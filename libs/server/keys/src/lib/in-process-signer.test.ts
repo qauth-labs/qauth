@@ -1,4 +1,4 @@
-import { KeyObject } from 'node:crypto';
+import { createHmac, KeyObject, timingSafeEqual } from 'node:crypto';
 
 import {
   getSignatureBackend,
@@ -16,17 +16,19 @@ import { describe, expect, it, type Mock, vi } from 'vitest';
 import { KEK_A, KEK_B, localProvider } from '../testing/keks';
 import { createMemoryKeyStore, type MemoryKeyStore } from '../testing/memory-key-store';
 import { createMemorySignerStore, type MemorySignerStore } from '../testing/memory-signer-store';
-import { openKeyMaterial } from './envelope';
+import { openKeyMaterial, sealKeyMaterial } from './envelope';
 import { isKeyCustodyError } from './errors';
 import { createInProcessSigner, type InProcessSignerOptions } from './in-process-signer';
 import type { KekProvider } from './kek-provider';
 import { createKeyFactory, type KeyFactory } from './key-factory';
 import {
   type RealmJwks,
+  type SignClientAssertionRequest,
   type Signer,
   SIGNER_OPERATIONS,
   type SignerOperation,
   type SignJwsRequest,
+  type SignWebhookRequest,
 } from './signer';
 import {
   DataDecryptionError,
@@ -36,6 +38,7 @@ import {
   SignerKeyNotFoundError,
   type SignerRefusalReason,
   SignerRequestRefusedError,
+  UpstreamClientNotFoundError,
 } from './signer-errors';
 import { SIGNER_CALLERS, SIGNER_POLICY, type SignerCaller } from './signer-policy';
 import { JWS_TYP_BY_PURPOSE } from './signer-typ';
@@ -50,6 +53,9 @@ const NOW = 1_800_000_000_000;
 const REFRESH_MS = 60_000;
 const ED25519_ONLY: readonly SignatureAlgorithm[] = ['EdDSA'];
 const HYBRID: readonly SignatureAlgorithm[] = ['EdDSA', 'ML-DSA-65'];
+/** The webhook subscription and the upstream provider that `scoped` setups create keys for. */
+const SUBSCRIPTION = 'subscription-1';
+const PROVIDER = 'provider-1';
 
 const CLAIMS = Object.freeze({
   sub: 'user-1',
@@ -66,6 +72,8 @@ interface Setup {
   readonly kekProvider: KekProvider;
   readonly unwrap: Mock<KekProvider['unwrap']>;
   readonly enabled: readonly SignatureAlgorithm[];
+  /** With `scoped`: each realm's webhook secret, as `createKey` showed it. */
+  readonly webhookSecrets: ReadonlyMap<string, string>;
   advance(ms: number): void;
 }
 
@@ -77,6 +85,11 @@ interface SetupOptions {
   /** The KEK provider the signer unwraps with. Defaults to one holding the factory's KEK. */
   readonly signerKek?: KekProvider;
   readonly signer?: Partial<InProcessSignerOptions>;
+  /**
+   * Also give each realm a webhook secret for {@link SUBSCRIPTION} and an
+   * RS256 client-assertion key and a configuration for {@link PROVIDER}.
+   */
+  readonly scoped?: boolean;
 }
 
 async function setup(options: SetupOptions = {}): Promise<Setup> {
@@ -91,8 +104,23 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     hybridSigning: hybrid,
     now: () => NOW,
   });
-  for (const realmId of options.realms ?? [REALM_A, REALM_B]) {
+  const realms = options.realms ?? [REALM_A, REALM_B];
+  const webhookSecrets = new Map<string, string>();
+  for (const realmId of realms) {
     await factory.provisionRealmKeys(realmId);
+    if (options.scoped === true) {
+      const [webhook] = await factory.createKey({
+        realmId,
+        purpose: 'webhook_signing',
+        scopeId: SUBSCRIPTION,
+      });
+      webhookSecrets.set(realmId, webhook.secret as string);
+      await factory.createKey({
+        realmId,
+        purpose: 'upstream_client_assertion',
+        scopeId: PROVIDER,
+      });
+    }
   }
 
   const store = createMemorySignerStore(keys, {
@@ -101,6 +129,11 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     [REALM_WITHOUT_KEYS]: 'https://empty.example.test',
     [REALM_WITHOUT_ISSUER]: null,
   });
+  if (options.scoped === true) {
+    for (const realmId of realms) {
+      store.upstreamClients.set(`${realmId}/${PROVIDER}`, { clientId: clientIdOf(realmId) });
+    }
+  }
   // The local provider is frozen, so the unwrap count comes from a delegate.
   const inner = options.signerKek ?? sealing;
   const unwrap = vi.fn(inner.unwrap);
@@ -123,14 +156,100 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     kekProvider,
     unwrap,
     enabled,
+    webhookSecrets,
     advance: (ms) => {
       clock += ms;
     },
   };
 }
 
+/** The client id each realm is registered under at {@link PROVIDER}. */
+function clientIdOf(realmId: string): string {
+  return `qauth-${realmId.slice(-2)}`;
+}
+
 function accessToken(realmId = REALM_A, overrides: Partial<SignJwsRequest> = {}): SignJwsRequest {
   return { realmId, purpose: 'token_signing', typ: 'at+jwt', claims: CLAIMS, ...overrides };
+}
+
+function webhook(overrides: Partial<SignWebhookRequest> = {}): SignWebhookRequest {
+  return {
+    realmId: REALM_A,
+    subscriptionId: SUBSCRIPTION,
+    id: 'msg_2KWPBgLlAfxdpx2AI54pPJ85f4W',
+    timestamp: NOW / 1000,
+    body: '{"type":"user.created","data":{"id":"u-1"}}',
+    ...overrides,
+  };
+}
+
+function assertion(
+  overrides: Partial<SignClientAssertionRequest> = {}
+): SignClientAssertionRequest {
+  return {
+    realmId: REALM_A,
+    providerId: PROVIDER,
+    audience: 'https://idp.example.test',
+    claims: { jti: 'assertion-1', iat: NOW / 1000, exp: NOW / 1000 + 60 },
+    ...overrides,
+  };
+}
+
+/**
+ * Verify a `webhook-signature` header as a Standard Webhooks receiver does:
+ * strip `whsec_`, take the HMAC-SHA256 of `id.timestamp.body`, and accept
+ * when any `v1` signature in the header matches, compared in constant time.
+ */
+function verifiesWebhook(
+  header: string,
+  secret: string,
+  message: { id: string; timestamp: number; body: string | Uint8Array }
+): boolean {
+  const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64');
+  const expected = createHmac('sha256', key)
+    .update(`${message.id}.${message.timestamp}.`)
+    .update(message.body)
+    .digest();
+  return header.split(' ').some((signature) => {
+    const [version, value] = signature.split(',');
+    const actual = Buffer.from(value ?? '', 'base64');
+    return (
+      version === 'v1' && actual.length === expected.length && timingSafeEqual(actual, expected)
+    );
+  });
+}
+
+/** Store `secret` as a webhook secret, sealed as the factory seals one. */
+async function storeWebhookSecret(
+  context: Setup,
+  realmId: string,
+  subscriptionId: string,
+  secret: Buffer
+): Promise<string> {
+  const kid = `vector-${subscriptionId}`;
+  const identity = {
+    realmId,
+    purpose: 'webhook_signing',
+    scopeId: subscriptionId,
+    kid,
+    algorithm: 'HS256',
+  };
+  const sealed = await sealKeyMaterial(context.kekProvider, secret, identity);
+  await context.keys.create(
+    {
+      key: {
+        ...identity,
+        status: 'active',
+        pairId: null,
+        ...sealed,
+        publishAt: null,
+        activateAt: NOW,
+        createdAt: NOW,
+      },
+    },
+    { id: 0 }
+  );
+  return kid;
 }
 
 /** Verify `token` with the key its `kid` names in `jwks`, as a relying party would. */
@@ -1019,6 +1138,408 @@ describe('getVerificationKeys and getJwks', () => {
   );
 });
 
+describe('signWebhook', () => {
+  it('matches the Standard Webhooks test vector', async () => {
+    // The sign test of the reference libraries (JavaScript, Python, Go, PHP,
+    // C#): https://github.com/standard-webhooks/standard-webhooks, libraries/.
+    const context = await setup();
+    const secret = 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw';
+    await storeWebhookSecret(
+      context,
+      REALM_A,
+      'vector',
+      Buffer.from(secret.slice('whsec_'.length), 'base64')
+    );
+
+    const header = await context.signer.signWebhook('delivery', {
+      realmId: REALM_A,
+      subscriptionId: 'vector',
+      id: 'msg_p5jXN8AQM9LWM0D4loKWxJek',
+      timestamp: 1614265330,
+      body: '{"test": 2432232314}',
+    });
+
+    expect(header).toBe('v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=');
+  });
+
+  it('signs with the secret createKey showed, which a receiver verifies', async () => {
+    const { signer, webhookSecrets } = await setup({ scoped: true });
+    const message = webhook();
+
+    const header = await signer.signWebhook('delivery', message);
+
+    expect(header).toMatch(/^v1,[A-Za-z0-9+/]{43}=$/);
+    expect(verifiesWebhook(header, webhookSecrets.get(REALM_A) as string, message)).toBe(true);
+    expect(
+      verifiesWebhook(header, webhookSecrets.get(REALM_A) as string, {
+        ...message,
+        id: 'msg_other',
+      })
+    ).toBe(false);
+  });
+
+  it('signs the same bytes for a text body and its UTF-8 bytes', async () => {
+    const { signer } = await setup({ scoped: true });
+    const body = '{"name":"Zoë 名前"}';
+
+    expect(await signer.signWebhook('local', webhook({ body: Buffer.from(body, 'utf8') }))).toBe(
+      await signer.signWebhook('local', webhook({ body }))
+    );
+  });
+
+  it("uses only the subscription's own secret, in its own realm", async () => {
+    const { signer, factory, webhookSecrets } = await setup({ scoped: true });
+    const [other] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'webhook_signing',
+      scopeId: 'subscription-2',
+    });
+    const message = webhook();
+
+    const header = await signer.signWebhook('local', message);
+
+    expect(verifiesWebhook(header, other.secret as string, message)).toBe(false);
+    expect(verifiesWebhook(header, webhookSecrets.get(REALM_B) as string, message)).toBe(false);
+  });
+
+  it('signs with the active and the next secret during a rotation, and the new one alone after it', async () => {
+    const context = await setup({ scoped: true });
+    const { signer, factory, keys, advance } = context;
+    const oldSecret = context.webhookSecrets.get(REALM_A) as string;
+    const scope = { realmId: REALM_A, purpose: 'webhook_signing', scopeId: SUBSCRIPTION } as const;
+    const [next] = await factory.createKey({ ...scope, status: 'next' });
+    const newSecret = next.secret as string;
+    const message = webhook();
+
+    const during = await signer.signWebhook('delivery', message);
+
+    const [first, second, ...rest] = during.split(' ');
+    expect(rest).toEqual([]);
+    expect(verifiesWebhook(first, oldSecret, message)).toBe(true);
+    expect(verifiesWebhook(second, newSecret, message)).toBe(true);
+
+    // The switch, after the overlap window, as the rotation's owner runs it.
+    await createKeyFactory({
+      store: keys,
+      kekProvider: context.kekProvider,
+      enabledSignatureAlgorithms: context.enabled,
+      hybridSigning: false,
+      prepublishMs: 0,
+      now: () => NOW,
+    }).activateNextKey(scope);
+    advance(REFRESH_MS);
+    const after = await signer.signWebhook('delivery', message);
+
+    expect(after.split(' ')).toHaveLength(1);
+    expect(verifiesWebhook(after, newSecret, message)).toBe(true);
+    expect(verifiesWebhook(after, oldSecret, message)).toBe(false);
+  });
+
+  it('gives a typed error for a subscription with no active secret, and creates none', async () => {
+    const { signer, factory, keys } = await setup({ scoped: true });
+    await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'webhook_signing',
+      scopeId: 'pending',
+      status: 'next',
+    });
+    const rows = keys.rows.length;
+
+    for (const subscriptionId of ['unknown', 'pending']) {
+      await expect(signer.signWebhook('local', webhook({ subscriptionId }))).rejects.toMatchObject({
+        code: 'SIGNER_KEY_NOT_FOUND',
+        purpose: 'webhook_signing',
+      });
+    }
+    expect(keys.rows).toHaveLength(rows);
+  });
+
+  it('refuses a secret row moved to another subscription', async () => {
+    const context = await setup({ scoped: true });
+    // Subscription 2's sealed secret under subscription 1: the associated data
+    // names the other scope, so it cannot open.
+    const [moved] = await context.factory.createKey({
+      realmId: REALM_A,
+      purpose: 'webhook_signing',
+      scopeId: 'subscription-2',
+    });
+    const rows = context.keys.rows;
+    rows.splice(
+      rows.findIndex((row) => row.key.realmId === REALM_A && row.key.scopeId === SUBSCRIPTION),
+      1
+    );
+    const index = rows.findIndex((row) => row.key.kid === moved.kid);
+    rows[index] = { ...rows[index], key: { ...rows[index].key, scopeId: SUBSCRIPTION } };
+
+    await expect(context.signer.signWebhook('local', webhook())).rejects.toSatisfy((e: unknown) =>
+      isKeyCustodyError(e, 'KEY_DECRYPTION_FAILED')
+    );
+  });
+
+  it.each([
+    ['an id with a full stop', { id: 'msg.1' }, 'INVALID_WEBHOOK_ID'],
+    ['an id with a space', { id: 'msg 1' }, 'INVALID_WEBHOOK_ID'],
+    ['an empty id', { id: '' }, 'INVALID_WEBHOOK_ID'],
+    ['an id outside printable ASCII', { id: 'msg_é' }, 'INVALID_WEBHOOK_ID'],
+    ['an id too long for a header', { id: 'm'.repeat(256) }, 'INVALID_WEBHOOK_ID'],
+    [
+      'a timestamp in milliseconds with a fraction',
+      { timestamp: 1614265330.5 },
+      'INVALID_TIMESTAMP',
+    ],
+    ['a negative timestamp', { timestamp: -1 }, 'INVALID_TIMESTAMP'],
+    ['a timestamp as text', { timestamp: '1614265330' }, 'INVALID_TIMESTAMP'],
+    ['a body that is a number', { body: 42 }, 'INVALID_BODY'],
+    ['a body with a lone surrogate', { body: 'a\ud800b' }, 'INVALID_BODY'],
+    ['an empty subscription id', { subscriptionId: '' }, 'INVALID_SCOPE_ID'],
+    ['a realm id that is not a UUID', { realmId: 'realm-a' }, 'INVALID_REALM_ID'],
+    ['a caller-supplied key id', { kid: 'k' }, 'UNEXPECTED_FIELD'],
+    ['a caller-supplied secret', { secret: 'whsec_x' }, 'UNEXPECTED_FIELD'],
+  ] as const)('refuses %s', async (_case, change, reason) => {
+    const { signer, unwrap } = await setup({ scoped: true });
+    const request = { ...webhook(), ...change } as unknown as SignWebhookRequest;
+
+    expect(await refusal(signer.signWebhook('local', request))).toBe(reason);
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+});
+
+describe('signClientAssertion', () => {
+  it('signs an RFC 7523 client assertion that the provider verifies with its JWKS', async () => {
+    const { signer, keys } = await setup({ scoped: true });
+
+    const token = await signer.signClientAssertion('api', assertion());
+
+    const header = decodeProtectedHeader(token);
+    const kid = keys.rows.find((row) => row.key.realmId === REALM_A && row.key.scopeId === PROVIDER)
+      ?.key.kid;
+    expect(header).toEqual({ alg: 'RS256', kid, typ: 'client-authentication+jwt' });
+    const jwks = await signer.getUpstreamJwks('api', REALM_A, PROVIDER);
+    const { claims } = await verifyWithJwks(token, jwks, clientIdOf(REALM_A));
+    expect(claims).toEqual({
+      iss: clientIdOf(REALM_A),
+      sub: clientIdOf(REALM_A),
+      aud: 'https://idp.example.test',
+      jti: 'assertion-1',
+      iat: NOW / 1000,
+      exp: NOW / 1000 + 60,
+    });
+  });
+
+  it('signs with the key of the algorithm asked for', async () => {
+    const { signer, factory } = await setup({ scoped: true });
+    const [es256] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'upstream_client_assertion',
+      scopeId: PROVIDER,
+      algorithm: 'ES256',
+    });
+
+    const token = await signer.signClientAssertion('local', assertion({ algorithm: 'ES256' }));
+
+    expect(decodeProtectedHeader(token)).toMatchObject({ alg: 'ES256', kid: es256.kid });
+    await verifyWithJwks(
+      token,
+      await signer.getUpstreamJwks('local', REALM_A, PROVIDER),
+      clientIdOf(REALM_A)
+    );
+  });
+
+  describe("cannot use another realm's or another provider's key", () => {
+    it('verifies with its own provider JWKS only', async () => {
+      const { signer, factory, store } = await setup({ scoped: true });
+      await factory.createKey({
+        realmId: REALM_A,
+        purpose: 'upstream_client_assertion',
+        scopeId: 'provider-q',
+      });
+      store.upstreamClients.set(`${REALM_A}/provider-q`, { clientId: 'qauth-q' });
+
+      const token = await signer.signClientAssertion('local', assertion());
+
+      const own = await signer.getUpstreamJwks('local', REALM_A, PROVIDER);
+      await expect(verifyWithJwks(token, own, clientIdOf(REALM_A))).resolves.toBeDefined();
+      for (const [realmId, providerId] of [
+        [REALM_B, PROVIDER],
+        [REALM_A, 'provider-q'],
+      ]) {
+        const other = await signer.getUpstreamJwks('local', realmId, providerId);
+        expect(other.keys).toHaveLength(1);
+        await expect(verifyWithJwks(token, other, clientIdOf(REALM_A))).rejects.toThrow(
+          'no published key'
+        );
+      }
+    });
+
+    it('finds no key for a provider whose key only another realm holds', async () => {
+      const { signer, factory, store, unwrap } = await setup({ scoped: true });
+      await factory.createKey({
+        realmId: REALM_B,
+        purpose: 'upstream_client_assertion',
+        scopeId: 'provider-q',
+      });
+      store.upstreamClients.set(`${REALM_A}/provider-q`, { clientId: 'qauth-q' });
+
+      await expect(
+        signer.signClientAssertion('local', assertion({ providerId: 'provider-q' }))
+      ).rejects.toBeInstanceOf(SignerKeyNotFoundError);
+      expect(unwrap).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another provider', REALM_A, 'provider-q'],
+      ['another realm', REALM_B, PROVIDER],
+    ])('refuses a key row moved from %s', async (_case, fromRealm, fromProvider) => {
+      const context = await setup({ scoped: true });
+      const [foreign] = await context.factory.createKey({
+        realmId: fromRealm,
+        purpose: 'upstream_client_assertion',
+        scopeId: fromProvider,
+        status: fromRealm === REALM_A ? 'active' : 'next',
+      });
+      // The foreign row relabelled as realm A's provider key, in place of the
+      // real one: its associated data names where it was sealed, so it cannot open.
+      const rows = context.keys.rows;
+      rows.splice(
+        rows.findIndex((row) => row.key.realmId === REALM_A && row.key.scopeId === PROVIDER),
+        1
+      );
+      const index = rows.findIndex((row) => row.key.kid === foreign.kid);
+      rows[index] = {
+        ...rows[index],
+        key: { ...rows[index].key, realmId: REALM_A, scopeId: PROVIDER, status: 'active' },
+      };
+
+      await expect(context.signer.signClientAssertion('local', assertion())).rejects.toSatisfy(
+        (e: unknown) => isKeyCustodyError(e, 'KEY_DECRYPTION_FAILED')
+      );
+    });
+  });
+
+  it('takes iss and sub from the provider configuration, and refuses a provider without one', async () => {
+    const { signer, store, unwrap } = await setup({ scoped: true });
+    store.upstreamClients.delete(`${REALM_A}/${PROVIDER}`);
+
+    const error = await signer.signClientAssertion('local', assertion()).catch((e) => e);
+
+    expect(error).toBeInstanceOf(UpstreamClientNotFoundError);
+    expect(error.message).not.toContain(PROVIDER);
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+
+  it('reads the client id at most once per refresh interval, and a new configuration at once', async () => {
+    const { signer, store, advance } = await setup({ scoped: true });
+    const reads = () => store.calls.filter((call) => call === 'findUpstreamClient').length;
+    store.upstreamClients.delete(`${REALM_A}/${PROVIDER}`);
+    await expect(signer.signClientAssertion('local', assertion())).rejects.toBeInstanceOf(
+      UpstreamClientNotFoundError
+    );
+
+    store.upstreamClients.set(`${REALM_A}/${PROVIDER}`, { clientId: 'first' });
+    await signer.signClientAssertion('local', assertion());
+    store.upstreamClients.set(`${REALM_A}/${PROVIDER}`, { clientId: 'second' });
+    const cached = await signer.signClientAssertion('local', assertion());
+    expect(reads()).toBe(2);
+    advance(REFRESH_MS);
+    const refreshed = await signer.signClientAssertion('local', assertion());
+
+    expect(reads()).toBe(3);
+    const subjectOf = (token: string) =>
+      JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub;
+    expect(subjectOf(cached)).toBe('first');
+    expect(subjectOf(refreshed)).toBe('second');
+  });
+
+  it.each([
+    ['iss among the claims', { claims: { iss: 'x', exp: 1, jti: 'j' } }, 'RESERVED_CLAIM'],
+    ['sub among the claims', { claims: { sub: 'x', exp: 1, jti: 'j' } }, 'RESERVED_CLAIM'],
+    ['aud among the claims', { claims: { aud: 'x', exp: 1, jti: 'j' } }, 'RESERVED_CLAIM'],
+    ['claims without exp', { claims: { jti: 'j' } }, 'MISSING_CLAIM'],
+    ['claims without jti', { claims: { exp: 1 } }, 'MISSING_CLAIM'],
+    ['an exp that is not a number', { claims: { exp: '1', jti: 'j' } }, 'MISSING_CLAIM'],
+    ['claims that are not an object', { claims: [] }, 'INVALID_CLAIMS'],
+    ['several audiences', { audience: ['https://a.test', 'https://b.test'] }, 'INVALID_AUDIENCE'],
+    ['an empty audience', { audience: '' }, 'INVALID_AUDIENCE'],
+    ['an HMAC algorithm', { algorithm: 'HS256' }, 'ALGORITHM_NOT_ALLOWED'],
+    ['ML-DSA-65', { algorithm: 'ML-DSA-65' }, 'ALGORITHM_NOT_ALLOWED'],
+    ['an empty provider id', { providerId: '' }, 'INVALID_SCOPE_ID'],
+    ['a realm id that is not a UUID', { realmId: 'realm-a' }, 'INVALID_REALM_ID'],
+    ['a caller-supplied key id', { kid: 'k' }, 'UNEXPECTED_FIELD'],
+    ['a caller-supplied client id', { clientId: 'evil' }, 'UNEXPECTED_FIELD'],
+    ['a caller-supplied typ', { typ: 'JWT' }, 'UNEXPECTED_FIELD'],
+  ] as const)('refuses %s', async (_case, change, reason) => {
+    const { signer, unwrap } = await setup({ scoped: true });
+    const request = { ...assertion(), ...change } as unknown as SignClientAssertionRequest;
+
+    expect(await refusal(signer.signClientAssertion('local', request))).toBe(reason);
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sub that a toJSON method would add at signing time', async () => {
+    const { signer } = await setup({ scoped: true });
+    const claims = { exp: 1, jti: 'j', toJSON: () => ({ exp: 1, jti: 'j', sub: 'evil' }) };
+
+    expect(await refusal(signer.signClientAssertion('local', assertion({ claims })))).toBe(
+      'RESERVED_CLAIM'
+    );
+  });
+});
+
+describe('getUpstreamJwks', () => {
+  it("lists one provider's published keys, next included, and nothing of the realm JWKS", async () => {
+    const { signer, factory, keys } = await setup({ scoped: true });
+    const [next] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'upstream_client_assertion',
+      scopeId: PROVIDER,
+      status: 'next',
+    });
+    await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'upstream_client_assertion',
+      scopeId: 'provider-q',
+    });
+    const active = keys.rows.find(
+      (row) =>
+        row.key.realmId === REALM_A && row.key.scopeId === PROVIDER && row.key.status === 'active'
+    )?.key.kid;
+
+    const jwks = await signer.getUpstreamJwks('admin', REALM_A, PROVIDER);
+    const realmJwks = await signer.getJwks('admin', REALM_A);
+
+    expect(jwks.keys.map((key) => key.kid)).toEqual([active, next.kid]);
+    for (const key of jwks.keys) {
+      expect(key).toMatchObject({ kty: 'RSA', alg: 'RS256', use: 'sig' });
+      expect(key).not.toHaveProperty('d');
+    }
+    expect(Object.isFrozen(jwks.keys)).toBe(true);
+    expect(realmJwks.keys.map((key) => key.kid)).not.toContain(active);
+  });
+
+  it('keeps a retired key until its window closes, and drops a compromised one', async () => {
+    const { signer, keys, store, advance } = await setup({ scoped: true });
+    const kid = keys.rows.find((row) => row.key.realmId === REALM_A && row.key.scopeId === PROVIDER)
+      ?.key.kid as string;
+    store.update(REALM_A, kid, { status: 'retired', unpublishAt: NOW + 2 * REFRESH_MS });
+    advance(REFRESH_MS);
+
+    expect((await signer.getUpstreamJwks('local', REALM_A, PROVIDER)).keys).toHaveLength(1);
+    advance(REFRESH_MS);
+    expect((await signer.getUpstreamJwks('local', REALM_A, PROVIDER)).keys).toEqual([]);
+
+    store.update(REALM_A, kid, { status: 'compromised', unpublishAt: null });
+    advance(REFRESH_MS);
+    expect((await signer.getUpstreamJwks('local', REALM_A, PROVIDER)).keys).toEqual([]);
+  });
+
+  it('is empty for a provider with no key, and refuses a malformed provider id', async () => {
+    const { signer } = await setup({ scoped: true });
+
+    await expect(signer.getUpstreamJwks('web', REALM_A, 'unknown')).resolves.toEqual({ keys: [] });
+    expect(await refusal(signer.getUpstreamJwks('web', REALM_A, ''))).toBe('INVALID_SCOPE_ID');
+  });
+});
+
 /** One call per operation, with a valid request. Typed so a new operation must be added. */
 const CALLS: Record<SignerOperation, (signer: Signer, caller: SignerCaller) => Promise<unknown>> = {
   signJws: (signer, caller) => signer.signJws(caller, accessToken()),
@@ -1038,6 +1559,9 @@ const CALLS: Record<SignerOperation, (signer: Signer, caller: SignerCaller) => P
   getVerificationKeys: (signer, caller) =>
     signer.getVerificationKeys(caller, REALM_A, 'token_signing'),
   getJwks: (signer, caller) => signer.getJwks(caller, REALM_A),
+  signWebhook: (signer, caller) => signer.signWebhook(caller, webhook()),
+  signClientAssertion: (signer, caller) => signer.signClientAssertion(caller, assertion()),
+  getUpstreamJwks: (signer, caller) => signer.getUpstreamJwks(caller, REALM_A, PROVIDER),
 };
 
 describe('caller policy', () => {
@@ -1046,7 +1570,7 @@ describe('caller policy', () => {
   );
 
   it.each(cases)('%s calling %s follows SIGNER_POLICY', async (caller, operation) => {
-    const { signer } = await setup({ hybrid: true });
+    const { signer } = await setup({ hybrid: true, scoped: true });
     const grant = SIGNER_POLICY[caller];
     const allowed =
       operation === 'signJws' ? grant.signJws.includes('token_signing') : grant[operation];
@@ -1082,6 +1606,39 @@ describe('caller policy', () => {
       ).rejects.toMatchObject({ code: 'SIGNER_ACCESS_DENIED', caller: 'web', purpose });
     }
   );
+
+  it('refuses signWebhook to web and signClientAssertion to delivery, and unwraps nothing', async () => {
+    const { signer, unwrap } = await setup({ scoped: true });
+
+    await expect(signer.signWebhook('web', webhook())).rejects.toMatchObject({
+      code: 'SIGNER_ACCESS_DENIED',
+      caller: 'web',
+      operation: 'signWebhook',
+    });
+    await expect(signer.signClientAssertion('delivery', assertion())).rejects.toMatchObject({
+      code: 'SIGNER_ACCESS_DENIED',
+      caller: 'delivery',
+      operation: 'signClientAssertion',
+    });
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+
+  it('lets delivery sign webhooks and not client assertions; api the other way round', async () => {
+    const { signer } = await setup({ scoped: true });
+
+    await expect(signer.signWebhook('delivery', webhook())).resolves.toMatch(/^v1,/);
+    await expect(signer.signClientAssertion('api', assertion())).resolves.toEqual(
+      expect.any(String)
+    );
+    await expect(signer.signWebhook('api', webhook())).rejects.toBeInstanceOf(
+      SignerAccessDeniedError
+    );
+    for (const caller of ['delivery', 'web', 'admin'] as const) {
+      await expect(signer.signClientAssertion(caller, assertion())).rejects.toBeInstanceOf(
+        SignerAccessDeniedError
+      );
+    }
+  });
 
   it('lets delivery sign event tokens and not access tokens; api the other way round', async () => {
     const { signer } = await setup();
@@ -1158,7 +1715,7 @@ describe('key material', () => {
   }
 
   it('offers exactly the operations of the interface', async () => {
-    const { signer } = await setup({ hybrid: true });
+    const { signer } = await setup({ hybrid: true, scoped: true });
 
     expect(Reflect.ownKeys(signer).sort()).toEqual([...SIGNER_OPERATIONS].sort());
     expect(Object.keys(CALLS).sort()).toEqual([...SIGNER_OPERATIONS].sort());
@@ -1166,10 +1723,17 @@ describe('key material', () => {
   });
 
   it('returns no key material from any operation but the cookie secrets', async () => {
-    const context = await setup({ hybrid: true });
+    const context = await setup({ hybrid: true, scoped: true });
     const materials = await storedMaterials(context);
     expect(materials.map(({ purpose }) => purpose)).toEqual(
-      expect.arrayContaining(['token_signing', 'event_signing', 'cookie_hmac', 'data_at_rest'])
+      expect.arrayContaining([
+        'token_signing',
+        'event_signing',
+        'cookie_hmac',
+        'data_at_rest',
+        'webhook_signing',
+        'upstream_client_assertion',
+      ])
     );
 
     for (const operation of Object.keys(context.signer) as SignerOperation[]) {
@@ -1183,14 +1747,57 @@ describe('key material', () => {
     }
   });
 
+  it('returns a webhook secret once, from createKey, and never from a later call', async () => {
+    const context = await setup({ hybrid: true, scoped: true });
+    const scope = { realmId: REALM_A, purpose: 'webhook_signing', scopeId: SUBSCRIPTION } as const;
+    const [next] = await context.factory.createKey({ ...scope, status: 'next' });
+    const shown = [context.webhookSecrets.get(REALM_A) as string, next.secret as string];
+    const secrets = shown.map((secret) => ({
+      purpose: 'webhook_signing',
+      bytes: Buffer.from(secret.slice('whsec_'.length), 'base64'),
+    }));
+    expect(secrets.map(({ bytes }) => bytes.length)).toEqual([32, 32]);
+
+    const later: unknown[] = [];
+    for (const caller of SIGNER_CALLERS) {
+      for (const operation of SIGNER_OPERATIONS) {
+        later.push(await CALLS[operation](context.signer, caller).catch((e: unknown) => e));
+      }
+    }
+    const rotation = createKeyFactory({
+      store: context.keys,
+      kekProvider: context.kekProvider,
+      enabledSignatureAlgorithms: context.enabled,
+      hybridSigning: true,
+      prepublishMs: 0,
+      now: () => NOW,
+    });
+    later.push(
+      await rotation.activateNextKey(scope),
+      await rotation.provisionRealmKeys(REALM_A),
+      await rotation.createKey({ ...scope, scopeId: 'subscription-2' }),
+      await rotation.createKey({ ...scope, status: 'next' }).catch((e: unknown) => e),
+      await rotation.activateNextKey(scope).catch((e: unknown) => e),
+      await rotation.deleteScopedKeys(scope)
+    );
+
+    // Every encoding of both secrets, the whsec_ form included, is searched for.
+    expect(leaks(later, secrets)).toEqual([]);
+  });
+
   it('puts no key material in an error', async () => {
-    const context = await setup({ hybrid: true });
+    const context = await setup({ hybrid: true, scoped: true });
     const materials = await storedMaterials(context);
     const errors = await Promise.all([
       context.signer.signJws('local', accessToken(REALM_A, { typ: 'logout+jwt' })).catch((e) => e),
       context.signer.signJws('web', accessToken()).catch((e) => e),
       context.signer.signJws('local', accessToken(REALM_WITHOUT_KEYS)).catch((e) => e),
       context.signer.decrypt('local', { realmId: REALM_A, ciphertext: 'v1.x.y.z' }).catch((e) => e),
+      context.signer.signWebhook('local', webhook({ id: 'a.b' })).catch((e) => e),
+      context.signer.signWebhook('local', webhook({ subscriptionId: 'other' })).catch((e) => e),
+      context.signer
+        .signClientAssertion('local', assertion({ providerId: 'other' }))
+        .catch((e) => e),
     ]);
     const kekFailure = await (
       await setup({ hybrid: true, signerKek: localProvider({ KEK: KEK_B }) })

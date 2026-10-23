@@ -9,6 +9,7 @@ import {
   SignerError,
   SignerKeyNotFoundError,
   SignerRequestRefusedError,
+  UpstreamClientNotFoundError,
 } from './signer-errors';
 
 const REALM = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
@@ -18,6 +19,7 @@ describe('signer errors', () => {
     [new SignerAccessDeniedError('web', 'signJws', 'token_signing'), 'SIGNER_ACCESS_DENIED', 403],
     [new SignerRequestRefusedError('TYP_NOT_ALLOWED', 'no'), 'SIGNER_REQUEST_REFUSED', 400],
     [new RealmIssuerNotFoundError(REALM), 'SIGNER_ISSUER_NOT_FOUND', 500],
+    [new UpstreamClientNotFoundError(REALM), 'SIGNER_UPSTREAM_CLIENT_NOT_FOUND', 500],
     [new SignerKeyNotFoundError(REALM, 'token_signing'), 'SIGNER_KEY_NOT_FOUND', 500],
     [new DataDecryptionError('detail'), 'DATA_DECRYPTION_FAILED', 500],
   ])('%s carries its code and status', (error, code, statusCode) => {
@@ -58,6 +60,12 @@ describe('signer errors', () => {
     ).toBe(
       `Realm '${REALM}' has no active 'EdDSA+ML-DSA-65' key for purpose 'token_signing' ` +
         '(no complete hybrid pair)'
+    );
+  });
+
+  it('names the realm of a missing upstream provider, and not the provider id it was given', () => {
+    expect(new UpstreamClientNotFoundError(REALM).message).toBe(
+      `Realm '${REALM}' has no configuration for the upstream provider`
     );
   });
 

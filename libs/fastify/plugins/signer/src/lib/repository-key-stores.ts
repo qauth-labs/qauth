@@ -16,7 +16,8 @@ import type { RealmKeyStore, SignerKeyStore } from '@qauth-labs/server-keys/cust
 
 /**
  * The store the in-process signer reads: realm issuers, key metadata, wrapped
- * keys for unwrapping, and published public keys.
+ * keys for unwrapping, published public keys, and the client id QAuth holds at
+ * each upstream provider.
  */
 export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
   const realms = createRealmsRepository(db);
@@ -30,6 +31,10 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
       keys.listByRealm(realmId, { purpose: filter.purpose, scopeId: filter.scopeId }),
     getWrappedKey: (realmId: string, kid: string) => keys.getWrappedForSigner(realmId, kid),
     listPublicKeys: (realmId: string) => keys.listPublicByRealm(realmId),
+    // No upstream provider is configured anywhere yet: upstream login owns
+    // that configuration (ADR-018 §3) and adds this read with it. Until then
+    // `signClientAssertion` finds no provider and signs nothing.
+    findUpstreamClient: async () => undefined,
   } satisfies SignerKeyStore);
 }
 

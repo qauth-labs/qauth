@@ -3,6 +3,7 @@ import type {
   PublicKeyRecord,
   SignerKeyRecord,
   SignerKeyStore,
+  UpstreamClientRecord,
   WrappedSignerKey,
 } from '../lib/signer-key-store';
 import type { MemoryKeyStore } from './memory-key-store';
@@ -29,6 +30,8 @@ export interface MemorySignerStore extends SignerKeyStore {
   readonly calls: string[];
   /** Each realm's issuer. A realm missing here does not exist. */
   readonly issuers: Map<string, string | null>;
+  /** Upstream provider configurations, by `realmId/providerId`. */
+  readonly upstreamClients: Map<string, UpstreamClientRecord>;
   /** Change a stored key's status and times. */
   update(realmId: string, kid: string, changes: KeyLifecycle): void;
   /** Replace a stored key's sealed bytes, as tampering or corruption would. */
@@ -43,6 +46,7 @@ export function createMemorySignerStore(
   const lifecycle = new Map<string, KeyLifecycle>();
   const sealedOverrides = new Map<string, Partial<WrappedSignerKey>>();
   const issuerMap = new Map(Object.entries(issuers));
+  const upstreamClients = new Map<string, UpstreamClientRecord>();
   const id = (realmId: string, kid: string) => `${realmId}/${kid}`;
 
   function rowsOf(realmId: string) {
@@ -54,6 +58,7 @@ export function createMemorySignerStore(
   return {
     calls,
     issuers: issuerMap,
+    upstreamClients,
 
     update(realmId, kid, changes) {
       lifecycle.set(id(realmId, kid), { ...lifecycle.get(id(realmId, kid)), ...changes });
@@ -105,6 +110,11 @@ export function createMemorySignerStore(
         aadVersion: key.aadVersion,
         ...sealedOverrides.get(id(realmId, kid)),
       };
+    },
+
+    async findUpstreamClient(realmId, providerId) {
+      calls.push('findUpstreamClient');
+      return upstreamClients.get(id(realmId, providerId));
     },
 
     async listPublicKeys(realmId): Promise<readonly PublicKeyRecord[]> {

@@ -4,6 +4,7 @@ import type {
   PublicKeyRecord,
   SignerKeyRecord,
   SignerKeyStore,
+  UpstreamClientRecord,
   WrappedSignerKey,
 } from '../lib/signer-key-store';
 
@@ -14,10 +15,14 @@ import type {
  * It reads the migrated `realms`, `realm_keys` and `realm_public_keys` tables
  * with plain SQL, as the repositories the signer's wiring passes in production
  * do (#461, #464), and records every statement it runs in {@link queries}.
+ * No table holds upstream provider configuration yet, so those come from
+ * {@link PgSignerStore.upstreamClients}.
  */
 export interface PgSignerStore extends SignerKeyStore {
   /** Every statement run, in order. */
   readonly queries: string[];
+  /** Upstream provider configurations, by `realmId/providerId`. */
+  readonly upstreamClients: Map<string, UpstreamClientRecord>;
 }
 
 /** node-postgres returns `bigint` columns as strings. */
@@ -27,6 +32,7 @@ function epochMs(value: string | null): number | null {
 
 export function createPgSignerStore(pool: Pool): PgSignerStore {
   const queries: string[] = [];
+  const upstreamClients = new Map<string, UpstreamClientRecord>();
 
   async function query<R extends object>(text: string, values: unknown[]): Promise<R[]> {
     queries.push(text);
@@ -35,6 +41,11 @@ export function createPgSignerStore(pool: Pool): PgSignerStore {
 
   return {
     queries,
+    upstreamClients,
+
+    async findUpstreamClient(realmId, providerId) {
+      return upstreamClients.get(`${realmId}/${providerId}`);
+    },
 
     async findRealmIssuer(realmId) {
       const [realm] = await query<{ issuer: string | null }>(

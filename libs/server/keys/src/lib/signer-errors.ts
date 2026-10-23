@@ -12,6 +12,7 @@ export type SignerErrorCode =
   | 'SIGNER_ACCESS_DENIED'
   | 'SIGNER_REQUEST_REFUSED'
   | 'SIGNER_ISSUER_NOT_FOUND'
+  | 'SIGNER_UPSTREAM_CLIENT_NOT_FOUND'
   | 'SIGNER_KEY_NOT_FOUND'
   | 'DATA_DECRYPTION_FAILED';
 
@@ -72,8 +73,23 @@ export type SignerRefusalReason =
   | 'ALGORITHM_NOT_ALLOWED'
   /** A scope id was given for an unscoped purpose. */
   | 'SCOPE_NOT_ALLOWED'
-  /** The claims set `iss`, which the signer sets from the realm row. */
+  /** A subscription or provider id is not a well-formed scope id (`MAX_SCOPE_ID_LENGTH`). */
+  | 'INVALID_SCOPE_ID'
+  /**
+   * The claims set a claim the signer sets: `iss` from the realm row, or for a
+   * client assertion `iss`, `sub` and `aud`.
+   */
   | 'RESERVED_CLAIM'
+  /** A client assertion's claims lack `exp` or `jti`, or carry one of the wrong type. */
+  | 'MISSING_CLAIM'
+  /** A client assertion's audience is not one non-empty string. */
+  | 'INVALID_AUDIENCE'
+  /** A webhook id is empty, too long, or holds a `.`, a space or a non-printable character. */
+  | 'INVALID_WEBHOOK_ID'
+  /** A webhook timestamp is not a whole, non-negative number of seconds. */
+  | 'INVALID_TIMESTAMP'
+  /** A webhook body is neither bytes nor well-formed text. */
+  | 'INVALID_BODY'
   /** The request carries a field the operation does not take, such as `kid` or `iss`. */
   | 'UNEXPECTED_FIELD'
   /** The claims are not a JSON object. */
@@ -109,6 +125,23 @@ export class RealmIssuerNotFoundError extends SignerError {
 
   constructor(realmId: string) {
     super(`Realm '${realmId}' has no issuer`);
+    this.realmId = realmId;
+  }
+}
+
+/**
+ * The realm has no configuration for the upstream provider a client assertion
+ * names, so the signer has no client id to put in `iss` and `sub`. It signs
+ * nothing.
+ */
+export class UpstreamClientNotFoundError extends SignerError {
+  readonly code = 'SIGNER_UPSTREAM_CLIENT_NOT_FOUND';
+  readonly statusCode = 500;
+  readonly realmId: string;
+
+  constructor(realmId: string) {
+    // The provider id came from the caller; it is not echoed.
+    super(`Realm '${realmId}' has no configuration for the upstream provider`);
     this.realmId = realmId;
   }
 }
@@ -172,6 +205,7 @@ const SIGNER_ERROR_CODES: ReadonlySet<unknown> = new Set<SignerErrorCode>([
   'SIGNER_ACCESS_DENIED',
   'SIGNER_REQUEST_REFUSED',
   'SIGNER_ISSUER_NOT_FOUND',
+  'SIGNER_UPSTREAM_CLIENT_NOT_FOUND',
   'SIGNER_KEY_NOT_FOUND',
   'DATA_DECRYPTION_FAILED',
 ]);

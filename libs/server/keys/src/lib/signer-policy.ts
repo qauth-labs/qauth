@@ -34,19 +34,24 @@ export interface SignerGrant {
   /** The purposes the role may sign with through `signJws`. */
   readonly signJws: readonly JwsSigningPurpose[];
   readonly signHybrid: boolean;
+  readonly signWebhook: boolean;
+  readonly signClientAssertion: boolean;
   readonly getCookieSecrets: boolean;
   readonly encrypt: boolean;
   readonly decrypt: boolean;
   readonly getVerificationKeys: boolean;
   readonly getJwks: boolean;
+  readonly getUpstreamJwks: boolean;
 }
 
 /** Public keys only: what every role may read. */
-const PUBLIC_READS = { getVerificationKeys: true, getJwks: true } as const;
+const PUBLIC_READS = { getVerificationKeys: true, getJwks: true, getUpstreamJwks: true } as const;
 
 const NOTHING_ELSE = {
   signJws: [],
   signHybrid: false,
+  signWebhook: false,
+  signClientAssertion: false,
   getCookieSecrets: false,
   encrypt: false,
   decrypt: false,
@@ -57,10 +62,12 @@ const NOTHING_ELSE = {
  *
  * - `web` gets the cookie HMAC secrets, the one secret ADR-019 Decision 9 hands
  *   to a role outside the signer. It never signs a token.
- * - `api` signs access and ID tokens (`token_signing`, hybrid included) and
- *   uses the `data_at_rest` key.
+ * - `api` signs access and ID tokens (`token_signing`, hybrid included), signs
+ *   client assertions toward upstream providers (#547), and uses the
+ *   `data_at_rest` key.
  * - `delivery` signs Security Event Tokens and logout tokens
- *   (`event_signing`). Webhook signing joins it with #547.
+ *   (`event_signing`) and webhook messages (#547). It holds no secret: it
+ *   sends the message to the signer and gets the signature header back.
  * - `admin` reads public keys. The key operations of the admin API (rotation
  *   and retirement, #544 and #551) add their own grants.
  * - Every role may read the realm's public keys, which hold no secret.
@@ -71,6 +78,8 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
   local: {
     signJws: JWS_SIGNING_PURPOSES,
     signHybrid: true,
+    signWebhook: true,
+    signClientAssertion: true,
     getCookieSecrets: true,
     encrypt: true,
     decrypt: true,
@@ -81,11 +90,12 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     ...NOTHING_ELSE,
     signJws: ['token_signing'],
     signHybrid: true,
+    signClientAssertion: true,
     encrypt: true,
     decrypt: true,
     ...PUBLIC_READS,
   },
-  delivery: { ...NOTHING_ELSE, signJws: ['event_signing'], ...PUBLIC_READS },
+  delivery: { ...NOTHING_ELSE, signJws: ['event_signing'], signWebhook: true, ...PUBLIC_READS },
   admin: { ...NOTHING_ELSE, ...PUBLIC_READS },
 });
 
