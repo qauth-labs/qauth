@@ -297,10 +297,11 @@ const signer = createInProcessSigner({
 - Which key is active is read at most once per `refreshIntervalMs` (default 60 seconds) per realm
   and purpose, so a signature with a warm cache runs no database query. Concurrent callers share one
   read. A rotation is followed within one interval; the old key stays published and verifiable
-  meanwhile. When the key list changes, the node reads its published keys again, so it never signs
-  with a key its own verification keys leave out. Two nodes can disagree for up to one interval,
-  which the rotation schedule (#542) must allow for. The realm's issuer never changes once set, so
-  it is read once.
+  meanwhile. When the key list changes, or the node has no earlier list to compare with, it reads
+  its published keys again and drops the answer of any published-key read already running, so it
+  never signs with a key its own verification keys leave out. Two nodes can disagree for up to one
+  interval, which the rotation schedule (#542) must allow for. The realm's issuer never changes
+  once set, so it is read once.
 - A key marked `compromised` stops signing, decrypting and appearing in the JWKS at each node's next
   read, not at once. Emergency retirement (#551) adds an invalidation that reaches every node.
 - With hybrid signing off, `signHybrid` is refused and the ML-DSA-65 private key is never unwrapped

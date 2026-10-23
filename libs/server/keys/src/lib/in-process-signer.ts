@@ -213,6 +213,11 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   const pendingKeys = new Map<string, Promise<LoadedKey>>();
   const keyLists = new BoundedCache<string, Timed<readonly SignerKeyRecord[]>>(keyCacheSize);
   const publicLists = new BoundedCache<string, Timed<readonly PublicKeyRecord[]>>(keyCacheSize);
+  // Raised each time a key-list read drops a realm's published keys, so a
+  // published-key read already running cannot store its older answer. A plain
+  // map: an evicted count would restart at 0 and let that read in. An entry
+  // lives only until the next stored read.
+  const publicGenerations = new Map<string, number>();
   // One store read per slot at a time: concurrent callers share it.
   const pendingReads = new Map<string, Promise<unknown>>();
   const issuers = new BoundedCache<string, string>(keyCacheSize);
@@ -273,11 +278,13 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       const value = Object.freeze([...(await store.listKeys(realmId, { purpose, scopeId }))]);
       const current = keyLists.get(slot);
       if (current === undefined || current.readAt <= readAt) {
-        // A key changed status: the published keys this node holds are as old
-        // as this list was, so read them again too. Otherwise this node could
-        // sign with a key its own verification set still calls `next`.
-        if (current !== undefined && !sameKeys(current.value, value)) {
+        // A key changed status, or there is no earlier list to compare (a
+        // first read, or one evicted): the published keys this node holds may
+        // be older than this list, so read them again too. Otherwise this node
+        // could sign with a key its own verification set still calls `next`.
+        if (current === undefined || !sameKeys(current.value, value)) {
           publicLists.delete(realmId);
+          publicGenerations.set(realmId, (publicGenerations.get(realmId) ?? 0) + 1);
         }
         keyLists.set(slot, { value, readAt });
       }
@@ -290,10 +297,17 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     const cached = publicLists.get(realmId);
     if (cached !== undefined && isFresh(cached)) return cached.value;
     return sharedRead(`public\u0000${realmId}`, async (readAt) => {
+      const generation = publicGenerations.get(realmId) ?? 0;
       const value = Object.freeze([...(await store.listPublicKeys(realmId))]);
       const current = publicLists.get(realmId);
-      if (current === undefined || current.readAt <= readAt) {
+      // One read per realm runs at a time, so removing the count after a store
+      // cannot make an older read match it.
+      if (
+        (publicGenerations.get(realmId) ?? 0) === generation &&
+        (current === undefined || current.readAt <= readAt)
+      ) {
         publicLists.set(realmId, { value, readAt });
+        publicGenerations.delete(realmId);
       }
       return value;
     });

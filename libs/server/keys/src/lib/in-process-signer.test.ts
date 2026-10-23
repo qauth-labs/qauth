@@ -554,6 +554,61 @@ describe('the key cache', () => {
     expect(after.map((key) => key.kid)).toContain(next.kid);
   });
 
+  it('reads the published keys again after its first read of the key list', async () => {
+    const { signer, store, factory, keys } = await setup();
+    const oldKid = activeKid(keys, REALM_A, 'token_signing');
+    const [next] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'token_signing',
+      status: 'next',
+    });
+    // The published keys are read before this node has read any key list.
+    const before = await signer.getVerificationKeys('local', REALM_A, 'token_signing');
+    expect(before.map((key) => key.kid)).toEqual([oldKid]);
+
+    store.update(REALM_A, oldKid, { status: 'retired', retireAt: NOW });
+    store.update(REALM_A, next.kid, { status: 'active' });
+    const token = await signer.signJws('local', accessToken());
+    const after = await signer.getVerificationKeys('local', REALM_A, 'token_signing');
+
+    expect(decodeProtectedHeader(token).kid).toBe(next.kid);
+    expect(after.map((key) => key.kid)).toContain(next.kid);
+  });
+
+  it('does not keep published keys whose read started before the key list changed', async () => {
+    const { signer, store, factory, keys, advance } = await setup();
+    const oldKid = activeKid(keys, REALM_A, 'token_signing');
+    const [next] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'token_signing',
+      status: 'next',
+    });
+    await signer.signJws('local', accessToken());
+    advance(REFRESH_MS);
+    // A published-key read answers with the keys from before the rotation, but
+    // only once the key-list read that sees the rotation has finished.
+    const stale = await store.listPublicKeys(REALM_A);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(store, 'listPublicKeys').mockImplementationOnce(async () => {
+      await held;
+      return stale;
+    });
+    const slow = signer.getVerificationKeys('local', REALM_A, 'token_signing');
+
+    store.update(REALM_A, oldKid, { status: 'retired', retireAt: NOW });
+    store.update(REALM_A, next.kid, { status: 'active' });
+    const token = await signer.signJws('local', accessToken());
+    release();
+    await slow;
+    const after = await signer.getVerificationKeys('local', REALM_A, 'token_signing');
+
+    expect(decodeProtectedHeader(token).kid).toBe(next.kid);
+    expect(after.map((key) => key.kid)).toContain(next.kid);
+  });
+
   it('holds no more keys than its size limit', async () => {
     const { signer, unwrap } = await setup({ signer: { keyCacheSize: 1 } });
 
