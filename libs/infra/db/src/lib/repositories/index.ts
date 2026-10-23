@@ -14,6 +14,7 @@ export * from './oid4vp-request-states.repository';
 export * from './realm-keys.repository';
 export * from './realms.repository';
 export * from './refresh-tokens.repository';
+export * from './sessions.repository';
 export * from './user-attributes.repository';
 export * from './user-credentials.repository';
 export * from './users.repository';

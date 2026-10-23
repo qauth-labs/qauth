@@ -190,6 +190,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long. The migration only creates the table and its indexes. Nothing emits
   events yet: the emitters, the delivery role and the event API come next.
 
+- **Schema**: migration 0030 reshapes the `sessions` table for browser sessions
+  ([#468], ADR-019 Decision 3). Each row is one account signed in on one
+  browser, tied to a realm and a user, and its `id` is the session's `sid`. It
+  holds the authentication (`auth_time`, `amr`, `assurance_level`), the address
+  and user agent at creation, `last_seen_at`, the absolute end `expires_at`, and
+  `revoked_at` with a `revoked_reason`. A new unique constraint on
+  `users (id, realm_id)` backs a composite foreign key, so the database refuses
+  a session whose realm is not its user's. The token-session columns
+  (`access_token_hash`, `refresh_token_hash`, `oauth_client_id`, `revoked`) and
+  `last_activity_at` are dropped. The new `session_clients` table records which
+  clients a session served, for back-channel logout. No code ever wrote the
+  old table, so the migration deletes any rows it holds. Nothing reads or
+  writes the new tables yet: browser sessions stay in Redis until the session
+  service lands.
+
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
   federation routes, which a switch registers, are experimental). The OpenAPI
@@ -287,6 +302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#464]: https://github.com/qauth-labs/qauth/issues/464
 [#467]: https://github.com/qauth-labs/qauth/issues/467
+[#468]: https://github.com/qauth-labs/qauth/issues/468
 [#470]: https://github.com/qauth-labs/qauth/issues/470
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 

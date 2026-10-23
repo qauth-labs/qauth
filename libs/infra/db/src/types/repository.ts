@@ -25,6 +25,7 @@ import type {
 import type { userAttributes, userCredentials } from '../lib/schema/identity';
 import type { realmKeys, realmPublicKeys } from '../lib/schema/keys';
 import type { oid4vpRequestStates } from '../lib/schema/oid4vp';
+import type { sessionClients, SessionRevokedReason, sessions } from '../lib/schema/sessions';
 import type {
   authorizationCodes,
   emailVerificationTokens,
@@ -787,6 +788,92 @@ export interface RealmKeysRepository {
     kid: string,
     tx?: DbClient
   ): Promise<WrappedRealmKey | undefined>;
+}
+
+/**
+ * Browser session types (ADR-019 Decision 3, issue #468).
+ */
+export type Session = InferSelectModel<typeof sessions>;
+export type SessionClient = InferSelectModel<typeof sessionClients>;
+
+/**
+ * Input of {@link SessionsRepository.create}. The id is not accepted: the
+ * database makes it (`uuidv7()`), and it becomes the session's `sid`. Nor are
+ * the revocation columns: a session starts live.
+ */
+export type NewSession = Omit<
+  InferInsertModel<typeof sessions>,
+  'id' | 'revokedAt' | 'revokedReason'
+>;
+
+/** Options of {@link SessionsRepository.updateLastSeen}. */
+export interface UpdateSessionLastSeenOptions {
+  /**
+   * Write only when the stored `last_seen_at` is at least this many
+   * milliseconds old. Defaults to 0, which always writes.
+   */
+  minIntervalMs?: number;
+}
+
+/**
+ * Browser sessions repository (ADR-019 Decision 3, issue #468).
+ *
+ * Storage only. Whether a session counts as signed in (the realm's idle limit,
+ * the cache in front of Postgres) is the session service's call (#469).
+ *
+ * Every method that names a session or a user also takes the realm id, and
+ * its statement filters on it (ADR-019 Decision 1). A session of another realm
+ * is never found, touched, ended or listed; to the caller it does not exist.
+ */
+export interface SessionsRepository {
+  /**
+   * Store a new, live session. The realm comes from `data.realmId`; the
+   * database refuses a user of another realm (`sessions_user_realm_fk`).
+   *
+   * @returns the stored row; its `id` is the session's `sid`
+   */
+  create(data: NewSession, tx?: DbClient): Promise<Session>;
+  /**
+   * Find a session by id within a realm, whatever its state: a revoked or
+   * expired row is returned as stored, for the caller to judge.
+   *
+   * @returns the row, or `undefined` when the realm holds no session with that id
+   */
+  findById(realmId: string, id: string, tx?: DbClient): Promise<Session | undefined>;
+  /**
+   * Set `last_seen_at` to now on a live session: one conditional `UPDATE` that
+   * skips a revoked or expired row, and a row seen less than
+   * `options.minIntervalMs` ago. Of several nodes touching one session within
+   * the interval, only the first writes.
+   *
+   * @returns `true` when this call wrote the row
+   */
+  updateLastSeen(
+    realmId: string,
+    id: string,
+    options?: UpdateSessionLastSeenOptions,
+    tx?: DbClient
+  ): Promise<boolean>;
+  /**
+   * End a session: one guarded `UPDATE` that sets `revoked_at` and
+   * `revoked_reason` on a row not yet revoked. An expired row may still be
+   * revoked, with `expired` or any other reason.
+   *
+   * @returns the ended row, or `undefined` when the realm holds no such session
+   * or it was already revoked. A second call changes nothing and keeps the
+   * first reason.
+   */
+  revoke(
+    realmId: string,
+    id: string,
+    reason: SessionRevokedReason,
+    tx?: DbClient
+  ): Promise<Session | undefined>;
+  /**
+   * A user's live sessions in a realm, newest first: not revoked and before
+   * `expires_at`. Served by the partial index `idx_sessions_realm_user_active`.
+   */
+  listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]>;
 }
 
 /** A stored `admin_audit_log` row (ADR-019 Decision 7, issue #448). */

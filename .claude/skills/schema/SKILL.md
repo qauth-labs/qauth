@@ -125,7 +125,8 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `realm_hosts`                 | `core.ts`        | Host → realm, PK `host`; `primary` (one per realm, permanent) or `endpoint`; written via `normaliseRealmHost`  |
 | `realm_keys`                  | `keys.ts`        | Envelope-encrypted keys per realm and purpose (ADR-019 D9); only `getWrappedForSigner` reads wrapped columns   |
 | `realm_public_keys`           | `keys.ts`        | Public JWK of each published key, `(realm_id, kid)` → `realm_keys`; every role reads it (JWKS, verify)         |
-| `sessions`                    | `sessions.ts`    | DB session table (PHASE-5+, **currently unused** — sessions live in Redis via `fastify.sessionUtils`)          |
+| `sessions`                    | `sessions.ts`    | Browser sessions (ADR-019 D3), `id` is the `sid`, `(user_id, realm_id)` → `users`; unused until #469           |
+| `session_clients`             | `sessions.ts`    | Clients a session served, PK `(session_id, oauth_client_id)`; cascades from both; for back-channel logout      |
 | `roles`, `user_roles`         | `roles.ts`       | RBAC (PHASE-5+, **currently unused** by auth-server routes)                                                    |
 
 A realm's `issuer` and its `primary` host in `realm_hosts` are **permanent**
