@@ -66,6 +66,7 @@ export async function applyQauthMigrations(
 export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'api_keys',
   'audit_logs',
+  'events',
   'oid4vp_request_states',
   'realm_public_keys',
   'realm_keys',
