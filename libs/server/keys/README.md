@@ -354,8 +354,9 @@ const signature = await signer.signWebhook('delivery', {
 - `id` is printable ASCII without a full stop or a space, at most 255 characters; `timestamp` is
   whole seconds. A body is signed byte for byte; send it as signed.
 - The secrets are imported as non-extractable HMAC keys, and only sign.
-- If the events work chooses the asymmetric form (`v1a`, Ed25519), only the purpose's key kind in
-  `KEY_PURPOSES` changes.
+- If the events work chooses the asymmetric form (`v1a`, Ed25519), the purpose's key kind changes in
+  `KEY_PURPOSES` and `signWebhook` signs under `v1a`; the operation, its request and its callers
+  stay as they are.
 
 ### Client assertions
 
