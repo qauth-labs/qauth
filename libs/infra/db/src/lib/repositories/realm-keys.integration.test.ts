@@ -621,5 +621,40 @@ describe('realm_keys integration (real Postgres)', () => {
       expect(await kids({ scopeId: 'subscription-1' })).toEqual([webhook.kid]);
       expect(await kids({ scopeId: null })).toEqual([signing.kid, next.kid, hmac.kid]);
     });
+
+    it('listPublicByRealm returns the public rows of one realm, by purpose, publish_at and kid', async () => {
+      const realmId = await seedRealm();
+      const otherRealm = await seedRealm();
+      const event = await keys.create({
+        key: keyRow(realmId, { purpose: 'event_signing', publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const later = await keys.create({
+        key: keyRow(realmId, { status: 'next' as const, publishAt: PUBLISH_AT + 1 }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const first = await keys.create({
+        key: keyRow(realmId, { publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      await keys.create({ key: keyRow(realmId, { purpose: 'cookie_hmac', algorithm: 'HS256' }) });
+      await keys.create({
+        key: keyRow(otherRealm, { publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+
+      const listed = await keys.listPublicByRealm(realmId);
+
+      expect(listed.map((key) => key.kid)).toEqual([event.kid, first.kid, later.kid]);
+      expect(listed[2]).toMatchObject({
+        realmId,
+        purpose: 'token_signing',
+        algorithm: 'EdDSA',
+        status: 'next',
+        publicJwk: PUBLIC_JWK,
+        publishAt: PUBLISH_AT + 1,
+        unpublishAt: null,
+      });
+    });
   });
 });

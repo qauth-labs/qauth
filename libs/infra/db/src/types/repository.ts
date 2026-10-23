@@ -764,6 +764,13 @@ export interface RealmKeysRepository {
    */
   listByRealm(realmId: string, filter?: RealmKeyFilter, tx?: DbClient): Promise<RealmKey[]>;
   /**
+   * Every `realm_public_keys` row of a realm, whatever its status or
+   * publication window, ordered by purpose, `publish_at` and `kid`. The signer
+   * builds the realm's JWKS and verification keys from them (#464). Public
+   * material only: the table's CHECKs refuse a private JWK member.
+   */
+  listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]>;
+  /**
    * The ONE method that returns wrapped key material: the full row, for the
    * signer to unwrap. Takes the realm id as well as the `kid`, so a `kid` from
    * one realm never opens another realm's key.
