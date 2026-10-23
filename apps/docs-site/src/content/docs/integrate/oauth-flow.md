@@ -504,6 +504,13 @@ properties enforce that:
 - `jti` is consumed exactly once, inside a window bounded by
   `ID_JAG_MAX_ASSERTION_LIFETIME`.
 
+**No re-submission.** The draft (`-04` §4.4.3) lets a client re-submit the same
+ID-JAG for a new access token while the assertion is unexpired. QAuth refuses the
+second presentation with `invalid_grant`. When the access token expires, ask the IdP
+for a fresh ID-JAG. With the default lifetimes nothing changes in practice: an
+assertion lives at most 5 minutes and the access token it buys at least 15, so the
+assertion expires first.
+
 The grant is confidential-client only, and the client must additionally be
 registered for it — which, like `private_key_jwt`, only an operator can do.
 
