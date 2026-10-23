@@ -351,7 +351,7 @@ const userLogs = await auditLogsRepo.findByRealmAndUserId('realm-123', 'user-456
 
 #### Event Store
 
-The `events` table (migration 0027) is both the transactional outbox and the
+The `events` table (migration 0029) is both the transactional outbox and the
 event log (ADR-019 Decision 8). Each row is one envelope of the event contract
 (`@qauth-labs/shared-events`), plus `seq` (an identity) and `xid` (the writing
 transaction's id, `pg_current_xact_id()`).
