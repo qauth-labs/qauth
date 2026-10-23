@@ -50,6 +50,15 @@
 > (decided 2026-10-11, maintainer). This record had called it `sid`, the
 > name OpenID Connect gives the browser session. Every place below that
 > meant the tree now says `tree_id`. No rule changed.
+>
+> **Amended 2026-10-23, decision 8** (before any implementation): the
+> maintainer decided that day that an account created through an upstream
+> provider is a verified account for owning an agent, while ADR-020 §3's
+> switch for that provider is on (question 7). The first slice had left it
+> out because no upstream sign-in was designed. ADR-020 has since designed
+> one, and it already counts such an account as verified for sign-in.
+> Decision 8's table, its reason, its test and the negative consequence now
+> say so.
 
 ## Context
 
@@ -322,7 +331,8 @@ node's audience would reach a resource the root consent never showed.
 
 ### 8. An agent owner is a verified account
 
-_Decided 2026-10-06 (maintainer), with question 7._
+_Decided 2026-10-06 (maintainer), with question 7. Amended 2026-10-23
+(maintainer): an upstream account counts._
 
 **Unless the user's account is verified, QAuth refuses, audited:**
 
@@ -338,12 +348,12 @@ of any type. An email address is one attribute an account may have. No
 account needs one, and no address counts on its own. Each type has its own
 proof, as ADR-002 and ADR-003 place it:
 
-| Primary identity (`provider_type`)    | Proved when                                                                                                       | On main, 2026-10-06                                                   |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Password with an address (`password`) | The mailbox code for that address was entered, and `email_verified` is `true` on the credential                   | Yes. `/auth/verify` sets it                                           |
-| Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 specifies the provider                                    |
-| Wallet presentation (`wallet`)        | QAuth's own verifier accepted the presentation                                                                    | Behind `WALLET_FEDERATION_ENABLED`, on its own seam                   |
-| Upstream OIDC (`oidc_*`)              | An upstream issuer says so; QAuth proves nothing itself                                                           | Not built. It does not count in the first slice (decided, question 7) |
+| Primary identity (`provider_type`)    | Proved when                                                                                                       | On main, 2026-10-06                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Password with an address (`password`) | The mailbox code for that address was entered, and `email_verified` is `true` on the credential                   | Yes. `/auth/verify` sets it                                      |
+| Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 specifies the provider                               |
+| Wallet presentation (`wallet`)        | QAuth's own verifier accepted the presentation                                                                    | Behind `WALLET_FEDERATION_ENABLED`, on its own seam              |
+| Upstream sign-in (`oidc_*`)           | QAuth itself checked the sign-in that created the account, and ADR-020 §3's switch for that provider is on        | Not built. It counts once built (decided 2026-10-23, question 7) |
 
 The rule asks that the identity is proved, not how strongly. Assurance
 (`acr`) is another question: the password credential stays `low` (ADR-003),
@@ -351,6 +361,14 @@ and this rule does not change that. Only the primary identity counts. If a
 later credential could make an account verified, someone who registers an
 address they do not control could add a key of their own and pass the check
 (question 13).
+
+An upstream account's primary identity is the provider's subject identifier,
+never an address the provider reports. QAuth checks it itself at the sign-in
+that creates the account: the ID token's signature, issuer, audience and
+nonce, or, for a plugin with no ID token, its own code exchange and user read
+(ADR-020 §4). With the provider's switch off, the account does not count,
+whatever verification ADR-020 §3 then asks for: that verification proves an
+attribute, not the primary identity.
 
 The rule holds whatever `REQUIRE_VERIFIED_ACCOUNT` says. That flag defaults to
 `false` (`libs/server/config/src/lib/schemas/auth.ts:75`) and governs sign-in
@@ -363,7 +381,10 @@ for a transmitter's events (ADR-014 §7, §13, T7). An identity nobody proved is
 a claim. A password account can be registered by anyone for an address they do
 not control, and an offer to that account would reach the squatter. A passkey
 or wallet account has no such gap: creating it already proves control of the
-key or of the presentation.
+key or of the presentation. An upstream account has none either: creating it
+proves control of the upstream account. Whoever later takes that account over
+can take its agents, but could already sign in as their owner. An operator
+who does not trust a provider to keep its accounts turns its switch off.
 
 ### 9. A transfer is an offer the named user accepts
 
@@ -500,8 +521,9 @@ test that proves it.
   a bearer-leaf resource is refused and notifies no one.
 - **8 — P0c**, then P3 and P5: whatever `REQUIRE_VERIFIED_ACCOUNT` says, an
   account whose primary identity is not proved cannot create an agent. One
-  case per row of decision 8's table that exists, and one for an account with
-  no email address.
+  case per row of decision 8's table that exists, one for an account with
+  no email address, and one for an upstream account whose provider's switch
+  is off.
 - **9 — P2:** an unaccepted offer changes nothing, and an acceptance cuts
   every live tree in its own transaction.
 - **10 — P5:** the approval page carries the separate-device notice.
@@ -524,8 +546,8 @@ test that proves it.
 - Four shipped paths, the client delete route and the seed tool each gain a
   ledger walk.
 - Between P1a and P1b a deployment can narrow but not spawn to a new key.
-- An account whose primary identity is an upstream OIDC login cannot own an
-  agent in the first slice, and a transfer takes two people and two steps.
+- An agent whose owner signed up through an upstream provider is only as safe
+  as that upstream account, and a transfer takes two people and two steps.
 - The separate device is advice; an owner can still approve on the agent's
   own machine.
 
@@ -616,7 +638,12 @@ question below.
    whatever type;
    an email address is an attribute, never the default proof._ Why: an
    assertion shows what the issuer says, not that QAuth saw control, and an
-   upstream provider is not built.
+   upstream provider is not built. _Amended 2026-10-23 (maintainer): an
+   upstream account counts while ADR-020 §3's switch for its provider is
+   on._ ADR-020 (2026-10-10) had already counted it verified for sign-in, and
+   the two records disagreed. Both reasons are answered: QAuth checks the
+   provider's subject identifier itself at sign-in, as decision 8 says, and
+   ADR-020 designs the upstream.
 8. **When a root ends.** ADR-014 §1 lets a resume (same `session_id`; for
    example, Claude Code's `--resume` and `--continue`) reuse its root while
    the refresh token lives. §6's
