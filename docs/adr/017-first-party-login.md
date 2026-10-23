@@ -99,6 +99,8 @@
 > them. This record still called the corpus F5. The password section, the conformance table and
 > F5 now follow the later records. Step 8 now also places the forced update and the required
 > actions of ADR-020 §3: after every factor the login needs, before the passkey enrolment offer.
+> The maintainer also decided that day that an upstream sign-in is outside the downgrade rule's
+> ranking, as a wallet presentation is.
 
 ## Context
 
@@ -581,7 +583,10 @@ Any other rule that needs a step the client did not list answers `redirect_to_we
   disabled authenticator (Decision 7) still counts as bound, so disabling a factor never lowers what
   a login must prove. Wallet credentials are outside the ranking
   ([ADR-009 §6](./009-wallet-account-resolution.md) "Wallet presentation is onboarding and
-  assurance-raising, not session authentication").
+  assurance-raising, not session authentication"). An upstream sign-in is outside the ranking too
+  (decided 2026-10-23, maintainer). Linking an upstream identity to an account already takes a
+  fresh sign-in with the account's own factors (#670), so a later sign-in through it does not ask
+  for the passkey again. The realm's and client's MFA policy still applies (#639).
 - MFA policy. ADR-020 sets MFA per realm and per client (off, optional, required, required for
   admins, where an admin is an account with an admin role in the realm). Step 8 enforces it on every
   transport. The engine reads it from the realm and client rows on every round and never caches it
