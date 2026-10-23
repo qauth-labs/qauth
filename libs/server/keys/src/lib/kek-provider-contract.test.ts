@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import * as entryPoint from '../index';
+import * as custodyEntryPoint from '../custody';
 import { KEK_A, KEK_B, localProvider } from '../testing/keks';
 import { KEY_AAD_VERSION, type KeyAad } from './aad';
 import type { KekProvider } from './kek-provider';
@@ -43,8 +43,8 @@ runKekProviderContract({
 });
 
 describe('the contract kit', () => {
-  it('is exported from the package entry point for adapters', () => {
-    expect(entryPoint.runKekProviderContract).toBe(runKekProviderContract);
+  it('is exported from the custody entry point for adapters', () => {
+    expect(custodyEntryPoint.runKekProviderContract).toBe(runKekProviderContract);
   });
 
   it('registers one suite with one test per case', () => {

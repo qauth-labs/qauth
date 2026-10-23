@@ -21,6 +21,7 @@ import {
   STANDARD_REALM_KEY_PURPOSES,
 } from './key-purposes';
 import type { NewKeyStatus, NewStoredKey, RealmKeyStore } from './key-store';
+import { isRealmId } from './realm-id';
 
 /**
  * Creating a realm's keys (ADR-019 Decision 9, issue #463): generate, seal
@@ -30,9 +31,6 @@ import type { NewKeyStatus, NewStoredKey, RealmKeyStore } from './key-store';
 
 /** The longest `scope_id` that `realm_keys` holds. */
 export const MAX_SCOPE_ID_LENGTH = 255;
-
-/** The textual form of a UUID, the type of `realm_keys.realm_id`. */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The deployment a {@link KeyFactory} creates keys for. */
 export interface KeyFactoryOptions<Tx> {
@@ -385,7 +383,7 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
  * stored row.
  */
 function resolveRealmId(realmId: unknown): string {
-  if (typeof realmId !== 'string' || !UUID_PATTERN.test(realmId)) {
+  if (!isRealmId(realmId)) {
     throw new KeyCreationRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
   }
   return realmId.toLowerCase();
