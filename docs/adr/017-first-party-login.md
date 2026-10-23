@@ -93,6 +93,12 @@
 > **Amended 2026-10-22** (before any implementation): every step URN ends in a version,
 > `urn:qauth:ia:<name>:v1`, as ADR-018 §5 requires of every QAuth-defined identifier. Decisions 3,
 > 8 and 12 and F1b are edited in place, wire examples included. No rule changed.
+>
+> **Amended 2026-10-23** (before any implementation): ADR-018 §3 and ADR-020 §3 (both
+> 2026-10-10) put the breach-list check and the forced password update in 1.0, and #635 builds
+> them. This record still called the corpus F5. The password section, the conformance table and
+> F5 now follow the later records. Step 8 now also places the forced update and the required
+> actions of ADR-020 §3: after every factor the login needs, before the passkey enrolment offer.
 
 ## Context
 
@@ -548,8 +554,10 @@ response.
 7. The first factor: passkey (F2b) before password.
 8. After a first factor only: the downgrade rule, the realm's and client's MFA policy, verification
    of an account that is not yet verified (for a password account, its address is unproved), the
-   per-client post-password email check (FiPA endpoint only), TOTP (F2c), and from F2b an optional
-   passkey enrolment offer.
+   per-client post-password email check (FiPA endpoint only), TOTP (F2c), then the forced password
+   update and the other required actions (ADR-020 §3, #635, #700), and from F2b an optional passkey
+   enrolment offer. The forced update and the required actions come only after every factor the
+   login needs: a person who knows only a breached password must not be able to set a new one.
 9. Mint the code.
 
 Any other rule that needs a step the client did not list answers `redirect_to_web`.
@@ -1086,7 +1094,8 @@ password is blocklisted only when the whole password matches an entry; the same 
 entire password SHALL be subject to comparison, not substrings or words". Separately, a zxcvbn score
 below `PASSWORD_MIN_SCORE` (default 2) rejects the password. This score floor is a QAuth rule beyond
 the NIST blocklist. It requires no mix of character types, so QAuth does not count it as a
-composition rule. A breached-password corpus is F5. There are no composition rules and no periodic
+composition rule. A breach-list check is in 1.0 (ADR-020 §3, #635). It is a realm setting, and it
+is off until the realm names a source. There are no composition rules and no periodic
 change. Rejection reasons are returned (`too_short`, `too_long`, `blocklisted`, `too_weak`), and
 fields are marked for password managers. New and changed passwords are hashed after NFC
 normalisation, and the credential records a marker, declared as an optional field of
@@ -1582,7 +1591,7 @@ makes no claim the text governs), Deferred.
 | `prompt=create` metadata and ID token                                             | Conformant from F1's release                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | OIDF prompt=create §4.1, §4.2 MUSTs                                                                                                                                                                        |
 | Administrative consent                                                            | Conformant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | OpenID Connect Core 1.0 §3.1.2.4                                                                                                                                                                           |
 | `amr` vocabulary                                                                  | Conformant (RFC 8176 and IANA `pop`; no email value)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | RFC 8176 §2; RFC 9068 §2.2.1                                                                                                                                                                               |
-| Password verifiers                                                                | Conformant for new and changed passwords at the default minimum of 15 (whole-password blocklist); an operator-set minimum below 15 is a knowing deviation while a password can be the only factor; Stricter by a zxcvbn score floor, which requires no character mix and so is not read as a composition rule; blocklist partial until a breach corpus (F5)                                                                                                                                                                                                 | NIST SP 800-63B-4 §3.1.1.2                                                                                                                                                                                 |
+| Password verifiers                                                                | Conformant for new and changed passwords at the default minimum of 15 (whole-password blocklist); an operator-set minimum below 15 is a knowing deviation while a password can be the only factor; Stricter by a zxcvbn score floor, which requires no character mix and so is not read as a composition rule; blocklist partial unless the realm sets a breach list (1.0, #635)                                                                                                                                                                            | NIST SP 800-63B-4 §3.1.1.2                                                                                                                                                                                 |
 | Email as an authenticator                                                         | Not claimed: no `amr`, `acr`, `mfa` or AAL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | NIST SP 800-63B-4 §3.1.3.1 SHALL NOT                                                                                                                                                                       |
 | Email code parameters                                                             | Conformant as address-verification and issued recovery codes: each code is disabled after 5 wrong answers; across codes, a per-identifier wait ladder, not a stop, so the recovery path stays open. The optional per-client `confirm_sign_in` check is outside the §3.1.3.1 carve-out and claims no authenticator status (no `amr`, `acr`, `mfa` or AAL)                                                                                                                                                                                                    | NIST SP 800-63B-4 §4.2.1.2 "Issued Recovery Codes"; §3.2.2; §3.1.3.1                                                                                                                                       |
 | Throttling                                                                        | Conformant for passwords and TOTP while their hard actions are armed: for passwords by default (question 7), for TOTP while the hosted pages are on and the account keeps an unused recovery code, or keeps another usable second factor. Every counter is reserved before the verifier runs. Emailed and recovery codes have a ladder and no stop, so the recovery path stays open: an emailed code dies after 5 wrong answers, and a recovery code carries at least 64 bits. Partial in a deployment, or for an account, where a hard action is not armed | NIST SP 800-63B-4 §3.2.2                                                                                                                                                                                   |
@@ -1781,8 +1790,9 @@ on. A phase whose target is the train ships no later than F1's release.
 - F5 — later, unscheduled: an established post-code `auth_session` and FiPA §6.2 refresh-time
   step-up; a pushed-request `request_uri` (RFC 9126 §2.2 "Successful Response") in `redirect_to_web`
   once [WG issue #179](https://github.com/oauth-wg/oauth-first-party-apps/issues/179) settles; the
-  FiPA Appendix A.4 "Email Confirmation Code" link variant; `amr` on browser logins; a
-  breached-password corpus; an authenticator-strength `acr`; OpenID Connect Native SSO.
+  FiPA Appendix A.4 "Email Confirmation Code" link variant; `amr` on browser logins; an
+  authenticator-strength `acr`; OpenID Connect Native SSO. The breached-password corpus left F5:
+  ADR-018 and ADR-020 put it in 1.0 on 2026-10-10.
 
 | What the first release refuses                                           | Answer                                  | Lifted in                             |
 | ------------------------------------------------------------------------ | --------------------------------------- | ------------------------------------- |
