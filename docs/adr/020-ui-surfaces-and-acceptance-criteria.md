@@ -1,6 +1,6 @@
 # ADR-020: 1.0 UI Surfaces and Acceptance Criteria
 
-**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records. Amended 2026-10-19: the component foundation (§6).  
+**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records. Amended 2026-10-19: the component foundation (§6). Amended 2026-10-23: every passkey ceremony runs on the realm origin (§1).  
 **Date:** 2026-10-10  
 **Authors:** QAuth Team
 
@@ -18,6 +18,10 @@
 > **Amended 2026-10-19:** an Authority Tree's identifier is `tree_id`, not `sid` (ADR-014's
 > amendment of that date). The claims a mapper never writes and the search box of UX criterion 3
 > name `tree_id` beside the browser session's `sid`.
+>
+> **Amended 2026-10-23:** every passkey ceremony runs in the ceremony app, on the realm origin
+> (§1). A console on another host hands the person to it by an authorization request. The record
+> said where enrolment lives but not how a console on another host reaches it.
 
 ## Context
 
@@ -61,6 +65,24 @@ Decision 5 requires.
 | Admin console    | admin API (`admin:read`, `admin:write`, `admin:security`) | BFF, a client of the operator realm, DPoP-bound tokens, passkey step-up | Any host                                             |
 | Developer portal | developer API                                             | BFF, signs in through `/oauth/authorize` (ADR-017 F0)                   | Any host                                             |
 | Emails           | Rendered by the auth server                               | —                                                                       | —                                                    |
+
+**Every passkey ceremony runs in the ceremony app, on the realm origin.** Decided 2026-10-23
+(maintainer). A passkey's RP ID is the realm host, so a console on another host cannot create or
+use one itself.
+
+- Adding a passkey from the account console: the console sends the person through an authorization
+  request on the realm host that asks for the `setup_passkey` required action (§3). The ceremony
+  app signs the person in if needed, runs the enrolment and returns to the console's redirect URI.
+  The issue that builds it names the request parameter.
+- A fresh passkey that a console needs, such as for deleting a passkey or for an `admin:security`
+  operation: a new authorization request on the realm host that asks for re-authentication, as
+  step-up already works.
+- WebAuthn Related Origin Requests are not used in 1.0. A `/.well-known/webauthn` file on the realm
+  host would let a listed console origin run the ceremony itself. Support is recent: Chrome and
+  Edge from 128, Safari from 18, Firefox from 152 with an extra consent prompt. Older browsers
+  refuse with `SecurityError`, so the redirect is needed anyway. Every listed origin could also ask
+  for the realm's passkeys, so a flaw in a console would reach the realm. An operator opt-in may
+  come in 1.x.
 
 Placement rules that follow from earlier decisions:
 
@@ -533,7 +555,7 @@ counterpart. Keycloak locations are admin-console paths or login-theme template 
 | Profile                | Identifiers and contact address                                     | Update email                     | —                    | 1.0 | Row review | The user changes them with fresh authentication. A new address is verified by code, and the old one is notified. A realm can block username changes.                                                                                                                                                                                                                               |
 | Profile                | Language                                                            | Account console · language       | —                    | 1.0 | Decision   | 1.0 is English only. The picker appears once more than one language is installed (fork F).                                                                                                                                                                                                                                                                                         |
 | Security               | Change password                                                     | Signing in · Password            | —                    | 1.0 | Decision   | —                                                                                                                                                                                                                                                                                                                                                                                  |
-| Security               | Passkeys: add, rename, delete                                       | Signing in · Passkeys            | —                    | 1.0 | Decision   | Deleting needs fresh authentication.                                                                                                                                                                                                                                                                                                                                               |
+| Security               | Passkeys: add, rename, delete                                       | Signing in · Passkeys            | —                    | 1.0 | Decision   | Adding runs on the realm host (§1). Deleting needs fresh authentication.                                                                                                                                                                                                                                                                                                           |
 | Security               | Set up and remove TOTP                                              | Signing in · Authenticator app   | —                    | 1.0 | Decision   | Enrolment is confirmed by a first code; removal needs a fresh authentication with the strongest bound factor (ADR-017 Decision 8). On a password-only account, the first one also needs a code mailed to its address (ADR-017 Decision 8).                                                                                                                                         |
 | Security               | Regenerate recovery codes                                           | Signing in · Recovery codes      | —                    | 1.0 | Decision   | Needs a fresh authentication with the strongest bound factor; the old set stops working (ADR-017 Decision 8).                                                                                                                                                                                                                                                                      |
 | Security               | Device activity and sign out everywhere                             | Device activity                  | —                    | 1.0 | Decision   | ADR-017 F2a question 9. Sessions live in Postgres, with Redis as a cache.                                                                                                                                                                                                                                                                                                          |
