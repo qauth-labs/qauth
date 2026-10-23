@@ -80,7 +80,7 @@ export function createMemorySignerStore(
             algorithm: row.key.algorithm,
             status: changes.status ?? row.key.status,
             pairId: row.key.pairId,
-            retireAt: changes.retireAt ?? null,
+            retireAt: changes.retireAt ?? row.key.retireAt ?? null,
             createdAt: index,
           };
         });
@@ -120,7 +120,7 @@ export function createMemorySignerStore(
             status: changes.status ?? row.key.status,
             publicJwk: row.publicJwk as Record<string, unknown>,
             publishAt: changes.publishAt ?? (row.key.publishAt as number),
-            unpublishAt: changes.unpublishAt ?? null,
+            unpublishAt: changes.unpublishAt ?? row.key.unpublishAt ?? null,
           };
         });
     },

@@ -12,6 +12,8 @@
  *   findByKid: repositories.realmKeys.findByKid,
  *   listByRealm: repositories.realmKeys.listByRealm,
  *   create: repositories.realmKeys.create,
+ *   updateStatus: repositories.realmKeys.updateStatus,
+ *   deleteByScope: repositories.realmKeys.deleteByScope,
  * };
  * ```
  *
@@ -49,6 +51,8 @@ export interface NewStoredKeyRow {
   readonly publishAt: number | null;
   /** Epoch ms. Set for an `active` key; `null` for a `next` key, which rotation activates. */
   readonly activateAt: number | null;
+  /** Epoch ms, from the factory's clock like the other times. */
+  readonly createdAt: number;
 }
 
 /**
@@ -75,7 +79,20 @@ export interface StoredKeySummary {
   readonly kid: string;
   readonly algorithm: string;
   readonly status: StoredKeyStatus;
+  /** Epoch ms; `null` for a purpose that is never published. */
+  readonly publishAt: number | null;
+  /** Epoch ms. */
+  readonly createdAt: number;
 }
+
+/**
+ * One rotation step (#547): a `next` key becomes `active`, or an `active` key
+ * becomes `retired`. A retired key that is published leaves its JWKS at
+ * `unpublishAt`; an unpublished one passes `null`.
+ */
+export type StoredKeyStatusChange =
+  | { readonly status: 'active'; readonly activateAt: number }
+  | { readonly status: 'retired'; readonly retireAt: number; readonly unpublishAt: number | null };
 
 /**
  * The key storage the factory needs. `Tx` is the store's transaction handle,
@@ -98,4 +115,28 @@ export interface RealmKeyStore<Tx> {
   ): Promise<readonly StoredKeySummary[]>;
   /** Write a key row and, when `publicJwk` is given, its public row. */
   create(input: NewStoredKey, tx: Tx): Promise<unknown>;
+  /**
+   * Move the key with `kid` one rotation step, and its public row with it.
+   * Only a key in the status the step starts from moves (`next` to activate,
+   * `active` to retire).
+   *
+   * @returns the moved key, or `undefined` when no key was in that status.
+   */
+  updateStatus(
+    realmId: string,
+    kid: string,
+    change: StoredKeyStatusChange,
+    tx: Tx
+  ): Promise<object | undefined>;
+  /**
+   * Delete every key of one realm, purpose and scope, with their public rows.
+   *
+   * @returns the `kid`s it deleted.
+   */
+  deleteByScope(
+    realmId: string,
+    purpose: string,
+    scopeId: string,
+    tx: Tx
+  ): Promise<readonly string[]>;
 }

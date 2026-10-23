@@ -36,7 +36,8 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
 /**
  * The store the key factory writes through (`createKeyFactory`). A
  * transaction runs on `db`, or as a savepoint inside the caller's `outer`
- * transaction, so a realm and its keys can be created together.
+ * transaction, so a realm and its keys can be created together, and a
+ * subscription or provider deleted with its keys (`deleteScopedKeys`).
  */
 export function createRepositoryKeyStore(db: DbClient): RealmKeyStore<DbClient> {
   const keys = createRealmKeysRepository(db);
@@ -46,5 +47,7 @@ export function createRepositoryKeyStore(db: DbClient): RealmKeyStore<DbClient> 
     findByKid: keys.findByKid,
     listByRealm: keys.listByRealm,
     create: keys.create,
+    updateStatus: keys.updateStatus,
+    deleteByScope: keys.deleteByScope,
   } satisfies RealmKeyStore<DbClient>);
 }

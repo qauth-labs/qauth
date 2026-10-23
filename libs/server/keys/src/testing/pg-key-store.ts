@@ -4,6 +4,7 @@ import type {
   NewStoredKey,
   RealmKeyStore,
   StoredKeyFilter,
+  StoredKeyStatus,
   StoredKeySummary,
 } from '../lib/key-store';
 
@@ -76,18 +77,32 @@ export function createPgKeyStore(pool: Pool): RealmKeyStore<PoolClient> {
         values.push(filter.status);
         conditions.push(`status = $${values.length}`);
       }
-      const { rows } = await tx.query<StoredKeySummary>(
-        `SELECT kid, algorithm, status FROM realm_keys WHERE ${conditions.join(' AND ')}`,
+      const { rows } = await tx.query<{
+        kid: string;
+        algorithm: string;
+        status: StoredKeyStatus;
+        publish_at: string | null;
+        created_at: string;
+      }>(
+        `SELECT kid, algorithm, status, publish_at, created_at FROM realm_keys
+         WHERE ${conditions.join(' AND ')} ORDER BY created_at, id`,
         values
       );
-      return rows;
+      // node-postgres returns `bigint` columns as strings.
+      return rows.map((row) => ({
+        kid: row.kid,
+        algorithm: row.algorithm,
+        status: row.status,
+        publishAt: row.publish_at === null ? null : Number(row.publish_at),
+        createdAt: Number(row.created_at),
+      }));
     },
 
     async create({ key, publicJwk }: NewStoredKey, tx: PoolClient): Promise<unknown> {
       await tx.query(
         `INSERT INTO realm_keys (realm_id, purpose, scope_id, algorithm, kid, status, pair_id,
-           ciphertext, iv, wrapped_dek, kek_ref, aad_version, publish_at, activate_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+           ciphertext, iv, wrapped_dek, kek_ref, aad_version, publish_at, activate_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           key.realmId,
           key.purpose,
@@ -103,6 +118,7 @@ export function createPgKeyStore(pool: Pool): RealmKeyStore<PoolClient> {
           key.aadVersion,
           key.publishAt,
           key.activateAt,
+          key.createdAt,
         ]
       );
       if (publicJwk !== undefined) {
@@ -121,6 +137,36 @@ export function createPgKeyStore(pool: Pool): RealmKeyStore<PoolClient> {
         );
       }
       return key;
+    },
+
+    async updateStatus(realmId, kid, change, tx: PoolClient): Promise<object | undefined> {
+      const { rows } =
+        change.status === 'active'
+          ? await tx.query(
+              `UPDATE realm_keys SET status = 'active', activate_at = $3
+               WHERE realm_id = $1 AND kid = $2 AND status = 'next' RETURNING kid`,
+              [realmId, kid, change.activateAt]
+            )
+          : await tx.query(
+              `UPDATE realm_keys SET status = 'retired', retire_at = $3, unpublish_at = $4
+               WHERE realm_id = $1 AND kid = $2 AND status = 'active' RETURNING kid`,
+              [realmId, kid, change.retireAt, change.unpublishAt]
+            );
+      if (rows[0] !== undefined && change.status === 'retired' && change.unpublishAt !== null) {
+        await tx.query(
+          'UPDATE realm_public_keys SET unpublish_at = $3 WHERE realm_id = $1 AND kid = $2',
+          [realmId, kid, change.unpublishAt]
+        );
+      }
+      return rows[0];
+    },
+
+    async deleteByScope(realmId, purpose, scopeId, tx: PoolClient): Promise<readonly string[]> {
+      const { rows } = await tx.query<{ kid: string }>(
+        'DELETE FROM realm_keys WHERE realm_id = $1 AND purpose = $2 AND scope_id = $3 RETURNING kid',
+        [realmId, purpose, scopeId]
+      );
+      return rows.map((row) => row.kid);
     },
   };
 }

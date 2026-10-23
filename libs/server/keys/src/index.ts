@@ -16,11 +16,16 @@ export {
 } from './lib/errors';
 export {
   ActiveKeyConflictError,
+  type KeyChangeRefusalReason,
+  KeyChangeRefusedError,
   type KeyCreationRefusalReason,
   KeyCreationRefusedError,
   KeyIdConflictError,
+  NextKeyConflictError,
 } from './lib/key-creation-errors';
 export {
+  DEFAULT_KEY_PREPUBLISH_DAYS,
+  DEFAULT_KEY_RETIRED_RETENTION_DAYS,
   DEFAULT_KEY_ROTATION_PERIOD_DAYS,
   getKeyPurpose,
   isKeyPurpose,
@@ -77,3 +82,8 @@ export {
   type JwsTyp,
   REALM_JWKS_PURPOSES,
 } from './lib/signer-typ';
+export {
+  MAX_WEBHOOK_ID_LENGTH,
+  WEBHOOK_SECRET_PREFIX,
+  WEBHOOK_SIGNATURE_VERSION,
+} from './lib/webhook-signature';

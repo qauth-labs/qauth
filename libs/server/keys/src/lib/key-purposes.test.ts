@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_KEY_PREPUBLISH_DAYS,
+  DEFAULT_KEY_RETIRED_RETENTION_DAYS,
   DEFAULT_KEY_ROTATION_PERIOD_DAYS,
   getKeyPurpose,
   isKeyPurpose,
@@ -141,6 +143,21 @@ describe('KEY_PURPOSES', () => {
       'upstream_client_assertion',
       'webhook_signing',
     ]);
+  });
+
+  it('shows the secret of webhook signing once, and of no other purpose', () => {
+    const shown = entries.filter(([, definition]) => definition.secretShownOnce === true);
+
+    expect(shown.map(([name]) => name)).toEqual(['webhook_signing']);
+    for (const [, definition] of shown) {
+      expect(definition).toMatchObject({ kind: 'symmetric', scoped: true, published: false });
+    }
+  });
+
+  it('defaults the rotation windows to ADR-019: 7 days published before signing, 14 after', () => {
+    expect(DEFAULT_KEY_PREPUBLISH_DAYS).toBe(7);
+    expect(DEFAULT_KEY_RETIRED_RETENTION_DAYS).toBe(14);
+    expect(DEFAULT_KEY_PREPUBLISH_DAYS).toBeLessThan(DEFAULT_KEY_ROTATION_PERIOD_DAYS);
   });
 
   it('pins the algorithms the wire depends on', () => {

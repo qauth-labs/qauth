@@ -55,6 +55,16 @@ export const KEY_ALGORITHM_KINDS: Readonly<Record<KeyAlgorithm, KeyKind>> = Obje
 export const DEFAULT_KEY_ROTATION_PERIOD_DAYS = 90;
 
 /**
+ * How long a `next` key is published, or a new webhook secret handed out and
+ * signing beside the old one, before it replaces the active key, in days
+ * (ADR-019, answers of 2026-10-09: the retired-key lifetime).
+ */
+export const DEFAULT_KEY_PREPUBLISH_DAYS = 7;
+
+/** How long a retired key stays published after it stops signing, in days (ADR-019, same answer). */
+export const DEFAULT_KEY_RETIRED_RETENTION_DAYS = 14;
+
+/**
  * How a purpose's keys rotate by default.
  *
  * - `automatic` — the rotation job (#542) replaces the key every `periodDays`,
@@ -109,6 +119,12 @@ export interface KeyPurposeDefinition {
    * keys. Every other deployment refuses them (ADR-019 Decision 9).
    */
   readonly federationOperatorOnly?: boolean;
+  /**
+   * Whether `createKey` returns a new key's secret, once (`CreatedKey.secret`).
+   * Only a symmetric purpose whose secret a party outside the deployment
+   * verifies with: the subscriber of a webhook. No later call returns it.
+   */
+  readonly secretShownOnce?: boolean;
 }
 
 /**
@@ -127,7 +143,8 @@ export interface KeyPurposeDefinition {
  * - `oid4vp_response_encryption` is an ECDH-ES P-256 key (HAIP §5) whose
  *   public half wallets encrypt to.
  * - `webhook_signing` is a Standard Webhooks HMAC secret that the subscriber
- *   receives once, so it rotates manually.
+ *   receives once, so it rotates manually. `createKey` returns it in the
+ *   `whsec_` form; nothing returns it again.
  * - `upstream_client_assertion` keys are registered with the upstream
  *   provider, so they rotate manually. They are published so the signer can
  *   serve them to a provider that fetches a JWKS.
@@ -220,6 +237,7 @@ export const KEY_PURPOSES = freezeRegistry({
     scoped: true,
     published: false,
     rotation: MANUAL,
+    secretShownOnce: true,
   },
   upstream_client_assertion: {
     description: 'Signs client assertions to one upstream provider (private_key_jwt).',

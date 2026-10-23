@@ -3,6 +3,7 @@ import type {
   NewStoredKeyRow,
   RealmKeyStore,
   StoredKeyFilter,
+  StoredKeyStatus,
   StoredKeySummary,
 } from '../lib/key-store';
 
@@ -22,9 +23,16 @@ export interface MemoryTx {
   readonly id: number;
 }
 
+/** A stored key: the row as written, and the lifecycle columns a rotation step sets. */
+export interface MemoryStoredKey extends Omit<NewStoredKeyRow, 'status'> {
+  readonly status: StoredKeyStatus;
+  readonly retireAt?: number | null;
+  readonly unpublishAt?: number | null;
+}
+
 /** A stored row, with its public JWK when one was written. */
 export interface MemoryKeyRow {
-  readonly key: NewStoredKeyRow;
+  readonly key: MemoryStoredKey;
   readonly publicJwk?: Record<string, unknown>;
 }
 
@@ -114,6 +122,53 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
       }
       rows.push(input.publicJwk === undefined ? { key } : { key, publicJwk: input.publicJwk });
       return key;
+    },
+
+    async updateStatus(realmId, kid, change, tx: MemoryTx): Promise<object | undefined> {
+      calls.push({ method: 'updateStatus', tx });
+      const from = change.status === 'active' ? 'next' : 'active';
+      const index = rows.findIndex(
+        (row) => row.key.realmId === realmId && row.key.kid === kid && row.key.status === from
+      );
+      if (index === -1) return undefined;
+      const { key } = rows[index];
+      if (
+        change.status === 'active' &&
+        rows.some(
+          (row) =>
+            row.key.status === 'active' &&
+            row.key.realmId === key.realmId &&
+            row.key.purpose === key.purpose &&
+            row.key.scopeId === key.scopeId &&
+            row.key.algorithm === key.algorithm
+        )
+      ) {
+        throw new Error('idx_realm_keys_one_active');
+      }
+      const updated: MemoryStoredKey =
+        change.status === 'active'
+          ? { ...key, status: 'active', activateAt: change.activateAt }
+          : {
+              ...key,
+              status: 'retired',
+              retireAt: change.retireAt,
+              unpublishAt: change.unpublishAt,
+            };
+      rows[index] = { ...rows[index], key: updated };
+      return updated;
+    },
+
+    async deleteByScope(realmId, purpose, scopeId, tx: MemoryTx): Promise<readonly string[]> {
+      calls.push({ method: 'deleteByScope', tx });
+      const deleted: string[] = [];
+      for (let index = rows.length - 1; index >= 0; index--) {
+        const { key } = rows[index];
+        if (key.realmId === realmId && key.purpose === purpose && key.scopeId === scopeId) {
+          deleted.unshift(key.kid);
+          rows.splice(index, 1);
+        }
+      }
+      return deleted;
     },
   };
 }

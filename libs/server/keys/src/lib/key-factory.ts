@@ -8,11 +8,15 @@ import { sealKeyMaterial } from './envelope';
 import type { KekProvider } from './kek-provider';
 import {
   ActiveKeyConflictError,
+  KeyChangeRefusedError,
   KeyCreationRefusedError,
   KeyIdConflictError,
+  NextKeyConflictError,
 } from './key-creation-errors';
 import { assertAllowedBySigningMode, generateKeyMaterial } from './key-generation';
 import {
+  DEFAULT_KEY_PREPUBLISH_DAYS,
+  DEFAULT_KEY_RETIRED_RETENTION_DAYS,
   isKeyPurpose,
   KEY_PURPOSES,
   type KeyAlgorithm,
@@ -20,17 +24,22 @@ import {
   type KeyPurposeDefinition,
   STANDARD_REALM_KEY_PURPOSES,
 } from './key-purposes';
-import type { NewKeyStatus, NewStoredKey, RealmKeyStore } from './key-store';
+import type { NewKeyStatus, NewStoredKey, RealmKeyStore, StoredKeySummary } from './key-store';
 import { isRealmId } from './realm-id';
+import { formatWebhookSecret } from './webhook-signature';
 
 /**
  * Creating a realm's keys (ADR-019 Decision 9, issue #463): generate, seal
  * under the KEK, and store, with the purpose rules of `KEY_PURPOSES` and the
- * deployment's algorithm switches applied first.
+ * deployment's algorithm switches applied first. The scoped keys of #547
+ * (webhook secrets, upstream client-assertion keys) also rotate and are
+ * deleted here.
  */
 
 /** The longest `scope_id` that `realm_keys` holds. */
 export const MAX_SCOPE_ID_LENGTH = 255;
+
+const DAY_MS = 86_400_000;
 
 /** The deployment a {@link KeyFactory} creates keys for. */
 export interface KeyFactoryOptions<Tx> {
@@ -56,6 +65,18 @@ export interface KeyFactoryOptions<Tx> {
    * federation work names the switch that sets it; this is the seam only.
    */
   readonly federationOperator?: boolean;
+  /**
+   * How long a `next` scoped key waits before `activateNextKey` may make it
+   * active, in ms: published for that long, or for a webhook secret, handed
+   * out and signing beside the old one. Defaults to
+   * {@link DEFAULT_KEY_PREPUBLISH_DAYS}. The rotation settings of #542 set it.
+   */
+  readonly prepublishMs?: number;
+  /**
+   * How long a retired published key stays in its JWKS, in ms. Defaults to
+   * {@link DEFAULT_KEY_RETIRED_RETENTION_DAYS}.
+   */
+  readonly retiredRetentionMs?: number;
   /** The clock, in epoch ms. Defaults to `Date.now`. */
   readonly now?: () => number;
 }
@@ -92,8 +113,45 @@ export interface CreatedKey {
   readonly pairId: string | null;
   readonly publishAt: number | null;
   readonly activateAt: number | null;
+  readonly createdAt: number;
   /** The public JWK stored in `realm_public_keys`, for a published purpose. */
   readonly publicJwk?: JWK;
+  /**
+   * The new key's secret, for a purpose that shows it once
+   * (`secretShownOnce`): a webhook secret in the Standard Webhooks form,
+   * `whsec_` and base64. This result is the only place it ever appears;
+   * nothing the factory or the signer returns later carries it.
+   */
+  readonly secret?: string;
+}
+
+/** Which scoped key {@link KeyFactory.activateNextKey} and {@link KeyFactory.deleteScopedKeys} act on. */
+export interface ScopedKeyInput<Tx> {
+  readonly realmId: string;
+  /** A scoped purpose: `webhook_signing`, `upstream_client_assertion` or `agent_upstream_identity`. */
+  readonly purpose: KeyPurpose;
+  /** The subscription, provider or app identity the keys belong to. */
+  readonly scopeId: string;
+  /** An outer transaction to run in, such as the one that deletes the owner. */
+  readonly tx?: Tx;
+}
+
+/** Input of {@link KeyFactory.activateNextKey}. */
+export interface ActivateNextKeyInput<Tx> extends ScopedKeyInput<Tx> {
+  /** The algorithm of the keys to rotate. Defaults to the purpose's default algorithm. */
+  readonly algorithm?: KeyAlgorithm;
+}
+
+/** What {@link KeyFactory.activateNextKey} changed. */
+export interface ActivatedKey {
+  /** The key that signs from now on. */
+  readonly activatedKid: string;
+  /** The key that stopped signing, or `null` when the scope had no active key. */
+  readonly retiredKid: string | null;
+  /** Epoch ms. When the switch happened. */
+  readonly activateAt: number;
+  /** Epoch ms. When the retired key leaves its JWKS; `null` for an unpublished purpose. */
+  readonly unpublishAt: number | null;
 }
 
 /** Creates realm keys. See {@link createKeyFactory}. */
@@ -146,6 +204,37 @@ export interface KeyFactory<Tx> {
     realmId: string,
     options?: ProvisionRealmKeysOptions<Tx>
   ): Promise<readonly CreatedKey[]>;
+  /**
+   * Finish the rotation of a scoped key, in one transaction: the scope's
+   * `next` key becomes `active`, and its `active` key, if any, becomes
+   * `retired`. A rotation starts with `createKey({ ..., status: 'next' })`,
+   * which publishes the new key at once, or hands out the new webhook secret,
+   * which then signs beside the old one.
+   *
+   * The overlap rules are those of the automatic rotation (ADR-019, #542):
+   * the `next` key must have been published, or handed out, for
+   * `prepublishMs` first, and a retired published key stays in its JWKS for
+   * `retiredRetentionMs` after the switch. A retired webhook secret signs
+   * nothing more.
+   *
+   * @throws KeyChangeRefusedError (`OVERLAP_NOT_ELAPSED`, with `notBefore`)
+   *   before the window has run; (`NO_NEXT_KEY`) when there is nothing to
+   *   activate; (`KEY_CHANGED`) when another writer moved a key meanwhile;
+   *   (`UNSCOPED_PURPOSE`) for a purpose the rotation job of #542 rotates;
+   *   and for a malformed realm id, scope id or algorithm. Nothing changes.
+   */
+  activateNextKey(input: ActivateNextKeyInput<Tx>): Promise<ActivatedKey>;
+  /**
+   * Delete every key of one scope, whatever its status, with its public rows:
+   * the hook a subscription's or a provider's deletion calls, in the same
+   * transaction (`tx`). Signers that hold one of the keys in memory drop it at
+   * their next key-list read.
+   *
+   * @returns the `kid`s it deleted; empty when the scope held none.
+   * @throws KeyChangeRefusedError for an unscoped purpose, or a malformed
+   *   realm id or scope id, before the store is touched.
+   */
+  deleteScopedKeys(input: ScopedKeyInput<Tx>): Promise<readonly string[]>;
 }
 
 /** A validated request: what to generate for one `createKey`. */
@@ -179,6 +268,17 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
   const hybridSigning = options.hybridSigning === true;
   const federationOperator = options.federationOperator === true;
   const now = options.now ?? Date.now;
+  const prepublishMs = options.prepublishMs ?? DEFAULT_KEY_PREPUBLISH_DAYS * DAY_MS;
+  const retiredRetentionMs =
+    options.retiredRetentionMs ?? DEFAULT_KEY_RETIRED_RETENTION_DAYS * DAY_MS;
+  for (const [name, value] of [
+    ['prepublish window', prepublishMs],
+    ['retired-key retention', retiredRetentionMs],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new InvalidConfigurationError(`The key ${name} is a non-negative whole number of ms`);
+    }
+  }
 
   if (hybridSigning && !enabledSignatureAlgorithms.includes('ML-DSA-65')) {
     throw new InvalidConfigurationError(
@@ -272,8 +372,24 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
           kekRef: sealed.kekRef,
           aadVersion: sealed.aadVersion,
           activateAt,
+          createdAt: at,
         };
-        const base = { realmId, purpose, scopeId, algorithm, kid, status, pairId, activateAt };
+        const base = {
+          realmId,
+          purpose,
+          scopeId,
+          algorithm,
+          kid,
+          status,
+          pairId,
+          activateAt,
+          createdAt: at,
+          // Formatted before the material is zeroed below. A string cannot be
+          // zeroed; it lives as long as the caller keeps this result.
+          ...(definition.secretShownOnce === true
+            ? { secret: formatWebhookSecret(generated.material) }
+            : {}),
+        };
 
         if (definition.published) {
           if (generated.publicJwk === undefined || publishAt === null) {
@@ -310,15 +426,18 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       if ((await store.findByKid(created.realmId, created.kid, tx)) !== undefined) {
         throw new KeyIdConflictError(created.kid);
       }
-      if (created.status === 'active') {
-        const active = await store.listByRealm(
-          created.realmId,
-          { purpose: created.purpose, scopeId: created.scopeId, status: 'active' },
-          tx
-        );
-        if (active.some((key) => key.algorithm === created.algorithm)) {
-          throw new ActiveKeyConflictError(created.purpose, created.algorithm);
-        }
+      // One key of each status signs or waits per realm, purpose, scope and
+      // algorithm. The active rule has the one-active index behind it; the
+      // next rule is this check alone.
+      const sameStatus = await store.listByRealm(
+        created.realmId,
+        { purpose: created.purpose, scopeId: created.scopeId, status: created.status },
+        tx
+      );
+      if (sameStatus.some((key) => key.algorithm === created.algorithm)) {
+        throw created.status === 'active'
+          ? new ActiveKeyConflictError(created.purpose, created.algorithm)
+          : new NextKeyConflictError(created.purpose, created.algorithm);
       }
     }
     for (const { stored } of prepared) {
@@ -373,7 +492,123 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
         return created;
       }, provisionOptions.tx);
     },
+
+    async activateNextKey(input: ActivateNextKeyInput<Tx>): Promise<ActivatedKey> {
+      const { realmId, purpose, definition, scopeId } = resolveScopedKey(input);
+      const algorithm = input.algorithm ?? definition.defaultAlgorithm;
+      if (!definition.algorithms.includes(algorithm)) {
+        throw new KeyChangeRefusedError(
+          'ALGORITHM_NOT_ALLOWED',
+          `Key purpose '${purpose}' does not allow algorithm '${String(algorithm)}'`
+        );
+      }
+
+      return store.transaction(async (tx) => {
+        const keys = (await store.listByRealm(realmId, { purpose, scopeId }, tx)).filter(
+          (key) => key.algorithm === algorithm
+        );
+        const next = keys.filter((key) => key.status === 'next');
+        const active = keys.filter((key) => key.status === 'active');
+        if (next.length !== 1) {
+          throw new KeyChangeRefusedError(
+            'NO_NEXT_KEY',
+            `The scope holds no next '${algorithm}' key for purpose '${purpose}'`
+          );
+        }
+        const at = now();
+        const notBefore = shownAt(next[0]) + prepublishMs;
+        if (at < notBefore) {
+          throw new KeyChangeRefusedError(
+            'OVERLAP_NOT_ELAPSED',
+            `The next '${algorithm}' key for purpose '${purpose}' may replace the active key ` +
+              `from ${new Date(notBefore).toISOString()}`,
+            notBefore
+          );
+        }
+
+        const unpublishAt = definition.published ? at + retiredRetentionMs : null;
+        // Retire first: the one-active index allows no moment with two.
+        for (const old of active) {
+          const retired = await store.updateStatus(
+            realmId,
+            old.kid,
+            { status: 'retired', retireAt: at, unpublishAt },
+            tx
+          );
+          if (retired === undefined) throw keyChanged(purpose);
+        }
+        const activated = await store.updateStatus(
+          realmId,
+          next[0].kid,
+          { status: 'active', activateAt: at },
+          tx
+        );
+        if (activated === undefined) throw keyChanged(purpose);
+
+        return Object.freeze({
+          activatedKid: next[0].kid,
+          retiredKid: active[0]?.kid ?? null,
+          activateAt: at,
+          unpublishAt: active.length > 0 ? unpublishAt : null,
+        });
+      }, input.tx);
+    },
+
+    async deleteScopedKeys(input: ScopedKeyInput<Tx>): Promise<readonly string[]> {
+      const { realmId, purpose, scopeId } = resolveScopedKey(input);
+      return Object.freeze([
+        ...(await store.transaction(
+          (tx) => store.deleteByScope(realmId, purpose, scopeId, tx),
+          input.tx
+        )),
+      ]);
+    },
   });
+}
+
+/** When a `next` key reached its outside party: its publication, or its creation when unpublished. */
+function shownAt(key: StoredKeySummary): number {
+  return key.publishAt ?? key.createdAt;
+}
+
+function keyChanged(purpose: KeyPurpose): KeyChangeRefusedError {
+  return new KeyChangeRefusedError(
+    'KEY_CHANGED',
+    `A '${purpose}' key changed status during the rotation; nothing was changed`
+  );
+}
+
+/**
+ * The realm, scoped purpose and scope id that `activateNextKey` and
+ * `deleteScopedKeys` act on, checked as `createKey` checks them.
+ */
+function resolveScopedKey(input: ScopedKeyInput<unknown>): {
+  readonly realmId: string;
+  readonly purpose: KeyPurpose;
+  readonly definition: KeyPurposeDefinition;
+  readonly scopeId: string;
+} {
+  if (!isRealmId(input.realmId)) {
+    throw new KeyChangeRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
+  }
+  const { purpose } = input;
+  if (typeof purpose !== 'string' || !isKeyPurpose(purpose)) {
+    throw new KeyChangeRefusedError('UNKNOWN_PURPOSE', 'An unknown key purpose');
+  }
+  const definition: KeyPurposeDefinition = KEY_PURPOSES[purpose];
+  if (!definition.scoped) {
+    throw new KeyChangeRefusedError(
+      'UNSCOPED_PURPOSE',
+      `Key purpose '${purpose}' is not scoped; only scoped keys rotate and are deleted by scope here`
+    );
+  }
+  if (!isScopeId(input.scopeId)) {
+    throw new KeyChangeRefusedError(
+      'INVALID_SCOPE_ID',
+      `A scope id is a non-empty, well-formed string of at most ${MAX_SCOPE_ID_LENGTH} characters`
+    );
+  }
+  return { realmId: input.realmId.toLowerCase(), purpose, definition, scopeId: input.scopeId };
 }
 
 /**
@@ -416,17 +651,27 @@ function resolveScopeId(
       `Key purpose '${purpose}' is scoped and needs a scope id`
     );
   }
-  if (
-    typeof scopeId !== 'string' ||
-    scopeId.length === 0 ||
-    scopeId.length > MAX_SCOPE_ID_LENGTH ||
-    scopeId.includes('\u0000') ||
-    Buffer.from(scopeId, 'utf8').toString('utf8') !== scopeId
-  ) {
+  if (!isScopeId(scopeId)) {
     throw new KeyCreationRefusedError(
       'INVALID_SCOPE_ID',
       `A scope id is a non-empty, well-formed string of at most ${MAX_SCOPE_ID_LENGTH} characters`
     );
   }
   return scopeId;
+}
+
+/**
+ * Whether `scopeId` can be stored as `realm_keys.scope_id`: a non-empty,
+ * well-formed string of at most {@link MAX_SCOPE_ID_LENGTH} characters. A lone
+ * surrogate and a NUL are refused: the associated-data encoder refuses the
+ * first, and Postgres text the second.
+ */
+export function isScopeId(scopeId: unknown): scopeId is string {
+  return (
+    typeof scopeId === 'string' &&
+    scopeId.length > 0 &&
+    scopeId.length <= MAX_SCOPE_ID_LENGTH &&
+    !scopeId.includes('\u0000') &&
+    Buffer.from(scopeId, 'utf8').toString('utf8') === scopeId
+  );
 }
