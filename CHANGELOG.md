@@ -155,6 +155,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/.well-known/assetlinks.json` from `WEBAUTHN_APPLE_APP_IDS` and
   `WEBAUTHN_ANDROID_APPS`; with neither set, both paths stay 404.
 
+- **The signer** ([#464], ADR-019 Decision 9). `@qauth-labs/server-keys`
+  defines `Signer`, the one interface for private-key work: sign a JWS, sign
+  the ADR-005 hybrid carrier, hand out the cookie HMAC secrets, encrypt and
+  decrypt with the `data_at_rest` key, and read the verification keys and the
+  realm JWKS. The signer sets `iss` from the realm row and `kid` from the
+  active key; a caller can set neither. `token_signing` signs only `at+jwt`
+  and ID tokens, `event_signing` only `secevent+jwt` and `logout+jwt`. Every
+  call names its caller's role (`local`, `web`, `api`, `delivery`, `admin`),
+  and a policy table decides what each may call. No operation returns a
+  private key. The in-process signer unwraps a key on first use, keeps it in a
+  bounded cache and re-reads the active key once a minute, so a signature with
+  a warm cache runs no database query; a missing key is an error, never a new
+  key. The KEK provider, envelope encryption and key factory move to the
+  `@qauth-labs/server-keys/custody` entry point, and a lint rule lets only the
+  signer's wiring, the new `@qauth-labs/fastify-plugin-signer`, import it.
+  Nothing registers the plugin yet: tokens are still signed with the
+  environment keys until token signing moves onto the signer.
+
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
   federation routes, which a switch registers, are experimental). The OpenAPI
@@ -249,6 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#456]: https://github.com/qauth-labs/qauth/issues/456
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
+[#464]: https://github.com/qauth-labs/qauth/issues/464
 [#467]: https://github.com/qauth-labs/qauth/issues/467
 [#470]: https://github.com/qauth-labs/qauth/issues/470
 [#484]: https://github.com/qauth-labs/qauth/issues/484

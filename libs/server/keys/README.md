@@ -1,11 +1,26 @@
 # @qauth-labs/server-keys
 
 The keys QAuth stores per realm and purpose: the fixed list of key purposes, key generation,
-envelope encryption, and the provider of the key-encryption key (KEK) that protects them
+envelope encryption, the provider of the key-encryption key (KEK) that protects them, and the
+signer, the one component that uses them
 ([ADR-019 Decision 9](../../../docs/adr/019-deployment-topology-and-trust-boundaries.md)).
 
-> **Status:** the library and its default provider are complete, but nothing calls them yet. The
-> signer (#464) and the import of the environment keys at first boot (#485) build on it.
+> **Status:** the library, its default provider and the in-process signer are complete. The
+> signer's wiring, [`@qauth-labs/fastify-plugin-signer`](../../fastify/plugins/signer/README.md),
+> is not registered yet: token signing moves onto it with #491, and the import of the environment
+> keys at first boot (#485) builds on it.
+
+## Entry points
+
+| Import                            | Holds                                                                                                                                               | Who may import it                                |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `@qauth-labs/server-keys`         | The `Signer` interface, the caller roles and their policy, the `typ` table, the key purposes, and the typed errors.                                 | Any project.                                     |
+| `@qauth-labs/server-keys/custody` | The KEK provider, envelope encryption, key generation, the key factory, the in-process signer and the storage ports. Everything that touches a KEK. | This library and the signer's wiring, no others. |
+
+ADR-019 provisions the KEK to the signer role alone, so a rule in `eslint.config.mjs` fails
+`nx lint` for an import of `@qauth-labs/server-keys/custody`, or of a deep path into the package,
+from any other project. Every other component signs, encrypts and reads keys through `Signer`. A
+KEK adapter package (#577–#579) is added to that rule's list when it lands.
 
 ## Overview
 
@@ -32,6 +47,8 @@ keys; the material stays as it is.
 
 The library may import only `scope:core` and `scope:shared` libraries. Its `type:key-custody` tag
 carries that rule in `eslint.config.mjs`.
+
+- **`Signer`** and **`createInProcessSigner`**: see [The signer](#the-signer).
 
 ## The default provider
 
@@ -65,7 +82,7 @@ wrapped under the new KEK, and keys wrapped under the old one still open until t
 ## Usage
 
 ```typescript
-import { loadKekProvider, openKeyMaterial, sealKeyMaterial } from '@qauth-labs/server-keys';
+import { loadKekProvider, openKeyMaterial, sealKeyMaterial } from '@qauth-labs/server-keys/custody';
 
 const provider = await loadKekProvider({
   env: process.env,
@@ -101,7 +118,7 @@ configuration warnings through `context.warn`.
 - Run the contract against the backend or a test double of it:
 
 ```typescript
-import { runKekProviderContract } from '@qauth-labs/server-keys';
+import { runKekProviderContract } from '@qauth-labs/server-keys/custody';
 import { describe, it } from 'vitest';
 
 runKekProviderContract({ name: 'my-adapter', createProvider, describe, it });
@@ -145,7 +162,7 @@ default.
 `createKeyFactory` takes the deployment's switches and returns `createKey` and `provisionRealmKeys`.
 
 ```typescript
-import { createKeyFactory } from '@qauth-labs/server-keys';
+import { createKeyFactory } from '@qauth-labs/server-keys/custody';
 
 const keys = createKeyFactory({
   store, // a RealmKeyStore, below
@@ -198,16 +215,101 @@ the federation work names the switch that sets it.
 ### The store
 
 This library may not import `@qauth-labs/infra-db`, so it writes through a `RealmKeyStore` port
-shaped like the realm keys repository (#461). The signer's wiring passes the repository:
+shaped like the realm keys repository (#461). The signer's wiring builds it from the repository:
+`createRepositoryKeyStore(db)` in `@qauth-labs/fastify-plugin-signer`.
+
+## The signer
+
+`Signer` is the one interface for private-key work. Every call names the caller's role first:
 
 ```typescript
-const store: RealmKeyStore<DbClient> = {
-  transaction: (work, outer) => (outer ?? db).transaction(work),
-  findByKid: repositories.realmKeys.findByKid,
-  listByRealm: repositories.realmKeys.listByRealm,
-  create: repositories.realmKeys.create,
-};
+const token = await signer.signJws('api', {
+  realmId,
+  purpose: 'token_signing',
+  typ: 'at+jwt',
+  claims: { sub, aud, client_id, scope, iat, exp, jti },
+});
 ```
+
+| Operation                                                | Returns                                                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `signJws({ realmId, purpose, typ, algorithm?, claims })` | A compact JWS signed by the realm's active key of the purpose. `algorithm` defaults to the purpose's default (`EdDSA`).               |
+| `signHybrid({ realmId, typ, claims })`                   | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                   |
+| `getCookieSecrets(realmId)`                              | The active cookie HMAC secret and the most recently retired one, as fresh buffers.                                                    |
+| `encrypt({ realmId, plaintext, context? })`              | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
+| `decrypt({ realmId, ciphertext, context? })`             | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
+| `getVerificationKeys(realmId, purpose)`                  | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |
+| `getJwks(realmId)`                                       | The realm's JWKS: the published `token_signing` and `event_signing` keys inside their window, `next` keys included, in a fixed order. |
+
+What the signer guarantees:
+
+- **It names the issuer and the key.** `iss` comes from the realm row and `kid` from the active
+  key. A claims set with `iss`, or a request with any field the operation does not take (`kid`,
+  `alg`, a header), is refused with `SignerRequestRefusedError`. The claims are serialized once
+  before signing, so what is checked is what is signed.
+- **Each purpose signs its own token types only** (`JWS_TYP_BY_PURPOSE`). Any other pair is refused.
+
+  | Purpose         | `typ`                        |
+  | --------------- | ---------------------------- |
+  | `token_signing` | `at+jwt`, `JWT` (ID token)   |
+  | `event_signing` | `secevent+jwt`, `logout+jwt` |
+
+- **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
+  `SignerAccessDeniedError`. Every role may read public keys.
+
+  | Role       | May call                                                                        |
+  | ---------- | ------------------------------------------------------------------------------- |
+  | `local`    | Everything. The caller inside the signer's own process, in a single deployment. |
+  | `web`      | `getCookieSecrets`. It never signs a token.                                     |
+  | `api`      | `signJws` for `token_signing`, `signHybrid`, `encrypt`, `decrypt`.              |
+  | `delivery` | `signJws` for `event_signing`. Webhook signing joins with #547.                 |
+  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.         |
+
+- **No key leaves it.** No operation returns a private key, a key object or symmetric material,
+  except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A compromised
+  caller still gets signatures for its allowed purposes, never a key. Errors carry roles,
+  purposes, algorithms, realm ids and `kid`s only.
+- **It never creates a key.** A realm without the key an operation needs gets a
+  `SignerKeyNotFoundError`. A realm without an issuer gets a `RealmIssuerNotFoundError`.
+- **It never falls back to another key.** A key that does not unwrap fails the call with the KEK
+  provider's typed error (`KEY_DECRYPTION_FAILED`, `KEK_UNKNOWN_REF`, `KEK_UNAVAILABLE`,
+  `KEK_ACCESS_DENIED`).
+
+Webhook signatures and client assertions are not operations yet; #547 adds them.
+
+### The in-process signer
+
+`createInProcessSigner` (from `/custody`) is the signer of a single deployment.
+
+```typescript
+const signer = createInProcessSigner({
+  store, // a SignerKeyStore; the wiring builds it from the repositories
+  kekProvider,
+  enabledSignatureAlgorithms: cryptoEnv.enabledSignatureAlgorithms,
+  hybridSigning: cryptoEnv.HYBRID_SIGNING_ENABLED,
+});
+```
+
+- A key is read and unwrapped the first time a call needs it, then kept in memory under a size limit
+  (`keyCacheSize`, default 256 keys). Signing and encryption keys are imported as non-extractable
+  WebCrypto keys, and the plaintext material is zeroed as soon as it is imported. Concurrent first
+  calls unwrap a key once.
+- Which key is active is read at most once per `refreshIntervalMs` (default 60 seconds) per realm
+  and purpose, so a signature with a warm cache runs no database query. A rotation is followed
+  within one interval; the old key stays published and verifiable meanwhile. The realm's issuer
+  never changes once set, so it is read once.
+- With hybrid signing off, `signHybrid` is refused and the ML-DSA-65 private key is never unwrapped
+  (ADR-005, #248 F10).
+
+The remote signer of a distributed deployment (#497) implements the same interface.
+
+### Data at rest
+
+A ciphertext is four parts joined by `.`: the version `v1`, the `kid` of the `data_at_rest` key,
+the 96-bit nonce and the AES-256-GCM ciphertext with its 128-bit tag, both base64url. The
+associated data binds the realm id, the `kid` and the caller's `context` (at most 1024
+characters), each length-prefixed, so a ciphertext decrypts only in the realm and for the context it
+was made for. Pass the row it belongs to as `context`, so a ciphertext copied to another row fails.
 
 ## Testing
 

@@ -765,12 +765,13 @@ interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 - [@qauth-labs/server-jwt](./libs/server/jwt/README.md) — JWT signing and verification
 - [@qauth-labs/server-pkce](./libs/server/pkce/README.md) — PKCE challenge generation and verification
 - [@qauth-labs/server-federation](./libs/server/federation/README.md) — `CredentialProvider` interface, registry, and the password/wallet providers
-- [@qauth-labs/server-keys](./libs/server/keys/README.md) — envelope encryption of stored keys and the KEK provider
+- [@qauth-labs/server-keys](./libs/server/keys/README.md) — the `Signer` interface, envelope encryption of stored keys and the KEK provider
 - [@qauth-labs/server-egress](./libs/server/egress/README.md) — SSRF-safe client for every outbound call
 - [@qauth-labs/core-crypto](./libs/core/crypto/README.md) — algorithm-agnostic sign/verify/JWE and the hybrid PQC layer
 - [@qauth-labs/crypto-native](./libs/core/crypto-native/README.md) — napi-rs binding over `aws-lc-rs`
 - [@qauth-labs/mcp-guard](./libs/fastify/plugins/mcp-guard/README.md) — resource-server SDK for protecting MCP servers
 - [@qauth-labs/fastify-plugin-federation](./libs/fastify/plugins/federation/README.md) — federation wiring for Fastify
+- [@qauth-labs/fastify-plugin-signer](./libs/fastify/plugins/signer/README.md) — the signer's wiring: KEK provider, key storage and `fastify.signer`
 - [@qauth-labs/shared-errors](./libs/shared/errors/README.md) — centralized error handling
 - [@qauth-labs/shared-validation](./libs/shared/validation/README.md) — input validation utilities
 - [@qauth-labs/shared-testing](./libs/shared/testing/README.md) — test helpers and fixtures
