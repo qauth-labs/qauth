@@ -6,6 +6,7 @@
   "dependencies": {
     "@node-rs/argon2": "catalog:",
     "@qauth-labs/shared-errors": "workspace:*",
+    "@qauth-labs/shared-events": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "dotenv": "catalog:",
     "drizzle-orm": "catalog:",

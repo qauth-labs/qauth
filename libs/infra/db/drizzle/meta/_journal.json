@@ -204,6 +204,13 @@
       "when": 1792680084287,
       "tag": "0028_webauthn_relying_party",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792761360336,
+      "tag": "0029_event_store",
+      "breakpoints": true
     }
   ]
 }

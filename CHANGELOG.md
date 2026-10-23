@@ -173,6 +173,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nothing registers the plugin yet: tokens are still signed with the
   environment keys until token signing moves onto the signer.
 
+- **Schema**: migration 0029 adds the event store ([#457], ADR-019 Decision 8,
+  ADR-018 §3). One append-only table, `events`, is both the transactional
+  outbox and the event log: an event is written in the transaction of the
+  change it records, so both commit or neither does. Each row is one envelope,
+  plus `seq` and `xid`, the writing transaction's id. In
+  `@qauth-labs/infra-db`, `createEventsRepository` gives `emit(tx, event)`,
+  which checks the event against the registry and throws on an unknown type or
+  a bad payload, and `emitInOwnTransaction(event)` for a caller without a
+  transaction. `readAfter(realmId, position, limit, filters)` returns a realm's
+  events in `(xid, seq)` order and only those older than every open
+  transaction, so a reader never skips one that commits late; its position is
+  opaque and names its realm. Every read needs a realm id. The price is lag: a
+  transaction left open holds back the events written after it began, and the
+  new gauge `qauth_events_oldest_unread_age_seconds` on `/metrics` shows how
+  long. The migration only creates the table and its indexes. Nothing emits
+  events yet: the emitters, the delivery role and the event API come next.
+
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
   federation routes, which a switch registers, are experimental). The OpenAPI
@@ -265,6 +282,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#451]: https://github.com/qauth-labs/qauth/issues/451
 [#452]: https://github.com/qauth-labs/qauth/issues/452
 [#456]: https://github.com/qauth-labs/qauth/issues/456
+[#457]: https://github.com/qauth-labs/qauth/issues/457
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#464]: https://github.com/qauth-labs/qauth/issues/464

@@ -3,6 +3,7 @@ export * from './audit';
 export * from './consents';
 export * from './core';
 export * from './enums';
+export * from './events';
 export * from './identity';
 export * from './keys';
 export * from './oid4vp';

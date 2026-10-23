@@ -345,6 +345,40 @@ Table "admin_audit_log_checkpoints" {
   }
 }
 
+// Event store (ADR-019 Decision 8, #457): the transactional outbox and the
+// event log in one append-only table. An event is written in the transaction
+// of the change it records. Readers take a realm's rows in (xid, seq) order,
+// and only rows whose xid is below their snapshot's xmin, so a row committed
+// late by an older transaction is never skipped. No foreign keys: an event
+// outlives the realm, user or client it names.
+Table "events" {
+  "seq" bigint [pk, increment, note: "GENERATED ALWAYS AS IDENTITY"]
+  "xid" xid8 [not null, default: `pg_current_xact_id()`, note: "The writing transaction"]
+  "id" uuid [not null, unique, note: "Envelope id, a UUIDv7"]
+  "realm_id" uuid [not null]
+  "category" varchar(16) [not null, note: "user | admin"]
+  "type" varchar(255) [not null, note: "urn:qauth:event:<name>:v<N>[-rc.<M>]"]
+  "time" bigint [not null, note: "Epoch ms"]
+  "actor_type" varchar(32)
+  "actor_id" varchar(255)
+  "actor_delegation_chain" jsonb [note: "client_id values, the acting agent first"]
+  "subject_type" varchar(32)
+  "subject_id" varchar(255)
+  "client_id" varchar(255)
+  "request_id" varchar(128) [note: "request.traceId"]
+  "request_ip" varchar(45)
+  "request_user_agent" varchar(1024)
+  "data" jsonb [not null]
+  "schema_version" smallint [not null, note: "Row layout version; 1"]
+
+  Indexes {
+    (realm_id, xid, seq) [name: "idx_events_realm_position"]
+    (realm_id, type) [name: "idx_events_realm_type"]
+    subject_id [name: "idx_events_subject_id"]
+    time [name: "idx_events_time"]
+  }
+}
+
 // ============================================================================
 // OPTIONAL: SESSION MANAGEMENT (can use Redis instead)
 // ============================================================================

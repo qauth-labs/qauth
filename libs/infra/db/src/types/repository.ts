@@ -1,3 +1,9 @@
+import type {
+  EventCategory,
+  EventDataOf,
+  EventEnvelope,
+  RegisteredEventType,
+} from '@qauth-labs/shared-events';
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type {
@@ -6,6 +12,7 @@ import type {
   AdminAuditDiff,
   FieldAnnotations,
 } from '../lib/admin-audit/types';
+import type { EventPosition } from '../lib/events/position';
 import type { adminAuditLog } from '../lib/schema/admin-audit';
 import type { oauthConsents } from '../lib/schema/consents';
 import type { apiKeys, oauthClients } from '../lib/schema/core';
@@ -926,4 +933,158 @@ export interface AdminAuditLogRepository {
    * cannot produce a false break.
    */
   verifyAdminAuditChain(realmId: string): Promise<AdminAuditChainReport>;
+}
+
+/**
+ * One event as its emitter hands it to {@link EventsRepository.emit}: the
+ * envelope of the event contract (`@qauth-labs/shared-events`) without `id`,
+ * `time` and `category`. The repository makes the id (a UUIDv7) and the time,
+ * and takes the category from the type's registry entry.
+ */
+export interface EmitEvent<Type extends RegisteredEventType = RegisteredEventType> {
+  /** A registered event type. */
+  type: Type;
+  /** The id of the realm the event happened in. */
+  realm: string;
+  actor?: EventEnvelope['actor'];
+  subject?: EventEnvelope['subject'];
+  client?: EventEnvelope['client'];
+  request?: EventEnvelope['request'];
+  /** The type's own payload, as its schema in the registry describes it. */
+  data: EventDataOf<Type>;
+}
+
+/** An event read back from the store, with its place in the realm's stream. */
+export interface StoredEvent {
+  /** The position of this event: reading on from it returns the events after it. */
+  position: EventPosition;
+  /** The envelope, as it was emitted. */
+  event: EventEnvelope;
+}
+
+/**
+ * Narrowing of {@link EventsRepository.readAfter}. Every member is optional
+ * and they combine with AND. A position does not depend on them: a reader may
+ * change its filters and read on from the same position.
+ */
+export interface EventReadFilters {
+  /** Only events of these types. An empty list matches no event. */
+  types?: readonly string[];
+  category?: EventCategory;
+  /** Only events about this subject (`subject.id`). */
+  subjectId?: string;
+  /** Only events whose request came through this client (`client.id`). */
+  clientId?: string;
+  /** Only events whose `time` is at or after this, in epoch milliseconds. */
+  fromTime?: number;
+}
+
+/** One read of a realm's stream. */
+export interface EventPage {
+  /** The events after the position read from, oldest first, at most the limit. */
+  events: StoredEvent[];
+  /**
+   * Where to read on from: the last event's position when the page is full,
+   * else the read's horizon. Never before the position read from.
+   */
+  next: EventPosition;
+}
+
+/** Options of `createEventsRepository`. */
+export interface EventsRepositoryOptions {
+  /** The clock for an event's `time` and id, in epoch milliseconds. Defaults to `Date.now`. */
+  now?: () => number;
+}
+
+/**
+ * The event store (ADR-019 Decision 8, ADR-018 §3, issue #457): the
+ * transactional outbox and the event log in one append-only table.
+ *
+ * ## The write rule
+ *
+ * An event is written in the transaction of the change it records, so both
+ * commit or neither does. A caller that has a transaction passes it to
+ * {@link emit}. A caller without one (a change that is a single statement, or
+ * an event that records no change, such as a refused sign-in) calls
+ * {@link emitInOwnTransaction}, which writes the event in a short transaction
+ * of its own. Never open a transaction only to emit after it commits: the
+ * change could commit and the event be lost.
+ *
+ * ## The read rule and its lag
+ *
+ * Every read takes a realm id; there is no read across realms.
+ * {@link readAfter} returns only events whose writing transaction is older
+ * than every transaction still open, so a reader never skips an event that
+ * commits late. The price is lag: one long-open transaction that has written
+ * anything, on any database of the Postgres server, holds back every event
+ * written after it began until it ends. {@link oldestUnreadEventAge} measures
+ * that wait; the auth server publishes it as the gauge
+ * `qauth_events_oldest_unread_age_seconds`.
+ */
+export interface EventsRepository {
+  /**
+   * Write one event in the caller's transaction (a `DbTransaction`, never the
+   * root database), so it commits or rolls back with the change it records.
+   *
+   * The event is checked against the registry first (`parseEvent`): its type
+   * must be registered, its `data` must match the type's schema and the
+   * payload rules, and its subject the type's. Nothing is written when it
+   * fails.
+   *
+   * The insert returns nothing, so a role granted only `INSERT` on `events`
+   * can write.
+   *
+   * @returns the event id, a UUIDv7
+   * @throws {EventValidationError} on an unknown type, a payload that fails
+   *   its schema or the payload rules, or a text Postgres cannot store (a NUL
+   *   character)
+   */
+  emit<Type extends RegisteredEventType>(
+    tx: DbTransaction,
+    event: EmitEvent<Type>
+  ): Promise<string>;
+
+  /**
+   * Write one event in a transaction of its own: the write rule's path for a
+   * caller without a transaction. Checked like {@link emit}.
+   *
+   * @returns the event id, a UUIDv7
+   * @throws {EventValidationError} as {@link emit} does
+   */
+  emitInOwnTransaction<Type extends RegisteredEventType>(event: EmitEvent<Type>): Promise<string>;
+
+  /**
+   * Read a realm's events after a position, oldest first, in `(xid, seq)`
+   * order.
+   *
+   * Only events whose `xid` is older than the read's snapshot xmin
+   * (`pg_snapshot_xmin(pg_current_snapshot())`) are returned. Every
+   * transaction below it has ended, so no event can appear before the last
+   * one returned later on, and reading on from `next` never skips or repeats
+   * one. The horizon and the rows come from one statement, one snapshot.
+   *
+   * @param realmId - the realm to read; required, there is no read across realms
+   * @param position - where to read on from: `eventStreamStart(realmId)`, or
+   *   a `position` or `next` this realm's reads returned
+   * @param limit - the most events to return, from 1 to 1000
+   * @throws {EventPositionError} on a position that does not parse or belongs
+   *   to another realm
+   * @throws {TypeError} on a realm id that is not a UUID, or a limit out of range
+   */
+  readAfter(
+    realmId: string,
+    position: EventPosition,
+    limit: number,
+    filters?: EventReadFilters
+  ): Promise<EventPage>;
+
+  /**
+   * How long, in seconds, the oldest committed event that readers cannot take
+   * yet has waited: an event held back because a transaction older than it
+   * is still open. 0 when no event is held back.
+   *
+   * Not an event read: it returns one number for the whole store and no
+   * event, so it takes no realm.
+   */
+  oldestUnreadEventAge(): Promise<number>;
 }

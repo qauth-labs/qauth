@@ -268,6 +268,12 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - Triggers in migration 0026 hold for every role whose statements fire them (SQLSTATE 23514, the constraint named): an inserted row must follow the realm's chain head (`admin_audit_log_follows_head`); no row is updated and neither table is truncated (`admin_audit_log_append_only`, `admin_audit_log_checkpoints_append_only`); a row is deleted only when a checkpoint covers it; a checkpoint names a row still in the log with its hash (`admin_audit_log_checkpoints_match`), moves forward (`admin_audit_log_checkpoints_forward`), covers an unbroken, linked run of rows (`admin_audit_log_checkpoints_unbroken`) and none younger than 90 days (`admin_audit_log_retention_floor`). The retention job removes rows with `SELECT admin_audit_log_prune(realm_id, through_seq)`, which writes the checkpoint and deletes the realm's rows up to that `seq`; `EXECUTE` on it is revoked from `PUBLIC`. Run `verifyAdminAuditChain` before a prune: the database checks the links, not the row hashes. A table owner or a superuser can disable a trigger, so only the per-role grants (#498) protect the log from the application's own database user. The triggers are hand-written SQL, which `drizzle-kit push` does not create; use the migrations.
   - The hash is unkeyed: a party that can rewrite a row and every row after it, or cut the newest rows, leaves a chain that verifies. A copy of each head kept outside the database, such as the outbox event that mirrors the row with its `seq` and `row_hash`, is what shows that.
   - `adminAuditLogWriterGrantStatements(role)` returns the statements that give a writing role `INSERT` and `SELECT` on the log and `SELECT` on the checkpoints, and nothing else. The per-role grants script (#498) applies them.
+- **`createEventsRepository(db, options?)`**: The event store (ADR-019 Decision 8, #457): the transactional outbox and the event log in one append-only table, `events`. It takes the root database, which reads and `emitInOwnTransaction` use. See [Event store](#event-store) for the write rule, the read rule and the lag.
+  - `emit(tx, event)` writes one event in the caller's transaction (a `DbTransaction`, not the root database) and returns its id. It checks the event with `parseEvent` from `@qauth-labs/shared-events` first and throws `EventValidationError` on an unknown type, a payload that fails its schema or the payload rules, or a NUL character; nothing is written then. The repository makes the id (a UUIDv7) and the time, and takes the category from the registry. The insert reads nothing back, so a role granted only `INSERT` on `events` can write.
+  - `emitInOwnTransaction(event)` is the same for a caller without a transaction: one `INSERT`, a transaction of its own.
+  - `readAfter(realmId, position, limit, filters?)` returns `{ events, next }`: the realm's events after `position`, oldest first in `(xid, seq)` order, at most `limit` (1 to 1000), each with its own `position`. `filters` narrows by `types`, `category`, `subjectId`, `clientId` and `fromTime`. Read on from `next`.
+  - `oldestUnreadEventAge()` returns how long, in seconds, the oldest committed event has been held back from readers. It returns no event, so it takes no realm.
+  - A position (`EventPosition`) is opaque text that names its realm, `xid` and `seq`. Start a realm's stream with `eventStreamStart(realmId)`. A position of another realm, or one that does not parse, throws `EventPositionError`.
 - **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
   - `create()`, `findByCode()`, `markUsed()`
 - **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
@@ -342,6 +348,67 @@ const userLogs = await auditLogsRepo.findByRealmAndUserId('realm-123', 'user-456
 ```
 
 **Security Note**: Realm filtering ensures that users can only access audit logs from their own realm, preventing cross-realm data leakage.
+
+#### Event Store
+
+The `events` table (migration 0029) is both the transactional outbox and the
+event log (ADR-019 Decision 8). Each row is one envelope of the event contract
+(`@qauth-labs/shared-events`), plus `seq` (an identity) and `xid` (the writing
+transaction's id, `pg_current_xact_id()`).
+
+**The write rule.** An event is written in the transaction of the change it
+records, so both commit or neither does. A caller that has a transaction
+passes it to `emit`. A caller without one, such as a change that is a single
+statement or an event that records no change, calls `emitInOwnTransaction`,
+which writes the event in a short transaction of its own. Never emit after the
+change's transaction has committed: the change would stay and the event could
+be lost.
+
+```typescript
+import { createEventsRepository, eventStreamStart } from '@qauth-labs/infra-db';
+
+const events = createEventsRepository(db);
+
+// Sign-out: the tokens are revoked and the event recorded, or neither.
+await db.transaction(async (tx) => {
+  await refreshTokensRepo.revokeAllForUser(userId, 'logout', tx);
+  await events.emit(tx, {
+    type: 'urn:qauth:event:user.signed_out:v1-rc.0',
+    realm: realmId,
+    actor: { type: 'user', id: userId },
+    subject: { type: 'user', id: userId },
+    data: {},
+  });
+});
+
+// A reader keeps its position and reads on from it.
+let position = eventStreamStart(realmId);
+const page = await events.readAfter(realmId, position, 100);
+position = page.next;
+```
+
+**The read rule.** Every read takes a realm id; there is no read across realms,
+and a read that leaves it out does not compile. `seq` alone cannot order a
+reader: two transactions can commit in the opposite order of their `seq`
+values, and a reader that had passed the later one would skip the earlier.
+`readAfter` returns only rows whose `xid` is below the snapshot's xmin
+(`pg_snapshot_xmin(pg_current_snapshot())`). Every transaction below it has
+ended, so no row can still appear before the last one returned, and reading on
+from `next` never skips or repeats an event. After a page shorter than the
+limit, `next` is that horizon, so a filtered reader does not scan the same old
+rows again.
+
+**The lag.** The price of that rule is lag: a transaction left open holds back
+every event written after it began, until it ends. That holds for any
+transaction that has written something, on any database of the same Postgres
+server. `oldestUnreadEventAge()` measures the wait, and the auth server
+publishes it on `/metrics` as `qauth_events_oldest_unread_age_seconds`. Keep
+transactions short, and never hold one open across a network call.
+
+The migration is expand-only: one `CREATE TABLE` and its `CREATE INDEX`
+statements. Insert-only grants for writing roles come with the per-role
+database users; the hash-chain columns of admin events and the trigger that
+refuses updates come with #459.
 
 #### Base Repository Interface
 
@@ -529,6 +596,10 @@ libs/infra/db/
 
 - **realm_keys**: Each realm's keys, one row per key, per purpose and (for webhook and upstream client-assertion keys) per `scope_id`. The material is stored envelope-encrypted (`ciphertext`, `iv`, `wrapped_dek`, with `kek_ref` naming the KEK and `aad_version` the associated-data layout). `status` is `next`, `active`, `retired` or `compromised`; a partial unique index allows one `active` key per realm, purpose, scope and algorithm, and `kid` is unique per realm. Only the signer's database user may read it once the per-role grants (#498) are applied
 - **realm_public_keys**: The public JWK of every published key, keyed by `(realm_id, kid)`. Its foreign key to the `realm_keys` row covers `purpose`, `algorithm` and `status` with `ON UPDATE CASCADE`, so a status change on the key row (a compromise included) reaches the public row in the same statement; change the status on `realm_keys` only. Every role may read it for the JWKS and for verification. Symmetric purposes have no row here: CHECKs require a `kty` other than `oct` and refuse private JWK members
+
+### Event Store (ADR-019 Decision 8)
+
+- **events**: One row per event, written in the transaction of the change it records: the envelope's `id` (a UUIDv7, unique), realm, category, type, time, actor, subject, client, request and `data`, plus `seq` (an identity), `xid` (the writing transaction, `xid8`) and `schema_version` (the row layout, 1). Readers take a realm's rows in `(xid, seq)` order below their snapshot's xmin (`idx_events_realm_position`). Also indexed by `(realm_id, type)`, by `subject_id` and by `time` for retention. No foreign keys: an event outlives the realm, user or client it names
 
 ### Admin Audit Tables (ADR-019 Decision 7)
 

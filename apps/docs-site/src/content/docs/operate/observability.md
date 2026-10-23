@@ -144,13 +144,14 @@ below.
 
 QAuth exposes Prometheus metrics in text exposition format at `GET /metrics`
 (`apps/auth-server/src/app/routes/metrics.ts`). The endpoint includes default
-process/runtime metrics plus QAuth auth counters:
+process/runtime metrics plus QAuth counters and gauges:
 
-| Metric                       | Type    | Labels               | Meaning                           |
-| ---------------------------- | ------- | -------------------- | --------------------------------- |
-| `qauth_login_attempts_total` | counter | `result`, `reason`   | Login outcomes (success/failure). |
-| `qauth_tokens_issued_total`  | counter | `type`, `grant_type` | Tokens issued by type and grant.  |
-| `qauth_job_runs_total`       | counter | `job`, `result`      | Background job runs by outcome.   |
+| Metric                                   | Type    | Labels               | Meaning                                                             |
+| ---------------------------------------- | ------- | -------------------- | ------------------------------------------------------------------- |
+| `qauth_login_attempts_total`             | counter | `result`, `reason`   | Login outcomes (success/failure).                                   |
+| `qauth_tokens_issued_total`              | counter | `type`, `grant_type` | Tokens issued by type and grant.                                    |
+| `qauth_job_runs_total`                   | counter | `job`, `result`      | Background job runs by outcome.                                     |
+| `qauth_events_oldest_unread_age_seconds` | gauge   | none                 | Seconds the oldest committed event has been held back from readers. |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -187,6 +188,28 @@ metrics subnet), or disable it entirely with `METRICS_ENABLED=false`.
 > The allowlist itself is the thing to remember: a variable you add to `.env`
 > later is **not** reachable from Compose until you also add it to that map.
 > See [Docker](/operate/docker/#environment-variables).
+
+### Event store lag
+
+The event store hands an event to its readers only once every transaction
+older than the event has ended, so a reader never skips an event that commits
+late. The price is lag: a transaction left open holds back every event written
+after it began, until it ends. That holds for any transaction that has written
+something, on any database of the same Postgres server.
+
+`qauth_events_oldest_unread_age_seconds` is how long the oldest event held back
+this way has waited. It is read from the database at each scrape and is 0 in
+normal operation. If the read fails, the gauge shows `NaN` and the auth server
+logs a warning. A value that keeps growing points at a long-running
+transaction; this query lists the open ones that hold readers back, oldest
+first:
+
+```sql
+SELECT pid, datname, xact_start, state, query
+FROM pg_stat_activity
+WHERE backend_xid IS NOT NULL
+ORDER BY xact_start;
+```
 
 ### Example Prometheus scrape config
 
