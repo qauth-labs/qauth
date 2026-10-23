@@ -217,6 +217,13 @@ export interface CimdClientInsert {
    * leaves the column out of its conflict set.
    */
   provisionedByOperator: false;
+  /**
+   * No ID-JAG target (ADR-011, #434): which foreign authorization servers and
+   * MCP servers a client may name in an ID-JAG is the operator's decision,
+   * made in the seed manifest, and a document cannot make it. Pinned for a new
+   * row; `upsertCimdClient` leaves the column out of its conflict set.
+   */
+  idJagTargets: [];
   scopes: string[];
   /** ADR-007 §2 agent classification, mirrored from the metadata document. */
   isAgent: boolean;
@@ -447,6 +454,7 @@ export function toCimdClientInsert(
     // `client_id` URL. The metadata document IS the management surface.
     developerId: null,
     provisionedByOperator: false,
+    idJagTargets: [],
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.
     isAgent: doc.is_agent ?? false,

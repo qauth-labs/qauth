@@ -144,8 +144,11 @@ See `libs/infra/db/src/qauth-schema.dbml` for the full visual schema.
 - All primary keys use `uuidv7()` (PostgreSQL 18+ native). Plugins/extensionless.
 - Use `bigint` epoch-ms timestamps (via the `EPOCH_MS_NOW` SQL helper), not `TIMESTAMP`.
 - `code_challenge_method` enum is `['S256']` only — `plain` is not supported.
-- `oauth_clients.audience` and `user_credentials.credential_data` carry
-  `jsonb_typeof` CHECK guards.
+- `oauth_clients.audience`, `oauth_clients.id_jag_targets` and
+  `user_credentials.credential_data` carry `jsonb_typeof` CHECK guards.
+  `audience` bounds the tokens QAuth issues; `id_jag_targets` (seed manifest
+  only, ADR-011) bounds ID-JAG mint targets and redeemable resources. Never
+  read one for the other's job.
 - FKs use explicit `onDelete` (cascade for children, `set null` for optional
   refs). Deletion cascades user → credentials → verification tokens.
 - Use the Drizzle ORM. Never write raw SQL in service code. The `sql` template

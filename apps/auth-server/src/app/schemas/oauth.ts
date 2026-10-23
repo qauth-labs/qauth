@@ -594,6 +594,9 @@ export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
  *     (ADR-011). ID-JAG consumption depends on an operator-configured issuer
  *     allowlist; letting a client add the grant to itself would suggest a
  *     capability it cannot actually reach and muddies the trust boundary.
+ *   - `id_jag_targets` (ADR-011, #434): the foreign authorization servers and
+ *     MCP servers a client may name in an ID-JAG. Operator-set through the
+ *     seed manifest only, like `max_agent_mode`; the route pins it to `[]`.
  * Since Zod strips unknown keys here, a registration request carrying any of
  * them is silently ignored rather than honoured — which is the fail-closed
  * outcome, but callers should not rely on it as the enforcement mechanism.

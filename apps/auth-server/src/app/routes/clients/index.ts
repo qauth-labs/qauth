@@ -497,6 +497,10 @@ export default async function (fastify: FastifyInstance) {
         // authorization errors are shown on the issuer, not redirected. Pinned
         // here, never read from the body; no update writes it either.
         provisionedByOperator: false,
+        // ADR-011 (#434): ID-JAG targets are operator state, set only by the
+        // seed manifest. Pinned empty here; `UpdateOAuthClient` excludes the
+        // column, so `PATCH` cannot write it either.
+        idJagTargets: [],
       });
 
       // Best-effort: the client (and its secret hash) is already committed, so

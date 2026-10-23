@@ -1621,10 +1621,9 @@ async function handleTokenExchange(
   // audience, which is correct for a delegated access token minted inside
   // QAuth's own trust domain and meaningless for an assertion whose `aud` is a
   // FOREIGN authorization server that could never appear in a QAuth-issued
-  // token. Substituting the operator's per-client audience allowlist there (see
-  // `mintIdJagForExchange`) is a narrowing, not a widening: it is the same
-  // allowlist `client_credentials` already treats as the client's reachable
-  // resource set, and an empty one denies.
+  // token. Substituting the operator's per-client ID-JAG target list there (see
+  // `mintIdJagForExchange`) is a narrowing, not a widening: it is operator-set
+  // server state that no self-service path can write, and an empty one denies.
   //
   // Because the target now comes from the agent's registration and not from
   // the subject token, the scope must be bounded by the agent's registration
@@ -1772,21 +1771,32 @@ async function handleTokenExchange(
 /**
  * The operator-configured set of targets a client may name in an ID-JAG request.
  *
- * This is `oauth_clients.audience` — the SAME server-side allowlist
- * `handleClientCredentials` already treats as "the resource servers this client
- * may obtain tokens for". Reused rather than re-invented so an operator has one
- * knob, not two, and so the ID-JAG paths inherit its deny-by-default shape.
+ * This is `oauth_clients.id_jag_targets` (#434), and deliberately NOT
+ * `oauth_clients.audience`. `audience` bounds the tokens QAuth itself issues
+ * (`handleClientCredentials`); sharing it meant that listing a foreign
+ * authorization server for ID-JAG also let the client obtain QAuth access tokens
+ * naming it. With a column of its own, each list grants exactly one thing: a
+ * value only in `audience` reaches no ID-JAG target, and a value only here
+ * reaches no `client_credentials` audience. Only the seed manifest writes it.
  *
- * `client_credentials` falls back to `[client.clientId]` when the column is
+ * `client_credentials` falls back to `[client.clientId]` when its column is
  * empty, because a token audience-restricted to the client itself is a
  * meaningful (if narrow) default. THAT FALLBACK IS DELIBERATELY ABSENT HERE:
  * both ID-JAG paths name a FOREIGN party — a third-party authorization server,
  * or an MCP server this deployment protects — and "the client's own id" is never
  * a correct answer for either. An unconfigured client therefore reaches no
  * target at all, which is the ADR-011 default-off posture expressed per client.
+ *
+ * The stored shape is re-checked here, beside the DB CHECK: anything but an
+ * array of non-empty strings denies, so a malformed value can never turn the
+ * membership test into a substring match.
  */
 function idJagTargetAllowlist(client: OAuthClientLike): string[] {
-  return client.audience && client.audience.length > 0 ? client.audience : [];
+  const targets = client.idJagTargets;
+  return Array.isArray(targets) &&
+    targets.every((target) => typeof target === 'string' && target.length > 0)
+    ? targets
+    : [];
 }
 
 /**
@@ -1901,7 +1911,7 @@ async function mintIdJagForExchange(args: {
     (target) => !allowedTargets.includes(target)
   );
   if (outsidePolicy.length > 0) {
-    await auditFailure('invalid_target: ID-JAG target outside the client audience allowlist', {
+    await auditFailure('invalid_target: ID-JAG target outside the client id_jag_targets', {
       outsidePolicy,
       allowedTargets,
     });
@@ -2011,9 +2021,10 @@ async function mintIdJagForExchange(args: {
  *    client (draft §4.4.1). This is what stops a valid assertion intended for
  *    client A being redeemed by client B.
  *  - GATE 4 — the assertion's `resource` MUST be inside the operator's
- *    per-client allowlist. A trusted IdP is trusted to say WHICH USER authorized
- *    WHICH CLIENT; it is not thereby trusted to enrol this deployment's clients
- *    into resources an operator never granted them.
+ *    per-client ID-JAG target list (`id_jag_targets`). A trusted IdP is trusted
+ *    to say WHICH USER authorized WHICH CLIENT; it is not thereby trusted to
+ *    enrol this deployment's clients into resources an operator never granted
+ *    them.
  *  - GATE 5 — the granted scope is the assertion's scope, optionally narrowed by
  *    the request, and then still subject to the client's own allowlist and the
  *    agent scope-mode cap. Both ceilings apply; neither can raise the other.
@@ -2100,7 +2111,7 @@ async function handleJwtBearer(
   // GATE 4 — the resource must be one an operator granted this client.
   const allowedTargets = idJagTargetAllowlist(client);
   if (!allowedTargets.includes(assertion.resource)) {
-    await auditFailure('invalid_target: assertion resource outside the client audience allowlist', {
+    await auditFailure('invalid_target: assertion resource outside the client id_jag_targets', {
       resource: assertion.resource,
       allowedTargets,
       issuer: assertion.issuer,

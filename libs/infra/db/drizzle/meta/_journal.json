@@ -190,6 +190,13 @@
       "when": 1792649554465,
       "tag": "0026_admin_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792674690409,
+      "tag": "0027_client_id_jag_targets",
+      "breakpoints": true
     }
   ]
 }

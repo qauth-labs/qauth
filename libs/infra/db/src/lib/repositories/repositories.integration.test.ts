@@ -1033,6 +1033,78 @@ describe('repository integration (real Postgres)', () => {
     });
   });
 
+  // ADR-011 (#434): the ID-JAG targets have a column of their own, apart from
+  // `audience`, and only the seed manifest writes it.
+  describe('oauth_clients — id_jag_targets (ADR-011, #434)', () => {
+    it('defaults to an empty list, which denies both ID-JAG paths', async () => {
+      const realm = await seedRealm('id-jag-default-realm');
+      const client = await seedClient(realm.id, 'no-targets-client');
+      expect(client.idJagTargets).toEqual([]);
+    });
+
+    it('keeps the targets apart from the audience', async () => {
+      const realm = await seedRealm('id-jag-round-trip-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      await clients.create({
+        realmId: realm.id,
+        clientId: 'id-jag-agent',
+        clientSecretHash: 'secret-hash',
+        name: 'ID-JAG Agent',
+        redirectUris: [],
+        grantTypes: ['urn:ietf:params:oauth:grant-type:token-exchange'],
+        audience: ['https://api.example.com'],
+        idJagTargets: ['https://as.partner.example', 'https://mcp.partner.example/mcp'],
+      });
+
+      const reloaded = await clients.findByClientId(realm.id, 'id-jag-agent');
+      expect(reloaded?.audience).toEqual(['https://api.example.com']);
+      expect(reloaded?.idJagTargets).toEqual([
+        'https://as.partner.example',
+        'https://mcp.partner.example/mcp',
+      ]);
+    });
+
+    it.each([
+      ['a string', '"https://as.partner.example"'],
+      ['an object', '{"aud": "https://as.partner.example"}'],
+      ['JSON null', 'null'],
+    ])('refuses %s through the CHECK constraint', async (_label, value) => {
+      const realm = await seedRealm('id-jag-check-realm');
+      const client = await seedClient(realm.id, 'check-client');
+      await expect(
+        db().database.pool.query(
+          `UPDATE oauth_clients SET id_jag_targets = $1::jsonb WHERE id = $2`,
+          [value, client.id]
+        )
+      ).rejects.toThrow(/oauth_clients_id_jag_targets_is_array/);
+    });
+
+    it('is left alone by a CIMD re-resolution', async () => {
+      const realm = await seedRealm('id-jag-cimd-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const insert = {
+        realmId: realm.id,
+        clientId: 'https://app.example.com/id-jag.json',
+        clientSecretHash: 'sentinel-hash',
+        name: 'Before',
+        redirectUris: ['https://app.example.com/cb'],
+        tokenEndpointAuthMethod: 'none' as const,
+        enabled: true,
+      };
+      const created = await clients.upsertCimdClient(insert);
+      expect(created.idJagTargets).toEqual([]);
+
+      // Only by hand: no route and no manifest section writes it for CIMD.
+      await db().database.pool.query(
+        `UPDATE oauth_clients SET id_jag_targets = '["https://as.partner.example"]' WHERE id = $1`,
+        [created.id]
+      );
+      const refreshed = await clients.upsertCimdClient({ ...insert, name: 'After' });
+      expect(refreshed.name).toBe('After');
+      expect(refreshed.idJagTargets).toEqual(['https://as.partner.example']);
+    });
+  });
+
   // --- CIMD upsert never re-enables a row ----------------------------------
 
   describe('oauth_clients — upsertCimdClient narrows `enabled` only', () => {

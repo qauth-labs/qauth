@@ -185,7 +185,7 @@ absent, malformed or unparseable input rejects; there is no lenient branch.
 | 9   | Client binding        | The `client_id` claim must identify the **authenticated** client. A `client_id` is a public identifier, so a plain comparison is enough. The check runs before the `jti` is burned. Otherwise a client holding another client's assertion could destroy it.                                                                                                                                                                                            | `invalid_grant`                                              |
 | 10  | Freshness             | `exp` and `iat` required; small bounded clock skew; assertion lifetime capped — an assertion whose `exp - iat` exceeds the configured maximum is rejected even if currently unexpired. An `iat` in the future beyond the skew is rejected.                                                                                                                                                                                                             | `invalid_grant`                                              |
 | 11  | Replay                | `jti` required. It is recorded for `ID_JAG_MAX_ASSERTION_LIFETIME` plus twice the skew leeway. A second presentation of the same `(iss, jti)` is rejected. If the replay store is unavailable, the assertion is rejected.                                                                                                                                                                                                                              | `invalid_grant`                                              |
-| 12  | Resource              | `resource` must be present and must appear in the client's `audience` allowlist (`oauth_clients.audience`). An empty allowlist denies. The issued access token's `aud` is restricted to it (RFC 8707 §2, RFC 9068). A `resource` request parameter may only agree with the claim. **An assertion with no `resource` is denied** — a token that cannot be audience-restricted is exactly the token EMA exists to avoid.                                 | `invalid_target` (`invalid_grant` when the claim is missing) |
+| 12  | Resource              | `resource` must be present and must appear in the client's ID-JAG targets (`oauth_clients.id_jag_targets`, #434). An empty list denies. The issued access token's `aud` is restricted to it (RFC 8707 §2, RFC 9068). A `resource` request parameter may only agree with the claim. **An assertion with no `resource` is denied** — a token that cannot be audience-restricted is exactly the token EMA exists to avoid.                                | `invalid_target` (`invalid_grant` when the claim is missing) |
 | 13  | Scope                 | The assertion's `scope` is intersected with the client's server-side allowlist and never widened. A `scope` request parameter may only narrow it. Reserved `agent:*` scopes remain subject to the operator-set `max_agent_mode` cap; an over-cap scope rejects the **whole** request rather than being silently reduced.                                                                                                                               | `invalid_scope`                                              |
 | 14  | Subject               | The `(iss, sub)` pair must match a `user_credentials` row in the realm with provider type `oidc_<issuer>` and `external_sub` equal to `sub`, and that user must be enabled. Email is never used to find or link a user. There is **no** just-in-time provisioning in this pass — an unresolvable subject is a deny, not an enrolment. An operator creates the row; see below.                                                                          | `invalid_grant`                                              |
 | 15  | Unknown constraints   | An assertion carrying `authorization_details` (RFC 9396) is **rejected**, not ignored. Silently dropping an authorization constraint you do not implement is a downgrade.                                                                                                                                                                                                                                                                              | `invalid_grant`                                              |
@@ -226,9 +226,28 @@ unchanged.
 A request needs exactly one `audience` and exactly one `resource`.
 
 **Targets are bounded by an operator allowlist.** Both values must appear in the
-client's `audience` column (`oauth_clients.audience`). An empty column denies. This is
+client's ID-JAG targets (`oauth_clients.id_jag_targets`). An empty list denies. This is
 the administrator-defined policy of EMA §4.1, in the form QAuth already has. The
 `audience` must also differ from QAuth's own issuer. That is gate 5 on the mint side.
+
+> **Amended 2026-10-22: ID-JAG targets have a column of their own (#434).** Until
+> then the mint targets, the consume resources (gate 12) and `client_credentials` all
+> read `oauth_clients.audience`. An operator who listed a foreign authorization server
+> there for ID-JAG also let the client request QAuth access tokens that name it.
+> Migration 0027 adds `oauth_clients.id_jag_targets` and copies nothing into it: the
+> feature is off by default and new, and a copy would carry every `client_credentials`
+> audience over as a target. A client provisioned before the migration mints and
+> redeems nothing until an operator lists its targets. Each column now does one job:
+>
+> | Column           | What it bounds                                                                                                                                                                     | Who writes it                                                                                                                             |
+> | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+> | `audience`       | The tokens QAuth issues: the `resource` values `client_credentials` accepts, the default `aud` when a grant names no `resource`, and the token audiences the client may introspect | The seed manifest (`clients` and `cimd_clients`), unchanged                                                                               |
+> | `id_jag_targets` | ID-JAG only: the `audience` and `resource` of a mint, and the `resource` of an assertion the client redeems                                                                        | The seed manifest's `clients` entries only. Dynamic registration, the developer API and CIMD pin it to `[]`; no route can change it later |
+>
+> There is no fallback from one to the other in either direction. A value only in
+> `audience` reaches no ID-JAG target, and a value only in `id_jag_targets` is not a
+> `client_credentials` audience. The delegation branch of token exchange reads neither:
+> it narrows against the subject token's `aud`.
 
 **The Authority Tree closes this path for agent types.** [ADR-014](./014-agent-authority-tree.md)
 decides that, with `AUTHORITY_TREE_ENABLED` on, an agent type is refused at the exchange
@@ -246,7 +265,7 @@ token-exchange grant and a target allowlist can mint.
 > assertion.
 >
 > Before this amendment the mint copied the subject token's scope into the assertion
-> unchecked. The target comes from the agent's own `audience` column, so an agent
+> unchecked. The target came from the agent's own registration, so an agent
 > registered only for `mcp:read` could carry `mcp:write` to a partner's server: a scope
 > its registration does not grant, at a target outside the subject token's audience
 > (ANT-2026-L66R3GFR). [ADR-014](./014-agent-authority-tree.md) adds GATE 4d behind
@@ -471,11 +490,13 @@ path is audited at least as carefully as the accept path.
   per minute. A client that holds the grant can send assertions with a valid `iss` and
   random `kid` values. Only the endpoint's rate limit slows it. A per-issuer refresh
   cooldown would close this.
-- **Mint targets and consume resources share a column with `client_credentials`.** All
-  three read `oauth_clients.audience`. An operator who lists a foreign authorization
-  server there also lets the client request QAuth access tokens that name it. The `typ`
-  header keeps those from being accepted as ID-JAGs. The coupling is still unintended. A
-  dedicated column would remove it.
+- **An ID-JAG client has a second list to keep.** Mint targets and consume resources
+  read `oauth_clients.id_jag_targets`, apart from the `audience` that bounds
+  `client_credentials` (#434, amended into §3 on 2026-10-22). Until then all three read
+  `audience`, and listing a foreign authorization server for ID-JAG also let the client
+  request QAuth access tokens that name it. The split removes that coupling. The price
+  is a list only the seed manifest sets, which an operator must fill for every client
+  that mints or redeems, including one provisioned before the change.
 - **The consume side needs a link that nothing creates.** See gate 14.
 - **Three JWT shapes now circulate** — access token, ID token, ID-JAG — and a
   verifier that accepts the wrong one is a privilege bug. Mitigated by the `typ`
@@ -569,7 +590,9 @@ Each new test was checked to fail when its fix is removed.
 
 - #433: a refresh cooldown, a negative cache and a hard TTL ceiling for the issuer key
   resolver.
-- #434: a dedicated target column instead of reusing `oauth_clients.audience`.
+- #434, since fixed: the ID-JAG targets have their own column,
+  `oauth_clients.id_jag_targets`, and `audience` no longer grants an ID-JAG target.
+  See §3.
 - #435, since fixed: the auth-server refuses `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD
   twin, when `NODE_ENV` is `production`. See §4.
 

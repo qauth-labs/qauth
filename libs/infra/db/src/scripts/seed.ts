@@ -53,6 +53,8 @@ async function main() {
           // Never suspended (ANT-2026-DR5XI3LV): only an operator suspends.
           suspended: f.default({ defaultValue: false }),
           suspendedAt: f.default({ defaultValue: null }),
+          // No ID-JAG target (#434): the dev client cannot mint or redeem one.
+          idJagTargets: f.default({ defaultValue: [] }),
         },
       },
     }));

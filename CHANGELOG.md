@@ -187,6 +187,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults `NODE_ENV` to `production`, so a local stack that needs one sets
   `NODE_ENV=development` in `.env`.
 
+- **BREAKING (ID-JAG; only with `ID_JAG_ENABLED`, which is off by default)**:
+  a client's ID-JAG targets have a column of their own, `oauth_clients.id_jag_targets`
+  (migration 0027, [#434], [ADR-011](./docs/adr/011-enterprise-managed-authorization.md)
+  §3). Minting reads it for the `audience` and `resource` a client may name, and
+  the `jwt-bearer` grant reads it for the `resource` an assertion may be redeemed
+  for. Both used to read `oauth_clients.audience`, which also bounds
+  `client_credentials`, so listing a foreign authorization server for ID-JAG let
+  the client request QAuth access tokens naming it. `audience` now grants no
+  ID-JAG target, and `id_jag_targets` grants no `client_credentials` audience.
+  An empty list denies both sides. Only the seed manifest's `clients` entries
+  set the column; dynamic registration, `POST /api/clients`, CIMD documents and
+  `cimd_clients` entries cannot. The migration copies nothing from `audience`.
+
+  **Action for operators**: for each client that mints or redeems ID-JAGs, add
+  `id_jag_targets` to its manifest entry and re-run it with `--rotate`, which
+  also issues a new secret, or set the column by hand. See the operator guide
+  (`operate/docker`, "Provisioning a client for ID-JAG").
+
 - The images and CI run on Node.js 26 and pnpm 12.14.0, up from Node.js 24 and
   pnpm 11. Node 26 no longer ships corepack, so each image installs pnpm from
   npm at that exact version while it builds. The migration-runner image no
@@ -197,6 +215,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Action for contributors**: install Node.js 26 (`nvm use` reads `.nvmrc`)
   and `npm install --global pnpm@12.14.0`.
 
+[#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#448]: https://github.com/qauth-labs/qauth/issues/448
 [#449]: https://github.com/qauth-labs/qauth/issues/449

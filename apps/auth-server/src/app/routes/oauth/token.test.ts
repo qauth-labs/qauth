@@ -399,6 +399,76 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
+  // #434: ID-JAG targets are a separate column precisely so that listing a
+  // foreign authorization server there grants no QAuth access token naming it.
+  describe('client_credentials ignores the ID-JAG targets (ADR-011, #434)', () => {
+    const FOREIGN_AS = 'https://as.partner.example';
+
+    function setupTargetsClient(audience: string[] | null) {
+      const { fastify, ctx } = createFastifyStub();
+      const client = {
+        id: 'client-uuid-ccr-idjag',
+        clientId: 'machine-client-idjag',
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: ['client_credentials'],
+        scopes: ['read:foo'],
+        audience,
+        idJagTargets: [FOREIGN_AS, 'https://mcp.partner.example/mcp'],
+      };
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('cc.jwt');
+      return { fastify, ctx, client };
+    }
+
+    function ccRequest(clientId: string, resource?: string[]) {
+      return {
+        body: {
+          grant_type: 'client_credentials',
+          client_id: clientId,
+          client_secret: 'secret',
+          scope: 'read:foo',
+          ...(resource ? { resource } : {}),
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      };
+    }
+
+    it.each([
+      ['an audience of its own', ['https://api.example.com/v1']],
+      ['no audience', null],
+    ])(
+      'refuses a resource listed only among the ID-JAG targets, for a client with %s',
+      async (_label, audience) => {
+        const { fastify, ctx, client } = setupTargetsClient(audience);
+        await tokenRoute(fastify);
+        if (!ctx.handler) throw new Error('Handler missing');
+
+        await expect(
+          ctx.handler(ccRequest(client.clientId, [FOREIGN_AS]), createReply())
+        ).rejects.toThrow(InvalidTargetError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      }
+    );
+
+    it('never defaults the token audience to an ID-JAG target', async () => {
+      const { fastify, ctx, client } = setupTargetsClient(null);
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(ccRequest(client.clientId), createReply());
+
+      // The light-mode default (the client's own id), not the targets.
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: client.clientId })
+      );
+    });
+  });
+
   it('authenticates client via Authorization: Basic header', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
@@ -3366,13 +3436,16 @@ async function signIdJag(
 describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () => {
   /**
    * A confidential client provisioned for the jwt-bearer grant, with the MCP
-   * server on its operator-set audience allowlist and a linked enterprise
+   * server among its operator-set ID-JAG targets (#434) and a linked enterprise
    * subject. Every ID-JAG deny-path test starts from this and removes one thing.
+   * Its `audience` is empty by default, so the happy path proves the targets
+   * alone suffice.
    */
   function setupConsumeStub(
     opts: {
       grantTypes?: string[];
       audience?: string[] | null;
+      idJagTargets?: string[];
       scopes?: string[];
       confidential?: boolean;
       linked?: boolean;
@@ -3390,7 +3463,8 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       enabled: true,
       grantTypes: opts.grantTypes ?? [JWT_BEARER_GRANT],
       scopes: opts.scopes ?? ['chat.read', 'chat.history'],
-      audience: opts.audience === undefined ? [MCP_SERVER] : opts.audience,
+      audience: opts.audience === undefined ? null : opts.audience,
+      idJagTargets: opts.idJagTargets === undefined ? [MCP_SERVER] : opts.idJagTargets,
       isAgent: opts.isAgent ?? true,
       maxAgentMode: opts.maxAgentMode ?? null,
       tokenEndpointAuthMethod: opts.confidential === false ? 'none' : 'client_secret_post',
@@ -3681,17 +3755,53 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
   it('rejects a `resource` the client is not configured to reach', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
-    const { fastify, ctx } = setupConsumeStub({ audience: ['https://other-mcp.example/'] });
+    const { fastify, ctx } = setupConsumeStub({ idJagTargets: ['https://other-mcp.example/'] });
 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidTargetError);
   });
 
-  it('rejects every resource when the client has NO configured audience (deny by default)', async () => {
+  it('rejects every resource when the client has NO ID-JAG target (deny by default)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
-    const { fastify, ctx } = setupConsumeStub({ audience: null });
+    const { fastify, ctx } = setupConsumeStub({ idJagTargets: [] });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects a `resource` listed only in the client `audience` (#434)', async () => {
+    // `audience` bounds the QAuth tokens `client_credentials` issues; it is not
+    // an ID-JAG target list, so it lets no assertion be redeemed.
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ audience: [MCP_SERVER], idJagTargets: [] });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        metadata: expect.objectContaining({
+          error: 'invalid_target: assertion resource outside the client id_jag_targets',
+          allowedTargets: [],
+        }),
+      })
+    );
+  });
+
+  it('denies when the stored targets are not a list, rather than matching a substring', async () => {
+    // Beside the DB CHECK: a string would make `includes` a substring test.
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({
+      idJagTargets: `${MCP_SERVER} https://other-mcp.example/` as unknown as string[],
+    });
 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
@@ -3859,9 +3969,15 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
 describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
   const AGENT_CLIENT_ID = 'agent-client';
 
+  /**
+   * An agent client provisioned to mint for {@link TARGET_AS} and
+   * {@link MCP_SERVER} through its ID-JAG targets (#434). Its `audience` is
+   * empty by default, so the happy path proves the targets alone suffice.
+   */
   function setupMintStub(
     opts: {
       audience?: string[] | null;
+      idJagTargets?: string[];
       isAgent?: boolean;
       grantTypes?: string[];
       subjectScope?: string;
@@ -3884,7 +4000,8 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       enabled: true,
       grantTypes: opts.grantTypes ?? [TOKEN_EXCHANGE_GRANT],
       scopes: opts.scopes ?? ['chat.read', 'chat.history'],
-      audience: opts.audience === undefined ? [TARGET_AS, MCP_SERVER] : opts.audience,
+      audience: opts.audience === undefined ? null : opts.audience,
+      idJagTargets: opts.idJagTargets === undefined ? [TARGET_AS, MCP_SERVER] : opts.idJagTargets,
       isAgent: opts.isAgent ?? true,
       maxAgentMode: null,
       tokenEndpointAuthMethod: 'client_secret_post',
@@ -4010,7 +4127,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       // The misconfiguration the gate exists for: the operator put QAuth's own
       // issuer among the client's targets. The mint must still refuse it.
       const { fastify, ctx } = setupMintStub({
-        audience: [AS_ISSUER, `${AS_ISSUER}/`, MCP_SERVER],
+        idJagTargets: [AS_ISSUER, `${AS_ISSUER}/`, MCP_SERVER],
       });
 
       await expect(
@@ -4036,7 +4153,9 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       invoke(missing.fastify, missing.ctx, mintRequest({ resource: undefined }))
     ).rejects.toBeInstanceOf(InvalidRequestError);
 
-    const multiple = setupMintStub({ audience: [TARGET_AS, MCP_SERVER, 'https://mcp2.example/'] });
+    const multiple = setupMintStub({
+      idJagTargets: [TARGET_AS, MCP_SERVER, 'https://mcp2.example/'],
+    });
     await expect(
       invoke(
         multiple.fastify,
@@ -4046,18 +4165,45 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     ).rejects.toBeInstanceOf(InvalidRequestError);
   });
 
-  it('rejects an audience outside the client policy allowlist', async () => {
+  it('rejects an audience outside the client ID-JAG targets', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
-    const { fastify, ctx } = setupMintStub({ audience: [MCP_SERVER] });
+    const { fastify, ctx } = setupMintStub({ idJagTargets: [MCP_SERVER] });
 
     await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
   });
 
-  it('rejects everything when the client has NO configured audience (deny by default)', async () => {
+  it('rejects everything when the client has NO ID-JAG target (deny by default)', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
-    const { fastify, ctx } = setupMintStub({ audience: null });
+    const { fastify, ctx } = setupMintStub({ idJagTargets: [] });
 
     await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
+    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ success: true })
+    );
+  });
+
+  it('refuses targets listed only in the client `audience` (#434)', async () => {
+    // `audience` bounds the QAuth tokens `client_credentials` issues; it is not
+    // an ID-JAG target list, so it lets the agent mint for nothing.
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      audience: [TARGET_AS, MCP_SERVER],
+      idJagTargets: [],
+    });
+
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
+    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ success: true })
+    );
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        metadata: expect.objectContaining({
+          error: 'invalid_target: ID-JAG target outside the client id_jag_targets',
+          outsidePolicy: [TARGET_AS, MCP_SERVER],
+        }),
+      })
+    );
   });
 
   it('keeps the agent gate in force on the mint path', async () => {
@@ -4301,7 +4447,8 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         grantTypes: [TOKEN_EXCHANGE_GRANT],
         // Covers the subject token's scope, or GATE 4d refuses the mint.
         scopes: ['chat.read'],
-        audience: [TARGET_AS, MCP_SERVER],
+        audience: null,
+        idJagTargets: [TARGET_AS, MCP_SERVER],
         isAgent: true,
         maxAgentMode: null,
         tokenEndpointAuthMethod: 'client_secret_post',

@@ -256,6 +256,27 @@ export const oauthClients = pgTable(
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     audience: jsonb('audience').$type<string[] | null>(),
     /**
+     * The foreign parties this client may name in an Identity Assertion
+     * Authorization Grant (ID-JAG, ADR-011, #434): on the MINT side the target
+     * authorization server's issuer (`audience`) and the MCP server
+     * (`resource`), on the CONSUME side the `resource` an assertion may be
+     * redeemed for. An empty list (the default) denies both sides; there is no
+     * fallback.
+     *
+     * Kept apart from {@link oauthClients.audience}, which bounds the tokens
+     * QAuth itself issues (`client_credentials`), so listing a foreign
+     * authorization server here never lets the client obtain a QAuth access
+     * token that names it, and listing a value only in `audience` never lets
+     * the client mint or redeem an ID-JAG for it.
+     *
+     * OPERATOR-SET, NOT SELF-ASSERTED, exactly like `max_agent_mode`: only the
+     * `db:seed-oauth-clients` manifest writes it. Dynamic registration,
+     * `POST /api/clients` and CIMD materialisation pin it to `[]`, no request
+     * body or metadata document can reach it, and `UpdateOAuthClient` excludes
+     * it so no route can change it.
+     */
+    idJagTargets: jsonb('id_jag_targets').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    /**
      * The OWNER's on/off switch: `PATCH /api/clients/:id` may set it either
      * way. An operator's cut-off is {@link oauthClients.suspended}, a separate
      * column, so the owner can never undo it (ANT-2026-DR5XI3LV).
@@ -433,6 +454,7 @@ export const oauthClients = pgTable(
       'oauth_clients_audience_is_array',
       sql`${t.audience} IS NULL OR jsonb_typeof(${t.audience}) = 'array'`
     ),
+    check('oauth_clients_id_jag_targets_is_array', sql`jsonb_typeof(${t.idJagTargets}) = 'array'`),
   ]
 );
 

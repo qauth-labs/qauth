@@ -35,6 +35,14 @@ export type OAuthClientLike = {
   scopes: string[];
   audience: string[] | null;
   /**
+   * ADR-011 (#434) the foreign parties this client may name in an ID-JAG: mint
+   * targets (authorization server and MCP server) and the resources it may
+   * redeem an assertion for. Operator-set through the seed manifest only.
+   * Optional for older callers; absent ⇒ no target (deny). Read through
+   * `idJagTargetAllowlist` in `routes/oauth/token.ts`, never `audience`.
+   */
+  idJagTargets?: string[];
+  /**
    * Token endpoint auth method (RFC 7591). `'none'` identifies public
    * clients (PKCE, native/SPA) that present only `client_id` at /token.
    * When absent we conservatively treat the client as confidential.

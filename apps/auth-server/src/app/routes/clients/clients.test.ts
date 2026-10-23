@@ -418,6 +418,30 @@ describe('POST /api/clients (create) — #86', () => {
     expect(created.provisionedByOperator).toBe(false);
   });
 
+  it("never stores a developer's ID-JAG targets (ADR-011, #434 — seed manifest only)", async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Agent',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        grantTypes: ['urn:ietf:params:oauth:grant-type:token-exchange'],
+        responseTypes: [],
+        idJagTargets: ['https://as.partner.example'],
+        id_jag_targets: ['https://as.partner.example'],
+      },
+    });
+    await route(ctx, 'POST /').handler(request, createReply().reply);
+
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created.idJagTargets).toEqual([]);
+  });
+
   it('omits client_secret for a public client (token_endpoint_auth_method=none)', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
@@ -754,6 +778,27 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     expect(updateArg).not.toHaveProperty('suspendedAt');
     // The owner can see why the client is still refused.
     expect(body.suspended).toBe(true);
+  });
+
+  it('never writes ID-JAG targets on PATCH (ADR-011, #434 — seed manifest only)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const row = makeClientRow({ developerId: DEV_A });
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(row);
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => ({ ...row, ...data })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { name: 'Renamed', idJagTargets: ['https://as.partner.example'] },
+    });
+    await route(ctx, 'PATCH /:id').handler(request, createReply().reply);
+
+    const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
+      .calls[0][1];
+    expect(updateArg).toEqual({ name: 'Renamed' });
   });
 
   it('validates the effective grant/response combination against persisted values', async () => {

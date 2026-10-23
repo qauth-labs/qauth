@@ -291,6 +291,21 @@ describe('toCimdClientInsert — never operator-provisioned (ANT-2026-O8U3P920)'
   });
 });
 
+describe('toCimdClientInsert — no ID-JAG target (ADR-011, #434)', () => {
+  it('pins idJagTargets to [], whatever the document says', () => {
+    // Which foreign parties a client may name in an ID-JAG is the operator's
+    // decision (seed manifest only); a metadata document cannot make it.
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        id_jag_targets: ['https://as.partner.example'],
+        idJagTargets: ['https://as.partner.example'],
+      })
+    );
+    const insert = toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel');
+    expect(insert.idJagTargets).toEqual([]);
+  });
+});
+
 describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', () => {
   const REALM = 'realm-1';
   const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
