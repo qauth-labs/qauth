@@ -15,6 +15,9 @@
 > schema. Where the code is stricter or different, the text now says what the code
 > does. Three claims were not true of the code. They were fixed before acceptance, and
 > [Review findings](#review-findings-2026-10-11) lists them.
+>
+> **Amended 2026-10-23:** §2 now records that an ID-JAG is single-use, a deliberate
+> departure from `-04` §4.4.3. The code did not change.
 
 ## Context
 
@@ -206,6 +209,22 @@ account. The operator already chose to trust the issuer. The operation is not bu
 **No refresh token is issued** on this path. The client re-presents a fresh
 ID-JAG, which keeps the IdP's policy in the loop on every renewal — the point of
 the flow. Every accept and every reject is audit-logged (§6).
+
+**An ID-JAG is single-use, on purpose.** Decided 2026-10-23 (maintainer). The draft
+departs from this. `-04` §4.4.3 lets a client re-submit the same ID-JAG for a new
+access token once the first one expires, as long as the assertion has not. QAuth
+refuses the second presentation at gate 11 with `invalid_grant`. The client then asks
+its IdP for a fresh ID-JAG, as §4.4.3 already tells it to do once the assertion has
+expired. RFC 7523 §3 lets an authorization server refuse a `jti` it has seen, so this
+stays inside the grant profile.
+
+- **Why:** each new access token goes back through the IdP's policy, so a revocation
+  there takes effect at the next renewal. A copied assertion cannot be spent twice.
+- **Cost:** small. With the default lifetimes an assertion lives at most 5 minutes
+  (`ID_JAG_MAX_ASSERTION_LIFETIME`) and the access token it buys at least 15
+  (`ACCESS_TOKEN_LIFESPAN`). The assertion has expired before the access token does,
+  so the re-submission §4.4.3 allows would fail on `exp` anyway. Only an operator who
+  raises the assertion lifetime above the access-token lifetime sees a difference.
 
 ### 3. Mint — ID-JAG via the existing token-exchange endpoint
 
@@ -590,6 +609,10 @@ Acceptance covers the trust model and the gates. The wire constants follow the d
 `typ` value, the claim names, the token-type URN and the profile URN. They are pinned in
 `id-jag.ts` and in [`docs/spec-pin-log.md`](../spec-pin-log.md). If a later revision
 changes one of them, the matching section is amended. The record is not superseded.
+
+One behaviour departs from `-04` on purpose: an ID-JAG is single-use, while `-04`
+§4.4.3 lets a client re-submit it (§2, decided 2026-10-23). Every other gate is
+stricter than the draft or fills a place where it is silent.
 
 ### Checked and sound
 
