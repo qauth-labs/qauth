@@ -744,6 +744,17 @@ export interface RealmKeyFilter {
 }
 
 /**
+ * One rotation step for {@link RealmKeysRepository.updateStatus} (#547):
+ *
+ * - `active` — a `next` key starts to sign at `activateAt`;
+ * - `retired` — an `active` key stops signing at `retireAt`. A published key
+ *   leaves its JWKS at `unpublishAt`; an unpublished one passes `null`.
+ */
+export type RealmKeyStatusChange =
+  | { status: 'active'; activateAt: number }
+  | { status: 'retired'; retireAt: number; unpublishAt: number | null };
+
+/**
  * Realm keys repository (ADR-019 Decision 9, issue #461).
  *
  * The signer's view of `realm_keys` and `realm_public_keys`. Only the signer's
@@ -788,6 +799,37 @@ export interface RealmKeysRepository {
     kid: string,
     tx?: DbClient
   ): Promise<WrappedRealmKey | undefined>;
+  /**
+   * Move one key a step through its rotation (#547): `next` → `active`, or
+   * `active` → `retired`. A key in any other status is left as it is, so two
+   * rotations that race cannot both move it. The status reaches the key's
+   * public row through its foreign key; a retirement also writes the public
+   * row's `unpublish_at`. Both rows change in ONE transaction (a savepoint
+   * inside `tx`).
+   *
+   * @returns the updated key, or `undefined` when the realm holds no key with
+   *   `kid` in the status the step starts from.
+   */
+  updateStatus(
+    realmId: string,
+    kid: string,
+    change: RealmKeyStatusChange,
+    tx?: DbClient
+  ): Promise<RealmKey | undefined>;
+  /**
+   * Delete every key of one scope: a webhook subscription's secrets or an
+   * upstream provider's client-assertion keys (#547). Their public rows go
+   * with them (foreign key, `ON DELETE CASCADE`). An unscoped key never
+   * matches, since its `scope_id` is NULL.
+   *
+   * @returns the `kid`s of the deleted keys.
+   */
+  deleteByScope(
+    realmId: string,
+    purpose: string,
+    scopeId: string,
+    tx?: DbClient
+  ): Promise<string[]>;
 }
 
 /**
