@@ -853,6 +853,9 @@ importers:
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
+      '@qauth-labs/shared-events':
+        specifier: workspace:*
+        version: link:../../shared/events
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation
