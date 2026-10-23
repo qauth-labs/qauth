@@ -186,6 +186,23 @@ describe('sessions integration (real Postgres)', () => {
       expect(await repo.findById(realm, created.id)).toEqual(created);
     });
 
+    it('deleting a realm deletes its sessions and their client rows', async () => {
+      const realm = await seedRealm();
+      const other = await seedRealm();
+      const created = await repo.create(session(realm, await seedUser(realm)));
+      const kept = await repo.create(session(other, await seedUser(other)));
+      await pool().query(
+        `INSERT INTO session_clients (session_id, oauth_client_id) VALUES ($1, $2)`,
+        [created.id, await seedClient(realm)]
+      );
+
+      await pool().query(`DELETE FROM realms WHERE id = $1`, [realm]);
+
+      expect(await count('sessions', 'realm_id = $1', [realm])).toBe(0);
+      expect(await count('session_clients', 'session_id = $1', [created.id])).toBe(0);
+      expect(await repo.findById(other, kept.id)).toEqual(kept);
+    });
+
     it('records a client once per session', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm);
