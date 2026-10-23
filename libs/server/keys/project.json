@@ -5,6 +5,30 @@
   "projectType": "library",
   "tags": ["scope:server", "type:key-custody"],
   "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "eslint"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/eslint.config.mjs"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `custody-import-rule.test.ts` lints sample imports with the workspace ESLint configuration, so a change to `eslint.config.mjs` or to ESLint itself must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared, with `eslint` added to the external dependencies."
+      }
+    },
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {

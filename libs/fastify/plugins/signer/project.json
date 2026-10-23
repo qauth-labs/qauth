@@ -1,0 +1,18 @@
+{
+  "name": "fastify-plugin-signer",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/signer/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:signer"],
+  "targets": {
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts libs/fastify/plugins/signer",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run the Docker-backed signer wiring tests against the migrated schema (testcontainers Postgres). Requires a running Docker daemon."
+    }
+  },
+  "// targets": "to see all targets run: nx show project fastify-plugin-signer --web"
+}

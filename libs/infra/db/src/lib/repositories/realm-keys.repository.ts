@@ -10,6 +10,7 @@ import type {
   RealmKey,
   RealmKeyFilter,
   RealmKeysRepository,
+  RealmPublicKey,
   WrappedRealmKey,
 } from '../../types';
 import { DbClient } from '../db';
@@ -121,6 +122,19 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
         .from(realmKeys)
         .where(and(...conditions))
         .orderBy(asc(realmKeys.createdAt), asc(realmKeys.id));
+    },
+
+    async listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(realmPublicKeys)
+        .where(eq(realmPublicKeys.realmId, realmId))
+        .orderBy(
+          asc(realmPublicKeys.purpose),
+          asc(realmPublicKeys.publishAt),
+          asc(realmPublicKeys.kid)
+        );
     },
 
     async getWrappedForSigner(

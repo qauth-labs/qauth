@@ -42,6 +42,7 @@
         "libs/server/egress/*",
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
+        "libs/fastify/plugins/signer/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*"
       ]
@@ -70,6 +71,7 @@
         "libs/server/egress/*",
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
+        "libs/fastify/plugins/signer/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*"
       ],

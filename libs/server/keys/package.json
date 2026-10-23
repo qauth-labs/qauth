@@ -3,6 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./custody": "./src/custody.ts",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "custody": [
+        "src/custody.ts"
+      ]
+    }
+  },
   "dependencies": {
     "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",

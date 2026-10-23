@@ -132,6 +132,7 @@ const CALLS: Record<keyof RealmKeysRepository, (repo: RealmKeysRepository) => Pr
   findByKid: (repo) => repo.findByKid(REALM_ID, KID),
   listByRealm: (repo) =>
     repo.listByRealm(REALM_ID, { purpose: 'token_signing', scopeId: null, status: 'active' }),
+  listPublicByRealm: (repo) => repo.listPublicByRealm(REALM_ID),
   getWrappedForSigner: (repo) => repo.getWrappedForSigner(REALM_ID, KID),
 };
 
@@ -233,6 +234,19 @@ describe('createRealmKeysRepository — statements', () => {
     expect(text).toContain('"realm_keys"."scope_id" is null');
     expect(text).toContain('"realm_keys"."status" = $3');
     expect(query.values).toEqual([REALM_ID, 'token_signing', 'active']);
+  });
+
+  it('listPublicByRealm reads realm_public_keys of the given realm only, in a fixed order', async () => {
+    const [query] = await run('listPublicByRealm');
+    const text = query.text.toLowerCase();
+
+    expect(text).toContain('from "realm_public_keys"');
+    expect(text).not.toContain('"realm_keys"');
+    expect(text).toContain('"realm_public_keys"."realm_id" = $1');
+    expect(text).toMatch(
+      /order by "realm_public_keys"\."purpose" asc, "realm_public_keys"\."publish_at" asc, "realm_public_keys"\."kid" asc/
+    );
+    expect(query.values).toEqual([REALM_ID]);
   });
 
   it('listByRealm without a filter narrows by realm only', async () => {

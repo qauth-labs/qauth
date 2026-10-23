@@ -1,0 +1,19 @@
+{
+  "name": "@qauth-labs/fastify-plugin-signer",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/core-crypto": "workspace:*",
+    "@qauth-labs/infra-db": "workspace:*",
+    "@qauth-labs/server-keys": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -17,7 +17,7 @@ import { KEK_PROVIDER_NAME } from './load-kek-provider';
  *
  * ```ts
  * import { describe, it } from 'vitest';
- * import { runKekProviderContract } from '@qauth-labs/server-keys';
+ * import { runKekProviderContract } from '@qauth-labs/server-keys/custody';
  *
  * runKekProviderContract({ name: 'cloud-kms', createProvider, describe, it });
  * ```

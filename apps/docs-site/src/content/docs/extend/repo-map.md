@@ -62,6 +62,7 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/fastify/plugins/email`      | `@qauth-labs/fastify-plugin-email`      | `scope:fastify`                        |
 | `libs/fastify/plugins/federation` | `@qauth-labs/fastify-plugin-federation` | `scope:fastify`                        |
 | `libs/fastify/plugins/mcp-guard`  | `@qauth-labs/mcp-guard`                 | `scope:fastify`                        |
+| `libs/fastify/plugins/signer`     | `@qauth-labs/fastify-plugin-signer`     | `scope:fastify`                        |
 
 ## The layering
 
@@ -81,6 +82,17 @@ import **from inside the workspace**; external npm packages are never restricted
 | `type:testing`     | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:158` |
 | `type:key-custody` | `scope:core`, `scope:shared`                                                     | `eslint.config.mjs:217` |
 | `scope:wire-suite` | nothing — and nothing may import it                                              | `eslint.config.mjs:149` |
+
+### Key custody has a second, path-based rule
+
+The `type:key-custody` row limits what `@qauth-labs/server-keys` imports. Who imports it is a
+separate rule, because ADR-019 Decision 9 provisions the key-encryption key to the signer alone.
+The package has two entry points: `@qauth-labs/server-keys`, with the `Signer` interface that any
+project may use, and `@qauth-labs/server-keys/custody`, with the KEK provider, envelope encryption,
+the key factory and the in-process signer. Module boundaries work per project and cannot tell the
+two apart, so a `no-restricted-imports` block in `eslint.config.mjs` (the key custody guard) refuses
+`/custody`, and any deep path into the package, everywhere except `libs/server/keys` and the signer's
+wiring, `libs/fastify/plugins/signer`. Sign through `fastify.signer`; do not widen the list.
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 
