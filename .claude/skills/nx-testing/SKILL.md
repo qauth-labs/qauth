@@ -7,7 +7,7 @@ description: Testing workflows with Vitest in Nx monorepo. Use when writing test
 
 ## Test Stack
 
-- **Runner**: Vitest 4.x
+- **Runner**: Vitest 5.x
 - **HTTP Testing**: Supertest
 - **Containers**: Testcontainers
 - **Coverage**: Built-in Vitest

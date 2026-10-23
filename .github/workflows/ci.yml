@@ -61,7 +61,7 @@ jobs:
       # fails the report is partial, and a matrix on top of a real test failure
       # helps nobody. With no artifact the matrix job does not run at all.
       - name: Upload unit-suite report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vitest-report
           path: dist/vitest-report.json
@@ -497,7 +497,7 @@ jobs:
       # `always()` so a red run still leaves its report behind.
       - name: Upload wire-suite report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wire-report
           path: dist/wire-report.json
@@ -537,12 +537,12 @@ jobs:
           node-version: 26
 
       # No install: the joiner uses Node's standard library only.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: vitest-report
           path: dist
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wire-report
           path: dist
@@ -554,7 +554,7 @@ jobs:
       # most useful precisely when it is red.
       - name: Upload conformance matrix
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: spec-conformance-matrix
           path: dist/conformance/

@@ -1,7 +1,7 @@
 import nx from '@nx/eslint-plugin';
 import prettierPlugin from 'eslint-plugin-prettier';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
-import jsoncParser from 'jsonc-eslint-parser';
+import * as jsoncParser from 'jsonc-eslint-parser';
 
 /**
  * Files inside a project that are NOT part of what it ships: build tooling and

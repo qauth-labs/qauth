@@ -17,6 +17,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     watch: false,
+    // Vitest 5 clears every mock before each test by default. Kept off so a
+    // call recorded in beforeAll or at module scope still counts, as in v4.
+    clearMocks: false,
     include: ['**/*.integration.test.ts'],
     server: {
       deps: {

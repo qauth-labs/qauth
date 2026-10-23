@@ -14,7 +14,7 @@
     "tslib": "catalog:"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.7.4",
+    "@napi-rs/cli": "^3.10.8",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "vitest": "catalog:"
