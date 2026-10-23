@@ -32,6 +32,11 @@
 > - §5: the error format of the API families and the other non-protocol routes joins the contract,
 >   with its `code` values. OAuth protocol endpoints keep the error shape their specification
 >   defines.
+>
+> **Amended 2026-10-23** with the maintainer's decision of that day on upstream sign-ins.
+>
+> - §10: a per-provider switch that counts an upstream sign-in as strong in ADR-017's downgrade
+>   rule is planned for 1.x. In 1.0 an upstream sign-in ranks with the password.
 
 ## Context
 
@@ -398,6 +403,11 @@ That brings mdoc PIDs, and My Number held on a phone, for example on iPhone.
 
 **With a hosted service:** automatic TLS through ACME, and DNS verification for custom domains.
 Custom domains themselves are in 1.0, as ADR-019 records.
+
+**In 1.x:** a per-provider switch, off by default, that counts an upstream provider's sign-in as
+strong in ADR-017's downgrade rule. It is meant for a provider that asserts phishing-resistant
+authentication in `acr`, such as an enterprise IdP. In 1.0 an upstream sign-in ranks with the
+password (decided 2026-10-23, maintainer).
 
 ### 11. Topology is ADR-019's
 
