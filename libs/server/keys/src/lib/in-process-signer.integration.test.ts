@@ -1,5 +1,6 @@
 /**
- * Real-Postgres integration tests for the in-process signer (issue #464).
+ * Real-Postgres integration tests for the in-process signer (issues #464 and
+ * #547).
  *
  * Keys are created by the key factory into the migrated `realm_keys` and
  * `realm_public_keys` tables (#461, #463), and the signer reads them back with
@@ -9,6 +10,8 @@
  *
  * Requires Docker; self-skips without it, like the other container suites.
  */
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
 import {
   getSignatureBackend,
   importPublicSigningJwk,
@@ -218,6 +221,158 @@ describe('in-process signer integration (real Postgres)', () => {
         }
       )
     ).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  describe('scoped keys (#547)', () => {
+    const DAY_MS = 86_400_000;
+
+    /** A factory and a signer on one movable clock; the signer reads the store on every call. */
+    function rotating() {
+      let clock = NOW;
+      const factory = createKeyFactory({
+        store: createPgKeyStore(db()),
+        kekProvider,
+        enabledSignatureAlgorithms: ['EdDSA'],
+        hybridSigning: false,
+        now: () => clock,
+      });
+      const store = createPgSignerStore(db());
+      const signer = createInProcessSigner({
+        store,
+        kekProvider,
+        enabledSignatureAlgorithms: ['EdDSA'],
+        hybridSigning: false,
+        refreshIntervalMs: 0,
+        now: () => clock,
+      });
+      return {
+        factory,
+        signer,
+        store,
+        advance: (ms: number) => {
+          clock += ms;
+        },
+      };
+    }
+
+    /** Whether one `v1` signature of `header` verifies with `secret`, as a receiver checks. */
+    function verifies(header: string, secret: string, content: string): boolean {
+      const expected = createHmac('sha256', Buffer.from(secret.slice('whsec_'.length), 'base64'))
+        .update(content)
+        .digest();
+      return header.split(' ').some((signature) => {
+        const actual = Buffer.from(signature.slice('v1,'.length), 'base64');
+        return (
+          signature.startsWith('v1,') &&
+          actual.length === expected.length &&
+          timingSafeEqual(actual, expected)
+        );
+      });
+    }
+
+    it('keeps both webhook signatures valid through a rotation until the old secret is retired', async () => {
+      const { factory, signer, advance } = rotating();
+      const realmId = await seedRealm('https://a.example.test');
+      const scope = { realmId, purpose: 'webhook_signing', scopeId: 'sub-1' } as const;
+      const [old] = await factory.createKey(scope);
+      const message = { realmId, subscriptionId: 'sub-1', id: 'evt_1', body: '{"a":1}' };
+      const sign = (timestamp: number) => signer.signWebhook('delivery', { ...message, timestamp });
+      const content = (timestamp: number) => `evt_1.${timestamp}.{"a":1}`;
+      const oldSecret = old.secret as string;
+
+      const before = await sign(1);
+      expect(verifies(before, oldSecret, content(1))).toBe(true);
+
+      advance(DAY_MS);
+      const [next] = await factory.createKey({ ...scope, status: 'next' });
+      const newSecret = next.secret as string;
+      // Every message of the overlap carries both signatures, so a receiver
+      // verifies with either secret, whenever it switches.
+      for (const day of [0, 3, 6]) {
+        if (day > 0) advance(3 * DAY_MS);
+        const header = await sign(100 + day);
+        expect(header.split(' ')).toHaveLength(2);
+        expect(verifies(header, oldSecret, content(100 + day))).toBe(true);
+        expect(verifies(header, newSecret, content(100 + day))).toBe(true);
+        await expect(factory.activateNextKey(scope)).rejects.toMatchObject({
+          reason: 'OVERLAP_NOT_ELAPSED',
+        });
+      }
+
+      advance(DAY_MS);
+      await expect(factory.activateNextKey(scope)).resolves.toMatchObject({
+        activatedKid: next.kid,
+        retiredKid: old.kid,
+      });
+      const after = await sign(200);
+
+      expect(after.split(' ')).toHaveLength(1);
+      expect(verifies(after, newSecret, content(200))).toBe(true);
+      expect(verifies(after, oldSecret, content(200))).toBe(false);
+      const { rows } = await db().query(
+        'SELECT kid, status FROM realm_keys WHERE realm_id = $1 ORDER BY created_at',
+        [realmId]
+      );
+      expect(rows).toEqual([
+        { kid: old.kid, status: 'retired' },
+        { kid: next.kid, status: 'active' },
+      ]);
+    });
+
+    it('serves the next client-assertion key before it signs, and the retired one until its window closes', async () => {
+      const { factory, signer, store, advance } = rotating();
+      const realmId = await seedRealm('https://a.example.test');
+      store.upstreamClients.set(`${realmId}/idp-1`, { clientId: 'qauth-at-idp' });
+      const scope = { realmId, purpose: 'upstream_client_assertion', scopeId: 'idp-1' } as const;
+      const [old] = await factory.createKey(scope);
+      advance(DAY_MS);
+      const [next] = await factory.createKey({ ...scope, status: 'next' });
+      const assertion = () =>
+        signer.signClientAssertion('api', {
+          realmId,
+          providerId: 'idp-1',
+          audience: 'https://idp.example.test',
+          claims: { jti: `j-${Math.random()}`, exp: NOW / 1000 + 10 * 86_400 * 30 },
+        });
+      const kids = async () =>
+        (await signer.getUpstreamJwks('api', realmId, 'idp-1')).keys.map((key) => key.kid);
+
+      expect(decodeProtectedHeader(await assertion()).kid).toBe(old.kid);
+      expect(await kids()).toEqual([old.kid, next.kid]);
+
+      advance(7 * DAY_MS);
+      await factory.activateNextKey(scope);
+      const token = await assertion();
+
+      expect(decodeProtectedHeader(token)).toMatchObject({
+        kid: next.kid,
+        typ: 'client-authentication+jwt',
+      });
+      const jwks = await signer.getUpstreamJwks('api', realmId, 'idp-1');
+      const { claims } = await verifyWithJwks(token, jwks, 'qauth-at-idp');
+      expect(claims).toMatchObject({ sub: 'qauth-at-idp', aud: 'https://idp.example.test' });
+      expect(await kids()).toEqual([old.kid, next.kid]);
+      advance(14 * DAY_MS);
+      expect(await kids()).toEqual([next.kid]);
+      expect((await signer.getJwks('api', realmId)).keys).toEqual([]);
+    });
+
+    it('signs nothing more for a subscription once its keys are deleted', async () => {
+      const { factory, signer } = rotating();
+      const realmId = await seedRealm('https://a.example.test');
+      const scope = { realmId, purpose: 'webhook_signing', scopeId: 'sub-1' } as const;
+      await factory.createKey(scope);
+      const request = { realmId, subscriptionId: 'sub-1', id: 'evt_1', timestamp: 1, body: '' };
+      await signer.signWebhook('delivery', request);
+
+      await factory.deleteScopedKeys(scope);
+
+      await expect(signer.signWebhook('delivery', request)).rejects.toBeInstanceOf(
+        SignerKeyNotFoundError
+      );
+      const { rows } = await db().query('SELECT count(*)::int AS n FROM realm_keys');
+      expect(rows[0].n).toBe(0);
+    });
   });
 
   it('encrypts with the stored data key and hands out the stored cookie secret', async () => {

@@ -1507,7 +1507,8 @@ describe('getUpstreamJwks', () => {
     const jwks = await signer.getUpstreamJwks('admin', REALM_A, PROVIDER);
     const realmJwks = await signer.getJwks('admin', REALM_A);
 
-    expect(jwks.keys.map((key) => key.kid)).toEqual([active, next.kid]);
+    // Both were published at NOW, so the fixed order falls back to the kid.
+    expect(jwks.keys.map((key) => key.kid)).toEqual([active, next.kid].sort());
     for (const key of jwks.keys) {
       expect(key).toMatchObject({ kty: 'RSA', alg: 'RS256', use: 'sig' });
       expect(key).not.toHaveProperty('d');

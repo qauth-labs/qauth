@@ -46,11 +46,13 @@ export {
   type EncryptRequest,
   type JwsKeyAlgorithm,
   type RealmJwks,
+  type SignClientAssertionRequest,
   type Signer,
   SIGNER_OPERATIONS,
   type SignerOperation,
   type SignHybridRequest,
   type SignJwsRequest,
+  type SignWebhookRequest,
   type VerificationKey,
 } from './lib/signer';
 export {
@@ -64,6 +66,7 @@ export {
   SignerKeyNotFoundError,
   type SignerRefusalReason,
   SignerRequestRefusedError,
+  UpstreamClientNotFoundError,
 } from './lib/signer-errors';
 export {
   isSignerCallAllowed,
@@ -74,6 +77,7 @@ export {
   type SignerGrant,
 } from './lib/signer-policy';
 export {
+  CLIENT_ASSERTION_TYP,
   isJwsSigningPurpose,
   isTypAllowed,
   JWS_SIGNING_PURPOSES,

@@ -86,5 +86,6 @@ export type {
   PublicKeyRecord,
   SignerKeyRecord,
   SignerKeyStore,
+  UpstreamClientRecord,
   WrappedSignerKey,
 } from './lib/signer-key-store';
