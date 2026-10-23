@@ -1,11 +1,11 @@
 import type { EventTypeDefinition } from './definition';
+import { eventVersionLabel } from './identifier';
 import {
   dataJsonSchema,
   ENVELOPE_SCHEMA_FILE,
   envelopeJsonSchema,
   eventSchemaFile,
 } from './json-schema';
-import { eventVersionLabel } from './identifier';
 import { LEGACY_EVENT_MAP } from './legacy';
 
 /**
