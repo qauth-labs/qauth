@@ -42,8 +42,9 @@ keys; the material stays as it is.
 - **`KEY_PURPOSES`**: the fixed list of key purposes and their rules. See
   [Key purposes](#key-purposes).
 - **`generateKeyMaterial`**: a new key of one algorithm, with its `kid`.
-- **`createKeyFactory`**: `createKey` and `provisionRealmKeys`, which generate, seal and store keys.
-  See [Creating keys](#creating-keys).
+- **`createKeyFactory`**: `createKey` and `provisionRealmKeys`, which generate, seal and store keys,
+  and `activateNextKey` and `deleteScopedKeys` for the scoped keys. See
+  [Creating keys](#creating-keys) and [Scoped keys](#scoped-keys).
 
 The library may import only `scope:core` and `scope:shared` libraries. Its `type:key-custody` tag
 carries that rule in `eslint.config.mjs`.
@@ -159,7 +160,8 @@ default.
 
 ## Creating keys
 
-`createKeyFactory` takes the deployment's switches and returns `createKey` and `provisionRealmKeys`.
+`createKeyFactory` takes the deployment's switches and returns `createKey`, `provisionRealmKeys`,
+`activateNextKey` and `deleteScopedKeys`.
 
 ```typescript
 import { createKeyFactory } from '@qauth-labs/server-keys/custody';
@@ -172,7 +174,12 @@ const keys = createKeyFactory({
 });
 
 await keys.provisionRealmKeys(realmId); // token_signing, event_signing, cookie_hmac, data_at_rest
-await keys.createKey({ realmId, purpose: 'webhook_signing', scopeId: subscriptionId });
+const [webhook] = await keys.createKey({
+  realmId,
+  purpose: 'webhook_signing',
+  scopeId: subscriptionId,
+});
+// webhook.secret: 'whsec_…', shown to the subscriber once
 await keys.createKey({ realmId, purpose: 'token_signing', algorithm: 'RS256' });
 ```
 
@@ -189,7 +196,12 @@ anything is generated when:
 
 A `kid` the realm already uses gives a `KeyIdConflictError`. A second `active` key for the same
 realm, purpose, scope and algorithm gives an `ActiveKeyConflictError`; a replacement is created as
-`next`. Nothing is stored in either case.
+`next`. A second `next` key for the same realm, purpose, scope and algorithm gives a
+`NextKeyConflictError`: a rotation has one key waiting. Nothing is stored in any of these cases.
+
+A `webhook_signing` key's result carries `secret`, the new secret in the Standard Webhooks form
+(`whsec_` and the base64 of its 32 bytes). That result is the only place the secret ever appears: no
+later call of the factory or the signer returns it. No other purpose's result carries a secret.
 
 With `HYBRID_SIGNING_ENABLED` on, an `EdDSA` `token_signing` key is created with an `ML-DSA-65` key,
 and both rows share one `pair_id`.
@@ -204,6 +216,43 @@ transaction (`tx`) so a realm and its keys can be created together.
 `federationOperator` is the seam for the federation-operator deployment. It defaults to `false`;
 the federation work names the switch that sets it.
 
+### Scoped keys
+
+A webhook subscription's secrets and an upstream provider's client-assertion keys are scoped keys:
+`scope_id` is the subscription id or the provider id. The subscription and provider records belong
+to the events and upstream-login work; this library creates, rotates and deletes their keys.
+
+```typescript
+const scope = { realmId, purpose: 'webhook_signing', scopeId: subscriptionId } as const;
+
+const [current] = await keys.createKey(scope); // current.secret, shown once
+const [next] = await keys.createKey({ ...scope, status: 'next' }); // next.secret, shown once
+// ... at least 7 days later:
+await keys.activateNextKey(scope); // next signs alone; the old secret is retired
+
+await keys.deleteScopedKeys({ ...scope, tx }); // with the subscription, in its transaction
+```
+
+A rotation follows the overlap rules of the automatic rotation (ADR-019, #542):
+
+- It starts with `createKey({ ..., status: 'next' })`. A next client-assertion key is published at
+  once, in the provider's JWKS (`getUpstreamJwks`), but does not sign. A next webhook secret is
+  shown to the subscriber and signs every message beside the active one, so the receiver can switch
+  at any time.
+- `activateNextKey` makes the next key `active` and the active key `retired`, in one transaction. It
+  refuses with a `KeyChangeRefusedError` (`OVERLAP_NOT_ELAPSED`, with `notBefore`) until the next
+  key has been published, or handed out, for `prepublishMs` (default 7 days,
+  `DEFAULT_KEY_PREPUBLISH_DAYS`).
+- A retired client-assertion key stays in the provider's JWKS for `retiredRetentionMs` (default 14
+  days, `DEFAULT_KEY_RETIRED_RETENTION_DAYS`). A retired webhook secret signs nothing more.
+- `activateNextKey` takes scoped purposes only; the rotation job of #542 rotates the others. The
+  rotation settings of #542 set both windows.
+
+`deleteScopedKeys` deletes every key of one scope, whatever its status, with their public rows. It is
+the hook the deletion of a subscription or a provider calls, in the same transaction (`tx`), so the
+owner and its keys go together. A signer that holds one of the keys in memory drops it at its next
+key-list read, within one refresh interval.
+
 ### What is stored
 
 - **`kid`**: the RFC 7638 SHA-256 thumbprint of the public JWK for an asymmetric key, and 128 random
@@ -215,7 +264,8 @@ the federation work names the switch that sets it.
 ### The store
 
 This library may not import `@qauth-labs/infra-db`, so it writes through a `RealmKeyStore` port
-shaped like the realm keys repository (#461). The signer's wiring builds it from the repository:
+shaped like the realm keys repository (#461): `findByKid`, `listByRealm`, `create`, `updateStatus`
+and `deleteByScope`. The signer's wiring builds it from the repository:
 `createRepositoryKeyStore(db)` in `@qauth-labs/fastify-plugin-signer`.
 
 ## The signer
@@ -231,15 +281,18 @@ const token = await signer.signJws('api', {
 });
 ```
 
-| Operation                                                | Returns                                                                                                                               |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `signJws({ realmId, purpose, typ, algorithm?, claims })` | A compact JWS signed by the realm's active key of the purpose. `algorithm` defaults to the purpose's default (`EdDSA`).               |
-| `signHybrid({ realmId, typ, claims })`                   | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                   |
-| `getCookieSecrets(realmId)`                              | The active cookie HMAC secret and the most recently retired one, as fresh buffers.                                                    |
-| `encrypt({ realmId, plaintext, context? })`              | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
-| `decrypt({ realmId, ciphertext, context? })`             | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
-| `getVerificationKeys(realmId, purpose)`                  | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |
-| `getJwks(realmId)`                                       | The realm's JWKS: the published `token_signing` and `event_signing` keys inside their window, `next` keys included, in a fixed order. |
+| Operation                                                                    | Returns                                                                                                                               |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `signJws({ realmId, purpose, typ, algorithm?, claims })`                     | A compact JWS signed by the realm's active key of the purpose. `algorithm` defaults to the purpose's default (`EdDSA`).               |
+| `signHybrid({ realmId, typ, claims })`                                       | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                   |
+| `signWebhook({ realmId, subscriptionId, id, timestamp, body })`              | The `webhook-signature` header value. See [Webhook signatures](#webhook-signatures).                                                  |
+| `signClientAssertion({ realmId, providerId, audience, algorithm?, claims })` | A `private_key_jwt` client assertion toward an upstream provider. See [Client assertions](#client-assertions).                        |
+| `getCookieSecrets(realmId)`                                                  | The active cookie HMAC secret and the most recently retired one, as fresh buffers.                                                    |
+| `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
+| `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
+| `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |
+| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` and `event_signing` keys inside their window, `next` keys included, in a fixed order. |
+| `getUpstreamJwks(realmId, providerId)`                                       | The JWKS of one upstream provider's client-assertion keys, by the same window rules as `getJwks`.                                     |
 
 What the signer guarantees:
 
@@ -257,25 +310,81 @@ What the signer guarantees:
 - **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
   `SignerAccessDeniedError`. Every role may read public keys.
 
-  | Role       | May call                                                                        |
-  | ---------- | ------------------------------------------------------------------------------- |
-  | `local`    | Everything. The caller inside the signer's own process, in a single deployment. |
-  | `web`      | `getCookieSecrets`. It never signs a token.                                     |
-  | `api`      | `signJws` for `token_signing`, `signHybrid`, `encrypt`, `decrypt`.              |
-  | `delivery` | `signJws` for `event_signing`. Webhook signing joins with #547.                 |
-  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.         |
+  | Role       | May call                                                                                  |
+  | ---------- | ----------------------------------------------------------------------------------------- |
+  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.           |
+  | `web`      | `getCookieSecrets`. It never signs anything.                                              |
+  | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt`. |
+  | `delivery` | `signJws` for `event_signing`, `signWebhook`.                                             |
+  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                   |
+
+  The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 
 - **No key leaves it.** No operation returns a private key, a key object or symmetric material,
-  except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A compromised
-  caller still gets signatures for its allowed purposes, never a key. Errors carry roles,
-  purposes, algorithms, realm ids and `kid`s only.
+  except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A webhook secret
+  is shown once, by `createKey`, never by the signer. A compromised caller still gets signatures
+  for its allowed purposes, never a key. Errors carry roles, purposes, algorithms, realm ids and
+  `kid`s only.
 - **It never creates a key.** A realm without the key an operation needs gets a
   `SignerKeyNotFoundError`. A realm without an issuer gets a `RealmIssuerNotFoundError`.
 - **It never falls back to another key.** A key that does not unwrap fails the call with the KEK
   provider's typed error (`KEY_DECRYPTION_FAILED`, `KEK_UNKNOWN_REF`, `KEK_UNAVAILABLE`,
   `KEK_ACCESS_DENIED`).
 
-Webhook signatures and client assertions are not operations yet; #547 adds them.
+### Webhook signatures
+
+`signWebhook` signs one message for one subscription in the
+[Standard Webhooks](https://www.standardwebhooks.com/) symmetric form: HMAC-SHA256 over
+`id.timestamp.body`, base64, prefixed `v1,`. The delivery role holds no secret (ADR-019 Decision 8):
+it sends the message and gets back the value of the `webhook-signature` header.
+
+```typescript
+const signature = await signer.signWebhook('delivery', {
+  realmId,
+  subscriptionId,
+  id: event.id, // webhook-id: the same on every retry
+  timestamp: Math.floor(Date.now() / 1000), // webhook-timestamp: this attempt
+  body, // the exact bytes, or text sent as UTF-8
+});
+```
+
+- The subscription's `active` secret signs, and during a rotation its `next` secret too. The header
+  then carries both signatures, separated by a space, the active one first, so a receiver verifies
+  with either secret. The output matches the reference libraries' test vector.
+- `id` is printable ASCII without a full stop or a space, at most 255 characters; `timestamp` is
+  whole seconds. A body is signed byte for byte; send it as signed.
+- The secrets are imported as non-extractable HMAC keys, and only sign.
+- If the events work chooses the asymmetric form (`v1a`, Ed25519), only the purpose's key kind in
+  `KEY_PURPOSES` changes.
+
+### Client assertions
+
+`signClientAssertion` signs the JWT QAuth sends as a client authenticating with `private_key_jwt`
+to an upstream provider ([RFC 7523](https://www.rfc-editor.org/rfc/rfc7523) §2.2, OpenID Connect
+Core §9), with the provider's active key. ADR-019 Decision 12: a provider plugin holds no private key
+and asks the signer.
+
+```typescript
+const assertion = await signer.signClientAssertion('api', {
+  realmId,
+  providerId,
+  audience: provider.issuer, // the upstream issuer identifier, its sole value
+  claims: { jti: randomUUID(), iat, exp: iat + 60 },
+});
+```
+
+- `iss` and `sub` are the client id the realm's configuration of the provider names. The signer
+  reads it through `SignerKeyStore.findUpstreamClient`, at most once per refresh interval; a claims
+  set with `iss`, `sub` or `aud` is refused. A realm without a configuration for the provider gets
+  an `UpstreamClientNotFoundError`. Until the upstream-login work adds that configuration, the
+  repository wiring has none, so no assertion is signed.
+- `aud` is `audience`, one string, as draft-ietf-oauth-rfc7523bis §4 requires for client
+  authentication. `exp` and `jti` are required.
+- The protected header is `alg`, `kid` and `typ: client-authentication+jwt` (`CLIENT_ASSERTION_TYP`,
+  rfc7523bis §4). No realm verifier accepts that `typ`, so an assertion is never a QAuth token.
+- `algorithm` picks the key, `RS256` by default; the provider may need `ES256` or `EdDSA`.
+- `getUpstreamJwks(realmId, providerId)` serves the provider's published keys, for a provider that
+  registers QAuth's public key or fetches it from a `jwks_uri`. The realm JWKS never lists them.
 
 ### The in-process signer
 
@@ -304,6 +413,9 @@ const signer = createInProcessSigner({
   once set, so it is read once.
 - A key marked `compromised` stops signing, decrypting and appearing in the JWKS at each node's next
   read, not at once. Emergency retirement (#551) adds an invalidation that reaches every node.
+- Scoped keys are read per realm, purpose and scope, and unwrapped under their scope: a row moved to
+  another subscription, provider or realm does not open. A rotation or a deletion of a scope reaches
+  a node within one interval.
 - With hybrid signing off, `signHybrid` is refused and the ML-DSA-65 private key is never unwrapped
   (ADR-005, #248 F10).
 
