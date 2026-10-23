@@ -266,9 +266,11 @@ export default [
   // `@nx/enforce-module-boundaries` works per project and cannot tell one entry
   // point of a package from another, so this is a path rule. It also refuses a
   // deep import such as `@qauth-labs/server-keys/src/lib/envelope`, which would
-  // otherwise reach the same code past the entry point, and a dynamic
-  // `import()` or `require()` of either, which `no-restricted-imports` does not
-  // see. A KEK adapter package (#577-#579) joins KEY_CUSTODY_WIRING when it lands.
+  // otherwise reach the same code past the entry point, and any string that
+  // names either path, which covers `import()`, `require()` and the forms
+  // `no-restricted-imports` does not see. A path assembled at run time still
+  // passes: this keeps honest code honest, the signer role's own process and
+  // database user are what hold the line (ADR-019 Decision 9). A KEK adapter package (#577-#579) joins KEY_CUSTODY_WIRING when it lands.
   {
     files: [
       '**/*.ts',
@@ -286,14 +288,18 @@ export default [
         'error',
         { patterns: [{ regex: KEY_CUSTODY_IMPORT.source, message: KEY_CUSTODY_MESSAGE }] },
       ],
+      // Any other string naming the path: a dynamic import(), require(),
+      // createRequire(...)(...), a type-level import('...'), or a template
+      // literal. Import and export declarations are left to the rule above, so
+      // each import is reported once.
       'no-restricted-syntax': [
         'error',
         {
-          selector: `ImportExpression[source.value=${KEY_CUSTODY_IMPORT}]`,
+          selector: `:not(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, TSExternalModuleReference) > Literal[value=${KEY_CUSTODY_IMPORT}]`,
           message: KEY_CUSTODY_MESSAGE,
         },
         {
-          selector: `CallExpression[callee.name='require'][arguments.0.value=${KEY_CUSTODY_IMPORT}]`,
+          selector: `TemplateElement[value.raw=${KEY_CUSTODY_IMPORT}]`,
           message: KEY_CUSTODY_MESSAGE,
         },
       ],

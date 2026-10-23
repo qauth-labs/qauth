@@ -56,6 +56,23 @@ const FORBIDDEN: [string, string][] = [
     "import { openKeyMaterial } from '@qauth-labs/server-keys/src/lib/envelope';\n",
   ],
   ['a dynamic import', "export const custody = import('@qauth-labs/server-keys/custody');\n"],
+  [
+    'a dynamic import of a template literal',
+    'export const custody = import(`@qauth-labs/server-keys/custody`);\n',
+  ],
+  [
+    'a type-level import',
+    "export type Provider = import('@qauth-labs/server-keys/custody').KekProvider;\n",
+  ],
+  [
+    'an import through createRequire',
+    "import { createRequire } from 'node:module';\n" +
+      "export const custody = createRequire(__filename)('@qauth-labs/server-keys/custody');\n",
+  ],
+  [
+    'an import-equals declaration',
+    "import custody = require('@qauth-labs/server-keys/custody');\nexport { custody };\n",
+  ],
 ];
 
 describe('key custody import guard', () => {
