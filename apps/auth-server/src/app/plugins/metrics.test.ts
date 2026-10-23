@@ -56,6 +56,60 @@ async function buildAppWithLogCapture(requestIdLogLabel = 'reqId'): Promise<{
   return { app, lines };
 }
 
+/** The metrics plugin and route over a stand-in event store, as the app registers them after the database. */
+async function buildAppWithEventStore(oldestUnreadEventAge: () => Promise<number>) {
+  const app = Fastify({ logger: false });
+  app.decorate('repositories', {
+    events: { oldestUnreadEventAge },
+  } as unknown as FastifyInstance['repositories']);
+  await app.register(metricsPlugin);
+  await app.register(metricsRoute);
+  return app;
+}
+
+describe('event store lag gauge (#457)', () => {
+  it('reads the event store lag at each scrape', async () => {
+    let age = 12.5;
+    const app = await buildAppWithEventStore(async () => age);
+
+    const first = await app.inject({ method: 'GET', url: '/metrics' });
+    expect(first.statusCode).toBe(200);
+    expect(first.body).toContain('# TYPE qauth_events_oldest_unread_age_seconds gauge');
+    expect(first.body).toContain('qauth_events_oldest_unread_age_seconds{app="auth-server"} 12.5');
+
+    age = 0;
+    const second = await app.inject({ method: 'GET', url: '/metrics' });
+    expect(second.body).toContain('qauth_events_oldest_unread_age_seconds{app="auth-server"} 0');
+
+    await app.close();
+  });
+
+  it('shows NaN, not a stale or a reassuring value, when the read fails, and still serves the rest', async () => {
+    const app = await buildAppWithEventStore(async () => {
+      throw new Error('connection refused');
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.statusCode).toBe(200);
+    // prom-client writes NaN as `Nan`; Prometheus reads either spelling.
+    expect(res.body).toMatch(/^qauth_events_oldest_unread_age_seconds\{app="auth-server"\} nan$/im);
+    expect(res.body).toContain('qauth_login_attempts_total');
+
+    await app.close();
+  });
+
+  it('is absent without a database', async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.body).not.toContain('qauth_events_oldest_unread_age_seconds');
+
+    await app.close();
+  });
+});
+
 describe('metrics + request-id', () => {
   it('exposes /metrics in Prometheus text format with the auth counters', async () => {
     const app = await buildApp();

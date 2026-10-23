@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
-import { collectDefaultMetrics, Counter, Registry } from 'prom-client';
+import { collectDefaultMetrics, Counter, Gauge, Registry } from 'prom-client';
 
 /**
  * Application metrics exposed to Prometheus.
@@ -45,7 +45,8 @@ export const METRICS_PLUGIN_NAME = '@qauth-labs/metrics';
  *
  * Creates an isolated prom-client {@link Registry} (so tests and multiple
  * instances do not clash on the global default registry), registers default
- * process/Node metrics, and defines the QAuth auth counters. Decorates the
+ * process/Node metrics, and defines the QAuth auth counters and, when the
+ * database plugin is registered, the event store lag gauge. Decorates the
  * Fastify instance with {@link AppMetrics}.
  */
 export const metricsPlugin = fp<FastifyPluginOptions>(
@@ -76,6 +77,27 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       labelNames: ['job', 'result'] as const,
       registers: [registry],
     });
+
+    // The event store's read lag (#457): how long the oldest committed event
+    // has been held back from readers by an older transaction still open. It
+    // is read from the database at each scrape, so it exists only when the
+    // database plugin, registered before this one in the app, is present. A
+    // failed read reports NaN, not a stale or a reassuring value.
+    if (fastify.hasDecorator('repositories')) {
+      new Gauge({
+        name: 'qauth_events_oldest_unread_age_seconds',
+        help: 'Seconds the oldest committed event has been held back from readers by an older open transaction; 0 when none is.',
+        registers: [registry],
+        async collect() {
+          try {
+            this.set(await fastify.repositories.events.oldestUnreadEventAge());
+          } catch (error) {
+            fastify.log.warn({ err: error }, 'Could not read the event store lag for /metrics');
+            this.set(Number.NaN);
+          }
+        },
+      });
+    }
 
     const metrics: AppMetrics = { registry, loginAttempts, tokensIssued, jobRuns };
     fastify.decorate('metrics', metrics);

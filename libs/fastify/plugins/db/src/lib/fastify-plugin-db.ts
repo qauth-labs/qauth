@@ -6,6 +6,7 @@ import {
   createAuthorizationCodesRepository,
   createDatabase,
   createEmailVerificationTokensRepository,
+  createEventsRepository,
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
   createOid4vpRequestStatesRepository,
@@ -17,6 +18,7 @@ import {
   type Database,
   type DatabasePool,
   type EmailVerificationTokensRepository,
+  type EventsRepository,
   OAuthClientsRepository,
   type OAuthConsentsRepository,
   type Oid4vpRequestStatesRepository,
@@ -55,6 +57,12 @@ declare module 'fastify' {
        * the storage layer, so a disabled deployment simply never writes a row.
        */
       oid4vpRequestStates: Oid4vpRequestStatesRepository;
+      /**
+       * The event store (ADR-019 Decision 8, #457): `emit(tx, event)` in the
+       * transaction of the change, `emitInOwnTransaction(event)` without one,
+       * and `readAfter(realmId, position, limit)` for a realm's stream.
+       */
+      events: EventsRepository;
     };
   }
 }
@@ -100,6 +108,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       userCredentials: createUserCredentialsRepository(database.db),
       userAttributes: createUserAttributesRepository(database.db),
       oid4vpRequestStates: createOid4vpRequestStatesRepository(database.db),
+      events: createEventsRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {
