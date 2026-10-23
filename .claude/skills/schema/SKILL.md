@@ -136,7 +136,7 @@ repository's host methods. At most one realm has `is_operator = true`.
 The auth-server's boot step (#484) fills the default realm's issuer and primary
 host from `JWT_ISSUER` (`assignIssuer` for a realm from before 0025) under
 `lockProvisioning`, and marks it the operator realm when none is.
-`realms.webauthn_rp_id` is the realm's passkey RP ID lock (migration 0027,
+`realms.webauthn_rp_id` is the realm's passkey RP ID lock (migration 0028,
 #467): NULL until the first passkey enrolment writes it through
 `lockWebAuthnRpId`, permanent afterwards (trigger). Passkeys are
 `user_credentials` rows with `provider_type = 'webauthn'` and the credential id

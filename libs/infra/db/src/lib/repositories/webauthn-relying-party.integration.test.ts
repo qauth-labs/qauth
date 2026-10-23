@@ -1,6 +1,6 @@
 /**
  * Real-Postgres integration tests for the passkey relying-party columns
- * (migration 0027, issue #467).
+ * (migration 0028, issue #467).
  *
  * What only a database can show: the RP ID lock written once and never
  * changed (`realms_webauthn_rp_id_permanent`), its stored form (CHECK
