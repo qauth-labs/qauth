@@ -136,4 +136,46 @@ describe('isCimdClientIdShape', () => {
   ])('refuses %s', (_label, value) => {
     expect(isCimdClientIdShape(value)).toBe(false);
   });
+
+  describe('webauthn_allowed_origins (#467)', () => {
+    const nativeClient = (origins: unknown) => ({
+      realm: 'master',
+      clients: [
+        {
+          client_id: 'native-app',
+          name: 'Native app',
+          grant_types: ['authorization_code'],
+          webauthn_allowed_origins: origins,
+        },
+      ],
+    });
+    const APK_ORIGIN = 'android:apk-key-hash:sYUC8p5I9SxqFernBPHmDxz_YVZXmVJdW8s-m3RTTqE';
+
+    it('accepts an Android app origin and an https origin, in the browser form', () => {
+      const parsed = manifestSchema.parse(
+        nativeClient([APK_ORIGIN, 'https://App.Example.com:443'])
+      );
+      expect(parsed.clients?.[0].webauthn_allowed_origins).toEqual([
+        APK_ORIGIN,
+        'https://app.example.com',
+      ]);
+    });
+
+    it.each([
+      ['a path', 'https://app.example.com/login'],
+      ['plain http off localhost', 'http://app.example.com'],
+      ['a hex fingerprint', 'android:apk-key-hash:FA:C6:17'],
+      ['an IP address', 'https://192.0.2.1'],
+    ])('refuses %s, naming the entry', (_name, origin) => {
+      const result = manifestSchema.safeParse(nativeClient([origin]));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain(`"${origin}"`);
+    });
+
+    it('refuses more than 20 origins', () => {
+      expect(
+        manifestSchema.safeParse(nativeClient(Array.from({ length: 21 }, () => APK_ORIGIN))).success
+      ).toBe(false);
+    });
+  });
 });

@@ -36,12 +36,20 @@ export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
  * lifted only by the operator tooling (`scripts/client-suspension.ts`), so no
  * route can write it through `update`, not even by mistake. `idJagTargets` is
  * left out for the same reason (#434): only the `db:seed-oauth-clients`
- * manifest writes a client's ID-JAG targets.
+ * manifest writes a client's ID-JAG targets. `webauthnAllowedOrigins` is left
+ * out too (#467): the operator sets a client's passkey origins through the
+ * same manifest.
  */
 export type UpdateOAuthClient = Partial<
   Omit<
     NewOAuthClient,
-    'id' | 'createdAt' | 'realmId' | 'suspended' | 'suspendedAt' | 'idJagTargets'
+    | 'id'
+    | 'createdAt'
+    | 'realmId'
+    | 'suspended'
+    | 'suspendedAt'
+    | 'idJagTargets'
+    | 'webauthnAllowedOrigins'
   >
 > & {
   updatedAt?: number;

@@ -4,6 +4,7 @@
  * Kept apart from the script so the validation can be tested without running
  * it, like `client-suspension.ts`.
  */
+import { InvalidWebAuthnOriginError, normaliseWebAuthnOrigin } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import {
@@ -36,6 +37,22 @@ const clientJwkZ = z
   .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
     message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
   });
+
+/**
+ * One operator-set passkey origin (#467), written in the form a browser puts in
+ * `clientDataJSON.origin`: an https origin, or an Android app's
+ * `android:apk-key-hash:` origin. The refusal names the entry, since it is the
+ * operator's own manifest.
+ */
+const webauthnOriginZ = z.string().transform((value, ctx) => {
+  try {
+    return normaliseWebAuthnOrigin(value);
+  } catch (error) {
+    if (!(error instanceof InvalidWebAuthnOriginError)) throw error;
+    ctx.addIssue({ code: 'custom', message: `"${value}": ${error.message}` });
+    return z.NEVER;
+  }
+});
 
 export const clientSpecSchema = z
   .object({
@@ -72,6 +89,11 @@ export const clientSpecSchema = z
     // that authenticate it — same operator-set posture as `max_agent_mode`.
     jwks: z.object({ keys: z.array(clientJwkZ).min(1).max(20) }).optional(),
     jwks_uri: z.url().max(2048).optional(),
+    // ADR-017 Decision 14 (#467): the origins a native app's passkey
+    // ceremonies may come from, beside the realm's own. Operator-set only, like
+    // `jwks`: no registration path accepts it, so a client cannot widen where
+    // its passkeys may be used.
+    webauthn_allowed_origins: z.array(webauthnOriginZ).max(20).optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be

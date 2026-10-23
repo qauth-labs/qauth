@@ -197,6 +197,13 @@
       "when": 1792674690409,
       "tag": "0027_client_id_jag_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792680084287,
+      "tag": "0028_webauthn_relying_party",
+      "breakpoints": true
     }
   ]
 }
