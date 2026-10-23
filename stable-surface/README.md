@@ -102,11 +102,11 @@ documented configuration keys will too.
 ```json
 {
   "name": "event-user-signed-in-v1",
-  "description": "The urn:qauth:event:user.signed_in:v1 event: the envelope with that type's data (ADR-018 §5, #456).",
+  "description": "The urn:qauth:event:user.signed_in:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
   "format": "json-schema",
   "role": "both",
   "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
-  "path": "apps/docs-site/public/schemas/events/user.signed_in.v1.json",
+  "path": "apps/docs-site/public/schemas/events/user.signed_in.v1-rc.0.json",
   "stability": "stable"
 }
 ```
@@ -114,6 +114,11 @@ documented configuration keys will too.
 An event schema is `both`: QAuth emits the event, and the events it stored under an earlier
 release must still match the schema, so a new required member is a break and a new optional one
 is not. The tests of `libs/shared/events` fail when a schema file is missing from the registry.
+
+An event surface's name carries only the major version, and its path carries the whole version.
+When a breaking change before 1.0.0 raises a type's release-candidate number, the path changes and
+the name does not, so the check compares the new file with the old one at the baseline and reports
+the break for approval.
 
 | Key                  | Meaning                                                                                                                     |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |

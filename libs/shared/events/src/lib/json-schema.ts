@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { EventTypeDefinition } from './definition';
 import { envelopeSchema, EXTENSIBLE_ENUM_META } from './envelope';
+import { eventVersionLabel } from './identifier';
 import { eventSchemaFor } from './registry';
 
 /**
@@ -27,9 +28,11 @@ export const SCHEMA_BASE_URL = 'https://docs.qauth.dev/schemas/events/';
 /** The file name of the envelope's schema. */
 export const ENVELOPE_SCHEMA_FILE = 'envelope.json';
 
-/** The file name of one type's schema: `<name>.v<N>.json`. */
-export function eventSchemaFile(definition: Pick<EventTypeDefinition, 'name' | 'version'>): string {
-  return `${definition.name}.v${definition.version}.json`;
+/** The file name of one type's schema: `<name>.v<N>.json`, or `<name>.v<N>-rc.<M>.json`. */
+export function eventSchemaFile(
+  definition: Pick<EventTypeDefinition, 'name' | 'version' | 'rc'>
+): string {
+  return `${definition.name}.${eventVersionLabel(definition)}.json`;
 }
 
 type JsonObject = Record<string, unknown>;

@@ -13,8 +13,8 @@
     },
     "type": {
       "type": "string",
-      "pattern": "^urn:qauth:event:([a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+):v([1-9][0-9]*)$",
-      "description": "The event type, `urn:qauth:event:<name>:v<N>`. The registry lists every type."
+      "pattern": "^urn:qauth:event:([a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+):v([1-9][0-9]*)(?:-rc\\.(0|[1-9][0-9]*))?$",
+      "description": "The event type, `urn:qauth:event:<name>:v<N>`, or `:v<N>-rc.<M>` for a release candidate. The registry lists every type."
     },
     "time": {
       "type": "string",

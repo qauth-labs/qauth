@@ -8,6 +8,7 @@ import { FIRST_RELEASE, identifierHmac, reason, signInMethod, verifierProfile } 
 export const userSignedIn = defineEventType({
   name: 'user.signed_in',
   version: 1,
+  rc: 0,
   description:
     'A person signed in: the credential checked out and QAuth started a browser session or issued tokens.',
   category: 'user',
@@ -23,6 +24,7 @@ export const userSignedIn = defineEventType({
 export const userSignInFailed = defineEventType({
   name: 'user.sign_in_failed',
   version: 1,
+  rc: 0,
   description:
     'A sign-in was refused: an unknown identifier, a wrong credential, a locked or disabled account.',
   category: 'user',
@@ -40,6 +42,7 @@ export const userSignInFailed = defineEventType({
 export const userSignedOut = defineEventType({
   name: 'user.signed_out',
   version: 1,
+  rc: 0,
   description: 'A person signed out, and QAuth ended their sessions.',
   category: 'user',
   severity: 'info',
@@ -51,6 +54,7 @@ export const userSignedOut = defineEventType({
 export const userSignOutFailed = defineEventType({
   name: 'user.sign_out_failed',
   version: 1,
+  rc: 0,
   description: 'A sign-out request was refused or could not complete.',
   category: 'user',
   severity: 'warning',
@@ -64,6 +68,7 @@ export const userSignOutFailed = defineEventType({
 export const userRegistered = defineEventType({
   name: 'user.registered',
   version: 1,
+  rc: 0,
   description: 'A person created an account.',
   category: 'user',
   severity: 'info',
@@ -77,6 +82,7 @@ export const userRegistered = defineEventType({
 export const userRegistrationFailed = defineEventType({
   name: 'user.registration_failed',
   version: 1,
+  rc: 0,
   description: 'An account could not be created, for example because the address is in use.',
   category: 'user',
   severity: 'warning',

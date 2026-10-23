@@ -2,7 +2,13 @@ import { z } from 'zod';
 
 import { EVENT_SEVERITIES, type EventTypeDefinition, RELEASE_TAG_PATTERN } from './definition';
 import { envelopeSchema, EVENT_CATEGORIES, SUBJECT_TYPES, typedEnvelopeSchema } from './envelope';
-import { EVENT_NAME_PATTERN, EVENT_TYPE_PATTERN, eventTypeId, parseEventType } from './identifier';
+import {
+  compareEventVersions,
+  EVENT_NAME_PATTERN,
+  EVENT_TYPE_PATTERN,
+  eventVersionLabel,
+  parseEventType,
+} from './identifier';
 import { type PayloadFinding, scanJsonSchema, scanPayload, scanValues } from './payload-rules';
 import { CLIENT_EVENT_TYPES } from './types/client';
 import { OAUTH_EVENT_TYPES } from './types/oauth';
@@ -54,7 +60,7 @@ export function eventSchemaFor(definition: EventTypeDefinition) {
     definition.type,
     definition.category,
     definition.data,
-    `The ${definition.name} event, version ${definition.version}. ${definition.description}`
+    `The ${definition.name} event, ${eventVersionLabel(definition)}. ${definition.description}`
   );
 }
 
@@ -143,9 +149,15 @@ export function validateRegistry(
     const at = definition.type ?? '(no type)';
     const parsed = typeof definition.type === 'string' ? parseEventType(definition.type) : null;
     if (!parsed || !EVENT_TYPE_PATTERN.test(definition.type)) {
-      problems.push(`${at}: the identifier must match urn:qauth:event:<name>:v<N>`);
-    } else if (parsed.name !== definition.name || parsed.version !== definition.version) {
-      problems.push(`${at}: the identifier must be built from the name and the version`);
+      problems.push(`${at}: the identifier must match urn:qauth:event:<name>:v<N>[-rc.<M>]`);
+    } else if (
+      parsed.name !== definition.name ||
+      parsed.version !== definition.version ||
+      parsed.rc !== definition.rc
+    ) {
+      problems.push(
+        `${at}: the identifier must be built from the name, the version and the candidate number`
+      );
     }
     if (!EVENT_NAME_PATTERN.test(definition.name ?? '')) {
       problems.push(`${at}: the name must be snake_case segments joined by full stops`);
@@ -193,23 +205,31 @@ export function validateRegistry(
   }
 
   // The versioning rules: a breaking change registers the next version beside
-  // the old one, and the old one is deprecated in favour of it until the next
-  // major release removes it.
-  const byType = new Map<string, EventTypeDefinition>(
-    definitions.map((definition) => [definition.type, definition])
-  );
+  // the old one, and the old one is deprecated in favour of it until it is
+  // removed. Each version of a type, in order, names the one after it.
+  const byName = new Map<string, EventTypeDefinition[]>();
+  for (const definition of definitions) {
+    byName.set(definition.name, [...(byName.get(definition.name) ?? []), definition]);
+  }
+  for (const versions of byName.values()) {
+    const ordered = [...versions].sort(compareEventVersions);
+    ordered.slice(0, -1).forEach((definition, index) => {
+      const next = ordered[index + 1];
+      // The same version twice is already reported as registered twice.
+      if (compareEventVersions(definition, next) === 0) return;
+      if (definition.deprecated?.replacedBy !== next.type) {
+        problems.push(`${definition.type}: must be deprecated with replacedBy ${next.type}`);
+      }
+    });
+  }
   for (const definition of definitions) {
     const at = definition.type;
-    const previous = byType.get(eventTypeIdOrEmpty(definition.name, definition.version - 1));
-    if (previous && previous.deprecated?.replacedBy !== definition.type) {
-      problems.push(`${previous.type}: must be deprecated with replacedBy ${definition.type}`);
-    }
     if (definition.deprecated) {
       const { replacedBy, since } = definition.deprecated;
       const replacement = parseEventType(replacedBy);
       if (!seen.has(replacedBy) || replacement?.name !== definition.name) {
         problems.push(`${at}: replacedBy must name a registered later version of the same type`);
-      } else if (replacement.version <= definition.version) {
+      } else if (compareEventVersions(replacement, definition) <= 0) {
         problems.push(`${at}: replacedBy must name a later version`);
       }
       if (!RELEASE_TAG_PATTERN.test(since)) {
@@ -218,12 +238,4 @@ export function validateRegistry(
     }
   }
   return problems;
-}
-
-function eventTypeIdOrEmpty(name: string, version: number): string {
-  try {
-    return eventTypeId(name, version);
-  } catch {
-    return '';
-  }
 }

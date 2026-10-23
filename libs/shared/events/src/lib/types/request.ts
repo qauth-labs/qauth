@@ -17,6 +17,7 @@ export const CSRF_FORMS = [
 export const requestCsrfRejected = defineEventType({
   name: 'request.csrf_rejected',
   version: 1,
+  rc: 0,
   description:
     'A form post was refused because its CSRF check failed: the token was missing or did not match.',
   category: 'user',

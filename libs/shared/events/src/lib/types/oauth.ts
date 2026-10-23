@@ -24,6 +24,7 @@ const failure = () => ({
 export const authorizationCompleted = defineEventType({
   name: 'authorization.completed',
   version: 1,
+  rc: 0,
   description:
     'The authorization endpoint sent the client back with an authorization response that grants access.',
   category: 'user',
@@ -36,6 +37,7 @@ export const authorizationCompleted = defineEventType({
 export const authorizationFailed = defineEventType({
   name: 'authorization.failed',
   version: 1,
+  rc: 0,
   description:
     'The authorization endpoint refused a request: an unknown client, a redirect URI that is not registered, a scope the client may not have, or a denial.',
   category: 'user',
@@ -48,6 +50,7 @@ export const authorizationFailed = defineEventType({
 export const stepUpRequired = defineEventType({
   name: 'step_up.required',
   version: 1,
+  rc: 0,
   description:
     'A request needs a fresh sign-in or new consent before it can go on, for example for a dangerous scope (ADR-007 §2).',
   category: 'user',
@@ -74,6 +77,7 @@ export const stepUpRequired = defineEventType({
 export const stepUpElevated = defineEventType({
   name: 'step_up.elevated',
   version: 1,
+  rc: 0,
   description: 'After a fresh sign-in, a user granted a client dangerous scopes (ADR-007 §2).',
   category: 'user',
   severity: 'info',
@@ -93,6 +97,7 @@ export const stepUpElevated = defineEventType({
 export const consentGranted = defineEventType({
   name: 'consent.granted',
   version: 1,
+  rc: 0,
   description: 'A user granted a client the scopes it asked for.',
   category: 'user',
   severity: 'info',
@@ -110,6 +115,7 @@ export const consentGranted = defineEventType({
 export const consentDenied = defineEventType({
   name: 'consent.denied',
   version: 1,
+  rc: 0,
   description:
     'Consent was not given: the user declined, or the request did not match what the consent screen showed.',
   category: 'user',
@@ -125,6 +131,7 @@ export const consentDenied = defineEventType({
 export const consentRevoked = defineEventType({
   name: 'consent.revoked',
   version: 1,
+  rc: 0,
   description:
     "A user withdrew a client's consent. QAuth revoked the refresh tokens the consent covered.",
   category: 'user',
@@ -140,6 +147,7 @@ export const consentRevoked = defineEventType({
 export const tokenIssued = defineEventType({
   name: 'token.issued',
   version: 1,
+  rc: 0,
   description:
     'The token endpoint issued tokens: for an authorization code, a refresh, client credentials, a token exchange or a JWT bearer assertion.',
   category: 'user',
@@ -200,6 +208,7 @@ export const tokenIssued = defineEventType({
 export const tokenRequestFailed = defineEventType({
   name: 'token.request_failed',
   version: 1,
+  rc: 0,
   description:
     'The token endpoint refused a request: failed client authentication, an invalid or replayed grant, a scope or resource outside what was granted.',
   category: 'user',
@@ -215,6 +224,7 @@ export const tokenRequestFailed = defineEventType({
 export const tokenRevoked = defineEventType({
   name: 'token.revoked',
   version: 1,
+  rc: 0,
   description: 'A client revoked a token at the RFC 7009 revocation endpoint.',
   category: 'user',
   severity: 'info',
@@ -233,6 +243,7 @@ export const tokenRevoked = defineEventType({
 export const tokenRevocationFailed = defineEventType({
   name: 'token.revocation_failed',
   version: 1,
+  rc: 0,
   description:
     'The revocation endpoint refused a request, for example on failed client authentication.',
   category: 'user',
@@ -244,6 +255,7 @@ export const tokenRevocationFailed = defineEventType({
 export const tokenIntrospected = defineEventType({
   name: 'token.introspected',
   version: 1,
+  rc: 0,
   description: 'A resource server introspected an active token (RFC 7662).',
   category: 'user',
   severity: 'info',
@@ -262,6 +274,7 @@ export const tokenIntrospected = defineEventType({
 export const tokenIntrospectionFailed = defineEventType({
   name: 'token.introspection_failed',
   version: 1,
+  rc: 0,
   description:
     'An introspection request failed: client authentication, or a token that is invalid, expired, revoked or not one the caller may inspect.',
   category: 'user',
@@ -274,6 +287,7 @@ export const tokenIntrospectionFailed = defineEventType({
 export const userinfoServed = defineEventType({
   name: 'userinfo.served',
   version: 1,
+  rc: 0,
   description: 'The userinfo endpoint returned claims for an access token.',
   category: 'user',
   severity: 'info',
@@ -285,6 +299,7 @@ export const userinfoServed = defineEventType({
 export const userinfoRequestFailed = defineEventType({
   name: 'userinfo.request_failed',
   version: 1,
+  rc: 0,
   description: 'The userinfo endpoint refused a request.',
   category: 'user',
   severity: 'warning',

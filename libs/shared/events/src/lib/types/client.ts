@@ -15,6 +15,7 @@ export const CLIENT_REGISTRATIONS = ['dynamic', 'developer_api'] as const;
 export const clientCreated = defineEventType({
   name: 'client.created',
   version: 1,
+  rc: 0,
   description:
     'An OAuth client was created: by RFC 7591 dynamic registration, or by a developer through the developer API.',
   category: 'user',
@@ -47,6 +48,7 @@ export const clientCreated = defineEventType({
 export const clientUpdated = defineEventType({
   name: 'client.updated',
   version: 1,
+  rc: 0,
   description: "A developer changed a client's settings.",
   category: 'user',
   severity: 'info',
@@ -63,6 +65,7 @@ export const clientUpdated = defineEventType({
 export const clientDeleted = defineEventType({
   name: 'client.deleted',
   version: 1,
+  rc: 0,
   description: 'A developer deleted a client.',
   category: 'user',
   severity: 'info',
@@ -74,6 +77,7 @@ export const clientDeleted = defineEventType({
 export const clientSecretRotated = defineEventType({
   name: 'client.secret_rotated',
   version: 1,
+  rc: 0,
   description: "A developer replaced a client's secret. The old secret stopped working.",
   category: 'user',
   severity: 'info',
@@ -85,6 +89,7 @@ export const clientSecretRotated = defineEventType({
 export const clientSuspended = defineEventType({
   name: 'client.suspended',
   version: 1,
+  rc: 0,
   description:
     'An operator suspended a client: it can no longer obtain tokens until the suspension is lifted.',
   category: 'admin',
@@ -97,6 +102,7 @@ export const clientSuspended = defineEventType({
 export const clientSuspensionLifted = defineEventType({
   name: 'client.suspension_lifted',
   version: 1,
+  rc: 0,
   description: "An operator lifted a client's suspension.",
   category: 'admin',
   severity: 'info',
@@ -108,6 +114,7 @@ export const clientSuspensionLifted = defineEventType({
 export const apiKeyCreated = defineEventType({
   name: 'api_key.created',
   version: 1,
+  rc: 0,
   description: 'A developer created an API key for a client.',
   category: 'user',
   severity: 'info',
@@ -119,6 +126,7 @@ export const apiKeyCreated = defineEventType({
 export const apiKeyRevoked = defineEventType({
   name: 'api_key.revoked',
   version: 1,
+  rc: 0,
   description: 'A developer revoked an API key. It stopped working.',
   category: 'user',
   severity: 'info',

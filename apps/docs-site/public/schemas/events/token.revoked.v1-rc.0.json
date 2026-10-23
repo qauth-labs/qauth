@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/schemas/events/token.revoked.v1-rc.0.json",
+  "title": "urn:qauth:event:token.revoked:v1-rc.0",
+  "description": "The token.revoked event, v1-rc.0. A client revoked a token at the RFC 7009 revocation endpoint.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+      "description": "The event id, a UUIDv7. One event keeps one id on every route and every retry, so a receiver drops duplicates by it. It is the `webhook-id` of a webhook and the source of an SSF `jti`."
+    },
+    "type": {
+      "type": "string",
+      "const": "urn:qauth:event:token.revoked:v1-rc.0",
+      "description": "The event type, `urn:qauth:event:<name>:v<N>`, or `:v<N>-rc.<M>` for a release candidate. The registry lists every type."
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "description": "When the event happened, as an RFC 3339 time in UTC. Not when it was delivered."
+    },
+    "realm": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "description": "The id of the realm the event happened in."
+    },
+    "category": {
+      "type": "string",
+      "const": "user",
+      "description": "`user`: an end user's own activity. `admin`: an administrator's change. Fixed by the type."
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "`user`: a person, signed in. `client`: an OAuth client acting for itself or, with `delegationChain`, as an agent for the subject. `system`: QAuth itself, such as a scheduled job. `operator_cli`: an operator on the server host, through a QAuth command-line tool.",
+          "x-extensible-enum": [
+            "user",
+            "client",
+            "system",
+            "operator_cli"
+          ]
+        },
+        "id": {
+          "description": "The actor's identifier: a user id, a client's `client_id`, or the operating-system user for `operator_cli`. Absent for `system`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "delegationChain": {
+          "description": "The RFC 8693 `act` chain of a delegated request, as `client_id` values: the acting agent first, then each earlier actor. Absent when nothing was delegated.",
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "description": "Who or what caused the event."
+    },
+    "subject": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "What kind of thing the subject is.",
+          "x-extensible-enum": [
+            "user",
+            "client",
+            "api_key"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "The subject's identifier: a user id, a client's `client_id` or an API key id. It stays valid after the subject is deleted."
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "description": "What the event is about."
+    },
+    "client": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "The client's `client_id`."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "The OAuth client the request came through."
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "description": "The id under which QAuth logged the request: the `trace_id` of a problem document from the same request.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ip": {
+          "description": "The end user's IP address, as QAuth derived it from the request. An IPv4-mapped IPv6 address is written in its IPv4 form.",
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "ipv4",
+              "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$"
+            },
+            {
+              "type": "string",
+              "format": "ipv6",
+              "pattern": "^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$"
+            }
+          ]
+        },
+        "userAgent": {
+          "description": "The `User-Agent` header, cut to 1024 characters.",
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "description": "The HTTP request that caused the event."
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "typeHint": {
+          "description": "The `token_type_hint` the client sent, such as `refresh_token`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "description": "The type's own payload. Its schema is the type's."
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "time",
+    "realm",
+    "category",
+    "data"
+  ]
+}

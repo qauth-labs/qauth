@@ -34,17 +34,26 @@ const sample = (overrides: Partial<EventTypeDefinition> = {}): EventTypeDefiniti
 
 describe('the event type registry', () => {
   // The acceptance criterion of #456: every entry has a data schema, a
-  // category, `since` and an identifier of the form urn:qauth:event:<name>:v<N>.
+  // category, `since` and an identifier of the form urn:qauth:event:<name>:v<N>,
+  // here with the release-candidate suffix -rc.<M>.
   it.each(EVENT_TYPES.map((definition) => [definition.type, definition] as const))(
     '%s has a data schema, a category, since and a well-formed identifier',
     (type, definition) => {
       expect(type).toMatch(EVENT_TYPE_PATTERN);
-      expect(type).toBe(`urn:qauth:event:${definition.name}:v${definition.version}`);
+      expect(type).toBe(
+        `urn:qauth:event:${definition.name}:v${definition.version}-rc.${definition.rc}`
+      );
       expect(definition.data).toBeInstanceOf(z.ZodObject);
       expect(EVENT_CATEGORIES).toContain(definition.category);
       expect(definition.since).toMatch(RELEASE_TAG_PATTERN);
     }
   );
+
+  // Nothing about a type is promised before QAuth 1.0.0 (ADR-018 §5). The
+  // release that ships 1.0.0 drops the suffix from every type, and this test.
+  it('keeps every type a release candidate until QAuth 1.0.0', () => {
+    expect(EVENT_TYPES.filter((definition) => definition.rc === undefined)).toEqual([]);
+  });
 
   it('passes every registry rule, the payload rules included', () => {
     expect(validate(EVENT_TYPES)).toEqual([]);
@@ -56,7 +65,7 @@ describe('the event type registry', () => {
   });
 
   it('types each registered identifier and its data', () => {
-    expectTypeOf<EventDataOf<'urn:qauth:event:user.signed_in:v1'>>().toEqualTypeOf<{
+    expectTypeOf<EventDataOf<'urn:qauth:event:user.signed_in:v1-rc.0'>>().toEqualTypeOf<{
       method: 'password' | 'wallet';
       verifierProfile?: string | undefined;
     }>();
@@ -65,9 +74,10 @@ describe('the event type registry', () => {
   });
 
   it('looks types up by identifier', () => {
-    expect(getEventType('urn:qauth:event:user.signed_in:v1')?.name).toBe('user.signed_in');
+    expect(getEventType('urn:qauth:event:user.signed_in:v1-rc.0')?.name).toBe('user.signed_in');
+    expect(getEventType('urn:qauth:event:user.signed_in:v1')).toBeUndefined();
     expect(getEventType('urn:qauth:event:user.signed_in:v9')).toBeUndefined();
-    expect(isRegisteredEventType('urn:qauth:event:token.issued:v1')).toBe(true);
+    expect(isRegisteredEventType('urn:qauth:event:token.issued:v1-rc.0')).toBe(true);
     expect(isRegisteredEventType('user.signed_in')).toBe(false);
   });
 });
@@ -86,7 +96,12 @@ describe('the registry rules catch a bad entry', () => {
     [
       'an identifier that is not built from the name and version',
       { type: 'urn:qauth:event:sample.other:v1' },
-      'built from the name and the version',
+      'must be built from the name',
+    ],
+    [
+      'an identifier with a candidate number the entry does not have',
+      { type: 'urn:qauth:event:sample.happened:v1-rc.3' },
+      'must be built from the name, the version and the candidate number',
     ],
     ['no data schema', { data: undefined }, 'must be a Zod object'],
     ['an open data schema', { data: z.object({ count: z.int() }) }, 'must be closed'],
@@ -158,6 +173,57 @@ describe('the registry rules catch a bad entry', () => {
       );
     });
 
+    describe('release candidates', () => {
+      const candidate = (rc: number, overrides: Partial<EventTypeDefinition> = {}) =>
+        sample({
+          ...defineEventType({
+            name: 'sample.happened',
+            version: 1,
+            rc,
+            description: 'A sample event.',
+            category: 'user',
+            severity: 'info',
+            since: 'v0.2.0',
+            data: z.strictObject({ count: z.int() }),
+          }),
+          ...overrides,
+        });
+
+      it('builds the identifier with the suffix', () => {
+        expect(candidate(0).type).toBe('urn:qauth:event:sample.happened:v1-rc.0');
+        expect(validate([candidate(0)])).toEqual([]);
+      });
+
+      it('accepts a candidate replaced in place by the next one', () => {
+        expect(validate([candidate(1)])).toEqual([]);
+      });
+
+      it('orders a candidate before the next one, and every candidate before the release', () => {
+        const rc0 = candidate(0, {
+          deprecated: { since: 'v0.3.0', replacedBy: 'urn:qauth:event:sample.happened:v1-rc.1' },
+        });
+        const rc1 = candidate(1, {
+          deprecated: { since: 'v1.0.0', replacedBy: 'urn:qauth:event:sample.happened:v1' },
+        });
+        expect(validate([sample(), rc1, rc0])).toEqual([]);
+      });
+
+      it('fails a candidate that stays undeprecated beside the next one', () => {
+        expect(validate([candidate(0), candidate(1)]).join('\n')).toContain(
+          'urn:qauth:event:sample.happened:v1-rc.0: must be deprecated with replacedBy urn:qauth:event:sample.happened:v1-rc.1'
+        );
+      });
+
+      it('fails a deprecation that names an earlier candidate', () => {
+        const rc1 = candidate(1, {
+          deprecated: { since: 'v0.3.0', replacedBy: 'urn:qauth:event:sample.happened:v1-rc.0' },
+        });
+        expect(validate([candidate(0), rc1]).join('\n')).toContain(
+          'replacedBy must name a later version'
+        );
+      });
+    });
+
     it('fails a deprecation that names no registered later version', () => {
       const v1 = sample({
         deprecated: { since: 'v1.3.0', replacedBy: 'urn:qauth:event:sample.happened:v3' },
@@ -185,7 +251,7 @@ describe('parseEvent', () => {
   });
 
   it('refuses an unknown type', () => {
-    expect(() => parseEvent(event({ type: 'urn:qauth:event:user.teleported:v1' }))).toThrow(
+    expect(() => parseEvent(event({ type: 'urn:qauth:event:user.teleported:v1-rc.0' }))).toThrow(
       /unknown event type/
     );
   });
@@ -223,7 +289,7 @@ describe('parseEvent', () => {
     const { id, time, realm, category, client } = EXAMPLE_EVENT;
     const revocation = {
       id,
-      type: 'urn:qauth:event:token.revocation_failed:v1',
+      type: 'urn:qauth:event:token.revocation_failed:v1-rc.0',
       time,
       realm,
       category,

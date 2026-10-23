@@ -12,6 +12,7 @@ import { count, FIRST_RELEASE, reason, verifierProfile } from './fields';
 export const walletLinked = defineEventType({
   name: 'wallet.linked',
   version: 1,
+  rc: 0,
   description: 'A signed-in user linked a wallet credential to their account.',
   category: 'user',
   severity: 'info',
@@ -38,6 +39,7 @@ export const walletLinked = defineEventType({
 export const walletLinkFailed = defineEventType({
   name: 'wallet.link_failed',
   version: 1,
+  rc: 0,
   description: 'A wallet could not be linked, for example because it is linked to another account.',
   category: 'user',
   severity: 'warning',
@@ -52,6 +54,7 @@ export const walletLinkFailed = defineEventType({
 export const walletPresentationReceived = defineEventType({
   name: 'wallet.presentation_received',
   version: 1,
+  rc: 0,
   description:
     'The OpenID4VP response endpoint accepted a wallet presentation. This is not a sign-in: the flow that asked for it decides.',
   category: 'user',

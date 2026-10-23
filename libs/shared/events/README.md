@@ -12,7 +12,7 @@ the JSON Schema files under `apps/docs-site/public/schemas/events/`.
 | Module                      | What                                                                                                     |
 | --------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `lib/envelope.ts`           | The envelope: `id`, `type`, `time`, `realm`, `category`, `actor`, `subject`, `client`, `request`, `data` |
-| `lib/identifier.ts`         | Event type identifiers, `urn:qauth:event:<name>:v<N>`                                                    |
+| `lib/identifier.ts`         | Event type identifiers, `urn:qauth:event:<name>:v<N>`, with `-rc.<M>` for a release candidate            |
 | `lib/definition.ts`         | `defineEventType`, and what a registry entry holds                                                       |
 | `lib/types/*.ts`            | The registered types, by area                                                                            |
 | `lib/registry.ts`           | `EVENT_TYPES`, `getEventType`, `parseEvent`, `validateRegistry`                                          |
@@ -29,7 +29,7 @@ import { type EventDataOf, eventRequest, parseEvent } from '@qauth-labs/shared-e
 // fails the type's schema, or data that breaks a payload rule.
 const event = parseEvent(candidate);
 
-type SignInData = EventDataOf<'urn:qauth:event:user.signed_in:v1'>;
+type SignInData = EventDataOf<'urn:qauth:event:user.signed_in:v1-rc.0'>;
 
 // The client controls the User-Agent and a forwarded address. eventRequest
 // cuts and normalises them, so a long header cannot make the event fail.
@@ -38,9 +38,10 @@ const request = eventRequest({ traceId: req.id, ip: req.ip, userAgent: req.heade
 
 ## Adding an event type
 
-1. Add a `defineEventType({ name, version: 1, ... })` entry to the file of its area under
-   `src/lib/types/`, and list it in that file's array. `since` is the release that will first ship
-   it. Every `data` member has a description, and the schema is a `z.strictObject`.
+1. Add a `defineEventType({ name, version: 1, rc: 0, ... })` entry to the file of its area under
+   `src/lib/types/`, and list it in that file's array. Until QAuth 1.0.0 every type is a release
+   candidate, so it carries `rc`. `since` is the release that will first ship it. Every `data`
+   member has a description, and the schema is a `z.strictObject`.
 2. Run `pnpm exec nx run shared-events:schema-export`. It writes the type's schema file and the
    docs page.
 3. Register the new schema file in `stable-surface/surfaces.json`, like its neighbours: format
@@ -55,6 +56,10 @@ The payload rules and the versioning rules are on the docs page, and the code en
   `personalData`. Never a password, code, OTP, token, key, assertion, signature, cookie, secret or
   link. Hidden identifiers are keyed HMACs. `validateRegistry` scans every type's schema, and
   `parseEvent` scans every event's `data`.
+- **Release candidates.** Until QAuth 1.0.0 every type is `:v<N>-rc.<M>` and nothing about it is
+  promised. A breaking change before then raises `rc` in place (`:v1-rc.0` becomes `:v1-rc.1`),
+  so one identifier never names two schemas. The release that ships 1.0.0 drops `rc` from every
+  type, and the registry test that requires it.
 - **Versioning.** Within a major release, only additions: a new type, a new optional member, a new
   value of an open set (`extensibleEnum`). A breaking change registers `:v2` beside `:v1`; `:v1`
   is marked `deprecated` with `replacedBy`, both are emitted until the deprecation window ends,

@@ -5,6 +5,7 @@ import {
   envelopeJsonSchema,
   eventSchemaFile,
 } from './json-schema';
+import { eventVersionLabel } from './identifier';
 import { LEGACY_EVENT_MAP } from './legacy';
 
 /**
@@ -15,7 +16,7 @@ import { LEGACY_EVENT_MAP } from './legacy';
  */
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const EVENTS_PAGE_LAST_VERIFIED = '2026-10-22';
+export const EVENTS_PAGE_LAST_VERIFIED = '2026-10-23';
 
 /** Where the schema files are served, relative to the docs site root. */
 const SCHEMA_PATH = '/schemas/events/';
@@ -48,8 +49,10 @@ export function headingAnchor(text: string): string {
 }
 
 /** The heading of one type's section. */
-export function typeHeading(definition: Pick<EventTypeDefinition, 'name' | 'version'>): string {
-  return `${definition.name} v${definition.version}`;
+export function typeHeading(
+  definition: Pick<EventTypeDefinition, 'name' | 'version' | 'rc'>
+): string {
+  return `${definition.name} ${eventVersionLabel(definition)}`;
 }
 
 /** A short, human reading of a JSON Schema node's type. */
@@ -132,7 +135,7 @@ function memberTable(rows: readonly MemberRow[]): string {
 /** An event of the first registered type, as the envelope section shows it. */
 export const EXAMPLE_EVENT = {
   id: '0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42',
-  type: 'urn:qauth:event:user.signed_in:v1',
+  type: 'urn:qauth:event:user.signed_in:v1-rc.0',
   time: '2026-10-22T09:30:00.123Z',
   realm: '0199f2b4-1a2b-7c3d-8e4f-5a6b7c8d9e0f',
   category: 'user',
@@ -251,6 +254,13 @@ id, a type or a count of such a thing passes when its name ends in \`Id\`, \`Typ
     `An event type's identifier is \`urn:qauth:event:<name>:v<N>\`. The \`<name>\` is its short
 name: lower-case \`snake_case\` segments joined by full stops, the resource first. \`<N>\` is the
 major version of its \`data\`. Every QAuth-defined identifier carries a version (ADR-018 §5).
+
+**Release candidates.** Until QAuth 1.0.0, every type is a release candidate and its identifier
+ends in \`-rc.<M>\`, as in \`urn:qauth:event:user.signed_in:v1-rc.0\`. Nothing about a candidate
+is promised. A breaking change before 1.0.0 raises \`<M>\` (\`:v1-rc.0\` becomes \`:v1-rc.1\`), so
+an identifier never names two different schemas. The release that ships QAuth 1.0.0 drops the
+suffix from every type: \`:v1\` is the version under the stability promise, and the rules below
+apply from then on.
 
 Within a major release, the contract changes only by addition:
 

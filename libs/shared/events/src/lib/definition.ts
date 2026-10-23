@@ -3,6 +3,15 @@ import type { z } from 'zod';
 import type { EventCategory, SubjectType } from './envelope';
 import { eventTypeId } from './identifier';
 
+/** The identifier a name, a version and a candidate number make, as a literal type. */
+export type EventTypeIdOf<
+  Name extends string,
+  Version extends number,
+  Rc extends number | undefined,
+> = Rc extends number
+  ? `urn:qauth:event:${Name}:v${Version}-rc.${Rc}`
+  : `urn:qauth:event:${Name}:v${Version}`;
+
 /**
  * How much attention an event asks for. `info`: normal operation. `warning`:
  * a refusal or a failure someone may need to look at. `critical`: a security
@@ -27,13 +36,19 @@ export interface EventTypeDefinition<
   Name extends string = string,
   Version extends number = number,
   Data extends z.ZodObject = z.ZodObject,
+  Rc extends number | undefined = number | undefined,
 > {
-  /** `urn:qauth:event:<name>:v<N>`. */
-  readonly type: `urn:qauth:event:${Name}:v${Version}`;
+  /** `urn:qauth:event:<name>:v<N>`, or `urn:qauth:event:<name>:v<N>-rc.<M>`. */
+  readonly type: EventTypeIdOf<Name, Version, Rc>;
   /** The short name, the middle part of `type`. */
   readonly name: Name;
   /** The major version of `data`, the `N` of `:vN`. */
   readonly version: Version;
+  /**
+   * The release-candidate number, the `M` of `:vN-rc.M`. Every type has one
+   * until QAuth 1.0.0, and a breaking change before then raises it.
+   */
+  readonly rc?: Rc;
   /** One or two sentences: when QAuth emits it. */
   readonly description: string;
   readonly category: EventCategory;
@@ -63,19 +78,21 @@ export type EventTypeInput<
   Name extends string,
   Version extends number,
   Data extends z.ZodObject,
-> = Omit<EventTypeDefinition<Name, Version, Data>, 'type'>;
+  Rc extends number | undefined = undefined,
+> = Omit<EventTypeDefinition<Name, Version, Data, Rc>, 'type'>;
 
 /**
- * Define an event type. The identifier is built from the name and the version,
- * so it always has the registry's shape.
+ * Define an event type. The identifier is built from the name, the version and
+ * the candidate number, so it always has the registry's shape.
  *
- * @throws {Error} when the name or the version is not well formed
+ * @throws {Error} when the name, the version or the candidate number is not well formed
  */
 export function defineEventType<
   const Name extends string,
   const Version extends number,
   Data extends z.ZodObject,
->(input: EventTypeInput<Name, Version, Data>): EventTypeDefinition<Name, Version, Data> {
-  const type = eventTypeId(input.name, input.version) as `urn:qauth:event:${Name}:v${Version}`;
+  const Rc extends number | undefined = undefined,
+>(input: EventTypeInput<Name, Version, Data, Rc>): EventTypeDefinition<Name, Version, Data, Rc> {
+  const type = eventTypeId(input.name, input.version, input.rc) as EventTypeIdOf<Name, Version, Rc>;
   return Object.freeze({ type, ...input });
 }

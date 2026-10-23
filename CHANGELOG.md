@@ -119,7 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every delivery route: an envelope (`id`, a UUIDv7 kept across routes and
   retries; `type`; `time`; `realm`; `category`, `user` or `admin`; `actor`;
   `subject`; `client`; `request`; `data`) and a registry of 33 event types,
-  named `urn:qauth:event:<name>:v<N>`, each with a payload schema, a category,
+  named `urn:qauth:event:<name>:v<N>-rc.<M>`, each with a payload schema, a category,
   a severity and the release it appeared in. Every event the auth server
   records today has a type, and a map from each earlier audit or log name to
   its type is ready for copying the audit log into the event store. A scanner
@@ -130,8 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/schemas/events/` on the docs site and registered with the stable-surface
   guard, so a new required member fails CI and a new optional one passes. The
   docs site's new **Events** page (`reference/events`) is generated from the
-  registry. Nothing emits these events yet: the event store and the emitters
-  come next.
+  registry. Every type is a release candidate (`:v1-rc.0`) until QAuth 1.0.0:
+  nothing about it is promised before then, a breaking change raises the
+  candidate number, and 1.0.0 drops the suffix. Nothing emits these events
+  yet: the event store and the emitters come next.
 
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet

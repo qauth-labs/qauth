@@ -171,7 +171,7 @@ export function eventRequest(input: {
 
 /** The descriptions of the members a per-type schema fixes. */
 export const TYPE_DESCRIPTION =
-  'The event type, `urn:qauth:event:<name>:v<N>`. The registry lists every type.';
+  'The event type, `urn:qauth:event:<name>:v<N>`, or `:v<N>-rc.<M>` for a release candidate. The registry lists every type.';
 export const CATEGORY_DESCRIPTION =
   "`user`: an end user's own activity. `admin`: an administrator's change. Fixed by the type.";
 export const DATA_DESCRIPTION = "The type's own payload. Its schema is the type's.";
