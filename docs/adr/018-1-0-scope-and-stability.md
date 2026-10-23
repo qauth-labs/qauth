@@ -275,7 +275,10 @@ The contract covers:
     for the deprecation window. The key exists on `main` today, default `false`. Decided 2026-10-09
     (maintainer).
 - **The event types and their payload schema**, on every delivery route (§3). Decided 2026-10-10
-  (maintainer).
+  (maintainer). Until 1.0.0 every event type is a release candidate,
+  `urn:qauth:event:<name>:v1-rc.<M>`, and nothing about it is promised. A breaking change before
+  then raises `<M>`, so an identifier never names two schemas. The release that ships 1.0.0 drops
+  the suffix, and `:v1` is the promise. Decided 2026-10-23 (maintainer).
 - **The declarative realm file.** It describes a realm's configuration and leaves out every secret
   value. The admin API and the CLI export it and import it, and an import first shows a dry-run
   diff. Today's seed manifest becomes a subset of it. Decided 2026-10-10 (maintainer). An import is

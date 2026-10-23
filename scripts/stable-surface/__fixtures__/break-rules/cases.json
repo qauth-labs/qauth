@@ -431,5 +431,118 @@
       }
     ],
     "breaks": ["response-optional-property-removed"]
+  },
+  {
+    "name": "json-schema both: a new required field breaks on the input side",
+    "format": "json-schema",
+    "role": "both",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/reason",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/required/-",
+        "value": "reason"
+      }
+    ],
+    "breaks": ["new-required-request-property"]
+  },
+  {
+    "name": "json-schema both: an optional field that becomes required breaks",
+    "format": "json-schema",
+    "role": "both",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/required/-",
+        "value": "note"
+      }
+    ],
+    "breaks": ["request-property-became-required"]
+  },
+  {
+    "name": "json-schema both: an added optional field passes",
+    "format": "json-schema",
+    "role": "both",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/trace_id",
+        "value": {
+          "type": "string"
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "json-schema both: a new required member of a nested object breaks",
+    "format": "json-schema",
+    "role": "both",
+    "basePatch": [
+      {
+        "op": "add",
+        "path": "/properties/data",
+        "value": {
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/data/properties/reason",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/properties/data/required/-",
+        "value": "reason"
+      }
+    ],
+    "breaks": ["new-required-request-property"]
+  },
+  {
+    "name": "json-schema both: a new optional member of a nested object passes",
+    "format": "json-schema",
+    "role": "both",
+    "basePatch": [
+      {
+        "op": "add",
+        "path": "/properties/data",
+        "value": {
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/data/properties/reason",
+        "value": {
+          "type": "string"
+        }
+      }
+    ],
+    "breaks": []
   }
 ]

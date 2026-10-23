@@ -31,6 +31,312 @@
       "path": "apps/docs-site/public/openapi.json",
       "stability": "experimental",
       "maximalOf": "openapi"
+    },
+    {
+      "name": "event-envelope",
+      "description": "The envelope every QAuth event carries, of any type (ADR-018 §5, #456). Compared as both: QAuth emits it, and the events it stored under an earlier release must still match it.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/envelope.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-api-key-created-v1",
+      "description": "The urn:qauth:event:api_key.created:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/api_key.created.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-api-key-revoked-v1",
+      "description": "The urn:qauth:event:api_key.revoked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/api_key.revoked.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-authorization-completed-v1",
+      "description": "The urn:qauth:event:authorization.completed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/authorization.completed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-authorization-failed-v1",
+      "description": "The urn:qauth:event:authorization.failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/authorization.failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-client-created-v1",
+      "description": "The urn:qauth:event:client.created:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/client.created.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-client-deleted-v1",
+      "description": "The urn:qauth:event:client.deleted:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/client.deleted.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-client-secret-rotated-v1",
+      "description": "The urn:qauth:event:client.secret_rotated:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/client.secret_rotated.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-client-suspended-v1",
+      "description": "The urn:qauth:event:client.suspended:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/client.suspended.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-client-suspension-lifted-v1",
+      "description": "The urn:qauth:event:client.suspension_lifted:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/client.suspension_lifted.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-client-updated-v1",
+      "description": "The urn:qauth:event:client.updated:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/client.updated.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-consent-denied-v1",
+      "description": "The urn:qauth:event:consent.denied:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/consent.denied.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-consent-granted-v1",
+      "description": "The urn:qauth:event:consent.granted:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/consent.granted.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-consent-revoked-v1",
+      "description": "The urn:qauth:event:consent.revoked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/consent.revoked.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-request-csrf-rejected-v1",
+      "description": "The urn:qauth:event:request.csrf_rejected:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/request.csrf_rejected.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-step-up-elevated-v1",
+      "description": "The urn:qauth:event:step_up.elevated:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/step_up.elevated.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-step-up-required-v1",
+      "description": "The urn:qauth:event:step_up.required:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/step_up.required.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-introspected-v1",
+      "description": "The urn:qauth:event:token.introspected:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.introspected.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-introspection-failed-v1",
+      "description": "The urn:qauth:event:token.introspection_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.introspection_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-issued-v1",
+      "description": "The urn:qauth:event:token.issued:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.issued.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-request-failed-v1",
+      "description": "The urn:qauth:event:token.request_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.request_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-revocation-failed-v1",
+      "description": "The urn:qauth:event:token.revocation_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.revocation_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-revoked-v1",
+      "description": "The urn:qauth:event:token.revoked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.revoked.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-registered-v1",
+      "description": "The urn:qauth:event:user.registered:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.registered.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-registration-failed-v1",
+      "description": "The urn:qauth:event:user.registration_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.registration_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-sign-in-failed-v1",
+      "description": "The urn:qauth:event:user.sign_in_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.sign_in_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-sign-out-failed-v1",
+      "description": "The urn:qauth:event:user.sign_out_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.sign_out_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-signed-in-v1",
+      "description": "The urn:qauth:event:user.signed_in:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.signed_in.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-user-signed-out-v1",
+      "description": "The urn:qauth:event:user.signed_out:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.signed_out.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-userinfo-request-failed-v1",
+      "description": "The urn:qauth:event:userinfo.request_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/userinfo.request_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-userinfo-served-v1",
+      "description": "The urn:qauth:event:userinfo.served:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/userinfo.served.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-wallet-link-failed-v1",
+      "description": "The urn:qauth:event:wallet.link_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/wallet.link_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-wallet-linked-v1",
+      "description": "The urn:qauth:event:wallet.linked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/wallet.linked.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-wallet-presentation-received-v1",
+      "description": "The urn:qauth:event:wallet.presentation_received:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/wallet.presentation_received.v1-rc.0.json",
+      "stability": "stable"
     }
   ]
 }
