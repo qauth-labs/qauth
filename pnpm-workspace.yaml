@@ -290,6 +290,15 @@ catalog:
   # #243). EXACT pin (pre-1.0 signing-path dependency): security fixes do NOT
   # flow automatically — upgrade only via a deliberate, reviewed bump.
   '@noble/post-quantum': '0.6.1'
+  # WebAuthn registration and assertion verification (ADR-017 F2b, #467):
+  # CBOR and COSE decoding, the attestation statement formats and the
+  # signature checks for ES256, EdDSA and RS256. Used only behind the
+  # `WebAuthnVerifier` port in @qauth-labs/server-federation, so a later move
+  # to the Rust core (ADR-018 §6) replaces one adapter. 14.0.3 is past
+  # GHSA-6hxq-p678-4hr2 (attestation chains not checked against the trust
+  # anchor; patched 13.3.2). EXACT pin, like the ML-DSA backend above: a
+  # signature-verification dependency moves only by a reviewed bump.
+  '@simplewebauthn/server': '14.0.3'
   '@swc-node/register': '~1.12.1'
   '@swc/core': '~1.15.46'
   '@swc/helpers': '~0.5.23'

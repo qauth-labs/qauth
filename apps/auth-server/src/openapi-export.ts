@@ -46,7 +46,8 @@
  * boot the app twice under different flags.
  *
  * Each surface sets every switch that decides whether a route registers
- * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`) explicitly, so a value in
+ * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, and the passkey app lists
+ * `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
  * the caller's shell cannot change which operations an export contains.
  * `oid4vp-1.0-base` is used because it is the profile that actually starts on
  * this deployment's crypto (EdDSA-only) — `haip-1.0` requires ES256 signing
@@ -206,7 +207,12 @@ function setEphemeralEnv(surface: FlagSurface): void {
   });
 
   if (surface === 'default') {
-    Object.assign(process.env, { WALLET_FEDERATION_ENABLED: 'false' });
+    Object.assign(process.env, {
+      WALLET_FEDERATION_ENABLED: 'false',
+      // No app identifiers, so neither association file is registered (#467).
+      WEBAUTHN_APPLE_APP_IDS: '',
+      WEBAUTHN_ANDROID_APPS: '',
+    });
     return;
   }
 
@@ -230,6 +236,17 @@ function setEphemeralEnv(surface: FlagSurface): void {
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
     OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
     OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
+    // The passkey association files (#467) are registered only when the
+    // operator lists apps, and only while the RP ID is the realm host, which
+    // it is with WEBAUTHN_RP_ID unset. Example identifiers in the documented
+    // formats; they affect no path beyond the two routes.
+    WEBAUTHN_RP_ID: '',
+    WEBAUTHN_APPLE_APP_IDS: 'ABCDE12345.com.example.app',
+    WEBAUTHN_ANDROID_APPS: JSON.stringify({
+      'com.example.app': [
+        'FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C',
+      ],
+    }),
   });
 }
 

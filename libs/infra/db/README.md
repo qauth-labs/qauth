@@ -252,6 +252,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - An issuer is an `https` URL; plain `http` is accepted only on `localhost` or a name under it, for development. It holds no white space, control character or backslash, which the URL parser would drop or rewrite. Both rules are CHECKs on `realms.issuer` (`realms_issuer_scheme`, `realms_issuer_no_space_or_control`), so they also hold for an issuer set by `update`.
   - A realm's `issuer` and primary host are **permanent**: database triggers allow them to be set once, from nothing, and refuse every later change (SQLSTATE 23514, constraints `realms_issuer_permanent` and `realm_hosts_primary_permanent`). Deleting the realm still removes its hosts. The triggers are hand-written SQL in migration 0025, which `drizzle-kit push` does not create; use the migrations.
   - At most one realm has `isOperator: true` (`idx_realms_one_operator`).
+  - `lockWebAuthnRpId(realmId, rpId, tx?)` locks the realm's passkey RP ID (ADR-019 Decision 2, #467): it writes `webauthn_rp_id` where the realm has none and accepts the same RP ID again, under the realm row lock. Another RP ID is a `BadRequestError`. The first passkey enrolment calls it in the transaction that stores the credential, and the auth-server refuses to boot when `WEBAUTHN_RP_ID` differs from the lock. Once set, the column is permanent (trigger `realms_webauthn_rp_id_permanent`, migration 0028).
 - **`createOAuthClientsRepository(db)`**: OAuth client CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByClientId()`, `listByDeveloper()`, `upsertCimdClient()`, `update()`, `delete()`
   - `listByDeveloper(developerId, tx?)`: lists a developer's own clients, scoped strictly by `developer_id` and ordered newest-first. Dynamically registered (RFC 7591 / DCR) clients carry a null `developer_id` and are excluded.
@@ -447,6 +448,8 @@ Manifest shape for `db:seed-oauth-clients`:
 ```
 
 The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for the authoritative Zod schema and the full set of optional fields (`description`, `response_types`, `redirect_uris`, `require_pkce`, `token_endpoint_auth_method`).
+
+`webauthn_allowed_origins` lists the extra origins a native app's passkey ceremonies may come from (#467), in the form a browser writes in `clientDataJSON.origin`: an Android app's `android:apk-key-hash:<base64url SHA-256 of its signing certificate>`, or an `https` origin under the RP ID. The manifest is the only way to set `oauth_clients.webauthn_allowed_origins`: no route writes it, so a client cannot widen where its passkeys are accepted.
 
 Both seeders mark their clients `provisioned_by_operator = true`, and so does the system client the auth-server creates for its own login. Only such a client receives authorization error responses by automatic redirect (RFC 9700 §4.11.2); every client created through `POST /oauth/register`, a CIMD document or `POST /api/clients` gets them on an issuer page. A `--rotate` run sets the marker on the clients it rewrites, which is how an operator marks a client that migration 0023's backfill left unmarked.
 

@@ -24,6 +24,7 @@ const OWNER_HEADINGS: Readonly<Record<KeyOwner, string>> = {
   mail: 'Mail',
   'client-registration': 'Client registration',
   'id-jag': 'Enterprise-managed authorization (ID-JAG)',
+  passkeys: 'Passkeys',
   'wallet-federation': 'Wallet federation',
   'rate-limits': 'Rate limits',
   'developer-portal': 'Developer portal',

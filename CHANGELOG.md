@@ -135,6 +135,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate number, and 1.0.0 drops the suffix. Nothing emits these events
   yet: the event store and the emitters come next.
 
+- **Passkeys: the WebAuthn provider and the relying-party settings** ([#467],
+  ADR-017 Decision 14, ADR-019 Decision 2). One WebAuthn `CredentialProvider`
+  (`provider_type` `webauthn`, `external_sub` the credential id) that sign-in,
+  account pages, admin sign-in and the Authority Tree approval will share. It
+  asks for `attestation: "none"`, accepts EdDSA, ES256 and RS256 keys only,
+  binds each single-use challenge to its transaction, requires user
+  verification for sign-in and flags a sign counter that goes backwards.
+  SimpleWebAuthn (`@simplewebauthn/server` 14.0.3, pinned) does the
+  cryptography behind a `WebAuthnVerifier` port. Nothing calls the provider
+  yet: `WEBAUTHN_ENABLED` is refused at boot until phase F2b is complete.
+  `WEBAUTHN_RP_ID` defaults to the realm host; a parent domain needs
+  `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN=true` and logs a warning at every boot.
+  Migration 0028 adds `realms.webauthn_rp_id`, the RP ID lock that the realm's
+  first passkey enrolment writes and a trigger keeps permanent, and the
+  operator-set `oauth_clients.webauthn_allowed_origins` for native apps, set in
+  the `db:seed-oauth-clients` manifest. While the RP ID is the realm host, the
+  server serves `/.well-known/apple-app-site-association` and
+  `/.well-known/assetlinks.json` from `WEBAUTHN_APPLE_APP_IDS` and
+  `WEBAUTHN_ANDROID_APPS`; with neither set, both paths stay 404.
+
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
   federation routes, which a switch registers, are experimental). The OpenAPI
@@ -155,6 +175,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolveRequireVerifiedAccount` is removed from `@qauth-labs/server-config`;
   `readConfiguredEnv` and `applyKeyAliases` replace it.
 
+- The auth-server refuses to start when the default realm's passkeys are
+  bound to another RP ID than `WEBAUTHN_RP_ID` gives ([#467]), and the
+  `default realm ready` line names the passkey RP ID. A realm has a lock only
+  after its first passkey enrolment, which no release can make yet, so no
+  existing deployment is affected.
 - **BREAKING**: the auth-server refuses to start when the default realm's
   stored issuer differs from `JWT_ISSUER` ([#484]). A realm's issuer and its
   host are permanent, and the error names both values. It also refuses a
@@ -224,6 +249,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#456]: https://github.com/qauth-labs/qauth/issues/456
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
+[#467]: https://github.com/qauth-labs/qauth/issues/467
 [#470]: https://github.com/qauth-labs/qauth/issues/470
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 

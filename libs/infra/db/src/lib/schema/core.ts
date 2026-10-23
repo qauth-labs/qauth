@@ -86,6 +86,19 @@ export const realms = pgTable(
      * The partial unique index `idx_realms_one_operator` allows at most one.
      */
     isOperator: boolean('is_operator').notNull().default(false),
+    /**
+     * The passkey RP ID the realm's passkeys are bound to (ADR-019 Decision 2,
+     * issue #467): NULL until the first passkey is enrolled, which writes the
+     * RP ID in effect then. From then on it is the realm's lock. A configured
+     * RP ID that differs refuses to boot, because another one would orphan
+     * every enrolled passkey.
+     *
+     * PERMANENT once set, like the issuer: the trigger
+     * `realms_webauthn_rp_id_permanent` refuses every UPDATE that changes a
+     * non-NULL value. Stored in the realm host form (`normaliseRealmHost`),
+     * never an IP literal (CHECKs below).
+     */
+    webauthnRpId: varchar('webauthn_rp_id', { length: 253 }),
     accessTokenLifespan: bigint('access_token_lifespan', { mode: 'number' }).default(900),
     refreshTokenLifespan: bigint('refresh_token_lifespan', { mode: 'number' }).default(604800),
     sslRequired: sslRequiredEnum('ssl_required').default('external'),
@@ -155,6 +168,12 @@ export const realms = pgTable(
     // The URL parser drops white space and control characters and reads `\`
     // as `/`, so such an issuer is not the string a parser compares.
     check('realms_issuer_no_space_or_control', sql`${t.issuer} !~ '[[:space:][:cntrl:]\\\\]'`),
+    // The host form of `realm_hosts.host`, without the IP literal branch: an RP
+    // ID is a domain name (ADR-019 Decision 2).
+    check(
+      'realms_webauthn_rp_id_normalised',
+      sql`${t.webauthnRpId} ~ '^[a-z0-9_-]+(\\.[a-z0-9_-]+)*$' and ${t.webauthnRpId} !~ '^[0-9.]+$'`
+    ),
   ]
 );
 
@@ -436,6 +455,23 @@ export const oauthClients = pgTable(
      * path that persists a client.
      */
     provisionedByOperator: boolean('provisioned_by_operator').notNull().default(false),
+    /**
+     * OPERATOR-SET passkey origins of a native app (ADR-017 Decision 14, issue
+     * #467): extra `clientDataJSON.origin` values a WebAuthn ceremony started
+     * for this client accepts beside the realm's own origin. An Android app's
+     * is `android:apk-key-hash:<base64url SHA-256 of its signing certificate>`;
+     * a first-party web front-end under a parent-domain RP ID has its `https`
+     * origin. An iOS app needs none: it sends the RP ID's own origin.
+     *
+     * Only the operator sets it, through the `db:seed-oauth-clients` manifest,
+     * where each entry is checked with `normaliseWebAuthnOrigin`. No route
+     * writes it: DCR, CIMD and `/api/clients` cannot, and `UpdateOAuthClient`
+     * excludes it. A client cannot widen where its own passkeys may be used.
+     */
+    webauthnAllowedOrigins: jsonb('webauthn_allowed_origins')
+      .notNull()
+      .default(JSONB_EMPTY_ARRAY)
+      .$type<string[]>(),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -455,6 +491,10 @@ export const oauthClients = pgTable(
       sql`${t.audience} IS NULL OR jsonb_typeof(${t.audience}) = 'array'`
     ),
     check('oauth_clients_id_jag_targets_is_array', sql`jsonb_typeof(${t.idJagTargets}) = 'array'`),
+    check(
+      'oauth_clients_webauthn_allowed_origins_is_array',
+      sql`jsonb_typeof(${t.webauthnAllowedOrigins}) = 'array'`
+    ),
   ]
 );
 

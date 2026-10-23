@@ -100,13 +100,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // from JWT_ISSUER, mark it the operator realm when there is none, and add
   // DEFAULT_REALM_ENDPOINT_HOSTS. It runs in an `onReady` hook, so before the
   // server listens, and refuses the boot when the stored issuer differs from
-  // JWT_ISSUER. Registered right after the database so its hook runs before
+  // JWT_ISSUER, or the realm's passkeys are bound to another RP ID. Registered right after the database so its hook runs before
   // the job runner starts.
   if (defaultRealmBoot) {
     await fastify.register(defaultRealmPlugin, {
       realmName: env.DEFAULT_REALM_NAME,
       jwtIssuer: env.JWT_ISSUER,
       endpointHosts: env.DEFAULT_REALM_ENDPOINT_HOSTS,
+      // The passkey RP ID (#467): checked against the realm's lock at every
+      // boot, whatever WEBAUTHN_ENABLED says.
+      passkeys: {
+        rpId: env.WEBAUTHN_RP_ID,
+        allowParentDomain: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
+      },
     });
   }
 

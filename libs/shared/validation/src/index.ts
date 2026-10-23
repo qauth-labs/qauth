@@ -6,3 +6,5 @@ export type * from './lib/realm-host';
 export * from './lib/realm-host';
 export type * from './lib/url';
 export * from './lib/url';
+export type * from './lib/webauthn-origin';
+export * from './lib/webauthn-origin';

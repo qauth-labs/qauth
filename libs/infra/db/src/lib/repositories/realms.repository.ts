@@ -15,7 +15,12 @@ import { BaseRepository } from './base.repository';
 
 export type Realm = InferSelectModel<typeof realms>;
 export type NewRealm = InferInsertModel<typeof realms>;
-export type UpdateRealm = Partial<Omit<NewRealm, 'id' | 'createdAt'>> & {
+/**
+ * Fields a realm update may change. `webauthnRpId` is left out on purpose
+ * (#467): the passkey RP ID lock is written only by `lockWebAuthnRpId`, which
+ * normalises it and holds the realm row while the first enrolment commits.
+ */
+export type UpdateRealm = Partial<Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId'>> & {
   updatedAt?: number;
 };
 
@@ -106,6 +111,21 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * Find the operator realm (ADR-019 Decisions 1 and 7), if one is marked.
    */
   findOperator(tx?: DbClient): Promise<Realm | undefined>;
+
+  /**
+   * Lock the realm's passkey RP ID (ADR-019 Decision 2, issue #467): write it
+   * where the realm has none, and accept it where it is already this one. The
+   * first passkey enrolment calls this in the transaction that stores the
+   * credential, so a realm never holds a passkey under an RP ID it is not
+   * locked to. A changed RP ID would orphan every enrolled passkey, so once
+   * set the column never changes (trigger `realms_webauthn_rp_id_permanent`).
+   *
+   * @throws InvalidRealmHostError if `rpId` cannot be an RP ID (an IP literal,
+   * a URL, a wildcard)
+   * @throws BadRequestError if the realm is locked to another RP ID
+   * @throws NotFoundError if the realm does not exist
+   */
+  lockWebAuthnRpId(realmId: string, rpId: string, tx?: DbClient): Promise<Realm>;
 
   /**
    * Take the realm provisioning lock until `tx` ends: a transaction-scoped
@@ -381,6 +401,37 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
         .where(eq(realms.isOperator, true))
         .limit(1);
       return realm;
+    },
+
+    async lockWebAuthnRpId(realmId: string, rpId: string, tx?: DbClient): Promise<Realm> {
+      const normalised = normaliseRealmHost(rpId, 'primary');
+      const invoker = tx ?? defaultDb;
+      // A savepoint inside an outer transaction, as in assignIssuer: the row
+      // lock holds until the caller's transaction ends, so two first
+      // enrolments under different RP IDs cannot both win.
+      return invoker.transaction(async (innerTx) => {
+        const [current] = await innerTx
+          .select()
+          .from(realms)
+          .where(eq(realms.id, realmId))
+          .limit(1)
+          .for('update');
+        if (!current) {
+          throw new NotFoundError('Realm', realmId);
+        }
+        if (current.webauthnRpId === normalised) return current;
+        if (current.webauthnRpId !== null) {
+          throw new BadRequestError(
+            "Realm's passkeys are bound to a different RP ID; the RP ID is locked once a passkey is enrolled"
+          );
+        }
+        const [locked] = await innerTx
+          .update(realms)
+          .set({ webauthnRpId: normalised, updatedAt: Date.now() })
+          .where(eq(realms.id, realmId))
+          .returning();
+        return locked;
+      });
     },
 
     async lockProvisioning(tx: DbTransaction): Promise<void> {

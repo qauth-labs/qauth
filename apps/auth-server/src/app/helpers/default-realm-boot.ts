@@ -1,9 +1,20 @@
+import {
+  assertRelyingPartyIdUnlockedOrSame,
+  RelyingPartyIdLockedError,
+} from '@qauth-labs/fastify-plugin-federation';
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { InvalidRealmHostError, normaliseRealmHost } from '@qauth-labs/shared-validation';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
 import { resolveIssuerIdentifier } from './discovery';
 import type { RealmRow } from './realm';
+import {
+  PasskeyRelyingPartyError,
+  type PasskeyRelyingPartySettings,
+  REALM_HOST_RELYING_PARTY,
+  type RealmRelyingParty,
+  resolveRealmRelyingParty,
+} from './webauthn-relying-party';
 
 /**
  * The default realm's boot step (ADR-019 Decision 1 and its answer on existing
@@ -20,7 +31,11 @@ import type { RealmRow } from './realm';
  * 3. when no realm is the operator realm yet, mark this one (simple mode);
  * 4. add each `DEFAULT_REALM_ENDPOINT_HOSTS` name the realm lacks as an
  *    endpoint host, and remove none;
- * 5. log one line naming the realm, its issuer and host, and the operator flag.
+ * 5. resolve the passkey RP ID from the realm host and `WEBAUTHN_RP_ID`
+ *    (ADR-019 Decision 2, #467), warn when it is a parent domain, and refuse to
+ *    boot when the realm's passkeys are bound to another one;
+ * 6. log one line naming the realm, its issuer and host, the operator flag and
+ *    the passkey RP ID.
  *
  * All of it runs in one transaction under the realm provisioning lock, so nodes
  * that start together do it one at a time: the first creates the realm, the
@@ -110,6 +125,12 @@ export interface DefaultRealmBootSettings {
   readonly jwtIssuer: string;
   /** `DEFAULT_REALM_ENDPOINT_HOSTS`, parsed. */
   readonly endpointHosts: readonly string[];
+  /**
+   * `WEBAUTHN_RP_ID` and `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN` (#467). Absent
+   * means the realm host. The lock check runs either way, and whatever
+   * `WEBAUTHN_ENABLED` says: the lock is a fact about enrolled passkeys.
+   */
+  readonly passkeys?: PasskeyRelyingPartySettings;
 }
 
 /** What the boot step works through: `fastify.db`, `fastify.repositories.realms` and a logger. */
@@ -126,14 +147,18 @@ export interface DefaultRealmBootResult {
   readonly host: string;
   /** The endpoint hosts this boot added, in stored form. */
   readonly endpointHostsAdded: readonly string[];
+  /** The realm's passkey RP ID. */
+  readonly relyingParty: RealmRelyingParty;
 }
 
 /**
  * Run the default realm's boot step. See the module comment for the steps.
  *
  * @throws DefaultRealmBootError when the stored issuer differs from
- * `JWT_ISSUER`, when `JWT_ISSUER` cannot be a realm issuer, or when its host or
- * an endpoint host belongs to another realm. The message names the values.
+ * `JWT_ISSUER`, when `JWT_ISSUER` cannot be a realm issuer, when its host or
+ * an endpoint host belongs to another realm, when `WEBAUTHN_RP_ID` cannot be
+ * the realm's RP ID, or when the realm's passkeys are bound to another RP ID.
+ * The message names the values.
  */
 export async function bootDefaultRealm(
   deps: DefaultRealmBootDependencies,
@@ -142,6 +167,10 @@ export async function bootDefaultRealm(
   const identity = defaultRealmIssuerFrom(settings.jwtIssuer);
   for (const warning of identity.warnings) {
     deps.log.warn({ variable: 'JWT_ISSUER', issuer: settings.jwtIssuer }, warning);
+  }
+  const relyingParty = defaultRealmRelyingParty(identity.host, settings);
+  if (relyingParty.warning !== undefined) {
+    deps.log.warn({ variable: 'WEBAUTHN_RP_ID', rpId: relyingParty.rpId }, relyingParty.warning);
   }
 
   const result = await deps.db.transaction(async (tx: ProvisioningTransaction) => {
@@ -153,7 +182,8 @@ export async function bootDefaultRealm(
     }
 
     const endpointHostsAdded = await addEndpointHosts(deps.realms, tx, realm, settings);
-    return { realm, host: identity.host, endpointHostsAdded };
+    assertPasskeyRpIdLock(realm, relyingParty);
+    return { realm, host: identity.host, endpointHostsAdded, relyingParty };
   });
 
   deps.log.info(
@@ -163,6 +193,8 @@ export async function bootDefaultRealm(
       host: result.host,
       operator: result.realm.isOperator,
       endpointHostsAdded: result.endpointHostsAdded,
+      passkeyRpId: result.relyingParty.rpId,
+      passkeyRpIdLocked: (result.realm.webauthnRpId ?? null) !== null,
     },
     'default realm ready'
   );
@@ -240,6 +272,40 @@ async function addEndpointHosts(
     );
   }
   return added;
+}
+
+/** Step 5: the passkey RP ID, from the realm host and the operator's settings. */
+function defaultRealmRelyingParty(
+  realmHost: string,
+  settings: DefaultRealmBootSettings
+): RealmRelyingParty {
+  try {
+    return resolveRealmRelyingParty(realmHost, settings.passkeys ?? REALM_HOST_RELYING_PARTY);
+  } catch (error) {
+    if (!(error instanceof PasskeyRelyingPartyError)) throw error;
+    throw new DefaultRealmBootError(error.message, { cause: error });
+  }
+}
+
+/**
+ * Step 5: a realm whose first passkey is enrolled is locked to the RP ID it was
+ * enrolled under. Another RP ID would orphan every passkey, so the boot stops
+ * and says which value keeps them working.
+ */
+function assertPasskeyRpIdLock(realm: RealmRow, relyingParty: RealmRelyingParty): void {
+  try {
+    assertRelyingPartyIdUnlockedOrSame(realm.webauthnRpId ?? null, relyingParty);
+  } catch (error) {
+    if (!(error instanceof RelyingPartyIdLockedError)) throw error;
+    const remedy =
+      error.lockedRpId === relyingParty.realmHost
+        ? `Unset WEBAUTHN_RP_ID, or set it to "${error.lockedRpId}".`
+        : `Set WEBAUTHN_RP_ID to "${error.lockedRpId}" and keep WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN=true.`;
+    throw new DefaultRealmBootError(
+      `The default realm "${realm.name}" has passkeys bound to the RP ID "${error.lockedRpId}", but WEBAUTHN_RP_ID gives "${error.configuredRpId}". The RP ID is locked once a realm has a passkey: another one would orphan every passkey enrolled under "${error.lockedRpId}". ${remedy}`,
+      { cause: error }
+    );
+  }
 }
 
 function hostKindPhrase(kind: 'primary' | 'endpoint'): string {

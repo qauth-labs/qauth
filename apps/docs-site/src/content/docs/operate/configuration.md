@@ -246,6 +246,16 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `ID_JAG_MAX_ASSERTION_LIFETIME`  | deployment | `300`   | 0.1.0 | The longest lifetime, in seconds, of an assertion the server accepts; at most 3600.                                                                                           |
 | `ID_JAG_MAX_DOCUMENT_BYTES`      | deployment | `65536` | 0.1.0 | The largest discovery document or JWKS, in bytes, the server accepts.                                                                                                         |
 
+### Passkeys
+
+| Key                                  | Role       | Default                                     | Since | Description                                                                                                                                                                                |
+| ------------------------------------ | ---------- | ------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `WEBAUTHN_ANDROID_APPS`              | deployment | empty                                       | 0.2.0 | Android apps as JSON, package name to SHA-256 signing-certificate fingerprints, served in `/.well-known/assetlinks.json` while the RP ID is the realm host.                                |
+| `WEBAUTHN_APPLE_APP_IDS`             | deployment | empty                                       | 0.2.0 | Apple app identifiers (`<Team ID>.<bundle id>`), comma-separated, served in `/.well-known/apple-app-site-association` while the RP ID is the realm host.                                   |
+| `WEBAUTHN_ENABLED`                   | deployment | `false`                                     | 0.2.0 | Turn passkeys on; refused at boot until passkey sign-in (ADR-017 phase F2b) is complete.                                                                                                   |
+| `WEBAUTHN_RP_ID`                     | deployment | the default realm's host, from `JWT_ISSUER` | 0.2.0 | The default realm's passkey RP ID: its host, or a parent domain with `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`; locked once the realm has a passkey, after which another value refuses to boot. |
+| `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN` | deployment | `false`                                     | 0.2.0 | Allow a parent domain of the realm host as the RP ID, which lets every host under it ask for the realm's passkeys; the server warns at every boot.                                         |
+
 ### Wallet federation
 
 | Key                                      | Role       | Default                                           | Since | Description                                                                                                                                 |

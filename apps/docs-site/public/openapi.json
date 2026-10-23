@@ -17,6 +17,34 @@
     "schemas": {}
   },
   "paths": {
+    "/.well-known/apple-app-site-association": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "description": "Apple associated domains file: the apps that share the passkeys and passwords of the realm host (`webcredentials`). Served only while the passkey RP ID is the realm host.",
+        "x-qauth-stability": "experimental",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/.well-known/assetlinks.json": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "description": "Digital Asset Links statement list: the Android apps that share the sign-in credentials of the realm host (`get_login_creds`). Served only while the passkey RP ID is the realm host.",
+        "x-qauth-stability": "experimental",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [

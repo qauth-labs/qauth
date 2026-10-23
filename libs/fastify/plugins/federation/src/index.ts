@@ -348,3 +348,19 @@ export {
   OID4VP_RESPONSE_CODE_BYTES,
   OID4VP_RESPONSE_CODE_PATTERN,
 } from '@qauth-labs/server-federation';
+
+// Passkeys (ADR-017 Decision 14, ADR-019 Decision 2, #467). The default
+// realm's boot step resolves the RP ID with the rules the WebAuthn provider
+// owns and refuses one that differs from the realm's lock; the association
+// files are served only while the RP ID is the realm host; and the enrolment
+// helper writes a verified registration under the provider's type. All of it
+// lives in `apps/auth-server`, which reaches the rules only through here.
+export type { ResolvedRelyingPartyId, WebAuthnEnrolment } from '@qauth-labs/server-federation';
+export {
+  assertRelyingPartyIdUnlockedOrSame,
+  parentDomainRpIdWarning,
+  RelyingPartyIdError,
+  RelyingPartyIdLockedError,
+  resolveRelyingPartyId,
+  WEBAUTHN_PROVIDER_TYPE,
+} from '@qauth-labs/server-federation';

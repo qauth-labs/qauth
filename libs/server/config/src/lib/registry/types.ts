@@ -49,6 +49,7 @@ export type KeyOwner =
   | 'mail'
   | 'client-registration'
   | 'id-jag'
+  | 'passkeys'
   | 'wallet-federation'
   | 'rate-limits'
   | 'developer-portal'
