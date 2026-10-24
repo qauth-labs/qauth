@@ -569,6 +569,18 @@ async function handleAuthorizationCode(
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   const aud = resolveAudience(client, effectiveResource);
 
+  const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
+
+  // BREAKING (#229, ADR-002): ONE trust-ordered resolution shared by the
+  // access token AND the ID token, so the two can never disagree about the
+  // email within a single issuance. Both claims are omitted entirely when no
+  // verified email attribute exists.
+  //
+  // BREAKING (#259, then ANT-2026-2O0T72HY): released only under the `email`
+  // scope, in BOTH tokens. The access token is a JWT the client reads in the
+  // same response as the ID token, so gating only the ID token gated nothing.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, authCode.scopes);
+
   // Spend the code and store the refresh token it buys in ONE transaction, so
   // the grant is never observable in between: code already used, refresh
   // token not yet there. Logout and consent revocation invalidate the user's
@@ -577,7 +589,7 @@ async function handleAuthorizationCode(
   // matches nothing, or waits on the row lock taken here until the refresh
   // token is committed, where the sweep that follows sees it. The
   // `token.issued` event commits with the redemption, or neither does.
-  await fastify.db.transaction(async (tx) => {
+  const { accessToken, idToken } = await fastify.db.transaction(async (tx) => {
     await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
     if (refresh) {
       await fastify.repositories.refreshTokens.create(
@@ -595,6 +607,52 @@ async function handleAuthorizationCode(
         tx
       );
     }
+    // Signed here, after the compare-and-set and before the event: a lost
+    // race mints nothing, and a signing failure rolls the redemption back, so
+    // the code is not spent and `token.issued` records only tokens that exist.
+    const accessToken = await issueAccessToken(fastify, {
+      sub: user.id,
+      ...emailClaims,
+      clientId: client.clientId,
+      scope: scopeString,
+      aud,
+      expiresInOverride: accessTokenExpiresIn,
+    });
+
+    // OIDC Core §3.1.3.3: when the granted scope includes `openid`, the token
+    // response also carries an ID token asserting the end-user's authentication
+    // to this client. `aud` is the client_id (NOT the resource audience used for
+    // the access token), and the authorization request's `nonce` is echoed when
+    // present (OIDC Core §3.1.3.6). Signed with the same EdDSA key as the access
+    // token so a single JWKS verifies both.
+    const idToken = authCode.scopes.includes('openid')
+      ? await fastify.jwtUtils.signIdToken({
+          sub: user.id,
+          audience: client.clientId,
+          // BREAKING (#259, data minimization): email claims are released only
+          // under the `email` scope, matching userinfo's gating (OIDC Core
+          // §5.4). `emailClaims` is already empty without it, and the shared
+          // resolution keeps the access token and ID token consistent.
+          ...emailClaims,
+          // BREAKING (#755): `name` is released only under the `profile` scope,
+          // through the same helper userinfo uses, so the two cannot drift.
+          ...resolveProfileClaimsForScopes(user, authCode.scopes),
+          nonce: authCode.nonce ?? undefined,
+          // OIDC Core §2 `auth_time`: the real end-user authentication time
+          // (session establishment), captured on the auth code at mint time. In
+          // epoch MS here; signIdToken floors to seconds. Nullable on in-flight
+          // codes minted before the column existed → omit the claim.
+          authTime: authCode.authTime ?? undefined,
+          // OIDC Core §2 `acr` (#237, ADR-004/ADR-010): the eIDAS Level of
+          // Assurance of the authentication this code represents, rendered into
+          // the deployment's `acr` vocabulary here rather than at mint time. A
+          // NULL column — every password login, and every wallet login whose
+          // issuer the realm assures nothing about — spreads to NOTHING, so the
+          // claim is absent rather than present-and-low.
+          ...resolveAcrClaims(authCode.assuranceLevel),
+        })
+      : undefined;
+
     await emitUserEvent(
       request,
       TOKEN_ISSUED,
@@ -608,62 +666,8 @@ async function handleAuthorizationCode(
       },
       { tx, realmId: ctx.realmId, userId: user.id, clientId: client.clientId, actor: 'client' }
     );
+    return { accessToken, idToken };
   });
-
-  const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
-
-  // BREAKING (#229, ADR-002): ONE trust-ordered resolution shared by the
-  // access token AND the ID token, so the two can never disagree about the
-  // email within a single issuance. Both claims are omitted entirely when no
-  // verified email attribute exists.
-  //
-  // BREAKING (#259, then ANT-2026-2O0T72HY): released only under the `email`
-  // scope, in BOTH tokens. The access token is a JWT the client reads in the
-  // same response as the ID token, so gating only the ID token gated nothing.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, authCode.scopes);
-
-  const accessToken = await issueAccessToken(fastify, {
-    sub: user.id,
-    ...emailClaims,
-    clientId: client.clientId,
-    scope: scopeString,
-    aud,
-    expiresInOverride: accessTokenExpiresIn,
-  });
-
-  // OIDC Core §3.1.3.3: when the granted scope includes `openid`, the token
-  // response also carries an ID token asserting the end-user's authentication
-  // to this client. `aud` is the client_id (NOT the resource audience used for
-  // the access token), and the authorization request's `nonce` is echoed when
-  // present (OIDC Core §3.1.3.6). Signed with the same EdDSA key as the access
-  // token so a single JWKS verifies both.
-  const idToken = authCode.scopes.includes('openid')
-    ? await fastify.jwtUtils.signIdToken({
-        sub: user.id,
-        audience: client.clientId,
-        // BREAKING (#259, data minimization): email claims are released only
-        // under the `email` scope, matching userinfo's gating (OIDC Core
-        // §5.4). `emailClaims` is already empty without it, and the shared
-        // resolution keeps the access token and ID token consistent.
-        ...emailClaims,
-        // BREAKING (#755): `name` is released only under the `profile` scope,
-        // through the same helper userinfo uses, so the two cannot drift.
-        ...resolveProfileClaimsForScopes(user, authCode.scopes),
-        nonce: authCode.nonce ?? undefined,
-        // OIDC Core §2 `auth_time`: the real end-user authentication time
-        // (session establishment), captured on the auth code at mint time. In
-        // epoch MS here; signIdToken floors to seconds. Nullable on in-flight
-        // codes minted before the column existed → omit the claim.
-        authTime: authCode.authTime ?? undefined,
-        // OIDC Core §2 `acr` (#237, ADR-004/ADR-010): the eIDAS Level of
-        // Assurance of the authentication this code represents, rendered into
-        // the deployment's `acr` vocabulary here rather than at mint time. A
-        // NULL column — every password login, and every wallet login whose
-        // issuer the realm assures nothing about — spreads to NOTHING, so the
-        // claim is absent rather than present-and-low.
-        ...resolveAcrClaims(authCode.assuranceLevel),
-      })
-    : undefined;
 
   let sessionId: string | undefined;
   try {
@@ -1000,13 +1004,19 @@ async function handleRefreshToken(
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   const aud = resolveAudience(client, effectiveResource);
 
-  const rotated = await fastify.db.transaction(async (tx) => {
+  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
+  // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
+
+  const accessToken = await fastify.db.transaction(async (tx) => {
     const revoked = await fastify.repositories.refreshTokens.revokeIfActive(
       storedToken.id,
       'rotated',
       tx
     );
-    if (!revoked) return false;
+    if (!revoked) return undefined;
     await fastify.repositories.refreshTokens.create(
       {
         userId: user.id,
@@ -1023,6 +1033,18 @@ async function handleRefreshToken(
       },
       tx
     );
+    // Signed here, after the compare-and-set and before the event: a lost
+    // race mints nothing, and a signing failure rolls the rotation back, so
+    // the presented token stays live and `token.issued` records only a token
+    // that exists.
+    const signed = await issueAccessToken(fastify, {
+      sub: user.id,
+      ...emailClaims,
+      clientId: client.clientId,
+      scope: scopeString,
+      aud,
+      expiresInOverride: accessTokenExpiresIn,
+    });
     await emitUserEvent(
       request,
       TOKEN_ISSUED,
@@ -1036,27 +1058,12 @@ async function handleRefreshToken(
       },
       { tx, realmId: ctx.realmId, userId: user.id, clientId: client.clientId, actor: 'client' }
     );
-    return true;
+    return signed;
   });
 
-  if (!rotated) {
+  if (accessToken === undefined) {
     return rejectRefreshTokenReplay(ctx, storedToken);
   }
-
-  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
-
-  // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
-  // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
-
-  const accessToken = await issueAccessToken(fastify, {
-    sub: user.id,
-    ...emailClaims,
-    clientId: client.clientId,
-    scope: scopeString,
-    aud,
-    expiresInOverride: accessTokenExpiresIn,
-  });
 
   // Token issuance metrics (#126). Refresh-token rotation mints both.
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'refresh_token' });
