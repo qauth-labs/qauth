@@ -509,6 +509,9 @@ importers:
       '@qauth-labs/fastify-plugin-email':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/email
+      '@qauth-labs/fastify-plugin-event-delivery':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/event-delivery
       '@qauth-labs/fastify-plugin-federation':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/federation

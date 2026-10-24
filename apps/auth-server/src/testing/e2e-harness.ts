@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 
+import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
   applyQauthMigrations,
   type StartedPostgres,
@@ -186,6 +187,8 @@ export interface BootAuthServerOptions {
    * fills the queue or waits for a batch.
    */
   readonly eventTelemetryLimits?: Partial<EventLogQueueLimits>;
+  /** Event delivery routes for the delivery role (#460), for a suite that watches it. */
+  readonly eventDeliveryRoutes?: readonly DeliveryRoute[];
 }
 
 /**
@@ -271,6 +274,9 @@ export async function bootAuthServer(
     ...(options.eventTelemetryLimits === undefined
       ? {}
       : { eventTelemetryLimits: options.eventTelemetryLimits }),
+    ...(options.eventDeliveryRoutes === undefined
+      ? {}
+      : { eventDeliveryRoutes: options.eventDeliveryRoutes }),
   });
   const { routes } = options;
   if (routes !== undefined) {
