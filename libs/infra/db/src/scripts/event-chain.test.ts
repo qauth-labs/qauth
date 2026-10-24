@@ -29,6 +29,8 @@ describe('parseVerifyChainArgs', () => {
     ['two realms', ['--realm=a', `--realm-id=${REALM_ID}`]],
     ['half a starting point', ['--realm=a', '--from-seq=1']],
     ['a seq that is not a number', ['--realm=a', '--from-seq=-1', `--from-hash=${HASH}`]],
+    ['a hash that is not 64 hex digits', ['--realm=a', '--from-seq=1', '--from-hash=abc']],
+    ['a realm id that is not a UUID', ['--realm-id=default']],
     ['an unknown flag', ['--realm=a', '--fix']],
   ])('refuses %s', (_label, args) => {
     expect(parseVerifyChainArgs(argv(...args))).toBeNull();
@@ -63,6 +65,16 @@ describe('describeChainReport', () => {
       `The admin event chain of realm default BREAKS after seq 5 (hash ${HASH}), at event e8 (seq 8):`
     );
     expect(lines[1]).toContain('an event before it was removed');
+    expect(
+      describeChainReport(
+        { ...report, break: { id: null, seq: 5n, reason: 'anchor_missing' } },
+        'default'
+      )
+    ).toEqual([
+      `The admin event chain of realm default BREAKS after seq 5 (hash ${HASH}), at seq 5:`,
+      'the admin event at the starting point is gone: the chain was cut back to before it.',
+      '2 admin event(s) before it verified.',
+    ]);
     expect(JSON.parse(chainReportJson(report))).toMatchObject({
       ok: false,
       break: { id: 'e8', seq: '8', reason: 'prev_hash_mismatch' },

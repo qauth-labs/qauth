@@ -21,6 +21,9 @@ export interface VerifyChainArgs {
   json: boolean;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+
 export const VERIFY_CHAIN_USAGE =
   'Usage: verify-event-chain.ts (--realm=<realm name> | --realm-id=<uuid>)\n' +
   '                             [--from-seq=<seq> --from-hash=<hex>] [--json]\n' +
@@ -30,8 +33,9 @@ export const VERIFY_CHAIN_USAGE =
 
 /**
  * Parse the arguments from `process.argv`. Returns null when the realm is
- * missing or named twice, when only one half of the starting point is given,
- * or on an unknown flag, so the caller prints the usage instead of guessing.
+ * missing, named twice or not a UUID, when only one half of the starting
+ * point is given or either half is malformed, or on an unknown flag, so the
+ * caller prints the usage and exits 2 instead of reporting a break.
  */
 export function parseVerifyChainArgs(argv: readonly string[]): VerifyChainArgs | null {
   let realm: string | undefined;
@@ -48,11 +52,12 @@ export function parseVerifyChainArgs(argv: readonly string[]): VerifyChainArgs |
     else return null;
   }
   if (!realm === !realmId) return null;
+  if (realmId !== undefined && !UUID_PATTERN.test(realmId)) return null;
   if ((fromSeq === undefined) !== (fromHash === undefined)) return null;
   let from: EventChainPoint | undefined;
   if (fromSeq !== undefined && fromHash !== undefined) {
-    if (!/^(0|[1-9][0-9]*)$/.test(fromSeq)) return null;
-    from = { seq: BigInt(fromSeq), hash: fromHash };
+    if (!/^(0|[1-9][0-9]*)$/.test(fromSeq) || !SHA256_HEX.test(fromHash)) return null;
+    from = { seq: BigInt(fromSeq), hash: fromHash.toLowerCase() };
   }
   return {
     ...(realm ? { realm } : {}),
@@ -67,6 +72,10 @@ const REASONS: Readonly<Record<EventChainBreakReason, string>> = {
     'its prev_hash is not the hash of the admin event before it: an event before it was removed, or changed and given a new hash',
   hash_mismatch: 'it does not hash to its stored hash: it was changed',
   unreadable_row: 'it cannot be read back into an event that hashes',
+  anchor_missing:
+    'the admin event at the starting point is gone: the chain was cut back to before it',
+  anchor_mismatch:
+    'the admin event at the starting point no longer carries the hash given, or no longer hashes to it: it, or the chain up to it, was rewritten',
 };
 
 /** A report as JSON: `bigint` values as decimal strings. */
@@ -90,11 +99,15 @@ export function describeChainReport(report: EventChainReport, realmLabel: string
       report.head
         ? `Head: event ${report.head.id}, --from-seq=${report.head.seq} --from-hash=${report.head.hash}`
         : 'No admin event follows the starting point.',
-      'Keep the head outside the database: a later run from it shows the newest events cut or rewritten.',
+      'Keep the head outside the database: a later run from it fails when the chain up to it was cut or rewritten.',
     ];
   }
+  const at =
+    report.break.id === null
+      ? `at seq ${report.break.seq}`
+      : `at event ${report.break.id} (seq ${report.break.seq})`;
   return [
-    `The admin event chain of realm ${realmLabel} BREAKS ${from}, at event ${report.break.id} (seq ${report.break.seq}):`,
+    `The admin event chain of realm ${realmLabel} BREAKS ${from}, ${at}:`,
     `${REASONS[report.break.reason]}.`,
     `${report.rowsChecked} admin event(s) before it verified.`,
   ];

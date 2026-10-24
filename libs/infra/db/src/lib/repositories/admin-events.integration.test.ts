@@ -276,7 +276,7 @@ describe('admin events integration (real Postgres)', () => {
       expect(wrong).toMatchObject({
         ok: false,
         rowsChecked: 0,
-        break: { id: rows[3].id, reason: 'prev_hash_mismatch' },
+        break: { id: rows[2].id, seq: first.head.seq, reason: 'anchor_mismatch' },
       });
     });
 
@@ -368,6 +368,47 @@ describe('admin events integration (real Postgres)', () => {
       });
     });
 
+    // A head kept outside the database catches what the chain alone cannot.
+    it('fails from a kept head when the chain was cut back to before it', async () => {
+      const realm = randomUUID();
+      const rows = await fiveRows(realm);
+      const kept = await store.verifyChain(realm);
+      if (!kept.ok || !kept.head) throw new Error('expected a head');
+      await pool().query('DELETE FROM events WHERE realm_id = $1 AND seq >= $2', [
+        realm,
+        rows[3].seq,
+      ]);
+
+      expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 3 });
+      expect(await store.verifyChain(realm, kept.head)).toEqual({
+        ok: false,
+        realmId: realm,
+        from: { seq: kept.head.seq, hash: kept.head.hash },
+        rowsChecked: 0,
+        break: { id: null, seq: kept.head.seq, reason: 'anchor_missing' },
+      });
+    });
+
+    it('fails from a kept head when that head was edited, or the chain rewritten up to it', async () => {
+      const realm = randomUUID();
+      const rows = await fiveRows(realm);
+      const kept = await store.verifyChain(realm);
+      if (!kept.ok || !kept.head) throw new Error('expected a head');
+      await tamper([[`UPDATE events SET actor_id = 'someone-else' WHERE id = $1`, [rows[4].id]]]);
+      expect(await store.verifyChain(realm, kept.head)).toMatchObject({
+        ok: false,
+        break: { id: rows[4].id, reason: 'anchor_mismatch' },
+      });
+
+      await tamper([
+        [`UPDATE events SET hash = $2 WHERE id = $1`, [rows[4].id, Buffer.alloc(32, 3)]],
+      ]);
+      expect(await store.verifyChain(realm, kept.head)).toMatchObject({
+        ok: false,
+        break: { id: rows[4].id, reason: 'anchor_mismatch' },
+      });
+    });
+
     it('reports a row it cannot read back as unreadable', async () => {
       const realm = randomUUID();
       const rows = await fiveRows(realm);
@@ -400,14 +441,18 @@ describe('admin events integration (real Postgres)', () => {
       expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 1 });
     });
 
-    it('pins the search_path of the trigger function', async () => {
+    it('pins the search_path of the trigger functions', async () => {
       const { rows } = await pool().query(
-        `SELECT proconfig FROM pg_proc WHERE proname = 'events_no_update'`
+        `SELECT proname, proconfig FROM pg_proc
+          WHERE proname IN ('events_no_update', 'events_admin_follows_head') ORDER BY proname`
       );
-      expect(rows).toEqual([{ proconfig: ['search_path=pg_catalog, pg_temp'] }]);
+      expect(rows).toEqual([
+        { proname: 'events_admin_follows_head', proconfig: ['search_path=pg_catalog, pg_temp'] },
+        { proname: 'events_no_update', proconfig: ['search_path=pg_catalog, pg_temp'] },
+      ]);
     });
 
-    it('refuses an admin row without a hash, a user row with one, and a row that forks the chain', async () => {
+    it('refuses an admin row without a hash, a user row with one, and a row off the chain head', async () => {
       const realm = randomUUID();
       await emitInTx(change(realm));
       const [head] = await chainRows(realm);
@@ -424,14 +469,34 @@ describe('admin events integration (real Postgres)', () => {
       await expect(insert('user', head.hash, Buffer.alloc(32, 7))).rejects.toMatchObject({
         constraint: 'events_admin_chained',
       });
-      // A second row after the head: the chain cannot fork.
-      await expect(insert('admin', head.prev_hash, Buffer.alloc(32, 7))).rejects.toMatchObject({
-        code: '23505',
-        constraint: 'idx_events_chain_link',
+      // A second row after the genesis, a fork, and a row at a made-up hash.
+      for (const prev of [head.prev_hash, Buffer.alloc(32, 9)]) {
+        await expect(insert('admin', prev, Buffer.alloc(32, 7))).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'events_admin_follows_head',
+        });
+      }
+      await expect(insert('admin', head.hash, Buffer.alloc(31))).rejects.toMatchObject({
+        constraint: 'events_hash_sha256',
       });
-      await expect(insert('admin', Buffer.alloc(31), Buffer.alloc(32))).rejects.toMatchObject({
-        constraint: 'events_prev_hash_sha256',
-      });
+      expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 1 });
+    });
+
+    it('refuses an admin row whose seq was not the identity, so none can hold the head forever', async () => {
+      const realm = randomUUID();
+      await emitInTx(change(realm));
+      const [head] = await chainRows(realm);
+
+      await expect(
+        pool().query(
+          `INSERT INTO events (seq, id, realm_id, category, type, time, data, schema_version, prev_hash, hash)
+           OVERRIDING SYSTEM VALUE
+           VALUES (4611686018427387904, uuidv7(), $1, 'admin', 'urn:qauth:event:admin.change_applied:v1-rc.0', 0, '{}', 1, $2, $3)`,
+          [realm, head.hash, Buffer.alloc(32, 7)]
+        )
+      ).rejects.toMatchObject({ code: '23514', constraint: 'events_seq_from_identity' });
+      await emitInTx(change(realm));
+      expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 2 });
     });
 
     it('turns a REPEATABLE READ writer that read a stale head into a unique violation, not a fork', async () => {

@@ -69,11 +69,13 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  * the first, and its own `hash` is SHA-256 over `prev_hash` and the RFC 8785
  * canonical JSON of the envelope the row holds (`eventChainHash`). Only admin
  * rows carry the two columns, and every admin row written since migration
- * 0031 does. The chain runs in `seq` order: `emitAdminEvent` holds a per-realm
+ * 0032 does. The chain runs in `seq` order: `emitAdminEvent` holds a per-realm
  * advisory lock from reading the chain head to the end of its transaction,
  * and the identity's `CACHE 1` hands out `seq` values in the order the inserts
  * run. `idx_events_chain_link` lets no two rows of a realm follow the same
- * hash, so even a writer that skipped the lock cannot fork the chain.
+ * hash, so even a writer that skipped the lock cannot fork the chain, and the
+ * trigger `events_admin_follows_head` refuses an admin row whose `prev_hash`
+ * is not the head's or whose `seq` was not the identity's.
  *
  * ## No updates
  *
@@ -155,7 +157,7 @@ export const events = pgTable(
       sql`${t.prevHash} is null or octet_length(${t.prevHash}) = 32`
     ),
     check('events_hash_sha256', sql`${t.hash} is null or octet_length(${t.hash}) = 32`),
-    // Added NOT VALID by migration 0031: rows written before it are not
+    // Added NOT VALID by migration 0032: rows written before it are not
     // checked, every row written since is.
     check('events_admin_chained', sql`(${t.category} = 'admin') = (${t.hash} is not null)`),
     // Readers: a realm's rows in (xid, seq) order, from a position.

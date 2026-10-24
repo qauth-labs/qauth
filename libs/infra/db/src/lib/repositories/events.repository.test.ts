@@ -453,15 +453,20 @@ describe('emitAdminEvent', () => {
     const { db, queries } = createRecordingDb([], chainResponder());
     const repo = createEventsRepository(db, { now: () => NOW });
 
-    const id = await repo.emitAdminEvent(asTransaction(db), ADMIN_CHANGE);
+    const id = await db.transaction((tx) => repo.emitAdminEvent(tx, ADMIN_CHANGE));
 
     expect(queries.map((q) => q.text.trim().split(/\s+/).slice(0, 2).join(' '))).toEqual([
+      'begin',
       'select pg_advisory_xact_lock(hashtextextended($1::text',
       'select "hash"',
+      // The insert and its read-back run in a savepoint, undone on a mismatch.
+      'savepoint sp1',
       'insert into',
       'select "events"."seq"::text',
+      'release savepoint',
+      'commit',
     ]);
-    expect(queries[0].values).toEqual(['qauth:events:admin-chain:', REALM_ID]);
+    expect(queries[1].values).toEqual(['qauth:events:admin-chain:', REALM_ID]);
     const inserted = insertedColumns(insertOf(queries));
     expect(inserted).toMatchObject({
       id,
@@ -486,8 +491,8 @@ describe('emitAdminEvent', () => {
     expect(String(inserted['data'])).not.toContain('hunter');
   });
 
-  it('refuses to emit when the stored row does not hash as it was written', async () => {
-    const { db } = createRecordingDb(
+  it('refuses to emit, and undoes the insert, when the stored row does not hash as it was written', async () => {
+    const { db, queries } = createRecordingDb(
       [],
       chainResponder((row) => {
         row['data'] = { ...(row['data'] as object), operation: 'realms.delete' };
@@ -495,9 +500,13 @@ describe('emitAdminEvent', () => {
     );
     const repo = createEventsRepository(db, { now: () => NOW });
 
-    await expect(repo.emitAdminEvent(asTransaction(db), ADMIN_CHANGE)).rejects.toThrow(
-      /does not hash as it was written; nothing was emitted/
-    );
+    // The caller catches the error and commits: the insert is undone all the same.
+    await db.transaction(async (tx) => {
+      await expect(repo.emitAdminEvent(tx, ADMIN_CHANGE)).rejects.toThrow(
+        /does not hash as it was written; nothing was emitted/
+      );
+    });
+    expect(queries.slice(-2).map((q) => q.text)).toEqual(['rollback to savepoint sp1', 'commit']);
   });
 
   it('chains every admin type that emit writes, not only its own', async () => {

@@ -258,19 +258,22 @@ async function appendToChain(tx: DbTransaction, { row, envelope }: BuiltEvent): 
     .limit(1);
   const prevHash = head?.hash ?? EVENT_CHAIN_GENESIS_HASH;
   const hash = eventChainHash(prevHash, envelope);
-  await tx.insert(events).values({ ...row, prevHash, hash });
 
-  // The row as Postgres stores it must hash to its hash, or the chain would
-  // break at this row for good.
-  const { rows } = await tx.execute<ChainRow>(sql`
-    select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
-    from ${events} where ${events.id} = ${row.id}
-  `);
-  if (rows.length !== 1 || checkChainRow(rows[0], prevHash) !== undefined) {
-    throw new Error(
-      `events: admin event ${row.id} does not hash as it was written; nothing was emitted`
-    );
-  }
+  // In a savepoint: when the row as Postgres stores it does not hash to its
+  // hash, the chain would break at this row for good, so the insert is
+  // undone even when the caller catches the error and commits.
+  await tx.transaction(async (savepoint) => {
+    await savepoint.insert(events).values({ ...row, prevHash, hash });
+    const { rows } = await savepoint.execute<ChainRow>(sql`
+      select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
+      from ${events} where ${events.id} = ${row.id}
+    `);
+    if (rows.length !== 1 || checkChainRow(rows[0], prevHash) !== undefined) {
+      throw new Error(
+        `events: admin event ${row.id} does not hash as it was written; nothing was emitted`
+      );
+    }
+  });
   return row.id;
 }
 
@@ -363,7 +366,11 @@ export function createEventsRepository(
     async emitInOwnTransaction(event) {
       const built = buildEvent(event, now());
       if (built.row.category === 'admin') {
-        return defaultDb.transaction((tx) => appendToChain(tx, built));
+        // READ COMMITTED whatever the server's default, so the head is read
+        // after the lock is taken, not from a snapshot taken while waiting.
+        return defaultDb.transaction((tx) => appendToChain(tx, built), {
+          isolationLevel: 'read committed',
+        });
       }
       // One INSERT on the root database is a transaction of its own.
       return insertEvent(defaultDb, built.row);
@@ -400,6 +407,32 @@ export function createEventsRepository(
           let after = start.seq;
           let rowsChecked = 0;
           let head: (EventChainPoint & { id: string }) | null = null;
+
+          // A point after the start is a row the caller saw: it must still be
+          // there, unchanged, or cutting the chain back to before it, or
+          // rewriting it, would verify.
+          if (start.seq > 0n) {
+            const { rows: anchor } = await tx.execute<ChainRow>(sql`
+              select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
+              from ${events}
+              where ${events.realmId} = ${realm} and ${events.seq} = ${start.seq.toString()}::bigint
+            `);
+            const [point] = anchor;
+            const reason: EventChainBreakReason | undefined = !point
+              ? 'anchor_missing'
+              : !Buffer.isBuffer(point.hash) || !point.hash.equals(expectedPrev)
+                ? 'anchor_mismatch'
+                : checkChainRow(point, point.prev_hash) && 'anchor_mismatch';
+            if (reason) {
+              return {
+                ok: false,
+                realmId: realm,
+                from: start,
+                rowsChecked,
+                break: { id: point?.id ?? null, seq: start.seq, reason },
+              };
+            }
+          }
 
           for (;;) {
             const { rows } = await tx.execute<ChainRow>(sql`

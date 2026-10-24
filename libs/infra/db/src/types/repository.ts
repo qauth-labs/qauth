@@ -1193,7 +1193,14 @@ export type EventChainBreakReason =
   /** The row's envelope does not hash to its `hash`: the row was changed. */
   | 'hash_mismatch'
   /** The row cannot be read back into an envelope that hashes. */
-  | 'unreadable_row';
+  | 'unreadable_row'
+  /** No admin row of the realm is at the point verified from: it was removed. */
+  | 'anchor_missing'
+  /**
+   * The row at the point verified from no longer carries the point's hash,
+   * or no longer hashes to it: it, or the chain up to it, was rewritten.
+   */
+  | 'anchor_mismatch';
 
 /** The result of {@link EventsRepository.verifyChain}. */
 export type EventChainReport =
@@ -1207,7 +1214,9 @@ export type EventChainReport =
       /**
        * The newest admin row, with its event id, or `null` when no admin row
        * follows `from`. Kept outside the database, it is the point a later
-       * verification starts from, and it shows the newest rows cut.
+       * verification starts from: that run fails when the chain up to it was
+       * cut or rewritten. Rows cut after it leave no break; the next head is
+       * then older than expected.
        */
       head: (EventChainPoint & { id: string }) | null;
     }
@@ -1217,8 +1226,11 @@ export type EventChainReport =
       from: EventChainPoint;
       /** How many admin rows verified before the break. */
       rowsChecked: number;
-      /** The first admin row that does not verify. */
-      break: { id: string; seq: bigint; reason: EventChainBreakReason };
+      /**
+       * The first admin row that does not verify. `id` is `null` when the row
+       * at the point verified from is missing.
+       */
+      break: { id: string | null; seq: bigint; reason: EventChainBreakReason };
     };
 
 /**
@@ -1268,8 +1280,10 @@ export interface EventsRepository {
    * emit an admin event last; a transaction that writes admin events to
    * several realms writes them in a fixed order (by realm id), or two such
    * transactions can deadlock. Under REPEATABLE READ or SERIALIZABLE, an
-   * admin event that raced another fails on `idx_events_chain_link` (23505)
-   * instead of forking the chain; retry the transaction.
+   * admin event that raced another fails instead of forking the chain, on
+   * `idx_events_chain_link` (23505) or with a serialization failure (40001);
+   * retry the transaction. {@link emitInOwnTransaction} runs an admin event
+   * under READ COMMITTED.
    *
    * @returns the event id, a UUIDv7
    * @throws {EventValidationError} on an unknown type, a payload that fails
@@ -1315,8 +1329,15 @@ export interface EventsRepository {
    * Every admin row after `from`, in `seq` order, must carry the `hash` of the
    * row before it (the point's hash, for the first) as `prev_hash`, and its
    * envelope must hash to its own `hash`. A changed row breaks the chain at
-   * that row; a removed one at the row after it. Reads run in one REPEATABLE
-   * READ transaction, so a concurrent write cannot produce a false break.
+   * that row; a removed one at the row after it. A point after the start must
+   * still be an admin row of the realm with that hash and an envelope that
+   * hashes to it (`anchor_missing`, `anchor_mismatch`). Reads run in one
+   * REPEATABLE READ transaction, so a concurrent write cannot produce a false
+   * break.
+   *
+   * The retention job (#536) removes the oldest rows, a point it starts from
+   * included; it will keep that point as an anchor of its own and check it
+   * there.
    *
    * @param realmId - the realm whose chain to check
    * @param from - where to start: the head an earlier verification returned,
