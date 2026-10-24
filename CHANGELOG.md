@@ -323,6 +323,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position every destination has finished. No route exists yet, so the role
   does nothing but publish its metrics.
 
+- **The migration runner is one small command** ([#474], ADR-018 §5). The
+  `migration-runner` image holds Node and one bundled program,
+  `dist/apps/migration-runner/main.js`, with the migrations beside it, and no
+  pnpm, nx or drizzle-kit; its build fails when one of them reaches the image.
+  The runner takes a Postgres advisory lock, so a second runner waits and then
+  finds nothing to do. It applies the pending migrations in one transaction,
+  logs each with its duration, and exits `0` when the database is current, `1`
+  when a migration failed (the run rolled back), `2` on a usage error and `3`
+  when it could not start. `--check` lists the pending migrations, exits `1`
+  when there are any and changes nothing. From a checkout,
+  `pnpm nx run migration-runner:migrate` builds and runs it. The upgrade guide
+  (`operate/upgrades`) now opens with the procedure every upgrade follows: back
+  up, run the runner, start the new version.
+- The auth server checks the schema at boot ([#474]). When the database lacks
+  migrations of its release, it waits up to `DB_MIGRATION_WAIT_MS` (an advanced
+  key, 60 seconds by default) for the migration runner, then exits non-zero
+  naming them. A database ahead of the release is accepted with a warning, as
+  during a rolling upgrade. `@qauth-labs/infra-db/migrations` exports the
+  runner's work and the check; `awaitDatabaseMigrations` in
+  `@qauth-labs/fastify-plugin-db` runs the check.
+
 - **Schema**: migration 0030 reshapes the `sessions` table for browser sessions
   ([#468], ADR-019 Decision 3). Each row is one account signed in on one
   browser, tied to a realm and a user, and its `id` is the session's `sid`. It
@@ -560,6 +581,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also issues a new secret, or set the column by hand. See the operator guide
   (`operate/docker`, "Provisioning a client for ID-JAG").
 
+- **BREAKING (operators who run commands through the migration-runner
+  image)**: the image no longer holds the workspace, pnpm or nx ([#474]), so
+  `docker compose run --entrypoint pnpm migration-runner nx run …` no longer
+  works. Its entrypoint is `node /app/main.js`, and arguments after the image
+  name go to the runner, such as `--check`.
+
+  **Action for operators**: run operator commands such as
+  `db:seed-oauth-clients` from a checkout with pnpm installed, against the
+  deployment's `DATABASE_URL`; `apps/wire-suite/README.md` shows the seed
+  against the compose database.
+
 - The images and CI run on Node.js 26 and pnpm 12.14.0, up from Node.js 24 and
   pnpm 11. Node 26 no longer ships corepack, so each image installs pnpm from
   npm at that exact version while it builds. The migration-runner image no
@@ -618,6 +650,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#468]: https://github.com/qauth-labs/qauth/issues/468
 [#469]: https://github.com/qauth-labs/qauth/issues/469
 [#470]: https://github.com/qauth-labs/qauth/issues/470
+[#474]: https://github.com/qauth-labs/qauth/issues/474
 [#476]: https://github.com/qauth-labs/qauth/issues/476
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#484]: https://github.com/qauth-labs/qauth/issues/484

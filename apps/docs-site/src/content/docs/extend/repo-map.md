@@ -13,22 +13,25 @@ enforced by `@nx/enforce-module-boundaries` in `.oxlintrc.json`, which Oxlint ru
 
 ## `apps/`
 
-| Directory               | Nx project         | What it is                                                                      |
-| ----------------------- | ------------------ | ------------------------------------------------------------------------------- |
-| `apps/auth-server`      | `auth-server`      | The OAuth 2.1 / OIDC authorization server. Fastify.                             |
-| `apps/developer-portal` | `developer-portal` | The client-management UI. TanStack Start + React.                               |
-| `apps/docs-site`        | `docs-site`        | This site. Astro + Starlight, plus the drift-guard invariants.                  |
-| `apps/migration-runner` | —                  | Not an Nx project: a `Dockerfile` and an entrypoint script that run migrations. |
-| `apps/wire-suite`       | `wire-suite`       | The black-box HTTP suite that tests a running server. Ships nothing.            |
+| Directory               | Nx project         | What it is                                                                 |
+| ----------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `apps/auth-server`      | `auth-server`      | The OAuth 2.1 / OIDC authorization server. Fastify.                        |
+| `apps/developer-portal` | `developer-portal` | The client-management UI. TanStack Start + React.                          |
+| `apps/docs-site`        | `docs-site`        | This site. Astro + Starlight, plus the drift-guard invariants.             |
+| `apps/migration-runner` | `migration-runner` | The migration runner: one bundled Node program and the image that runs it. |
+| `apps/wire-suite`       | `wire-suite`       | The black-box HTTP suite that tests a running server. Ships nothing.       |
 
-The three deployable apps are tagged `scope:app` (e.g. `apps/auth-server/project.json:6`).
+The auth server, the portal and this site are tagged `scope:app` (e.g. `apps/auth-server/project.json:6`).
 `apps/wire-suite` is tagged `scope:wire-suite` and `type:testing` instead, because it must import
 **nothing** from the workspace — see [the wire suite](#the-wire-suite-imports-nothing) below.
 Nothing in `apps/` may be imported by anything — the app layer is the top of the graph.
 
-`apps/migration-runner` has no `project.json` and no `package.json`, so `nx show projects` does not
-list it. It is deliberately just a container image; if you are looking for the migration logic
-itself it lives in `libs/infra/db`.
+`apps/migration-runner` is tagged `scope:migration-runner`, and may depend only on the database
+library (`type:db`) and, in its container suite, the testing library. Its build bundles
+`src/main.ts`, `pg` and `drizzle-orm` into one file, `dist/apps/migration-runner/main.js`, beside a
+copy of the migrations, which its image runs with Node alone. The logic itself, the lock, the
+pending-migration rule and the boot check's wait, lives in `libs/infra/db/src/lib/migrations`,
+which the package exports as `@qauth-labs/infra-db/migrations` so the bundle loads nothing else.
 
 ## `libs/`
 
@@ -72,18 +75,19 @@ Every rule below is a `depConstraints` entry in `.oxlintrc.json:155`, and the co
 the source of record. `onlyDependOnLibsWithTags` lists what a project carrying that source tag may
 import **from inside the workspace**; external npm packages are never restricted.
 
-| Source tag         | May import (workspace)                                                           | In `.oxlintrc.json`  |
-| ------------------ | -------------------------------------------------------------------------------- | -------------------- |
-| `scope:core`       | nothing — strict leaf                                                            | `.oxlintrc.json:170` |
-| `scope:shared`     | nothing — strict leaf                                                            | `.oxlintrc.json:160` |
-| `scope:ui`         | nothing — strict leaf                                                            | `.oxlintrc.json:177` |
-| `scope:infra`      | `scope:core`, `scope:infra`, `scope:shared`                                      | `.oxlintrc.json:211` |
-| `scope:server`     | `scope:core`, `scope:server`, `scope:shared`                                     | `.oxlintrc.json:219` |
-| `scope:fastify`    | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `.oxlintrc.json:227` |
-| `scope:app`        | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `.oxlintrc.json:240` |
-| `type:testing`     | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `.oxlintrc.json:196` |
-| `type:key-custody` | `scope:core`, `scope:shared`                                                     | `.oxlintrc.json:265` |
-| `scope:wire-suite` | nothing — and nothing may import it                                              | `.oxlintrc.json:187` |
+| Source tag | May import (workspace) | In `.oxlintrc.json` |
+| --- | --- | --- |
+| `scope:core` | nothing — strict leaf | `.oxlintrc.json:170` |
+| `scope:shared` | nothing — strict leaf | `.oxlintrc.json:160` |
+| `scope:ui` | nothing — strict leaf | `.oxlintrc.json:177` |
+| `scope:infra` | `scope:core`, `scope:infra`, `scope:shared` | `.oxlintrc.json:211` |
+| `scope:server` | `scope:core`, `scope:server`, `scope:shared` | `.oxlintrc.json:219` |
+| `scope:fastify` | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared` | `.oxlintrc.json:227` |
+| `scope:app` | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `.oxlintrc.json:240` |
+| `type:testing` | see [the dead rule](#the-typetesting-rule-cannot-grant-anything) | `.oxlintrc.json:196` |
+| `type:key-custody` | `scope:core`, `scope:shared` | `.oxlintrc.json:274` |
+| `scope:migration-runner` | `type:db`, `type:testing` | `.oxlintrc.json:255` |
+| `scope:wire-suite` | nothing — and nothing may import it | `.oxlintrc.json:187` |
 
 ### Key custody has a second, path-based rule
 

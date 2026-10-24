@@ -138,7 +138,7 @@ export NODE_ENV HOST PORT LOG_LEVEL DATABASE_URL REDIS_URL REDIS_HOST REDIS_PORT
   JWT_PRIVATE_KEY JWT_PUBLIC_KEY JWT_ISSUER SESSION_COOKIE_SECRET SESSION_COOKIE_SECURE KEK_PATH \
   EMAIL_PROVIDER EMAIL_FROM_ADDRESS EMAIL_BASE_URL
 
-# --- Migrations, the way the migration-runner image applies them -------------
+# --- Migrations: drizzle-kit, into the table the migration runner reads ------
 log "applying migrations"
 (cd "$ROOT/libs/infra/db" && "$DRIZZLE_KIT" migrate) >"$STATE_DIR/migrate.log" 2>&1 || {
   cat "$STATE_DIR/migrate.log" >&2

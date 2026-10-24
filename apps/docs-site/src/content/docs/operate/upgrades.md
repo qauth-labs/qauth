@@ -1,10 +1,117 @@
 ---
 title: Upgrades
-description: The ADR-002 identity-migration runbook — the destructive schema change that drops users.email/email_normalized/password_hash, its required backfill precondition, and why there is no rollback.
+description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-07-27'
+lastVerified: '2026-10-24'
 ---
+
+Every upgrade takes the same three steps: back up the database, run the new
+version's migration runner, then start the new version. Migrations only go
+forward and downgrades are not supported, so the backup is your only way back
+([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)).
+
+## Upgrade procedure
+
+### 1. Back up the database
+
+```bash
+# Adjust host, container and credentials to your deployment.
+docker exec qauth-postgres pg_dump -U qauth -d qauth -F c -f /tmp/qauth-pre-upgrade.dump
+docker cp qauth-postgres:/tmp/qauth-pre-upgrade.dump ./qauth-pre-upgrade.dump
+```
+
+Confirm the dump is not empty. Restoring it later discards every write made
+after it was taken.
+
+### 2. Run the migration runner of the new version
+
+The runner is the `migration-runner` image built from
+`apps/migration-runner/Dockerfile`. It holds Node and one program, with the new
+version's migrations beside it, and needs only `DATABASE_URL`:
+
+```bash
+# Docker Compose: build the new version's image, then run it once.
+docker compose build migration-runner
+docker compose run --rm migration-runner
+
+# Any other platform: run the image as a one-off job.
+docker run --rm -e DATABASE_URL='postgresql://qauth:…@db:5432/qauth' qauth/migration-runner
+
+# From a checkout of the new version, with pnpm installed.
+pnpm nx run migration-runner:migrate
+```
+
+It applies every pending migration in one transaction and logs each with its
+duration:
+
+```text
+Applying 2 migrations in one transaction: 0034_webauthn_rp_id_lock, 0035_event_deliveries.
+  0034_webauthn_rp_id_lock ran in 14 ms
+  0035_event_deliveries ran in 34 ms
+Applied 2 migrations in 212 ms. The database is current.
+```
+
+It is safe to run twice. A run on a current database prints
+`The database is current: all 36 migrations are applied. Nothing to do.` and
+exits `0`. The runner holds a Postgres advisory lock while it works, so a second
+runner started beside it, for example by every node of a cluster at once, waits
+for the first, then finds nothing to do.
+
+| Exit code | Meaning                                                                                                                                             |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                |
+| `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending. |
+| `2`       | Usage error: an unknown flag, or `DATABASE_URL` is not set.                                                                                         |
+| `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                      |
+
+`--check` reports the pending migrations and changes nothing: it takes no lock
+and creates nothing, so a read-only database role can run it.
+
+```bash
+docker compose run --rm migration-runner --check
+```
+
+```text
+The database lacks 1 of 36 migrations: 0035_event_deliveries. Run the migration runner without --check to apply them.
+```
+
+A failed run changed nothing. Fix the cause the error names, then run the
+runner again.
+
+### 3. Start the new version
+
+```bash
+docker compose up -d auth-server
+```
+
+At boot the auth server compares the database with the migrations of its own
+release. When the database lacks some, the server waits for the migration
+runner, up to `DB_MIGRATION_WAIT_MS` (60 seconds by default, `0` to check once),
+then exits non-zero with a message that names the missing migrations:
+
+```text
+The database lacks 1 migration this release needs: 0035_event_deliveries. Waited 60 s for the migration runner. Run it against this database, then start the server again.
+```
+
+So a server started beside the runner, as a platform without job ordering
+does, waits for it instead of failing on a missing table.
+
+A database **ahead** of the release does not stop the server: during a rolling
+upgrade the old version keeps running on the new schema for a short time. The
+server logs a warning with the number of newer migrations and starts.
+
+### Release notes that need more than these steps
+
+Read the release's `CHANGELOG.md` entry before you upgrade. One migration in
+QAuth's history needs more: migration 0011, below.
+
+## History: the migration 0011 runbook (ADR-002)
+
+This runbook predates the migration runner: where it says
+`pnpm nx run infra-db:db:migrate` or `drizzle-kit migrate`, run the migration
+runner of Step 2 above. A failed migration is reported the same way, by name,
+and rolls back.
 
 QAuth's history contains one **destructive** schema migration you must plan
 around: migration **0011** (ADR-002, issue [#230]), which permanently drops
@@ -13,8 +120,8 @@ its precondition doesn't just fail the migration — it can **silently** strip
 `email`/`email_verified` claims from existing users, including users whose
 email was verified, without an error anywhere.
 
-This page restates the runbook from `CHANGELOG.md`'s `[Unreleased]` section as
-an ordered procedure. **`CHANGELOG.md` is the source of record** — if the two
+This section restates the runbook from `CHANGELOG.md`'s `[Unreleased]` section
+of the time as an ordered procedure. **`CHANGELOG.md` is the source of record** — if the two
 disagree, trust the CHANGELOG and the migration files in
 `libs/infra/db/drizzle/`, and file an issue against this page.
 
@@ -28,13 +135,13 @@ disagree, trust the CHANGELOG and the migration files in
 > made after the backup. Take the backup before Step 4 below, not after
 > something looks wrong.
 
-## Which path applies to you
+### Which path applies to you
 
-| Your current deployment                                                                                                    | Path                                                                                                                                    |
-| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Already running a release at or after the #228/#229 dual-write cutover, not yet past #230 (migration 0011 not yet applied) | **One-hop** — go to [Step 3](#step-3-run-the-backfill-verification)                                                                     |
-| Running anything older (pre-#228), or unsure                                                                               | **Two-hop** — go to [Step 1](#step-1-the-two-hop-precondition-pre-229-deployments-only)                                                 |
-| A fresh install with no existing users                                                                                     | Migrations apply cleanly with no data to guard; skip to [Step 4](#step-4-back-up-the-database) as a formality, or just run `db:migrate` |
+| Your current deployment                                                                                                    | Path                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Already running a release at or after the #228/#229 dual-write cutover, not yet past #230 (migration 0011 not yet applied) | **One-hop** — go to [Step 3](#step-3-run-the-backfill-verification)                                                                             |
+| Running anything older (pre-#228), or unsure                                                                               | **Two-hop** — go to [Step 1](#step-1-the-two-hop-precondition-pre-229-deployments-only)                                                         |
+| A fresh install with no existing users                                                                                     | Migrations apply cleanly with no data to guard; skip to [Step 4](#step-4-back-up-the-database) as a formality, or just run the migration runner |
 
 If you don't know which release you're running, check whether
 `pnpm nx run infra-db:db:backfill-identity` exists as a target in your
@@ -42,7 +149,7 @@ deployed checkout's `libs/infra/db/project.json`. If it does, you're on the
 dual-write release — one-hop. If it doesn't (as on current `main`, see below),
 and you haven't already applied migration 0011, you need the two-hop path.
 
-## Step 1: the two-hop precondition (pre-#229 deployments only)
+### Step 1: the two-hop precondition (pre-#229 deployments only)
 
 **The backfill tooling has been deleted from the tree.** `db:backfill-identity`
 (the nx target, `libs/infra/db/src/scripts/backfill-identity.ts`, and its
@@ -97,7 +204,7 @@ Skip this step entirely if you're already on a release at or after the
 dual-write cutover (#228/#229) and haven't applied migration 0011 yet — go
 straight to Step 3.
 
-## Step 2: understand the dual-write window (context, no action)
+### Step 2: understand the dual-write window (context, no action)
 
 The release between #228 and #230 **dual-writes**: it writes both the legacy
 `users.email`/`password_hash` columns and the new `user_credentials` /
@@ -109,7 +216,7 @@ though the backfill tool's own `--help` text calls `--refresh`
 rows with stale legacy-column data. On the dual-write release itself, the two
 sources are equal by construction, so refreshing is a no-op-safe reconciliation.
 
-## Step 3: run the backfill verification
+### Step 3: run the backfill verification
 
 Run this against the dual-write release (#228/#229) — either the one you're
 already on (one-hop), or the intermediate one you deployed in Step 1 (two-hop):
@@ -139,7 +246,7 @@ normal post-cutover writes). This is the reason this page exists — do not
 skip this step because the app "seems to still work" after upgrading. It will
 appear to work until a user's client asks for their email.
 
-## Step 4: back up the database
+### Step 4: back up the database
 
 Immediately before running the migration. This is your only undo (see the
 warning at the top of this page).
@@ -153,7 +260,7 @@ docker cp qauth-postgres:/tmp/qauth-pre-0011.dump ./qauth-pre-0011.dump
 Confirm the dump file is non-empty and, if you can afford the time, that it
 restores cleanly to a scratch database before proceeding.
 
-## Step 5: optional — preflight the migration's own guard
+### Step 5: optional — preflight the migration's own guard
 
 Migration 0011 opens with an in-SQL guard (`libs/infra/db/drizzle/0011_striped_brother_voodoo.sql`)
 that runs **before any DDL** in the same file and **aborts the entire
@@ -190,7 +297,7 @@ Step 3 backfill runbook. **No data is modified when the guard fires** — the
 whole file rolls back (drizzle-kit runs each migration file in a transaction),
 so it's safe to fix the underlying data and simply retry.
 
-## Step 6: apply migration 0011, before starting the new release
+### Step 6: apply migration 0011, before starting the new release
 
 ```bash
 pnpm nx run infra-db:db:migrate
@@ -227,7 +334,7 @@ counts above and telling you to deploy the backfill release and re-run
 Step 3. `drizzle-kit migrate` reports this as a failed migration; nothing was
 applied. Go fix Step 3, then re-run this step.
 
-## Step 7: minor operational consequences to expect
+### Step 7: minor operational consequences to expect
 
 Neither of these blocks the migration; both are one-time and self-healing:
 
@@ -246,7 +353,7 @@ Neither of these blocks the migration; both are one-time and self-healing:
   `user_credentials`. Cosmetic only — sign-in and claim resolution are
   unaffected (email matching was always case-insensitive).
 
-## Step 8: migration 0012 (no precondition, any time after 0011)
+### Step 8: migration 0012 (no precondition, any time after 0011)
 
 A later migration drops two more columns —
 `users.email_verified` / `users.email_verified_at`
@@ -257,7 +364,7 @@ state has lived in `user_credentials.credential_data.email_verified` /
 literal default value, not a real read. Apply it whenever you apply the rest
 of that release's migrations — nothing to sequence around.
 
-## Verify after upgrading
+### Verify after applying 0011
 
 - `pnpm nx run infra-db:db:migrate` exits 0 and the migration log shows 0011
   (and 0012, if applicable) applied.
@@ -272,7 +379,9 @@ of that release's migrations — nothing to sequence around.
 
 ## See also
 
-- [Docker](/operate/docker/) — running `migration-runner`; its Troubleshooting
-  section points back here for a migration 0011 failure.
-- [Keys](/operate/keys/) — unrelated to this migration, but worth checking
-  while you have the deployment open for maintenance.
+- [Docker](/operate/docker/) — the `migration-runner` service; its
+  Troubleshooting section points back here for a migration 0011 failure.
+- [Configuration](/operate/configuration/) — `DB_MIGRATION_WAIT_MS`, the auth
+  server's wait for missing migrations at boot.
+- [Keys](/operate/keys/) — unrelated to migrations, but worth checking while
+  you have the deployment open for maintenance.
