@@ -10,8 +10,11 @@
  * Usage (from the repo root):
  *
  *   DATABASE_URL=postgresql://qauth:pw@host:5432/qauth \
- *     pnpm nx run infra-db:events:verify-chain -- \
+ *     pnpm --dir libs/infra/db exec tsx src/scripts/verify-event-chain.ts \
  *     (--realm=<realm name> | --realm-id=<uuid>) [--from-seq=<seq> --from-hash=<hex>] [--json]
+ *
+ * `pnpm nx run infra-db:events:verify-chain -- …` runs it too, but Nx turns
+ * every non-zero exit into 1, so a monitor runs the command above.
  *
  * It exits 0 when the chain verifies, 1 when it breaks, 2 on a usage error,
  * and 3 when the check could not run: the database unreachable or failing,

@@ -31,7 +31,12 @@ interface CliRun {
   stderr: string;
 }
 
-/** Run the command as the Nx target does, with only PATH and DATABASE_URL set. */
+/**
+ * Run the documented command, `pnpm --dir libs/infra/db exec tsx
+ * src/scripts/verify-event-chain.ts`: pnpm runs this tsx in this directory
+ * and passes its exit code through. The Nx target would not: Nx reports every
+ * failure as 1. Only PATH and DATABASE_URL are set.
+ */
 function verifyChain(databaseUrl: string, ...args: string[]): Promise<CliRun> {
   return new Promise((resolve) => {
     execFile(

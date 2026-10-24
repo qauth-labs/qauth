@@ -232,8 +232,12 @@ credentials:
 
 ```bash
 DATABASE_URL=postgresql://qauth:pw@db:5432/qauth \
-  pnpm nx run infra-db:events:verify-chain -- --realm=<realm name>
+  pnpm --dir libs/infra/db exec tsx src/scripts/verify-event-chain.ts --realm=<realm name>
 ```
+
+`pnpm nx run infra-db:events:verify-chain -- --realm=<realm name>` runs the same
+check, but Nx reports every failure as exit code `1` and prints lines of its
+own, so a monitor uses the command above.
 
 The command only reads, so run it as a database role that may read the
 `events` table, such as its owner; a role given only the event writer's grants

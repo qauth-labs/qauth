@@ -191,13 +191,16 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   through `emit` as well: the writer takes the realm's advisory transaction
   lock, and a unique index on `(realm_id, prev_hash)` keeps a writer that raced
   it from forking the chain. `verifyChain(realmId, from?)` and the command
-  `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` report the first
+  `pnpm --dir libs/infra/db exec tsx src/scripts/verify-event-chain.ts --realm=<name>`
+  report the first
   admin event that was changed, or that follows one that was removed; run from
   a head kept outside the database, they also fail when the chain was cut back
   to before that head. The command exits 0 when the chain verifies, 1 when it
   breaks, 2 on a usage error and 3 when the check could not run, such as with
   the database unreachable or the realm not found, so a monitor does not report
-  an outage as a tampered chain ([#827]). A second trigger refuses an admin row that does not
+  an outage as a tampered chain ([#827]). The Nx target
+  `infra-db:events:verify-chain` runs the same script, but Nx reports every
+  failure as 1. A second trigger refuses an admin row that does not
   follow the realm's head or sets its own `seq`. A trigger now refuses every
   `UPDATE` on `events`, the owner's included. The migration adds two nullable columns, checks, two indexes and the
   trigger; the check that admin rows are chained is added `NOT VALID`, so rows
