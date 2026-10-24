@@ -28,7 +28,17 @@ import type { ConfigKey } from './types';
 const OTLP_LOGS_VARIABLE =
   'A standard OTLP exporter variable of the logs signal (#541): it sets where and how the OpenTelemetry export sends its copy of an event. Every event, admin events included, is stored and chained whatever it says.';
 
+/**
+ * A setting of the delivery role's retry schedule (#460): how often and how
+ * long a delivery is tried, never whether an event is stored or delivered.
+ */
+const EVENT_DELIVERY_SCHEDULE =
+  'Sets how many times and how often the delivery role retries an event delivery (#460). Every event, admin events included, is stored and chained whatever it says, and a delivery that runs out of attempts stays in the queue as failed.';
+
 const ALLOWED: Readonly<Record<string, string>> = {
+  EVENT_DELIVERY_MAX_ATTEMPTS: EVENT_DELIVERY_SCHEDULE,
+  EVENT_DELIVERY_RETRY_INITIAL_DELAY: EVENT_DELIVERY_SCHEDULE,
+  EVENT_DELIVERY_RETRY_MAX_DELAY: EVENT_DELIVERY_SCHEDULE,
   LOG_LEVEL:
     "The lowest level of the server's own process log. Events are not written to that log, and no level stops one.",
   LOG_PRETTY:
