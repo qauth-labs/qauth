@@ -1,0 +1,6 @@
+# Commits that only reformat files, for `git blame` to skip. Locally:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# A rebase changes a listed commit's hash; update its line when that happens.
+
+# style: format with Oxfmt (the one-time reformat when Oxfmt replaced Prettier)
+965e3dfb1e278e275c27a370796df3b5b2efe481
