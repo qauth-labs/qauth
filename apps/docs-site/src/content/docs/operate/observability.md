@@ -221,6 +221,12 @@ scrape_configs:
       - targets: ['auth-server:3000']
 ```
 
+`/metrics` answers only on a realm's host or endpoint host, like every route
+but `/health`; any other host gets `421 Misdirected Request`. The target above
+works because the Compose file lists `auth-server` in
+`DEFAULT_REALM_ENDPOINT_HOSTS`. A scraper that reaches the server by another
+name, or by a pod address, needs that name or address in the list.
+
 ## Background Jobs
 
 The auth server runs periodic jobs in its own process

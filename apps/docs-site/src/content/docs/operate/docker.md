@@ -726,7 +726,11 @@ This Docker setup is designed for **local development**. For production:
    `421 Misdirected Request`, and only `/health` answers on every host. Keep
    the client's `Host` header (nginx: `proxy_set_header Host $host;`), or send
    it as `X-Forwarded-Host` from an address listed in `TRUST_PROXY`; from any
-   other address that header is ignored. An endpoint host answers the API
+   other address that header is ignored. A proxy listed in `TRUST_PROXY` must
+   set `X-Forwarded-Host` itself or remove it (nginx:
+   `proxy_set_header X-Forwarded-Host $host;`), because the auth-server
+   believes the value it forwards, and one passed through from the client
+   would let the client pick the realm. An endpoint host answers the API
    routes only: the sign-in pages, `/oauth/authorize` and `/consents` answer
    421 there.
 5. **Configure resource limits** in Docker/Kubernetes. `docker-compose.yml`
