@@ -189,10 +189,15 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
     expect(text).not.toMatch(/22P02|23503|invalid input syntax for type uuid|foreign key/i);
   }
 
-  /** The failure audit rows userinfo wrote, oldest first. */
-  async function userinfoFailureAudits(app: FastifyInstance) {
-    const result = await app.dbPool.query<{ user_id: string | null; metadata: unknown }>(
-      `SELECT user_id, metadata FROM audit_logs WHERE event = 'oauth.userinfo.failure' ORDER BY created_at`
+  /** The failure events userinfo recorded, oldest first. */
+  async function userinfoFailureEvents(app: FastifyInstance) {
+    const result = await app.dbPool.query<{
+      subject_id: string | null;
+      client_id: string | null;
+      data: unknown;
+    }>(
+      `SELECT subject_id, client_id, data FROM events
+       WHERE type = 'urn:qauth:event:userinfo.request_failed:v1-rc.0' ORDER BY seq`
     );
     return result.rows;
   }
@@ -210,12 +215,14 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
       expectInvalidToken(postBody);
       expectNoDatabaseError(log);
 
-      // Each refusal is audited, with no user attributed to it.
-      const audits = await userinfoFailureAudits(app);
-      expect(audits).toHaveLength(3);
-      for (const audit of audits) {
-        expect(audit.user_id).toBeNull();
-        expect(audit.metadata).toMatchObject({ tokenSub: clientId });
+      // Each refusal is an event with no user as its subject; the machine
+      // token's subject is its own client, which the event names.
+      const events = await userinfoFailureEvents(app);
+      expect(events).toHaveLength(3);
+      for (const event of events) {
+        expect(event.subject_id).toBeNull();
+        expect(event.client_id).toBe(clientId);
+        expect(event.data).toEqual({ error: 'invalid_token', reason: 'subject_not_a_user' });
       }
     });
   }, 120_000);
@@ -233,9 +240,9 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
       expectInvalidToken(postBody);
       expectNoDatabaseError(log);
 
-      const audits = await userinfoFailureAudits(app);
-      expect(audits).toHaveLength(3);
-      for (const audit of audits) expect(audit.user_id).toBeNull();
+      const events = await userinfoFailureEvents(app);
+      expect(events).toHaveLength(3);
+      for (const event of events) expect(event.subject_id).toBeNull();
     });
   }, 120_000);
 
@@ -270,7 +277,7 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
         expect(response.json()).toEqual({ sub: userId, email, email_verified: true });
       }
       expectNoDatabaseError(log);
-      expect(await userinfoFailureAudits(app)).toEqual([]);
+      expect(await userinfoFailureEvents(app)).toEqual([]);
     });
   }, 120_000);
 
@@ -278,7 +285,8 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
    * `/auth/logout` had the same failure audit: it wrote the token's `sub` into
    * `audit_logs.user_id` before knowing a user owned it. A first-party token
    * outlives a deleted account, and its logout then failed the insert with
-   * 23503 and answered 500 instead of the refusal.
+   * 23503 and answered 500 instead of the refusal. The event that replaced
+   * the row has no foreign key, and names only a user the lookup confirmed.
    */
   it("answers 401 invalid_token at /auth/logout, without a database error, once the token's user is deleted", async () => {
     await withDeployment(async (app, log) => {
@@ -302,12 +310,10 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
 
       expectInvalidToken(logout);
       expectNoDatabaseError(log);
-      const audits = await app.dbPool.query<{ user_id: string | null; metadata: unknown }>(
-        `SELECT user_id, metadata FROM audit_logs WHERE event = 'user.logout.failure'`
+      const events = await app.dbPool.query<{ subject_id: string | null }>(
+        `SELECT subject_id FROM events WHERE type = 'urn:qauth:event:user.sign_out_failed:v1-rc.0'`
       );
-      expect(audits.rows).toEqual([
-        { user_id: null, metadata: expect.objectContaining({ tokenSub: userId }) },
-      ]);
+      expect(events.rows).toEqual([{ subject_id: null }]);
     });
   }, 120_000);
 
