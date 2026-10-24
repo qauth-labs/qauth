@@ -254,7 +254,9 @@ jobs:
           # persisted. Both halves are passed: the plugin only derives the
           # public key when JWT_PUBLIC_KEY is absent, and that derivation path
           # cannot export SPKI from a private key, so a real deployment always
-          # supplies both (see .env.docker.example).
+          # supplies both (see .env.docker.example). The KEK is ephemeral too:
+          # a production boot imports these keys into the realm key store,
+          # sealed with it, and refuses to start without one (#485).
           jwt_private_key="$(openssl genpkey -algorithm ed25519)"
           jwt_public_key="$(printf '%s' "$jwt_private_key" | openssl pkey -pubout)"
           docker run -d \
@@ -271,6 +273,7 @@ jobs:
             -e JWT_PRIVATE_KEY="$jwt_private_key" \
             -e JWT_PUBLIC_KEY="$jwt_public_key" \
             -e JWT_ISSUER='http://localhost:3000' \
+            -e KEK="$(openssl rand -base64 32)" \
             -e SESSION_COOKIE_SECRET="$(openssl rand -base64 48)" \
             -e SESSION_COOKIE_SECURE=false \
             -e EMAIL_PROVIDER=mock \
@@ -456,6 +459,7 @@ jobs:
             -e JWT_PRIVATE_KEY="$jwt_private_key" \
             -e JWT_PUBLIC_KEY="$jwt_public_key" \
             -e JWT_ISSUER="$QAUTH_BASE_URL" \
+            -e KEK="$(openssl rand -base64 32)" \
             -e SESSION_COOKIE_SECRET="$(openssl rand -base64 48)" \
             -e SESSION_COOKIE_SECURE=false \
             -e EMAIL_PROVIDER=mock \
