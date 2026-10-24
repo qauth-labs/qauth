@@ -3,6 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./migrations": "./src/migrations.ts",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "migrations": [
+        "src/migrations.ts"
+      ]
+    }
+  },
   "dependencies": {
     "@node-rs/argon2": "catalog:",
     "@qauth-labs/shared-errors": "workspace:*",
