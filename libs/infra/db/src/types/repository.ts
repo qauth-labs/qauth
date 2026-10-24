@@ -1,7 +1,9 @@
 import type {
+  AdminApproval,
   EventCategory,
   EventDataOf,
   EventEnvelope,
+  JsonObject,
   RegisteredEventType,
 } from '@qauth-labs/shared-events';
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
@@ -1130,7 +1132,94 @@ export interface EventPage {
 export interface EventsRepositoryOptions {
   /** The clock for an event's `time` and id, in epoch milliseconds. Defaults to `Date.now`. */
   now?: () => number;
+  /** Admin rows read per query while verifying the chain, a positive integer. Defaults to 500. */
+  verifyBatchSize?: number;
 }
+
+/**
+ * One admin change, as an admin operation records it with
+ * {@link EventsRepository.emitAdminEvent} (ADR-020 §3, issue #459). The
+ * repository builds the masked diff from `before` and `after` and writes one
+ * `admin.change_applied` event.
+ */
+export interface AdminEventInput {
+  /** The realm the operation changed: the chain the event joins. */
+  realm: string;
+  /**
+   * Who made the change: an admin (`user`), a service account (`client`), or
+   * an operator on the server host (`operator_cli`, with the operating-system
+   * user; see `operatorCliActor`). Required: an admin change always has one.
+   */
+  actor: NonNullable<EventEnvelope['actor']>;
+  /** The operation's id in the permission catalog, such as `realms.policies.write`. */
+  operation: string;
+  /** What the operation changed, such as `{ type: 'client', id: clientId }`. */
+  target: { type: string; id: string };
+  /** The target before the operation, or `null` when the operation created it. */
+  before: JsonObject | null;
+  /** The target after the operation, or `null` when the operation deleted it. */
+  after: JsonObject | null;
+  /**
+   * Fields the operation marks secret, by path inside the target (`smtp.password`,
+   * `webhooks.*.secret`). A field whose name looks like a secret is masked
+   * without a mark.
+   */
+  secretFields?: readonly string[];
+  /** The approvals the operation ran on, both of a two-admin operation. */
+  approvals?: readonly AdminApproval[];
+  /** The OAuth client the request came through, when there was one. */
+  client?: EventEnvelope['client'];
+  /** The HTTP request, when there was one. */
+  request?: EventEnvelope['request'];
+}
+
+/**
+ * A point of a realm's admin chain: an admin row's `seq` and its `hash`, in
+ * lowercase hex. {@link EventsRepository.verifyChain} starts after one.
+ */
+export interface EventChainPoint {
+  seq: bigint;
+  hash: string;
+}
+
+/** Why {@link EventsRepository.verifyChain} stopped at a row. */
+export type EventChainBreakReason =
+  /**
+   * The row's `prev_hash` is not the `hash` of the admin row before it (or of
+   * the point verified from): a row before it was removed, or changed and
+   * given a new hash.
+   */
+  | 'prev_hash_mismatch'
+  /** The row's envelope does not hash to its `hash`: the row was changed. */
+  | 'hash_mismatch'
+  /** The row cannot be read back into an envelope that hashes. */
+  | 'unreadable_row';
+
+/** The result of {@link EventsRepository.verifyChain}. */
+export type EventChainReport =
+  | {
+      ok: true;
+      realmId: string;
+      /** The point the chain was verified from. */
+      from: EventChainPoint;
+      /** How many admin rows were checked. */
+      rowsChecked: number;
+      /**
+       * The newest admin row, with its event id, or `null` when no admin row
+       * follows `from`. Kept outside the database, it is the point a later
+       * verification starts from, and it shows the newest rows cut.
+       */
+      head: (EventChainPoint & { id: string }) | null;
+    }
+  | {
+      ok: false;
+      realmId: string;
+      from: EventChainPoint;
+      /** How many admin rows verified before the break. */
+      rowsChecked: number;
+      /** The first admin row that does not verify. */
+      break: { id: string; seq: bigint; reason: EventChainBreakReason };
+    };
 
 /**
  * The event store (ADR-019 Decision 8, ADR-018 §3, issue #457): the
@@ -1168,7 +1257,19 @@ export interface EventsRepository {
    * fails.
    *
    * The insert returns nothing, so a role granted only `INSERT` on `events`
-   * can write.
+   * can write a user event.
+   *
+   * An event of an `admin` type joins the realm's admin chain: the call takes
+   * the realm's chain lock (`pg_advisory_xact_lock`) until the transaction
+   * ends, reads the chain head, and stores `prev_hash` and `hash` with the
+   * row, then reads the row back and throws if it does not hash as written,
+   * so a row the chain would reject never commits. That needs `SELECT` as
+   * well as `INSERT`. Because the lock lasts to the end of the transaction,
+   * emit an admin event last; a transaction that writes admin events to
+   * several realms writes them in a fixed order (by realm id), or two such
+   * transactions can deadlock. Under REPEATABLE READ or SERIALIZABLE, an
+   * admin event that raced another fails on `idx_events_chain_link` (23505)
+   * instead of forking the chain; retry the transaction.
    *
    * @returns the event id, a UUIDv7
    * @throws {EventValidationError} on an unknown type, a payload that fails
@@ -1188,6 +1289,43 @@ export interface EventsRepository {
    * @throws {EventValidationError} as {@link emit} does
    */
   emitInOwnTransaction<Type extends RegisteredEventType>(event: EmitEvent<Type>): Promise<string>;
+
+  /**
+   * Record one admin change as an `admin.change_applied` event (ADR-020 §3,
+   * issue #459), in the caller's transaction, so it commits or rolls back with
+   * the change. Every admin operation calls it, the command-line tools on the
+   * server host included; nothing turns it off.
+   *
+   * It builds the diff from `before` and `after` (`buildAdminDiff`): changed
+   * fields only, nested objects diffed, arrays whole, every secret field
+   * `***`. The event then joins the realm's admin chain as {@link emit}
+   * writes any admin event.
+   *
+   * @returns the event id, a UUIDv7
+   * @throws {TypeError} on a target that is not plain JSON, or a secret field
+   *   mark with an empty segment
+   * @throws {EventValidationError} as {@link emit} does
+   */
+  emitAdminEvent(tx: DbTransaction, input: AdminEventInput): Promise<string>;
+
+  /**
+   * Check a realm's admin chain after a point, oldest row first, and report
+   * the first admin row that breaks it.
+   *
+   * Every admin row after `from`, in `seq` order, must carry the `hash` of the
+   * row before it (the point's hash, for the first) as `prev_hash`, and its
+   * envelope must hash to its own `hash`. A changed row breaks the chain at
+   * that row; a removed one at the row after it. Reads run in one REPEATABLE
+   * READ transaction, so a concurrent write cannot produce a false break.
+   *
+   * @param realmId - the realm whose chain to check
+   * @param from - where to start: the head an earlier verification returned,
+   *   or the anchor retention left (#536). Defaults to the chain's start,
+   *   `seq` 0 and 32 zero bytes.
+   * @throws {TypeError} on a realm id that is not a UUID, or a point whose
+   *   hash is not 64 hex digits
+   */
+  verifyChain(realmId: string, from?: EventChainPoint): Promise<EventChainReport>;
 
   /**
    * Read a realm's events after a position, oldest first, in `(xid, seq)`
