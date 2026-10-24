@@ -5,6 +5,18 @@
   "projectType": "application",
   "tags": ["scope:migration-runner"],
   "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default", "^default", { "externalDependencies": ["@typescript/native-preview"] }],
+      "options": {
+        "command": "tsgo -p tsconfig.app.json --noEmit",
+        "cwd": "apps/migration-runner"
+      },
+      "metadata": {
+        "description": "Declared here for the same reason as auth-server's: @nx/js/typescript (Nx 24) infers no `typecheck` target for a project whose @nx/esbuild build type-checks it. Same command shape, inputs and compiler (tsgo) as the inferred targets."
+      }
+    },
     "build": {
       "executor": "@nx/esbuild:esbuild",
       "outputs": ["{options.outputPath}"],
