@@ -335,6 +335,10 @@ services:
       OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE:
       OTEL_EXPORTER_OTLP_CLIENT_KEY:
       OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY:
+      # The event delivery role's retry schedule (#460).
+      EVENT_DELIVERY_MAX_ATTEMPTS:
+      EVENT_DELIVERY_RETRY_INITIAL_DELAY:
+      EVENT_DELIVERY_RETRY_MAX_DELAY:
 
       # OID4VP subject binding (#308) — required once the wallet flag is on
       OID4VP_SUBJECT_RESOLUTION:

@@ -14,6 +14,7 @@ const LAST_VERIFIED = '2026-10-24';
 const OWNER_HEADINGS: Readonly<Record<KeyOwner, string>> = {
   server: 'Server',
   observability: 'Logs and metrics',
+  events: 'Event delivery',
   storage: 'Database and Redis',
   realms: 'Realms',
   tokens: 'Tokens',
