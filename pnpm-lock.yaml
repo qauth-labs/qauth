@@ -491,6 +491,9 @@ importers:
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../libs/shared/errors
+      '@qauth-labs/shared-stability':
+        specifier: workspace:*
+        version: link:../../libs/shared/stability
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../libs/shared/validation
@@ -1128,6 +1131,12 @@ importers:
       tsx:
         specifier: 'catalog:'
         version: 4.23.15
+
+  libs/shared/stability:
+    dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
 
   libs/shared/test-vectors:
     dependencies:
