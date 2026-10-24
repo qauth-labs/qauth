@@ -364,5 +364,11 @@
         "no-unused-private-class-members": "off"
       }
     }
-  ]
+  ],
+  // ESLint's default since v9: a disable comment that suppresses nothing is a
+  // warning, so a stale one shows up instead of waiting to hide a future
+  // finding.
+  "options": {
+    "reportUnusedDisableDirectives": "warn"
+  }
 }
