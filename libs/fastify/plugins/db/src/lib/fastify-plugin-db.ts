@@ -6,6 +6,7 @@ import {
   createAuthorizationCodesRepository,
   createDatabase,
   createEmailVerificationTokensRepository,
+  createEventDeliveriesRepository,
   createEventsRepository,
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
@@ -18,6 +19,7 @@ import {
   type Database,
   type DatabasePool,
   type EmailVerificationTokensRepository,
+  type EventDeliveriesRepository,
   type EventsRepository,
   OAuthClientsRepository,
   type OAuthConsentsRepository,
@@ -63,6 +65,13 @@ declare module 'fastify' {
        * and `readAfter(realmId, position, limit)` for a realm's stream.
        */
       events: EventsRepository;
+      /**
+       * The delivery role's queue (ADR-019 Decision 8, #460), for the readers
+       * of its state: `minOffered(realmId)` for the retention job (#536) and
+       * `listForEvent(eventId)` for the delivery history. The role itself
+       * builds its own on the database it connects to.
+       */
+      eventDeliveries: EventDeliveriesRepository;
     };
   }
 }
@@ -109,6 +118,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       userAttributes: createUserAttributesRepository(database.db),
       oid4vpRequestStates: createOid4vpRequestStatesRepository(database.db),
       events: createEventsRepository(database.db, { telemetry: options.eventTelemetry }),
+      eventDeliveries: createEventDeliveriesRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {

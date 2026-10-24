@@ -46,6 +46,7 @@
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
         "libs/fastify/plugins/signer/*",
+        "libs/fastify/plugins/event-delivery/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*"
       ]
@@ -78,6 +79,7 @@
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
         "libs/fastify/plugins/signer/*",
+        "libs/fastify/plugins/event-delivery/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*"
       ],
