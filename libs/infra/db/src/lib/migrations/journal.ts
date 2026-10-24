@@ -29,11 +29,19 @@ export interface MigrationEntry {
  */
 export const QAUTH_MIGRATIONS_FOLDER = path.resolve(__dirname, '../../../drizzle');
 
+/** A migrations folder whose journal cannot be read. */
+export class MigrationJournalError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'MigrationJournalError';
+  }
+}
+
 /**
  * Read the migrations a folder holds, oldest first.
  *
- * @throws Error when the journal is missing or malformed. Drizzle's migrator
- *   would refuse the same folder.
+ * @throws MigrationJournalError when the journal is missing or malformed.
+ *   Drizzle's migrator would refuse the same folder.
  */
 export function readMigrationJournal(
   migrationsFolder: string = QAUTH_MIGRATIONS_FOLDER
@@ -43,16 +51,21 @@ export function readMigrationJournal(
   try {
     journal = JSON.parse(readFileSync(journalPath, 'utf8'));
   } catch (error) {
-    throw new Error(`Cannot read the migration journal ${journalPath}`, { cause: error });
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new MigrationJournalError(`Cannot read the migration journal ${journalPath}: ${reason}`, {
+      cause: error,
+    });
   }
   const entries = (journal as { entries?: unknown } | null)?.entries;
   if (!Array.isArray(entries)) {
-    throw new Error(`The migration journal ${journalPath} has no entries list`);
+    throw new MigrationJournalError(`The migration journal ${journalPath} has no entries list`);
   }
   return entries.map((entry: unknown, index) => {
     const { tag, when } = (entry ?? {}) as { tag?: unknown; when?: unknown };
     if (typeof tag !== 'string' || tag === '' || typeof when !== 'number') {
-      throw new Error(`Entry ${index} of the migration journal ${journalPath} has no tag or time`);
+      throw new MigrationJournalError(
+        `Entry ${index} of the migration journal ${journalPath} has no tag or time`
+      );
     }
     return { tag, when };
   });

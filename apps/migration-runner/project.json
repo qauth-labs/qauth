@@ -1,0 +1,54 @@
+{
+  "name": "migration-runner",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/migration-runner/src",
+  "projectType": "application",
+  "tags": ["scope:migration-runner"],
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "platform": "node",
+        "outputPath": "dist/apps/migration-runner",
+        "format": ["cjs"],
+        "bundle": true,
+        "thirdParty": true,
+        "main": "apps/migration-runner/src/main.ts",
+        "tsConfig": "apps/migration-runner/tsconfig.app.json",
+        "external": ["pg-native"],
+        "assets": [{ "input": "libs/infra/db/drizzle", "glob": "**/*", "output": "drizzle" }],
+        "skipTypeCheck": true,
+        "esbuildOptions": {
+          "sourcemap": false,
+          "outExtension": {
+            ".js": ".js"
+          }
+        }
+      },
+      "metadata": {
+        "description": "Bundle the migration runner (#474) into dist/apps/migration-runner: one main.js holding the program, pg and drizzle-orm, beside a copy of the generated migrations in drizzle/. The image runs it with Node alone, so it needs no pnpm, nx, tsx or drizzle-kit. `pg-native` stays out: pg loads it only when asked to. Type errors are the `typecheck` target's to find."
+      }
+    },
+    "migrate": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "cache": false,
+      "options": {
+        "command": "node dist/apps/migration-runner/main.js",
+        "cwd": "{workspaceRoot}",
+        "forwardAllArgs": true
+      },
+      "description": "Build the migration runner and run it against DATABASE_URL, from a checkout: `pnpm nx run migration-runner:migrate`, or `-- --check` to report pending migrations and change nothing. Nx reports every failure as exit 1; run `node dist/apps/migration-runner/main.js` for the runner's own exit codes."
+    },
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts apps/migration-runner",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run the built migration runner against testcontainers Postgres (#474): a fresh database, a second run, two runners at once and --check. Requires a running Docker daemon."
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@qauth-labs/migration-runner",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@qauth-labs/infra-db": "workspace:*"
+  },
+  "devDependencies": {
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@types/pg": "catalog:",
+    "pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

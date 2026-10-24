@@ -4,7 +4,12 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { type MigrationEntry, QAUTH_MIGRATIONS_FOLDER, readMigrationJournal } from './journal';
+import {
+  type MigrationEntry,
+  MigrationJournalError,
+  QAUTH_MIGRATIONS_FOLDER,
+  readMigrationJournal,
+} from './journal';
 import { describeDatabaseError } from './runner';
 import {
   describePending,
@@ -83,7 +88,8 @@ describe('readMigrationJournal', () => {
   it('refuses a folder with no journal, naming the file', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'qauth-journal-'));
     folder = dir;
-    expect(() => readMigrationJournal(dir)).toThrow(/meta\/_journal\.json/);
+    expect(() => readMigrationJournal(dir)).toThrow(MigrationJournalError);
+    expect(() => readMigrationJournal(dir)).toThrow(/meta\/_journal\.json: ENOENT/);
   });
 
   it('refuses a journal with no entries list or an entry with no tag', () => {
