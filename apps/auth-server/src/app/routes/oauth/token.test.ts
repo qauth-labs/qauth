@@ -20,7 +20,13 @@ import {
   type JWK,
   SignJWT,
 } from 'jose';
-import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
@@ -90,7 +96,22 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
 });
 
 import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
+import { emitUserEvent, userEventFor } from '../../helpers/user-events';
 import tokenRoute from './token';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
+const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
+
+/** The `data` of every event of the given type the route emitted. */
+function emittedData(type: string): unknown[] {
+  return emitUserEventMock.mock.calls.filter(([, t]) => t === type).map(([, , data]) => data);
+}
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 afterEach(() => {
   resetMockEnv();
@@ -201,9 +222,6 @@ function createFastifyStub() {
         // Deny-by-default: no stored consent means no refresh token on the
         // authorization_code grant, so those tests opt IN by overriding this.
         findActive: vi.fn().mockResolvedValue(undefined),
-      },
-      auditLogs: {
-        create: vi.fn(),
       },
     },
     passwordHasher: {
@@ -1028,18 +1046,18 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
       // No subject user (machine token) and no delegation chain, but the agent
       // and its effective scope mode are attributed for the agent-activity view.
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'oauth.token.exchange.success',
-          success: true,
-          userId: null,
-          actorClientId: 'cc-agent',
-          scopeMode: 'exec',
-        })
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        TOKEN_ISSUED,
+        expect.objectContaining({ grantType: 'client_credentials', scopeMode: 'exec' }),
+        expect.objectContaining({ clientId: 'cc-agent', actor: 'client' })
       );
+      const options = emitUserEventMock.mock.calls[0][3];
+      expect(options?.userId).toBeUndefined();
+      expect(options?.act).toBeUndefined();
     });
 
-    it('per-agent audit (#186): client_credentials success persists no secret/token material', async () => {
+    it('per-agent audit (#186): client_credentials success records no secret/token material', async () => {
       const { fastify, ctx } = createFastifyStub();
       await tokenRoute(fastify);
       const handler = ctx.handler;
@@ -1064,16 +1082,14 @@ describe('POST /oauth/token route — client_credentials grant', () => {
         createReply()
       );
 
-      const successCall = (
-        fastify.repositories.auditLogs.create as unknown as Mock
-      ).mock.calls.find(([arg]) => arg?.event === 'oauth.token.exchange.success');
+      const successCall = emitUserEventMock.mock.calls.find(([, type]) => type === TOKEN_ISSUED);
       expect(successCall).toBeDefined();
-      const serialized = JSON.stringify(successCall?.[0]);
+      const serialized = JSON.stringify(successCall?.slice(2));
       expect(serialized).not.toContain('cc-super-secret');
       expect(serialized).not.toContain('cc-access.jwt');
     });
 
-    it('per-agent audit (#186): NON-agent client_credentials success records no agent attribution', async () => {
+    it('per-agent audit (#186): NON-agent client_credentials success records no scope mode', async () => {
       const { fastify, ctx } = createFastifyStub();
       await tokenRoute(fastify);
       const handler = ctx.handler;
@@ -1108,12 +1124,17 @@ describe('POST /oauth/token route — client_credentials grant', () => {
         createReply()
       );
 
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'oauth.token.exchange.success',
-          actorClientId: null,
-          scopeMode: null,
-        })
+      // The client is the actor, as on every token request; no scope mode.
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        TOKEN_ISSUED,
+        {
+          grantType: 'client_credentials',
+          scopes: ['read:foo'],
+          audience: ['plain-machine'],
+          expiresIn: 900,
+        },
+        expect.objectContaining({ clientId: 'plain-machine', actor: 'client' })
       );
     });
 
@@ -1842,6 +1863,26 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(fastify.db.transaction).toHaveBeenCalledTimes(1);
     expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id, tx);
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(expect.anything(), tx);
+    // The token.issued event commits with the redemption, or neither does.
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
+      {
+        grantType: 'authorization_code',
+        scopes: ['read:foo'],
+        audience: ['https://api.example.com'],
+        expiresIn: 900,
+        refreshFamilyId: expect.any(String),
+      },
+      expect.objectContaining({
+        tx,
+        realmId: 'realm-1',
+        userId: 'user-uuid-1',
+        clientId: 'test-client-1',
+        actor: 'client',
+      })
+    );
   });
 
   it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
@@ -1862,6 +1903,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
   });
 
   it('rejects when PKCE verification fails', async () => {
@@ -1894,10 +1936,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
     // The code is still burned, so the exchange cannot be retried.
     expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: { error: 'invalid_grant: user_disabled' },
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: 'authorization_code', error: 'invalid_grant', reason: 'user_disabled' },
+      expect.objectContaining({ userId: 'user-uuid-1', clientId: 'test-client-1' })
     );
   });
 
@@ -1922,12 +1965,15 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidScopeError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          error: 'invalid_scope: code scope exceeds the agent scope mode',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: 'authorization_code',
+        error: 'invalid_scope',
+        reason: 'scope_exceeds_agent_mode',
+      },
+      expect.objectContaining({ userId: 'user-uuid-1' })
     );
     // The code is burned all the same: a client cannot narrow a code, so it
     // goes back through /oauth/authorize.
@@ -2037,6 +2083,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 describe('POST /oauth/token route — refresh_token grant', () => {
   const REFRESH_TOKEN_HEX = 'a'.repeat(64);
   const OTHER_REFRESH_HEX = 'b'.repeat(64);
+  /** A refresh family id: a UUID, as the store makes it and the event carries it. */
+  const REFRESH_FAMILY_ID = '0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b';
 
   function setupRefreshStub() {
     const { fastify, ctx } = createFastifyStub();
@@ -2089,7 +2137,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       id: 'token-uuid-rt-1',
       userId: user.id,
       oauthClientId: confidentialClient.id,
-      familyId: 'family-uuid-1',
+      familyId: REFRESH_FAMILY_ID,
       scopes: ['read:foo', 'write:foo'],
       expiresAt: Date.now() + 60_000,
       revoked: false,
@@ -2128,6 +2176,10 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     (
       fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
     ).mockResolvedValue(storedToken);
+    const tx = { tx: 'rotation' };
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => cb(tx)
+    );
 
     await tokenRoute(fastify);
     const handler = ctx.handler;
@@ -2176,6 +2228,27 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       token_type: 'Bearer',
       scope: 'read:foo write:foo',
     });
+    // The token.issued event commits with the rotation, in its transaction,
+    // and names the family, never a token.
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
+      {
+        grantType: 'refresh_token',
+        scopes: ['read:foo', 'write:foo'],
+        audience: ['https://api.example.com'],
+        expiresIn: 900,
+        refreshFamilyId: REFRESH_FAMILY_ID,
+      },
+      expect.objectContaining({
+        tx,
+        realmId: 'realm-1',
+        userId: user.id,
+        clientId: confidentialClient.clientId,
+        actor: 'client',
+      })
+    );
   });
 
   it('carries the email claims on rotation only under the email scope (ANT-2026-2O0T72HY)', async () => {
@@ -2315,11 +2388,13 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       storedToken.familyId,
       'replay_detected'
     );
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventType: 'security',
-        metadata: expect.objectContaining({ detection: 'lost_rotation_race' }),
-      })
+    // The lost race is the replay it is: no token.issued, one refusal.
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_replay' },
+      expect.objectContaining({ userId: storedToken.userId, clientId: 'confidential-client' })
     );
   });
 
@@ -2347,12 +2422,15 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          error: 'invalid_scope: refreshed scope exceeds what the client may hold',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: 'refresh_token',
+        error: 'invalid_scope',
+        reason: 'scope_not_allowed_for_client',
+      },
+      expect.objectContaining({ userId: 'user-uuid-rt' })
     );
   });
 
@@ -2379,13 +2457,15 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          error: 'invalid_scope: refreshed scope exceeds what the client may hold',
-          allowedScopes: ['read:foo'],
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: 'refresh_token',
+        error: 'invalid_scope',
+        reason: 'scope_not_allowed_for_client',
+      },
+      expect.objectContaining({ userId: 'user-uuid-rt' })
     );
   });
 
@@ -2866,12 +2946,11 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidRequestError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          error: 'invalid_request: subject_token has been revoked',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: GRANT, error: 'invalid_request', reason: 'subject_token_revoked' },
+      expect.objectContaining({ clientId: AGENT_CLIENT_ID, actor: 'client' })
     );
   });
 
@@ -2900,6 +2979,13 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow('redis down');
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    // The catch-all records the OAuth code the error stands for, never its message.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: GRANT, error: 'server_error' },
+      expect.objectContaining({ realmId: 'realm-1', clientId: AGENT_CLIENT_ID, actor: 'client' })
+    );
   });
 
   it('mints a delegated token: sub=user, act.sub=agent, preserved scope+aud', async () => {
@@ -3010,7 +3096,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
-  it('per-agent audit (#186): success row carries actor + subject + act chain + scope mode', async () => {
+  it('per-agent audit (#186): the event carries actor + subject + act chain + scope mode', async () => {
     // Agent capped at exec, subject token grants agent:exec; on-behalf-of of the
     // end-user with a prior actor already in the chain.
     const { fastify, ctx, client, user } = setupExchangeStub({
@@ -3021,33 +3107,44 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     await invoke(fastify, ctx, exchangeRequest());
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
       expect.objectContaining({
-        event: 'oauth.token.exchange.success',
-        eventType: 'token',
-        success: true,
-        // Subject = the end-user the agent acted on behalf of.
-        userId: user.id,
-        // Actor = the authenticated agent's client_id (denormalized, queryable).
-        actorClientId: client.clientId,
-        // Flattened RFC 8693 `act` chain: outermost (this agent) first.
-        delegationChain: [client.clientId, 'prior-agent'],
+        grantType: GRANT,
+        scopes: ['read:docs', 'agent:exec'],
+        issuedTokenType: ACCESS_TOKEN_TYPE,
+        delegationDepth: 2,
         // Highest agent scope mode present in the granted set.
         scopeMode: 'exec',
+      }),
+      expect.objectContaining({
+        // Subject = the end-user the agent acted on behalf of.
+        userId: user.id,
+        clientId: client.clientId,
+        // The minted token's RFC 8693 `act` claim.
+        act: { sub: client.clientId, act: { sub: 'prior-agent' } },
       })
     );
+    // Actor = the authenticated agent, with the flattened `act` chain:
+    // outermost (this agent) first.
+    const call = emitUserEventMock.mock.calls.find(([, type]) => type === TOKEN_ISSUED);
+    if (!call) throw new Error('no token.issued event');
+    expect(userEventFor(call[0], call[1], call[2], call[3] ?? {}, 'realm-1').actor).toEqual({
+      type: 'client',
+      id: client.clientId,
+      delegationChain: [client.clientId, 'prior-agent'],
+    });
   });
 
-  it('per-agent audit (#186): never persists token/secret material in audit fields', async () => {
+  it('per-agent audit (#186): never records token/secret material in its event', async () => {
     const { fastify, ctx } = setupExchangeStub({ subjectScope: 'read:docs' });
 
     await invoke(fastify, ctx, exchangeRequest({ client_secret: 'super-secret' }));
 
-    const successCall = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.find(
-      ([arg]) => arg?.event === 'oauth.token.exchange.success'
-    );
+    const successCall = emitUserEventMock.mock.calls.find(([, type]) => type === TOKEN_ISSUED);
     expect(successCall).toBeDefined();
-    const serialized = JSON.stringify(successCall?.[0]);
+    const serialized = JSON.stringify(successCall?.slice(2));
     // No subject/actor token, no client secret, no raw delegated token.
     expect(serialized).not.toContain('subject.jwt.token');
     expect(serialized).not.toContain('super-secret');
@@ -3165,18 +3262,15 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: null,
-        event: 'oauth.token.exchange.failure',
-        metadata: expect.objectContaining({
-          error: 'invalid_request: subject_token has no user subject',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: GRANT, error: 'invalid_request', reason: 'subject_not_a_user' },
+      expect.objectContaining({ userId: null })
     );
   });
 
-  it('accepts and verifies an actor_token, recording the actor subject in audit', async () => {
+  it('accepts and verifies an actor_token; the event names the agent as the actor', async () => {
     const { fastify, ctx } = setupExchangeStub();
     // Subject + actor tokens both verify; actor identity in `act` is still the
     // authenticated agent's client_id, not the actor token's self-declaration.
@@ -3208,17 +3302,16 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({ act: { sub: 'agent-client' } })
     );
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'oauth.token.exchange.success',
-        success: true,
-        metadata: expect.objectContaining({
-          grantType: 'token-exchange',
-          actor: 'agent-client',
-          hasActorToken: true,
-          actorTokenSubject: 'actor-service',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
+      expect.objectContaining({ grantType: GRANT, delegationDepth: 1 }),
+      expect.objectContaining({ act: { sub: 'agent-client' } })
+    );
+    // The actor token's self-declared subject is not recorded: the actor is
+    // the authenticated agent.
+    expect(JSON.stringify(emitUserEventMock.mock.calls.map((call) => call.slice(2)))).not.toContain(
+      'actor-service'
     );
   });
 
@@ -3626,6 +3719,14 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     // Refused BEFORE client authentication, so nothing was looked up.
     expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    // No client is authenticated yet, so the event names none.
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: JWT_BEARER_GRANT, error: 'unsupported_grant_type', reason: 'id_jag_disabled' },
+      { actor: 'client' }
+    );
   });
 
   it('rejects every assertion when the trusted-issuer allowlist is EMPTY', async () => {
@@ -3740,6 +3841,11 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     );
     // The token was issued exactly once.
     expect((fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls).toHaveLength(1);
+    expect(emittedData(TOKEN_ISSUED)).toHaveLength(1);
+    // The validator's own reason code, behind the one opaque `invalid_grant`.
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: JWT_BEARER_GRANT, error: 'invalid_grant', reason: 'replayed' },
+    ]);
   });
 
   it('rejects an assertion with NO `resource` claim', async () => {
@@ -3784,14 +3890,15 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidTargetError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        metadata: expect.objectContaining({
-          error: 'invalid_target: assertion resource outside the client id_jag_targets',
-          allowedTargets: [],
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: JWT_BEARER_GRANT,
+        error: 'invalid_target',
+        reason: 'id_jag_target_not_allowed',
+      },
+      expect.objectContaining({ clientId: EMA_CLIENT_ID, actor: 'client' })
     );
   });
 
@@ -3938,31 +4045,36 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     expect(result['scope']).toBe('chat.read');
   });
 
-  it('audit-logs both the accept and the reject', async () => {
+  it('records both the accept and the reject as events', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
 
     const accepted = setupConsumeStub();
     await invoke(accepted.fastify, accepted.ctx, bearerRequest(await signIdJag(idpKey)));
-    expect(accepted.fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
       expect.objectContaining({
-        event: 'oauth.token.exchange.success',
-        success: true,
-        metadata: expect.objectContaining({ grantType: 'jwt-bearer', resource: MCP_SERVER }),
-      })
+        grantType: JWT_BEARER_GRANT,
+        resources: [MCP_SERVER],
+        idJagIssuer: IDP_ISSUER,
+        idJagId: expect.any(String),
+      }),
+      expect.objectContaining({ userId: 'user-uuid-enterprise', clientId: EMA_CLIENT_ID })
     );
 
+    emitUserEventMock.mockClear();
     const rejected = setupConsumeStub({ linked: false });
     await expect(
       invoke(rejected.fastify, rejected.ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidGrantError);
-    expect(rejected.fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'oauth.token.exchange.failure',
-        success: false,
-        metadata: expect.objectContaining({ grantType: 'jwt-bearer' }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: JWT_BEARER_GRANT, error: 'invalid_grant', reason: 'subject_not_linked' },
+      expect.objectContaining({ userId: null, clientId: EMA_CLIENT_ID })
     );
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
   });
 });
 
@@ -4177,9 +4289,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     const { fastify, ctx } = setupMintStub({ idJagTargets: [] });
 
     await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
-      expect.objectContaining({ success: true })
-    );
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
   });
 
   it('refuses targets listed only in the client `audience` (#434)', async () => {
@@ -4192,17 +4302,16 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     });
 
     await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
-      expect.objectContaining({ success: true })
-    );
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        metadata: expect.objectContaining({
-          error: 'invalid_target: ID-JAG target outside the client id_jag_targets',
-          outsidePolicy: [TARGET_AS, MCP_SERVER],
-        }),
-      })
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: TOKEN_EXCHANGE_GRANT,
+        error: 'invalid_target',
+        reason: 'id_jag_target_not_allowed',
+      },
+      expect.objectContaining({ userId: 'user-uuid-subject', clientId: AGENT_CLIENT_ID })
     );
   });
 
@@ -4256,21 +4365,18 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
   // subject token's scope unchecked, so an agent registered for `chat.read`
   // got a QAuth-signed `chat.read chat.history` at a foreign server.
   describe('GATE 4d — the agent registered scopes bound the assertion', () => {
-    function expectRefusedWithAudit(fastify: FastifyInstance, grantedScopes: string[]) {
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'oauth.token.exchange.failure',
-          success: false,
-          metadata: expect.objectContaining({
-            error: 'invalid_scope: ID-JAG scope outside the client scope allowlist',
-            grantedScopes,
-            allowedScopes: ['chat.read'],
-          }),
-        })
+    function expectRefusedWithEvent() {
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        TOKEN_REQUEST_FAILED,
+        {
+          grantType: TOKEN_EXCHANGE_GRANT,
+          error: 'invalid_scope',
+          reason: 'scope_not_allowed_for_client',
+        },
+        expect.objectContaining({ userId: 'user-uuid-subject', clientId: AGENT_CLIENT_ID })
       );
-      expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'oauth.token.exchange.success' })
-      );
+      expect(emittedData(TOKEN_ISSUED)).toEqual([]);
     }
 
     it('refuses a scope inherited from the subject token that the agent is not registered for', async () => {
@@ -4284,7 +4390,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
         message: 'invalid_scope',
         errorDescription: 'chat.history not permitted for this client',
       });
-      expectRefusedWithAudit(fastify, ['chat.read', 'chat.history']);
+      expectRefusedWithEvent();
     });
 
     it('refuses an explicitly requested scope outside the registered scopes', async () => {
@@ -4297,7 +4403,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       await expect(
         invoke(fastify, ctx, mintRequest({ scope: 'chat.history' }))
       ).rejects.toBeInstanceOf(InvalidScopeError);
-      expectRefusedWithAudit(fastify, ['chat.history']);
+      expectRefusedWithEvent();
     });
 
     it('denies a scoped assertion to an agent registered with no scopes', async () => {
@@ -4379,26 +4485,33 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(result['access_token']).toBe('delegated.jwt');
   });
 
-  it('audit-logs the mint with the assertion id, never the assertion itself', async () => {
+  it('records the mint with the assertion id, never the assertion itself', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
     const { fastify, ctx } = setupMintStub();
 
     const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
     const claims = decodeJwt(result['access_token'] as string);
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
       expect.objectContaining({
-        event: 'oauth.token.exchange.success',
-        metadata: expect.objectContaining({
-          issuedTokenType: ID_JAG_TOKEN_TYPE,
-          idJagId: claims.jti,
-          audience: TARGET_AS,
-          resource: MCP_SERVER,
-        }),
+        grantType: TOKEN_EXCHANGE_GRANT,
+        issuedTokenType: ID_JAG_TOKEN_TYPE,
+        delegationDepth: 1,
+        idJagId: claims.jti,
+        audience: [TARGET_AS],
+        resources: [MCP_SERVER],
+      }),
+      // The agent is the actor, through the chain the assertion derives from.
+      expect.objectContaining({
+        userId: 'user-uuid-subject',
+        clientId: AGENT_CLIENT_ID,
+        act: { sub: AGENT_CLIENT_ID },
       })
     );
-    const logged = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
-      .map((call) => JSON.stringify(call[0]))
+    const logged = emitUserEventMock.mock.calls
+      .map((call) => JSON.stringify(call.slice(2)))
       .join('');
     expect(logged).not.toContain(result['access_token']);
   });
@@ -4814,11 +4927,12 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
   });
 
   // Regression (ANT-2026-MW7I4DS4): the verifier's refusal reason, meant for
-  // the audit log, was rethrown with the error and rendered as
+  // the server side only, was rethrown with the error and rendered as
   // `error_description` — telling an unauthenticated caller which client_ids
   // are registered and how they authenticate, what a `jwks_uri` fetch found,
   // and the address an internal name resolves to when the SSRF guard blocks it.
-  it('keeps the reason an assertion was refused off the wire and in the audit log', async () => {
+  // The event records the refusal as a code, without that prose.
+  it('keeps the reason an assertion was refused off the wire and out of the event', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
     const handler = ctx.handler;
@@ -4837,13 +4951,18 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
 
     expect(error).toBeInstanceOf(InvalidClientError);
     expect((error as InvalidClientError).errorDescription).toBeUndefined();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          error: 'Client authentication failed',
-          reason: 'client is not registered for private_key_jwt',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: 'client_credentials',
+        error: 'invalid_client',
+        reason: 'client_authentication_failed',
+      },
+      expect.objectContaining({ realmId: 'realm-1', actor: 'client' })
+    );
+    expect(JSON.stringify(emitUserEventMock.mock.calls.map((call) => call.slice(2)))).not.toContain(
+      'private_key_jwt'
     );
   });
 
@@ -4869,10 +4988,23 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
     expect(error).toBeInstanceOf(InvalidClientError);
     expect((error as InvalidClientError).errorDescription).toBeUndefined();
     expect(JSON.stringify(error)).not.toContain('10.9.8.7');
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+    // Nor in the event, which is exported beyond the operator's logs.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      expect.objectContaining({ error: 'invalid_client', reason: 'client_authentication_failed' }),
+      expect.anything()
+    );
+    expect(JSON.stringify(emitUserEventMock.mock.calls.map((call) => call.slice(2)))).not.toContain(
+      '10.9.8.7'
+    );
+    // The operator's log keeps why, as the audit row did.
+    expect(fastify.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({
-        metadata: expect.objectContaining({ reason: expect.stringContaining('10.9.8.7') }),
-      })
+        grantType: 'client_credentials',
+        reason: expect.stringContaining('10.9.8.7'),
+      }),
+      'token endpoint: client authentication refused'
     );
   });
 

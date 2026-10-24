@@ -26,6 +26,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
@@ -105,7 +111,6 @@ async function buildApp(): Promise<FastifyInstance> {
         enabled: true,
       }),
     },
-    auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     // #229: userinfo resolves email claims from verified attributes.
     userAttributes: {
       findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([

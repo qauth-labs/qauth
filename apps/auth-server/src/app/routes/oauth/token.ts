@@ -18,7 +18,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
-import { actDepth, flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
+import { actDepth, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import { clientAddressKey } from '../../helpers/client-address';
 import {
   authenticateClientRequest,
@@ -51,6 +51,7 @@ import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { emitUserEvent, failureData, oauthErrorCode } from '../../helpers/user-events';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
@@ -67,6 +68,11 @@ import {
   type TokenExchangeResponse,
   type TokenExchangeTokenExchangeBody,
 } from '../../schemas/oauth';
+
+/** The event of a token request that issued tokens. */
+const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
+/** The event of a refused token request. */
+const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
 
 /**
  * POST /oauth/token
@@ -139,6 +145,10 @@ export default async function (fastify: FastifyInstance) {
         | TokenExchangeRefreshBody
         | TokenExchangeTokenExchangeBody
         | TokenExchangeJwtBearerBody;
+      // The realm and the authenticated client once known, for the event of
+      // the catch-all below.
+      let realmId: string | undefined;
+      let clientId: string | undefined;
 
       try {
         // ADR-011 MASTER GATE. With `ID_JAG_ENABLED` off the jwt-bearer grant
@@ -150,23 +160,21 @@ export default async function (fastify: FastifyInstance) {
         // Discovery does not advertise the grant when the flag is off, so this
         // answer leaks nothing a client could not already read there.
         if (body.grant_type === JWT_BEARER_GRANT_TYPE && !env.ID_JAG_ENABLED) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: null,
-            event: 'oauth.token.exchange.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              error: 'unsupported_grant_type: ID-JAG is not enabled',
+          await emitUserEvent(
+            request as FastifyRequest,
+            TOKEN_REQUEST_FAILED,
+            {
               grantType: body.grant_type,
+              error: 'unsupported_grant_type',
+              reason: 'id_jag_disabled',
             },
-          });
+            { actor: 'client' }
+          );
           throw new BadRequestError('unsupported_grant_type');
         }
 
         const realm = await getOrCreateDefaultRealm(fastify);
+        realmId = realm.id;
 
         // Authenticate the client. authorization_code (PKCE) and
         // refresh_token both support public clients
@@ -212,24 +220,27 @@ export default async function (fastify: FastifyInstance) {
             }
           );
         } catch (err) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: null,
-            event: 'oauth.token.exchange.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              error: 'Client authentication failed',
+          // The event records the refusal as a code. The prose
+          // `authenticateClientAssertion` attaches to `errorDescription` (the
+          // secret path throws bare on purpose) is not an event member: it can
+          // name a `jwks_uri` target and the address it resolved to. It goes
+          // to the operator's log, the one place it may be read.
+          if (err instanceof InvalidClientError && err.errorDescription) {
+            fastify.log.warn(
+              { reqId: request.id, grantType: body.grant_type, reason: err.errorDescription },
+              'token endpoint: client authentication refused'
+            );
+          }
+          await emitUserEvent(
+            request as FastifyRequest,
+            TOKEN_REQUEST_FAILED,
+            {
               grantType: body.grant_type,
-              // `authenticateClientAssertion` attaches WHY it refused for this
-              // log and nowhere else (the secret path throws bare on purpose).
-              ...(err instanceof InvalidClientError && err.errorDescription
-                ? { reason: err.errorDescription }
-                : {}),
+              error: oauthErrorCode(err),
+              reason: 'client_authentication_failed',
             },
-          });
+            { realmId: realm.id, actor: 'client' }
+          );
           // The reason stops here (ANT-2026-MW7I4DS4). The error handler renders
           // `errorDescription` as `error_description`, and an authentication
           // failure that describes itself is an oracle: it tells an
@@ -239,6 +250,7 @@ export default async function (fastify: FastifyInstance) {
           // it. Every mechanism answers with the bare `invalid_client`.
           throw err instanceof InvalidClientError ? new InvalidClientError() : err;
         }
+        clientId = client.clientId;
 
         // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
         reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
@@ -329,18 +341,12 @@ export default async function (fastify: FastifyInstance) {
           throw error;
         }
 
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'oauth.token.exchange.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          },
-        });
+        await emitUserEvent(
+          request as FastifyRequest,
+          TOKEN_REQUEST_FAILED,
+          { grantType: body.grant_type, ...failureData(error) },
+          { realmId, clientId, actor: 'client' }
+        );
 
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
         throw error;
@@ -389,6 +395,29 @@ function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: Environm
 }
 
 /**
+ * Record a refused token request (`token.request_failed`) for a grant
+ * handler: the dispatch's realm, the authenticated client as the actor, the
+ * request's `grant_type`, and the end user when the grant names one.
+ *
+ * @param error - the OAuth `error` code the response carries
+ * @param reason - why, as a `snake_case` code
+ * @param userId - the end user the grant is for, when known
+ */
+async function emitRequestFailed(
+  ctx: HandlerContext<{ grant_type: string }>,
+  error: string,
+  reason: string,
+  userId: string | null = null
+): Promise<void> {
+  await emitUserEvent(
+    ctx.request,
+    TOKEN_REQUEST_FAILED,
+    { grantType: ctx.body.grant_type, error, reason },
+    { realmId: ctx.realmId, userId, clientId: ctx.client.clientId, actor: 'client' }
+  );
+}
+
+/**
  * Handle the authorization_code grant (legacy flow from Phase 1).
  * Now also issues `aud` + `scope` claims on the access token.
  */
@@ -398,16 +427,7 @@ async function handleAuthorizationCode(
   const { fastify, request, client, body, policy } = ctx;
 
   if (!client.grantTypes.includes('authorization_code')) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'unauthorized_client', grantType: 'authorization_code' },
-    });
+    await emitRequestFailed(ctx, 'unauthorized_client', 'grant_type_not_allowed');
     // RFC 6749 5.2: client authenticated, but not authorized for this grant.
     throw new UnauthorizedClientError();
   }
@@ -415,30 +435,12 @@ async function handleAuthorizationCode(
   // Authorization code lookup
   const authCode = await fastify.repositories.authorizationCodes.findByCode(body.code);
   if (!authCode) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'Invalid or expired authorization code' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'code_invalid');
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
   if (authCode.oauthClientId !== client.id) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'Invalid or expired authorization code' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'client_mismatch', authCode.userId);
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
@@ -447,16 +449,7 @@ async function handleAuthorizationCode(
   // authorization request: the code stores the URI as requested, with the
   // port the client actually listened on, so there is nothing to relax here.
   if (body.redirect_uri !== authCode.redirectUri) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'Invalid or expired authorization code' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_mismatch', authCode.userId);
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
@@ -480,29 +473,11 @@ async function handleAuthorizationCode(
     // Downgrade defence first — a verifier with no bound challenge is rejected
     // regardless of environment (the resolver can never relax this floor).
     if (body.code_verifier.length > 0) {
-      await fastify.repositories.auditLogs.create({
-        userId: authCode.userId,
-        oauthClientId: client.id,
-        event: 'oauth.token.exchange.failure',
-        eventType: 'security',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'pkce_downgrade: code_verifier presented without a bound challenge' },
-      });
+      await emitRequestFailed(ctx, 'invalid_grant', 'pkce_downgrade', authCode.userId);
       throw new InvalidGrantError('Invalid or expired authorization code');
     }
     if (policy.pkceRequired) {
-      await fastify.repositories.auditLogs.create({
-        userId: authCode.userId,
-        oauthClientId: client.id,
-        event: 'oauth.token.exchange.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'invalid_grant: PKCE is required for this environment' },
-      });
+      await emitRequestFailed(ctx, 'invalid_grant', 'pkce_required', authCode.userId);
       throw new InvalidGrantError('Invalid or expired authorization code');
     }
     fastify.log.warn(
@@ -515,16 +490,7 @@ async function handleAuthorizationCode(
     !hasBoundChallenge ||
     fastify.pkceUtils.verifyCodeChallenge(body.code_verifier, authCode.codeChallenge);
   if (!pkceValid) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'Invalid or expired authorization code' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'pkce_mismatch', authCode.userId);
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
@@ -536,19 +502,7 @@ async function handleAuthorizationCode(
   if (requestedResource.length > 0) {
     const extra = requestedResource.filter((r) => !codeResource.includes(r));
     if (extra.length > 0) {
-      await fastify.repositories.auditLogs.create({
-        userId: authCode.userId,
-        oauthClientId: client.id,
-        event: 'oauth.token.exchange.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'invalid_target: resource outside the authorization-code binding',
-          extra,
-        },
-      });
+      await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_binding', authCode.userId);
       throw new InvalidTargetError('requested resource is outside the authorization-code binding');
     }
   }
@@ -556,17 +510,10 @@ async function handleAuthorizationCode(
 
   const user = await fastify.repositories.users.findById(authCode.userId);
   if (!user) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'User not found' },
-    });
-    throw new NotFoundError('User', authCode.userId);
+    // The code names no user any more, so the event has none.
+    const notFound = new NotFoundError('User', authCode.userId);
+    await emitRequestFailed(ctx, oauthErrorCode(notFound), 'user_not_found');
+    throw notFound;
   }
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the
@@ -574,16 +521,7 @@ async function handleAuthorizationCode(
   // code is burned all the same, so it cannot be retried.
   if (!user.enabled) {
     await fastify.repositories.authorizationCodes.markUsed(authCode.id);
-    await fastify.repositories.auditLogs.create({
-      userId: user.id,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'invalid_grant: user_disabled' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
@@ -599,20 +537,7 @@ async function handleAuthorizationCode(
     enforceAgentScopeCap(authCode.scopes, toAgentScopeContext(client));
   } catch (err) {
     await fastify.repositories.authorizationCodes.markUsed(authCode.id);
-    await fastify.repositories.auditLogs.create({
-      userId: user.id,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: 'invalid_scope: code scope exceeds the agent scope mode',
-        scopes: authCode.scopes,
-        maxAgentMode: client.maxAgentMode ?? null,
-      },
-    });
+    await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_exceeds_agent_mode', user.id);
     throw err;
   }
 
@@ -637,13 +562,21 @@ async function handleAuthorizationCode(
         }
       : undefined;
 
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
+  // `short` (staging/production baseline) vs `long` (development convenience),
+  // mapped to concrete seconds in one place. Passed both as the signed `exp`
+  // override and the response `expires_in` so they always agree.
+  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
+  const aud = resolveAudience(client, effectiveResource);
+
   // Spend the code and store the refresh token it buys in ONE transaction, so
   // the grant is never observable in between: code already used, refresh
   // token not yet there. Logout and consent revocation invalidate the user's
   // unredeemed codes before they sweep the refresh tokens; their UPDATE on
   // this code row either lands first, and the compare-and-set in `markUsed`
   // matches nothing, or waits on the row lock taken here until the refresh
-  // token is committed, where the sweep that follows sees it.
+  // token is committed, where the sweep that follows sees it. The
+  // `token.issued` event commits with the redemption, or neither does.
   await fastify.db.transaction(async (tx) => {
     await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
     if (refresh) {
@@ -662,15 +595,22 @@ async function handleAuthorizationCode(
         tx
       );
     }
+    await emitUserEvent(
+      request,
+      TOKEN_ISSUED,
+      {
+        grantType: body.grant_type,
+        scopes: authCode.scopes,
+        audience: audToArray(aud),
+        ...(effectiveResource.length > 0 ? { resources: effectiveResource } : {}),
+        expiresIn: accessTokenExpiresIn,
+        ...(refresh ? { refreshFamilyId: refresh.familyId } : {}),
+      },
+      { tx, realmId: ctx.realmId, userId: user.id, clientId: client.clientId, actor: 'client' }
+    );
   });
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
-
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
-  // `short` (staging/production baseline) vs `long` (development convenience),
-  // mapped to concrete seconds in one place. Passed both as the signed `exp`
-  // override and the response `expires_in` so they always agree.
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
   // BREAKING (#229, ADR-002): ONE trust-ordered resolution shared by the
   // access token AND the ID token, so the two can never disagree about the
@@ -687,7 +627,7 @@ async function handleAuthorizationCode(
     ...emailClaims,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client, effectiveResource),
+    aud,
     expiresInOverride: accessTokenExpiresIn,
   });
 
@@ -752,17 +692,6 @@ async function handleAuthorizationCode(
     fastify.log.warn({ err: sessionError }, 'Failed to manage session during token exchange');
   }
 
-  await fastify.repositories.auditLogs.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    event: 'oauth.token.exchange.success',
-    eventType: 'token',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: { authCodeId: authCode.id, grantType: 'authorization_code' },
-  });
-
   // Token issuance metrics (#126).
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });
   if (refresh) {
@@ -793,16 +722,7 @@ async function handleClientCredentials(
   const { fastify, request, client, body, policy } = ctx;
 
   if (!client.grantTypes.includes('client_credentials')) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'unauthorized_client', grantType: 'client_credentials' },
-    });
+    await emitRequestFailed(ctx, 'unauthorized_client', 'grant_type_not_allowed');
     // RFC 6749 5.2: client authenticated, but not authorized for this grant.
     throw new UnauthorizedClientError();
   }
@@ -818,19 +738,7 @@ async function handleClientCredentials(
   try {
     grantedScopes = validateScopes(body.scope, client.scopes, toAgentScopeContext(client));
   } catch (err) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: err instanceof Error ? err.message : 'invalid_scope',
-        grantType: 'client_credentials',
-      },
-    });
+    await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_not_allowed_for_client');
     throw err;
   }
 
@@ -838,19 +746,7 @@ async function handleClientCredentials(
   // misconfiguration. Require at least one granted scope per RFC 9700 best
   // practice for client_credentials tokens.
   if (grantedScopes.length === 0) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: 'invalid_scope: client_credentials requires at least one scope',
-        grantType: 'client_credentials',
-      },
-    });
+    await emitRequestFailed(ctx, 'invalid_scope', 'scope_required');
     throw new InvalidScopeError('client_credentials grant requires at least one scope');
   }
 
@@ -869,20 +765,7 @@ async function handleClientCredentials(
       client.audience && client.audience.length > 0 ? client.audience : [client.clientId];
     const extra = requestedResource.filter((r) => !allowedAudience.includes(r));
     if (extra.length > 0) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.token.exchange.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'invalid_target: resource outside the client audience allowlist',
-          extra,
-          allowedAudience,
-        },
-      });
+      await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_client_audience');
       throw new InvalidTargetError('requested resource is outside the client audience allowlist');
     }
   }
@@ -890,37 +773,34 @@ async function handleClientCredentials(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
+  const aud = resolveAudience(client, requestedResource);
   const accessToken = await issueAccessToken(fastify, {
     sub: client.clientId,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client, requestedResource),
+    aud,
     expiresInOverride: accessTokenExpiresIn,
   });
 
   // Per-agent action audit (ADR-007 §2, #186). client_credentials has no
-  // subject user and no on-behalf-of `act` chain — the agent acts as itself —
-  // so we attribute the agent and the effective scope mode but leave
-  // `delegationChain`/`userId` null. Only an agent client (fail-closed
-  // `isAgentClient`) is attributed; an ordinary machine client records no
-  // agent fields, keeping existing behavior for non-agent clients unchanged.
-  const isAgent = isAgentClient(client);
-  await fastify.repositories.auditLogs.create({
-    userId: null,
-    oauthClientId: client.id,
-    actorClientId: isAgent ? client.clientId : null,
-    scopeMode: isAgent ? highestAgentModeInScopes(grantedScopes) : null,
-    event: 'oauth.token.exchange.success',
-    eventType: 'token',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: {
-      grantType: 'client_credentials',
-      scope: scopeString,
-      resource: requestedResource,
+  // subject user and no on-behalf-of `act` chain — the client acts as itself,
+  // so the event has no subject and its actor is the client. Only an agent
+  // client (fail-closed `isAgentClient`) has its effective scope mode
+  // recorded; an ordinary machine client records none.
+  const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(grantedScopes) : null;
+  await emitUserEvent(
+    request,
+    TOKEN_ISSUED,
+    {
+      grantType: body.grant_type,
+      scopes: grantedScopes,
+      audience: audToArray(aud),
+      ...(requestedResource.length > 0 ? { resources: requestedResource } : {}),
+      expiresIn: accessTokenExpiresIn,
+      ...(scopeMode === null ? {} : { scopeMode }),
     },
-  });
+    { realmId: ctx.realmId, clientId: client.clientId, actor: 'client' }
+  );
 
   // Token issuance metrics (#126). No refresh token on client_credentials.
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'client_credentials' });
@@ -944,29 +824,13 @@ async function handleClientCredentials(
  */
 async function rejectRefreshTokenReplay(
   ctx: HandlerContext<TokenExchangeRefreshBody>,
-  storedToken: { userId: string; familyId: string },
-  detection: 'revoked_on_read' | 'lost_rotation_race'
+  storedToken: { userId: string; familyId: string }
 ): Promise<never> {
-  const { fastify, request, client } = ctx;
-  const familyRevokedCount = await fastify.repositories.refreshTokens.revokeFamily(
+  await ctx.fastify.repositories.refreshTokens.revokeFamily(
     storedToken.familyId,
     'replay_detected'
   );
-  await fastify.repositories.auditLogs.create({
-    userId: storedToken.userId,
-    oauthClientId: client.id,
-    event: 'oauth.token.exchange.failure',
-    eventType: 'security',
-    success: false,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: {
-      error: 'invalid_grant: refresh token replay detected',
-      detection,
-      familyId: storedToken.familyId,
-      familyTokensRevoked: familyRevokedCount,
-    },
-  });
+  await emitRequestFailed(ctx, 'invalid_grant', 'refresh_replay', storedToken.userId);
   throw new InvalidGrantError('Invalid or expired refresh token');
 }
 
@@ -1009,16 +873,7 @@ async function handleRefreshToken(
   void policy.refreshRotationRequired;
 
   if (!client.grantTypes.includes('refresh_token')) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'unauthorized_client', grantType: 'refresh_token' },
-    });
+    await emitRequestFailed(ctx, 'unauthorized_client', 'grant_type_not_allowed');
     throw new UnauthorizedClientError();
   }
 
@@ -1030,16 +885,7 @@ async function handleRefreshToken(
     await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(presentedHash);
 
   if (!storedToken) {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'invalid_grant: refresh token not recognised' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'refresh_token_unknown');
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
 
@@ -1047,70 +893,30 @@ async function handleRefreshToken(
   // Cross-client replay must never be able to fan out family revocation
   // on another client's tokens.
   if (storedToken.oauthClientId !== client.id) {
-    await fastify.repositories.auditLogs.create({
-      userId: storedToken.userId,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: 'invalid_grant: refresh token bound to different client',
-        presentingClientId: client.id,
-        ownerClientId: storedToken.oauthClientId,
-      },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'client_mismatch', storedToken.userId);
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
 
   // Replay detection — a revoked token in the correct family MUST trigger
   // family-wide revocation per RFC 9700 §2.2.2 / OAuth 2.1 §4.3.1.
   if (storedToken.revoked) {
-    return rejectRefreshTokenReplay(ctx, storedToken, 'revoked_on_read');
+    return rejectRefreshTokenReplay(ctx, storedToken);
   }
 
   if (storedToken.expiresAt <= Date.now()) {
-    await fastify.repositories.auditLogs.create({
-      userId: storedToken.userId,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'invalid_grant: refresh token expired' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'refresh_token_expired', storedToken.userId);
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
 
   // Load the subject user; reject if missing or disabled (RFC 9700 §4.14).
   const user = await fastify.repositories.users.findById(storedToken.userId);
   if (!user) {
-    await fastify.repositories.auditLogs.create({
-      userId: storedToken.userId,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'invalid_grant: user not found' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'user_not_found');
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
   if (!user.enabled) {
     await fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled');
-    await fastify.repositories.auditLogs.create({
-      userId: user.id,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error: 'invalid_grant: user_disabled' },
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
 
@@ -1126,20 +932,7 @@ async function handleRefreshToken(
     const original = new Set(storedToken.scopes);
     const extraneous = requested.filter((s) => !original.has(s));
     if (extraneous.length > 0) {
-      await fastify.repositories.auditLogs.create({
-        userId: user.id,
-        oauthClientId: client.id,
-        event: 'oauth.token.exchange.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'invalid_scope: upscoping rejected',
-          extraneous,
-          originalScopes: storedToken.scopes,
-        },
-      });
+      await emitRequestFailed(ctx, 'invalid_scope', 'scope_exceeds_refresh_token', user.id);
       throw new InvalidScopeError(`${extraneous.join(' ')} not in original refresh token scope`);
     }
     grantedScopes = requested;
@@ -1164,21 +957,7 @@ async function handleRefreshToken(
   try {
     validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
   } catch (err) {
-    await fastify.repositories.auditLogs.create({
-      userId: user.id,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: 'invalid_scope: refreshed scope exceeds what the client may hold',
-        grantedScopes,
-        allowedScopes: client.scopes,
-        maxAgentMode: client.maxAgentMode ?? null,
-      },
-    });
+    await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_not_allowed_for_client', user.id);
     throw err;
   }
 
@@ -1192,19 +971,7 @@ async function handleRefreshToken(
   if (requestedResource.length > 0) {
     const extra = requestedResource.filter((r) => !storedResource.includes(r));
     if (extra.length > 0) {
-      await fastify.repositories.auditLogs.create({
-        userId: user.id,
-        oauthClientId: client.id,
-        event: 'oauth.token.exchange.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'invalid_target: resource outside the refresh-token binding',
-          extra,
-        },
-      });
+      await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_binding', user.id);
       throw new InvalidTargetError('requested resource is outside the refresh-token binding');
     }
   }
@@ -1222,9 +989,16 @@ async function handleRefreshToken(
   // handled as the replay it is (family revoke + invalid_grant) — never as a
   // second child in the same family. The unique index on `token_hash`
   // protects against the degenerate collision case.
+  //
+  // The `token.issued` event records the rotation, so it commits with it, or
+  // neither does. A lost race writes no event here; the replay records its own.
   const { token: newRefreshToken, tokenHash: newRefreshTokenHash } =
     fastify.jwtUtils.generateRefreshToken();
   const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
+
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
+  const aud = resolveAudience(client, effectiveResource);
 
   const rotated = await fastify.db.transaction(async (tx) => {
     const revoked = await fastify.repositories.refreshTokens.revokeIfActive(
@@ -1249,17 +1023,27 @@ async function handleRefreshToken(
       },
       tx
     );
+    await emitUserEvent(
+      request,
+      TOKEN_ISSUED,
+      {
+        grantType: body.grant_type,
+        scopes: grantedScopes,
+        audience: audToArray(aud),
+        ...(effectiveResource.length > 0 ? { resources: effectiveResource } : {}),
+        expiresIn: accessTokenExpiresIn,
+        refreshFamilyId: storedToken.familyId,
+      },
+      { tx, realmId: ctx.realmId, userId: user.id, clientId: client.clientId, actor: 'client' }
+    );
     return true;
   });
 
   if (!rotated) {
-    return rejectRefreshTokenReplay(ctx, storedToken, 'lost_rotation_race');
+    return rejectRefreshTokenReplay(ctx, storedToken);
   }
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
-
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
   // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
   // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
@@ -1270,24 +1054,8 @@ async function handleRefreshToken(
     ...emailClaims,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client, effectiveResource),
+    aud,
     expiresInOverride: accessTokenExpiresIn,
-  });
-
-  await fastify.repositories.auditLogs.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    event: 'oauth.token.exchange.success',
-    eventType: 'token',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: {
-      grantType: 'refresh_token',
-      familyId: storedToken.familyId,
-      rotatedFromTokenId: storedToken.id,
-      scope: scopeString,
-    },
   });
 
   // Token issuance metrics (#126). Refresh-token rotation mints both.
@@ -1369,28 +1137,15 @@ async function handleTokenExchange(
 ): Promise<TokenEndpointResponse> {
   const { fastify, request, client, body, policy } = ctx;
 
-  const auditFailure = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error, grantType: 'token-exchange', ...extra },
-    });
-  };
-
   // GATE 1 — agent classification + grant authorisation (default-deny).
   // `isAgentClient` is fail-closed; a client that omitted `is_agent` reads as
   // a non-agent and is rejected here.
   if (!isAgentClient(client)) {
-    await auditFailure('unauthorized_client: token-exchange is restricted to agent clients');
+    await emitRequestFailed(ctx, 'unauthorized_client', 'client_not_agent');
     throw new UnauthorizedClientError();
   }
   if (!client.grantTypes.includes(TOKEN_EXCHANGE_GRANT_TYPE)) {
-    await auditFailure('unauthorized_client: client not allowed the token-exchange grant');
+    await emitRequestFailed(ctx, 'unauthorized_client', 'grant_type_not_allowed');
     throw new UnauthorizedClientError();
   }
 
@@ -1419,9 +1174,7 @@ async function handleTokenExchange(
   const mintingIdJag = env.ID_JAG_ENABLED && body.requested_token_type === TOKEN_TYPE_ID_JAG;
 
   if (body.subject_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
-    await auditFailure('invalid_request: unsupported subject_token_type', {
-      subjectTokenType: body.subject_token_type,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'unsupported_subject_token_type');
     throw new InvalidRequestError('unsupported subject_token_type');
   }
   if (
@@ -1429,20 +1182,16 @@ async function handleTokenExchange(
     body.requested_token_type !== TOKEN_TYPE_ACCESS_TOKEN &&
     !mintingIdJag
   ) {
-    await auditFailure('invalid_request: unsupported requested_token_type', {
-      requestedTokenType: body.requested_token_type,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'unsupported_requested_token_type');
     throw new InvalidRequestError('unsupported requested_token_type');
   }
   // RFC 8693 §2.1: actor_token_type is REQUIRED when actor_token is present.
   if (body.actor_token !== undefined && body.actor_token_type === undefined) {
-    await auditFailure('invalid_request: actor_token_type required when actor_token present');
+    await emitRequestFailed(ctx, 'invalid_request', 'actor_token_type_missing');
     throw new InvalidRequestError('actor_token_type is required when actor_token is present');
   }
   if (body.actor_token !== undefined && body.actor_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
-    await auditFailure('invalid_request: unsupported actor_token_type', {
-      actorTokenType: body.actor_token_type,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'unsupported_actor_token_type');
     throw new InvalidRequestError('unsupported actor_token_type');
   }
 
@@ -1459,11 +1208,11 @@ async function handleTokenExchange(
       issuer: expectedIssuer,
     });
   } catch {
-    await auditFailure('invalid_request: subject_token failed verification');
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_token_invalid');
     throw new InvalidRequestError('subject_token is not a valid access token');
   }
   if (!subjectPayload.sub) {
-    await auditFailure('invalid_request: subject_token missing sub');
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_token_missing_sub');
     throw new InvalidRequestError('subject_token has no subject');
   }
 
@@ -1482,9 +1231,7 @@ async function handleTokenExchange(
       subjectPayload.clientId !== undefined &&
       subjectPayload.aud !== undefined);
   if (!isAccessToken) {
-    await auditFailure('invalid_request: subject_token is not a QAuth access token', {
-      tokenUse: tokenUse ?? null,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_token_not_access_token');
     throw new InvalidRequestError('subject_token is not a QAuth-issued access token');
   }
 
@@ -1499,7 +1246,7 @@ async function handleTokenExchange(
         issuer: expectedIssuer,
       });
     } catch {
-      await auditFailure('invalid_request: actor_token failed verification');
+      await emitRequestFailed(ctx, 'invalid_request', 'actor_token_invalid');
       throw new InvalidRequestError('actor_token is not a valid access token');
     }
   }
@@ -1512,15 +1259,11 @@ async function handleTokenExchange(
   // "unacceptable" under RFC 8693 §2.2.2 → invalid_request. A denylist store
   // outage throws out of `isJtiRevoked` and fails the exchange closed.
   if (await isJtiRevoked(fastify, subjectPayload.jti)) {
-    await auditFailure('invalid_request: subject_token has been revoked', {
-      jti: subjectPayload.jti,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_token_revoked');
     throw new InvalidRequestError('subject_token has been revoked');
   }
   if (actorPayload && (await isJtiRevoked(fastify, actorPayload.jti))) {
-    await auditFailure('invalid_request: actor_token has been revoked', {
-      jti: actorPayload.jti,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'actor_token_revoked');
     throw new InvalidRequestError('actor_token has been revoked');
   }
 
@@ -1533,9 +1276,7 @@ async function handleTokenExchange(
   // the dispatch layer), this closes the unauthorized-delegation gap.
   const subjectAudience = audToArray(subjectPayload.aud);
   if (!subjectAudience.includes(client.clientId)) {
-    await auditFailure('invalid_request: subject_token not issued for this agent', {
-      subjectAudience,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_token_audience_mismatch');
     throw new InvalidRequestError('subject_token was not issued for this client');
   }
 
@@ -1545,7 +1286,7 @@ async function handleTokenExchange(
   // is no one to act on behalf of. Refused before the user lookup, so a
   // `client_id` is never read as a `users.id` (#754).
   if (subjectPayload.sub === subjectPayload.clientId) {
-    await auditFailure('invalid_request: subject_token has no user subject');
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_not_a_user');
     throw new InvalidRequestError('subject_token subject is not a user');
   }
 
@@ -1554,11 +1295,11 @@ async function handleTokenExchange(
   // the token's `sub` string.
   const user = await fastify.repositories.users.findById(subjectPayload.sub);
   if (!user) {
-    await auditFailure('invalid_request: subject user not found');
+    await emitRequestFailed(ctx, 'invalid_request', 'user_not_found');
     throw new InvalidRequestError('subject_token subject is unknown');
   }
   if (!user.enabled) {
-    await auditFailure('invalid_request: subject user disabled', { userId: user.id });
+    await emitRequestFailed(ctx, 'invalid_request', 'user_disabled', user.id);
     throw new InvalidRequestError('subject_token subject is not active');
   }
 
@@ -1572,10 +1313,7 @@ async function handleTokenExchange(
     const requested = body.scope.split(/\s+/).filter((s) => s.length > 0);
     const extraneous = requested.filter((s) => !subjectScopes.includes(s));
     if (extraneous.length > 0) {
-      await auditFailure('invalid_scope: requested scope exceeds subject token', {
-        extraneous,
-        subjectScopes,
-      });
+      await emitRequestFailed(ctx, 'invalid_scope', 'scope_exceeds_subject_token', user.id);
       throw new InvalidScopeError(`${extraneous.join(' ')} not in subject_token scope`);
     }
     // Dedupe so a repeated scope cannot bloat the minted claim.
@@ -1594,10 +1332,7 @@ async function handleTokenExchange(
   try {
     enforceAgentScopeCap(grantedScopes, toAgentScopeContext(client));
   } catch (err) {
-    await auditFailure('invalid_scope: delegated scope exceeds the agent scope mode', {
-      grantedScopes,
-      maxAgentMode: client.maxAgentMode ?? null,
-    });
+    await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_exceeds_agent_mode', user.id);
     throw err;
   }
 
@@ -1631,7 +1366,8 @@ async function handleTokenExchange(
       grantedScopes,
       subjectAct: subjectPayload.act,
       subjectExp: subjectPayload.exp,
-      auditFailure,
+      realmId: ctx.realmId,
+      emitFailure: (error, reason) => emitRequestFailed(ctx, error, reason, user.id),
     });
   }
 
@@ -1645,10 +1381,7 @@ async function handleTokenExchange(
   if (requestedTargets.length > 0) {
     const extra = requestedTargets.filter((t) => !subjectAudience.includes(t));
     if (extra.length > 0) {
-      await auditFailure('invalid_target: requested audience outside subject token audience', {
-        extra,
-        subjectAudience,
-      });
+      await emitRequestFailed(ctx, 'invalid_target', 'audience_outside_subject_token', user.id);
       throw new InvalidTargetError('requested resource/audience is outside the subject token');
     }
     effectiveAudience = requestedTargets;
@@ -1672,10 +1405,7 @@ async function handleTokenExchange(
   // JWT unboundedly. Reject once the chain would exceed MAX_DELEGATION_DEPTH.
   const depth = actDepth(act);
   if (depth > MAX_DELEGATION_DEPTH) {
-    await auditFailure('invalid_request: delegation chain too deep', {
-      depth,
-      max: MAX_DELEGATION_DEPTH,
-    });
+    await emitRequestFailed(ctx, 'invalid_request', 'delegation_too_deep', user.id);
     throw new InvalidRequestError('delegation chain exceeds the maximum depth');
   }
 
@@ -1697,7 +1427,7 @@ async function handleTokenExchange(
       : configuredLifespan;
   const accessTokenExpiresIn = Math.max(0, Math.min(configuredLifespan, subjectRemaining));
   if (accessTokenExpiresIn <= 0) {
-    await auditFailure('invalid_request: subject_token has no remaining lifetime');
+    await emitRequestFailed(ctx, 'invalid_request', 'subject_token_expired', user.id);
     throw new InvalidRequestError('subject_token has expired');
   }
 
@@ -1717,33 +1447,25 @@ async function handleTokenExchange(
   });
 
   // Per-agent action audit (ADR-007 §2, #186). The delegated token was minted
-  // on behalf of `user` BY this agent — record the attribution as structured,
-  // queryable columns (agent client_id, the flattened `act` delegation chain,
-  // and the effective agent scope mode) on top of the existing metadata. Only
-  // public identifiers are stored; no subject/actor token, secret, or scope
-  // secret is ever persisted.
-  await fastify.repositories.auditLogs.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    actorClientId: client.clientId,
-    delegationChain: flattenActChain(act),
-    scopeMode: highestAgentModeInScopes(grantedScopes),
-    event: 'oauth.token.exchange.success',
-    eventType: 'token',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: {
-      grantType: 'token-exchange',
-      actor: client.clientId,
-      delegationDepth: depth,
-      hasActorToken: body.actor_token !== undefined,
-      actorTokenSubject: actorPayload?.sub,
-      scope: scopeString,
+  // on behalf of `user` BY this agent: the event's subject is the user, and
+  // its actor the agent, with the minted token's `act` chain as its
+  // delegation chain (this agent first). Only public identifiers are
+  // recorded; no subject/actor token, secret, or minted token.
+  const scopeMode = highestAgentModeInScopes(grantedScopes);
+  await emitUserEvent(
+    request,
+    TOKEN_ISSUED,
+    {
+      grantType: body.grant_type,
+      scopes: grantedScopes,
       audience: effectiveAudience,
       expiresIn: accessTokenExpiresIn,
+      issuedTokenType: TOKEN_TYPE_ACCESS_TOKEN,
+      delegationDepth: depth,
+      ...(scopeMode === null ? {} : { scopeMode }),
     },
-  });
+    { realmId: ctx.realmId, userId: user.id, clientId: client.clientId, actor: 'client', act }
+  );
 
   // Token issuance metrics (#126). Token-exchange mints an access token only.
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'token-exchange' });
@@ -1831,7 +1553,10 @@ async function mintIdJagForExchange(args: {
   subjectAct: ActClaim | undefined;
   /** The subject token's `exp` (epoch seconds); the assertion never outlives it. */
   subjectExp: number | undefined;
-  auditFailure: (error: string, extra?: Record<string, unknown>) => Promise<void>;
+  /** The realm the client authenticated in, for the `token.issued` event. */
+  realmId: string;
+  /** Record a refusal (`token.request_failed`), with its OAuth `error` and its reason. */
+  emitFailure: (error: string, reason: string) => Promise<void>;
 }): Promise<IdJagTokenResponse> {
   const {
     fastify,
@@ -1842,7 +1567,8 @@ async function mintIdJagForExchange(args: {
     grantedScopes,
     subjectAct,
     subjectExp,
-    auditFailure,
+    realmId,
+    emitFailure,
   } = args;
 
   // GATE 4d — the client's registered `scopes` are a ceiling on the assertion,
@@ -1853,10 +1579,7 @@ async function mintIdJagForExchange(args: {
   try {
     validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
   } catch (err) {
-    await auditFailure('invalid_scope: ID-JAG scope outside the client scope allowlist', {
-      grantedScopes,
-      allowedScopes: client.scopes,
-    });
+    await emitFailure(oauthErrorCode(err), 'scope_not_allowed_for_client');
     throw err;
   }
 
@@ -1864,9 +1587,7 @@ async function mintIdJagForExchange(args: {
 
   const requestedAudience = body.audience ?? [];
   if (requestedAudience.length !== 1) {
-    await auditFailure('invalid_request: ID-JAG requires exactly one audience', {
-      audienceCount: requestedAudience.length,
-    });
+    await emitFailure('invalid_request', 'id_jag_requires_one_audience');
     throw new InvalidRequestError(
       'audience is required and must name exactly one authorization server when requesting an ID-JAG'
     );
@@ -1875,9 +1596,7 @@ async function mintIdJagForExchange(args: {
 
   const requestedResource = body.resource ?? [];
   if (requestedResource.length !== 1) {
-    await auditFailure('invalid_request: ID-JAG requires exactly one resource', {
-      resourceCount: requestedResource.length,
-    });
+    await emitFailure('invalid_request', 'id_jag_requires_one_resource');
     throw new InvalidRequestError(
       'resource is required and must name exactly one MCP server when requesting an ID-JAG'
     );
@@ -1893,7 +1612,7 @@ async function mintIdJagForExchange(args: {
     resolveIssuerIdentifier(targetAuthorizationServer) ===
     resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())
   ) {
-    await auditFailure('invalid_target: ID-JAG audience is this authorization server');
+    await emitFailure('invalid_target', 'id_jag_audience_is_self');
     throw new InvalidTargetError('an ID-JAG cannot be minted for this authorization server');
   }
 
@@ -1901,10 +1620,7 @@ async function mintIdJagForExchange(args: {
     (target) => !allowedTargets.includes(target)
   );
   if (outsidePolicy.length > 0) {
-    await auditFailure('invalid_target: ID-JAG target outside the client id_jag_targets', {
-      outsidePolicy,
-      allowedTargets,
-    });
+    await emitFailure('invalid_target', 'id_jag_target_not_allowed');
     throw new InvalidTargetError('requested audience/resource is outside the client policy');
   }
 
@@ -1916,10 +1632,7 @@ async function mintIdJagForExchange(args: {
   const act: ActClaim = { sub: client.clientId, ...(subjectAct ? { act: subjectAct } : {}) };
   const depth = actDepth(act);
   if (depth > MAX_DELEGATION_DEPTH) {
-    await auditFailure('invalid_request: delegation chain too deep', {
-      depth,
-      max: MAX_DELEGATION_DEPTH,
-    });
+    await emitFailure('invalid_request', 'delegation_too_deep');
     throw new InvalidRequestError('delegation chain exceeds the maximum depth');
   }
 
@@ -1930,7 +1643,7 @@ async function mintIdJagForExchange(args: {
   const subjectRemaining =
     subjectExp !== undefined ? subjectExp - Math.floor(Date.now() / 1000) : undefined;
   if (subjectRemaining !== undefined && subjectRemaining <= 0) {
-    await auditFailure('invalid_request: subject_token has no remaining lifetime');
+    await emitFailure('invalid_request', 'subject_token_expired');
     throw new InvalidRequestError('subject_token has expired');
   }
 
@@ -1945,31 +1658,27 @@ async function mintIdJagForExchange(args: {
     ...(subjectRemaining !== undefined ? { maxLifetimeSeconds: subjectRemaining } : {}),
   });
 
-  await fastify.repositories.auditLogs.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    actorClientId: client.clientId,
-    delegationChain: flattenActChain(act),
-    scopeMode: highestAgentModeInScopes(grantedScopes),
-    event: 'oauth.token.exchange.success',
-    eventType: 'token',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: {
-      grantType: 'token-exchange',
+  // The actor is this agent with the delegation chain the assertion was
+  // derived through, though the assertion itself carries no `act` claim.
+  const scopeMode = highestAgentModeInScopes(grantedScopes);
+  await emitUserEvent(
+    request,
+    TOKEN_ISSUED,
+    {
+      grantType: body.grant_type,
+      scopes: grantedScopes,
+      audience: [targetAuthorizationServer],
+      resources: [targetResource],
+      expiresIn: minted.expiresIn,
       issuedTokenType: TOKEN_TYPE_ID_JAG,
-      actor: client.clientId,
       delegationDepth: depth,
-      // Public identifiers only — the assertion itself is never persisted, only
+      // Public identifiers only — the assertion itself is never recorded, only
       // the `jti` that identifies it.
       idJagId: minted.jti,
-      audience: targetAuthorizationServer,
-      resource: targetResource,
-      scope: scopeString,
-      expiresIn: minted.expiresIn,
+      ...(scopeMode === null ? {} : { scopeMode }),
     },
-  });
+    { realmId, userId: user.id, clientId: client.clientId, actor: 'client', act }
+  );
 
   fastify.metrics.tokensIssued.inc({ type: 'id_jag', grant_type: 'token-exchange' });
 
@@ -2032,31 +1741,18 @@ async function handleJwtBearer(
 ): Promise<TokenExchangeResponse> {
   const { fastify, request, client, body, policy, realmId } = ctx;
 
-  const auditFailure = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
-    await fastify.repositories.auditLogs.create({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { error, grantType: 'jwt-bearer', ...extra },
-    });
-  };
-
   // GATE 0 — defence in depth. The dispatch rejected this before client
   // authentication; a future caller reaching the handler directly must not be
   // able to skip the flag.
   if (!env.ID_JAG_ENABLED) {
-    await auditFailure('unsupported_grant_type: ID-JAG is not enabled');
+    await emitRequestFailed(ctx, 'unsupported_grant_type', 'id_jag_disabled');
     throw new BadRequestError('unsupported_grant_type');
   }
 
   // GATE 1 — grant authorisation (RFC 6749 §5.2). The grant is not registrable
   // through DCR, so this reflects an operator's provisioning decision.
   if (!client.grantTypes.includes(JWT_BEARER_GRANT_TYPE)) {
-    await auditFailure('unauthorized_client: client not allowed the jwt-bearer grant');
+    await emitRequestFailed(ctx, 'unauthorized_client', 'grant_type_not_allowed');
     throw new UnauthorizedClientError();
   }
 
@@ -2077,8 +1773,7 @@ async function handleJwtBearer(
     // issuer is allowlisted, whether a `kid` exists, or whether a `jti` was
     // already burned turns this endpoint into an oracle for each of those.
     const reason = err instanceof IdJagValidationError ? err.reason : 'unexpected';
-    const detail = err instanceof Error ? err.message : 'unknown error';
-    await auditFailure(`invalid_grant: assertion rejected (${reason})`, { reason, detail });
+    await emitRequestFailed(ctx, 'invalid_grant', reason);
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
@@ -2088,24 +1783,14 @@ async function handleJwtBearer(
   // redeemed by any client that happens to hold credentials at this AS, and a
   // future refactor of the helper must not be able to drop it silently.
   if (assertion.clientId !== client.clientId) {
-    await auditFailure(
-      'invalid_grant: assertion client_id does not match the authenticated client',
-      {
-        assertionClientId: assertion.clientId,
-        issuer: assertion.issuer,
-      }
-    );
+    await emitRequestFailed(ctx, 'invalid_grant', 'client_mismatch');
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
   // GATE 4 — the resource must be one an operator granted this client.
   const allowedTargets = idJagTargetAllowlist(client);
   if (!allowedTargets.includes(assertion.resource)) {
-    await auditFailure('invalid_target: assertion resource outside the client id_jag_targets', {
-      resource: assertion.resource,
-      allowedTargets,
-      issuer: assertion.issuer,
-    });
+    await emitRequestFailed(ctx, 'invalid_target', 'id_jag_target_not_allowed');
     throw new InvalidTargetError('the assertion resource is outside the client policy');
   }
 
@@ -2116,10 +1801,7 @@ async function handleJwtBearer(
   const requestedResource = body.resource ?? [];
   const mismatched = requestedResource.filter((value) => value !== assertion.resource);
   if (mismatched.length > 0) {
-    await auditFailure('invalid_target: resource parameter disagrees with the assertion', {
-      mismatched,
-      assertionResource: assertion.resource,
-    });
+    await emitRequestFailed(ctx, 'invalid_target', 'resource_mismatch');
     throw new InvalidTargetError('requested resource is outside the assertion');
   }
 
@@ -2136,10 +1818,7 @@ async function handleJwtBearer(
     const requested = [...new Set(body.scope.split(/\s+/).filter((s) => s.length > 0))];
     const extraneous = requested.filter((s) => !assertionScopes.includes(s));
     if (extraneous.length > 0) {
-      await auditFailure('invalid_scope: requested scope exceeds the assertion', {
-        extraneous,
-        assertionScopes,
-      });
+      await emitRequestFailed(ctx, 'invalid_scope', 'scope_exceeds_assertion');
       throw new InvalidScopeError(`${extraneous.join(' ')} not in assertion scope`);
     }
     requestedScopes = requested;
@@ -2155,10 +1834,7 @@ async function handleJwtBearer(
       toAgentScopeContext(client)
     );
   } catch (err) {
-    await auditFailure('invalid_scope: assertion scope exceeds what the client may hold', {
-      requestedScopes,
-      maxAgentMode: client.maxAgentMode ?? null,
-    });
+    await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_not_allowed_for_client');
     throw err;
   }
 
@@ -2179,18 +1855,18 @@ async function handleJwtBearer(
     assertion.subject
   );
   if (!credential) {
-    await auditFailure('invalid_grant: assertion subject is not linked to a user', {
-      issuer: assertion.issuer,
-    });
+    await emitRequestFailed(ctx, 'invalid_grant', 'subject_not_linked');
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
   const user = await fastify.repositories.users.findById(credential.userId);
   if (!user || !user.enabled) {
-    await auditFailure('invalid_grant: assertion subject is unknown or disabled', {
-      issuer: assertion.issuer,
-      userId: credential.userId,
-    });
+    await emitRequestFailed(
+      ctx,
+      'invalid_grant',
+      user ? 'user_disabled' : 'user_not_found',
+      user?.id ?? null
+    );
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
@@ -2212,37 +1888,34 @@ async function handleJwtBearer(
   // identifies — never the client's configured default audience, and never the
   // whole allowlist. `resolveAudience` collapses the single value to a string
   // `aud`, so the token names exactly one resource server.
+  const aud = resolveAudience(client, [assertion.resource]);
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client, [assertion.resource]),
+    aud,
     expiresInOverride: accessTokenExpiresIn,
   });
 
-  const isAgent = isAgentClient(client);
-  await fastify.repositories.auditLogs.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    actorClientId: isAgent ? client.clientId : null,
-    scopeMode: isAgent ? highestAgentModeInScopes(grantedScopes) : null,
-    event: 'oauth.token.exchange.success',
-    eventType: 'token',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: {
-      grantType: 'jwt-bearer',
-      // Public identifiers only. The assertion is never persisted; its `jti` is
-      // what ties this issuance to the single-use record that consumed it.
-      idJagIssuer: assertion.issuer,
-      idJagId: assertion.jti,
-      resource: assertion.resource,
-      scope: scopeString,
+  const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(grantedScopes) : null;
+  await emitUserEvent(
+    request,
+    TOKEN_ISSUED,
+    {
+      grantType: body.grant_type,
+      scopes: grantedScopes,
+      audience: audToArray(aud),
+      resources: [assertion.resource],
       expiresIn: accessTokenExpiresIn,
+      // Public identifiers only. The assertion is never recorded; its `jti` is
+      // what ties this issuance to the single-use record that consumed it.
+      idJagId: assertion.jti,
+      idJagIssuer: assertion.issuer,
+      ...(scopeMode === null ? {} : { scopeMode }),
     },
-  });
+    { realmId, userId: user.id, clientId: client.clientId, actor: 'client' }
+  );
 
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'jwt-bearer' });
 
