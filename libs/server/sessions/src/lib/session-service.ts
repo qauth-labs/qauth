@@ -24,6 +24,9 @@ export const DEFAULT_SESSION_LAST_SEEN_INTERVAL_SECONDS = 60;
 /** How long a cache entry may serve a session without Postgres, by default. */
 export const DEFAULT_SESSION_CACHE_TTL_SECONDS = 60;
 
+/** How long a cache call may take before the service goes on without it, by default. */
+export const DEFAULT_SESSION_CACHE_TIMEOUT_MS = 250;
+
 /** The settings of {@link createSessionService}. */
 export interface SessionServiceSettings {
   /**
@@ -43,6 +46,14 @@ export interface SessionServiceSettings {
    * {@link DEFAULT_SESSION_CACHE_TTL_SECONDS}.
    */
   cacheTtlSeconds?: number;
+  /**
+   * How long, in milliseconds, a cache call may take before the service treats
+   * the cache as down for that call: a read goes to Postgres, a write is
+   * dropped. A Redis that does not answer would otherwise hold every read for
+   * as long as its client retries. Defaults to
+   * {@link DEFAULT_SESSION_CACHE_TIMEOUT_MS}.
+   */
+  cacheTimeoutMs?: number;
 }
 
 /** What {@link createSessionService} works with. */
@@ -80,11 +91,23 @@ interface LiveSession {
   lifetimes: RealmSessionLifetimes;
 }
 
-function positiveSeconds(name: string, value: number): number {
+function positive(name: string, value: number, unit: string): number {
   if (!Number.isFinite(value) || value <= 0) {
-    throw new RangeError(`${name} must be a positive number of seconds, got ${value}`);
+    throw new RangeError(`${name} must be a positive number of ${unit}, got ${value}`);
   }
   return value;
+}
+
+function positiveSeconds(name: string, value: number): number {
+  return positive(name, value, 'seconds');
+}
+
+/** A cache call that did not answer in time. */
+class SessionCacheTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`The session cache did not answer within ${timeoutMs} ms`);
+    this.name = 'SessionCacheTimeoutError';
+  }
 }
 
 function cachedRecordOf(session: SessionRecord): CachedSessionRecord {
@@ -140,9 +163,30 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       'cacheTtlSeconds',
       options.settings.cacheTtlSeconds ?? DEFAULT_SESSION_CACHE_TTL_SECONDS
     ) * 1000;
+  const cacheTimeoutMs = positive(
+    'cacheTimeoutMs',
+    options.settings.cacheTimeoutMs ?? DEFAULT_SESSION_CACHE_TIMEOUT_MS,
+    'milliseconds'
+  );
 
   /** One Postgres round trip per session at a time on this node. */
   const inFlight = new Map<string, Promise<LiveSession | null>>();
+
+  /**
+   * A cache call, given up after {@link cacheTimeoutMs}. The call itself is
+   * left to finish or fail on its own; its late failure is ignored.
+   */
+  function bounded<T>(call: Promise<T>): Promise<T> {
+    call.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new SessionCacheTimeoutError(cacheTimeoutMs)),
+        cacheTimeoutMs
+      );
+    });
+    return Promise.race([call, timeout]).finally(() => clearTimeout(timer));
+  }
 
   function verdictOf(live: LiveSession, at: number): SessionVerdict {
     return sessionVerdict(sessionEnds(live.record, live.lifetimes, defaultMaxLifespanSeconds), at);
@@ -188,7 +232,7 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       freshUntil: until,
     };
     try {
-      await cache.write(entry, ttlMs);
+      await bounded(cache.write(entry, ttlMs));
     } catch (error) {
       logger.warn(
         { err: error, realmId: live.record.realmId },
@@ -274,7 +318,9 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
   function shared(key: string, work: () => Promise<LiveSession | null>) {
     const running = inFlight.get(key);
     if (running !== undefined) return running;
-    const started = work().finally(() => inFlight.delete(key));
+    const started: Promise<LiveSession | null> = work().finally(() => {
+      if (inFlight.get(key) === started) inFlight.delete(key);
+    });
     inFlight.set(key, started);
     return started;
   }
@@ -314,7 +360,7 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       const key = `${realmId}:${sid}`;
       let lookup;
       try {
-        lookup = await cache.read(realmId, sid);
+        lookup = await bounded(cache.read(realmId, sid));
       } catch (error) {
         metrics.cacheLookups.inc({ result: 'error' });
         logger.warn({ err: error, realmId }, 'Session cache read failed; reading Postgres');
@@ -351,10 +397,13 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       const sid = input.sid.toLowerCase();
       if (!UUID.test(realmId) || !UUID.test(sid)) return null;
       const ended = await store.revoke(realmId, sid, input.reason);
+      // A read started on this node before the end must not answer the reads
+      // that come after it.
+      inFlight.delete(`${realmId}:${sid}`);
       // Written whether or not this call ended the row: a stale entry of a
       // session that was already ended goes too.
       try {
-        await cache.markRevoked(realmId, sid, cacheTtlMs);
+        await bounded(cache.markRevoked(realmId, sid, cacheTtlMs));
       } catch (error) {
         logger.warn(
           { err: error, realmId },
