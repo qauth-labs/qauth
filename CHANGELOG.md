@@ -168,7 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-020 §3, ADR-019 Decision 7). Every admin change becomes one
   `admin.change_applied` event, written in the transaction of the change with
   `emitAdminEvent(tx, { realm, actor, operation, target, before, after,
-approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
+  approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   fields by JSON Pointer with their old and new values: unchanged fields are
   left out, nested objects are diffed, arrays are shown whole. A secret field
   holds `***`: one the operation marks, and one whose name looks like a secret
@@ -1136,7 +1136,7 @@ token carries; see Changed.
   writes and a CIMD re-resolution never touches; a suspended client is refused
   wherever a disabled one is, with the same error. New operator tooling:
   `pnpm nx run infra-db:db:suspend-oauth-client -- --realm=<name>
---client-id=<client_id> [--lift]`. The management API returns a read-only
+  --client-id=<client_id> [--lift]`. The management API returns a read-only
   `suspended` field. **Upgrade note**: migration 0023 suspends every client that
   is disabled when it runs; one its owner had disabled stays off until an
   operator lifts the suspension, after which the owner re-enables it.

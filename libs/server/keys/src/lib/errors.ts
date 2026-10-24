@@ -13,7 +13,10 @@
 
 /** What went wrong, as a stable value to branch on. */
 export type KeyCustodyErrorCode =
-  'KEY_DECRYPTION_FAILED' | 'KEK_UNKNOWN_REF' | 'KEK_UNAVAILABLE' | 'KEK_ACCESS_DENIED';
+  | 'KEY_DECRYPTION_FAILED'
+  | 'KEK_UNKNOWN_REF'
+  | 'KEK_UNAVAILABLE'
+  | 'KEK_ACCESS_DENIED';
 
 /**
  * The base of every key-custody error.

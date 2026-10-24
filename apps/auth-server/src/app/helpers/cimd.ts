@@ -132,7 +132,10 @@ export type CimdDocument = z.infer<typeof cimdDocumentSchema>;
  * ones; there is no record to spam.
  */
 export type CimdGrantType =
-  'authorization_code' | 'refresh_token' | 'client_credentials' | typeof TOKEN_EXCHANGE_GRANT_TYPE;
+  | 'authorization_code'
+  | 'refresh_token'
+  | 'client_credentials'
+  | typeof TOKEN_EXCHANGE_GRANT_TYPE;
 
 /**
  * RFC 8693 token exchange (#381) is admitted here for the same reason it is

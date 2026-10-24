@@ -1002,7 +1002,7 @@ keeping so it is not re-invented:
   `event = 'oauth.token.exchange.failure'` — the naming convention is a project convention, not a
   constraint the planner knows about. The fix is in the query, below.
 - **`idx_audit_logs_actor_client_id`** is `(actor_client_id, created_at) WHERE actor_client_id IS
-NOT NULL` (`libs/infra/db/src/lib/schema/audit.ts:77`). The "agent actions" count constrains the
+  NOT NULL` (`libs/infra/db/src/lib/schema/audit.ts:77`). The "agent actions" count constrains the
   leading column only with `IS NOT NULL`, which is the index's own partial predicate — so there is
   no range to seek to and the scan degenerates to reading the whole partial index. It also carries
   no ownership column, so every row it returns still needs checking. It is the right index for

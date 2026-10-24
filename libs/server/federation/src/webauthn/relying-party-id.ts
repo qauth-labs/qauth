@@ -66,7 +66,10 @@ export interface RelyingPartyIdSettings {
  *   refuse one as an RP ID. Only `localhost` is kept, for development.
  */
 export type RelyingPartyIdErrorReason =
-  'not-a-host' | 'unrelated' | 'parent-not-allowed' | 'public-suffix';
+  | 'not-a-host'
+  | 'unrelated'
+  | 'parent-not-allowed'
+  | 'public-suffix';
 
 /** An RP ID the realm cannot use. The message names the values: it is for the operator. */
 export class RelyingPartyIdError extends Error {

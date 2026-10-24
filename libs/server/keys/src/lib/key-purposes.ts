@@ -74,7 +74,8 @@ export const DEFAULT_KEY_RETIRED_RETENTION_DAYS = 14;
  *   a scheduled change would break that party without notice.
  */
 export type KeyRotationDefault =
-  { readonly mode: 'automatic'; readonly periodDays: number } | { readonly mode: 'manual' };
+  | { readonly mode: 'automatic'; readonly periodDays: number }
+  | { readonly mode: 'manual' };
 
 const AUTOMATIC: KeyRotationDefault = Object.freeze({
   mode: 'automatic',

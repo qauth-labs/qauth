@@ -1209,7 +1209,7 @@ GitHub, `gh` or PostgreSQL below are examples.
   message that carries one from the node: the first two certify a human's
   act and only a human adds them at review or merge; the third means a
   human wrote the code with an agent's help, the kernel's `Assisted-by:
-AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
+  AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
   merged April 2026), and never appears on an agent-authored commit. A
   `pre-push` hook reports the pushed commit hashes to the broker, which
   emits them as one §7 SET (`action: git-push`, `resource` the repository,

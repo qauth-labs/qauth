@@ -40,7 +40,11 @@ export const WEBAUTHN_ORIGIN_MAX_LENGTH = 300;
  * - `android_hash` — an Android origin whose hash is not a base64url SHA-256.
  */
 export type InvalidWebAuthnOriginReason =
-  'malformed' | 'scheme' | 'not_origin' | 'ip_literal' | 'android_hash';
+  | 'malformed'
+  | 'scheme'
+  | 'not_origin'
+  | 'ip_literal'
+  | 'android_hash';
 
 /**
  * Thrown by {@link normaliseWebAuthnOrigin}. The message is fixed text and

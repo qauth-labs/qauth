@@ -66,7 +66,8 @@ export interface StatusListFetchRequest {
  * responses.
  */
 export type StatusListFetchResult =
-  { readonly outcome: 'ok'; readonly token: string } | { readonly outcome: 'failed' };
+  | { readonly outcome: 'ok'; readonly token: string }
+  | { readonly outcome: 'failed' };
 
 /** The transport seam. Implementations must never throw. */
 export type StatusListFetch = (request: StatusListFetchRequest) => Promise<StatusListFetchResult>;

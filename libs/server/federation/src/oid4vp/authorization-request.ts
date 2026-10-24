@@ -123,7 +123,8 @@ export const DIRECT_POST_JWT_RESPONSE_MODE = 'direct_post.jwt' satisfies Respons
  * `deriveCryptoCapabilities`.
  */
 export type RenderableClientIdPrefix =
-  typeof UNSIGNED_CLIENT_ID_PREFIX | typeof X509_HASH_CLIENT_ID_PREFIX;
+  | typeof UNSIGNED_CLIENT_ID_PREFIX
+  | typeof X509_HASH_CLIENT_ID_PREFIX;
 
 /**
  * Verifier metadata sent as `client_metadata` (OID4VP 1.0 §5.1).

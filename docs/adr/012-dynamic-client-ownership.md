@@ -26,7 +26,7 @@
 > suspends.** The maintainer decided on 2026-10-19 (ANT-2026-DR5XI3LV) to stop
 > sharing one column between the owner's on/off switch and the operator's
 > cut-off. `oauth_clients.enabled` is the owner's again (`PATCH
-/api/clients/{id}` may set it either way). An operator who must keep a client
+> /api/clients/{id}` may set it either way). An operator who must keep a client
 > off sets `oauth_clients.suspended` (with `suspended_at`), which every check
 > that refuses a disabled client also reads, with the same error. No route
 > writes it, the repository's update type excludes it, and decision 3's
