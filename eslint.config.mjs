@@ -1,19 +1,32 @@
+import { globSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 import nx from '@nx/eslint-plugin';
 import prettierPlugin from 'eslint-plugin-prettier';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import * as jsoncParser from 'jsonc-eslint-parser';
+import ts from 'typescript';
 
 /**
  * Files inside a project that are NOT part of what it ships: build tooling and
  * test code. Imports made only from these belong in devDependencies, so
  * `@nx/dependency-checks` must not read them. Without this the rule would take
- * the whole `{projectRoot}/src/**\/*.ts` typecheck input set at face value and
- * demand vitest, testcontainers and friends in `dependencies`.
+ * the whole typecheck input set (`default`, so every file in the project since
+ * Nx 24) at face value and demand vitest, testcontainers and friends in
+ * `dependencies`.
  */
 const NON_SHIPPED_FILES = [
   '{projectRoot}/vite.config.ts',
   '{projectRoot}/vite.config.mts',
   '{projectRoot}/vitest.config.ts',
+  // Tooling beside src/ that Nx 23's typecheck inputs (the tsconfig includes)
+  // left out and Nx 24's `default` input takes in: wire-suite's runner config,
+  // infra-db's drizzle-kit config, crypto-native's packaging script and
+  // mcp-guard's runnable example. None of them ships with the package.
+  '{projectRoot}/vitest.*.config.ts',
+  '{projectRoot}/drizzle.config.ts',
+  '{projectRoot}/scripts/**',
+  '{projectRoot}/examples/**',
   '{projectRoot}/**/*.test.ts',
   '{projectRoot}/**/*.test.tsx',
   '{projectRoot}/**/*.spec.ts',
@@ -36,6 +49,36 @@ const NON_SHIPPED_FILES = [
 ];
 
 /**
+ * The package.json of every project whose tsconfig.json turns on
+ * `importHelpers`, so tsc's output imports its helpers from tslib and tslib is
+ * a real dependency. `@nx/dependency-checks` finds that setting only in a
+ * `tsc --build <config>` command, the typecheck shape Nx 23 inferred; Nx 24
+ * infers `tsc -p <config> --noEmit`, the rule falls back to
+ * tsconfig.base.json, and it would call tslib unused in every one of them.
+ * Naming tslib as a runtime helper for exactly these projects restores the
+ * Nx 23 verdicts: still required here, still obsolete everywhere else.
+ */
+function importHelpersManifests() {
+  const root = import.meta.dirname;
+  const host = {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+      throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+    },
+  };
+  return globSync(['apps/*/package.json', 'libs/**/package.json'], {
+    cwd: root,
+    exclude: ['**/node_modules/**'],
+  }).filter((manifest) => {
+    const tsconfig = join(root, dirname(manifest), 'tsconfig.json');
+    return (
+      ts.sys.fileExists(tsconfig) &&
+      ts.getParsedCommandLineOfConfigFile(tsconfig, {}, host)?.options.importHelpers === true
+    );
+  });
+}
+
+/**
  * Builds the `@nx/dependency-checks` config blocks.
  *
  * `buildTargets: ['typecheck', ...]` is deliberate and load-bearing. The rule
@@ -53,9 +96,12 @@ const NON_SHIPPED_FILES = [
  * `ignoredDependencies`, so the guard stays sharp everywhere else.
  */
 function dependencyChecksConfigs() {
+  const tslibManifests = importHelpersManifests();
+
   /** @type {Array<{ files: string[]; ignoredDependencies?: string[] }>} */
   const scopes = [
     { files: ['**/package.json'] },
+    { files: tslibManifests },
     {
       files: ['libs/ui/package.json'],
       // Both are peerDependencies: requirements this component library places
@@ -74,6 +120,9 @@ function dependencyChecksConfigs() {
     },
   ];
 
+  // A later block replaces an earlier one's rule options for the files they
+  // share, so each block carries the tslib helper itself when it covers only
+  // importHelpers projects (libs/ui does).
   return scopes.map(({ files, ignoredDependencies }) => ({
     files,
     languageOptions: { parser: jsoncParser },
@@ -84,6 +133,9 @@ function dependencyChecksConfigs() {
           buildTargets: ['typecheck', 'build'],
           ignoredFiles: NON_SHIPPED_FILES,
           ...(ignoredDependencies ? { ignoredDependencies } : {}),
+          ...(files.every((file) => tslibManifests.includes(file))
+            ? { runtimeHelpers: ['tslib'] }
+            : {}),
         },
       ],
     },
