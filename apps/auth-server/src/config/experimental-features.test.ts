@@ -243,7 +243,8 @@ function resolveAppPath(): string {
 
 // Behaviour is tested above and, against a booted server, in
 // experimental-features-boot.integration.test.ts; this pins that every boot of
-// the app logs the warnings, in the unit suite CI's main job runs.
+// the app logs the warnings, in the unit suite CI's `affected (test)` and
+// `coverage` jobs run.
 describe('app.ts', () => {
   it('logs the experimental-feature warnings through the app logger', () => {
     const code = readFileSync(resolveAppPath(), 'utf8')

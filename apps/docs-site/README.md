@@ -73,8 +73,9 @@ There used to be one: `.github/workflows/docs.yml` built the site in Actions and
 uploaded the prebuilt output through the Netlify CLI, which needed a
 `NETLIFY_AUTH_TOKEN` and a `NETLIFY_SITE_ID`. It was removed in favour of
 Netlify's own CD. The site's checks did not go with it — `ci.yml` runs
-`nx affected -t lint typecheck test build`, which covers `docs-site` (its drift
-invariants included) whenever the diff touches it or anything it reads.
+`nx affected` for lint, typecheck, test and build, one job per target, which
+covers `docs-site` (its drift invariants included) whenever the diff touches it
+or anything it reads.
 
 Two settings in `netlify.toml` are load-bearing, and both are documented at the
 lines that set them:

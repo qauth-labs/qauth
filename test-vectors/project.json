@@ -24,7 +24,7 @@
       "executor": "nx:noop",
       "dependsOn": ["validate"],
       "metadata": {
-        "description": "Runs validate. CI's unit job runs `nx affected -t lint typecheck test build`, so this is how test-vectors:validate runs there."
+        "description": "Runs validate. CI's `affected (test)` job runs `nx affected -t test`, so this is how test-vectors:validate runs there."
       }
     }
   }

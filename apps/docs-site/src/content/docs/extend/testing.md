@@ -11,14 +11,14 @@ the built server from outside, over HTTP. Knowing what each one **cannot** catch
 worst incidents in this repo's history came from: a suite that passed while running zero tests,
 and a schema change no unit test could see.
 
-| Tier                 | Command                                      | Runs in CI               | Catches                                                 |
-| -------------------- | -------------------------------------------- | ------------------------ | ------------------------------------------------------- |
-| Unit                 | `pnpm exec nx run-many -t test --all`        | `nx affected -t … test`  | Handler and helper logic, in isolation                  |
-| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job    | Real Postgres DDL, migrations, repositories             |
-| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | a separate step          | Coverage regression across the whole fast suite         |
-| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier    | Drift between this site and the tree it describes       |
-| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job     | What a client sees over HTTP from the built image       |
-| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job | A surface out of step with the code or the last release |
+| Tier                 | Command                                      | Runs in CI                | Catches                                                 |
+| -------------------- | -------------------------------------------- | ------------------------- | ------------------------------------------------------- |
+| Unit                 | `pnpm exec nx run-many -t test --all`        | the `affected (test)` job | Handler and helper logic, in isolation                  |
+| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job     | Real Postgres DDL, migrations, repositories             |
+| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | the `coverage` job        | Coverage regression across the whole fast suite         |
+| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier     | Drift between this site and the tree it describes       |
+| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job      | What a client sees over HTTP from the built image       |
+| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job  | A surface out of step with the code or the last release |
 
 ## Tier 1 — unit
 
@@ -115,15 +115,15 @@ credential-status E2E), which is why `apps/auth-server` carries its own `test-in
 target: since #240 its wallet-federation E2E boots the real server against testcontainers
 Postgres **and** Redis.
 
-**This is the only tier that exercises real DDL, and that is not a nice-to-have.** The `ci.yml`
-comment at `.github/workflows/ci.yml:56` states the reasoning better than a paraphrase would:
+**This is the only tier that exercises real DDL, and that is not a nice-to-have.** The comment
+above the `integration` job (`ci.yml:129`) states the reasoning better than a paraphrase would:
 
-> The `main` job above can never exercise real DDL: every unit suite mocks the repositories, and
-> both vitest.config.ts and the coverage gate exclude `*.integration.test.ts`. So the
-> testcontainers suites are the ONLY assertion that the generated migrations produce the schema
-> the code expects — e.g. that `authorization_codes.state`/`.nonce` are unbounded `text` and not
-> the varchar(255) that broke long opaque `state` (#316). Left unwired, a lost migration file or a
-> re-narrowed column would sail through a fully green CI.
+> The `affected` and `coverage` jobs above can never exercise real DDL: every unit suite mocks the
+> repositories, and both vitest.config.ts and the coverage gate exclude `*.integration.test.ts`.
+> So the testcontainers suites are the ONLY assertion that the generated migrations produce the
+> schema the code expects — e.g. that `authorization_codes.state`/`.nonce` are unbounded `text`
+> and not the varchar(255) that broke long opaque `state` (#316). Left unwired, a lost migration
+> file or a re-narrowed column would sail through a fully green CI.
 
 Both exclusions it names are real and worth seeing for yourself: `vitest.config.ts:23` keeps these
 suites out of the fast run, and `vitest.config.ts:62` keeps them out of the coverage report. A
@@ -135,12 +135,12 @@ failure anywhere else.
 Locally, an integration suite skips when Docker is not running. On CI it does not: inside
 `requireDockerOrSkip` there is a CI branch that throws instead of skipping
 (`libs/shared/testing/src/lib/pg-testcontainer.ts:117`), with a message explaining that skipping
-"turns the run into a green no-op". The `integration` job at `.github/workflows/ci.yml:66` runs on
+"turns the run into a green no-op". The `integration` job (`ci.yml:140`) runs on
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
 
-The job is affected-scoped like the main one (`.github/workflows/ci.yml:91`), so a schema,
-migration, or repository change runs it and a docs-only pull request pays nothing.
+The job is affected-scoped like the `affected` job (`ci.yml:162`), so a schema, migration, or
+repository change runs it and a docs-only pull request pays nothing.
 
 ## Tier 3 — the repo-wide coverage gate
 
@@ -153,10 +153,10 @@ functions 65, lines 70 — and the comment there is explicit that they sit comfo
 numbers so the gate passes now and fails on a real regression, to be ratcheted up as the
 container-backed suite grows.
 
-CI runs this as its **own step** (`.github/workflows/ci.yml:54`), separate from the affected
-per-project `test` targets on the line above it (`.github/workflows/ci.yml:45`). The reason, from
-that step's comment: the per-project runs write per-project coverage directories, so the threshold
-has to be evaluated once across the whole fast unit suite rather than per project. Running
+CI runs this in its **own job**, `coverage` (`ci.yml:75`), separate from the affected per-project
+`test` targets, which the `affected (test)` job runs (`ci.yml:59`). The reason, from that job's
+comment: the per-project runs write per-project coverage directories, so the threshold has to be
+evaluated once across the whole fast unit suite rather than per project. Running
 `nx affected -t test` locally therefore tells you nothing about the gate; run the command above
 before assuming a large deletion is safe.
 
