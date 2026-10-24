@@ -88,12 +88,15 @@ export function renderPromotionStatus(
       if (entry?.note !== undefined) lines.push(`        ${entry.note}`);
     });
     const lacking = missingEvidence(item).length;
+    const reasons = [
+      ...(item.built ? [] : ['not built']),
+      ...(lacking > 0 ? [`${lacking} of 4 conditions lack evidence`] : []),
+      ...(missingPaths.size > 0 ? [`${missingPaths.size} evidence path(s) do not exist`] : []),
+    ];
     lines.push(
       item.stable
         ? '  stable'
-        : `  may become stable: ${mayBecomeStable(item, pathExists) ? 'yes' : 'no'}${
-            lacking > 0 ? ` (${lacking} of 4 conditions lack evidence)` : ''
-          }${item.built ? '' : ' (not in code yet)'}`
+        : `  may become stable: ${reasons.length === 0 ? 'yes' : `no (${reasons.join('; ')})`}`
     );
     return lines.join('\n');
   });
