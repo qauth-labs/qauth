@@ -70,6 +70,15 @@
       },
       "description": "Idempotent OAuth-client provisioner, and scope grants for CIMD clients \u2014 pass `-- --manifest=<path> [--rotate]`"
     },
+    "events:verify-chain": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/verify-event-chain.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "Verify a realm's admin event chain and report the first broken event (#459): pass `-- (--realm=<name> | --realm-id=<uuid>) [--from-seq=<seq> --from-hash=<hex>] [--json]`. Exits 1 on a break."
+    },
     "db:suspend-oauth-client": {
       "executor": "nx:run-commands",
       "options": {
