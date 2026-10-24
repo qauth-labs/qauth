@@ -257,24 +257,37 @@ describe('the delivery role has no import path to key-loading code', () => {
 });
 
 /**
- * Nx's reader of its cached project graph, through `require` because this
- * library's TypeScript settings (CommonJS, `node` resolution) cannot see the
- * `exports` subpath Nx publishes it under. Typed with only the member used here.
+ * Nx's readers of the two caches the rule loads, the project graph and the file
+ * map, through `require` because this library's TypeScript settings (CommonJS,
+ * `node` resolution) cannot see the `exports` subpaths Nx publishes them under.
+ * Typed with only the members used here.
  */
-const { readCachedProjectGraph } = createRequire(__filename)('nx/src/devkit-exports') as {
+const requireNx = createRequire(__filename);
+const { readCachedProjectGraph } = requireNx('nx/src/devkit-exports') as {
   readCachedProjectGraph(): unknown;
 };
+const { readFileMapCache } = requireNx('nx/src/devkit-internals') as {
+  readFileMapCache(): unknown;
+};
+
+/** Whether both caches the rule needs are there; it skips every file without either. */
+function nxCachesPresent(): boolean {
+  try {
+    readCachedProjectGraph();
+  } catch {
+    return false;
+  }
+  return readFileMapCache() !== null;
+}
 
 describe('the Nx constraint of the delivery role', () => {
   let eslint: ESLint;
 
-  // The rule reads the project graph Nx caches. A run of Nx leaves one; a
-  // plain `vitest run` (CI's coverage job) may not, and then the rule skips
-  // every file, so build it first.
+  // The rule reads the project graph and the file map Nx caches. A run of Nx
+  // leaves both; a plain `vitest run` (CI's coverage job) may not, and then the
+  // rule skips every file, so build them first.
   beforeAll(() => {
-    try {
-      readCachedProjectGraph();
-    } catch {
+    if (!nxCachesPresent()) {
       execFileSync('pnpm', ['exec', 'nx', 'show', 'projects'], {
         cwd: WORKSPACE_ROOT,
         stdio: 'ignore',
