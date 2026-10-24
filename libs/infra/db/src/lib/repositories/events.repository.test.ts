@@ -625,6 +625,32 @@ describe('emitAdminEvent', () => {
     expect(insertedColumns(insertOf(queries))['request_id']).toBeNull();
   });
 
+  it('hands a chained admin event to the telemetry sink once it commits, in a transaction or its own', async () => {
+    // One recording database per write: the chain's read-back answers with
+    // the first INSERT it recorded.
+    const inTx = createRecordingDb([], chainResponder());
+    const inTxSink = recordingSink(inTx.queries);
+    const inTxRepo = createEventsRepository(inTx.db, { now: () => NOW, telemetry: inTxSink.sink });
+    const own = createRecordingDb([], chainResponder());
+    const ownSink = recordingSink(own.queries);
+    const ownRepo = createEventsRepository(own.db, { now: () => NOW, telemetry: ownSink.sink });
+
+    const inTxId = await inTx.db.transaction((tx) => inTxRepo.emitAdminEvent(tx, ADMIN_CHANGE));
+    const ownId = await ownRepo.emitInOwnTransaction({
+      type: 'urn:qauth:event:client.suspended:v1-rc.0',
+      realm: REALM_ID,
+      actor: { type: 'operator_cli', id: 'root' },
+      subject: { type: 'client', id: 'portal' },
+      data: {},
+    });
+
+    expect(inTxSink.handed.map((entry) => entry.event.id)).toEqual([inTxId]);
+    expect(ownSink.handed.map((entry) => entry.event.id)).toEqual([ownId]);
+    for (const entry of [...inTxSink.handed, ...ownSink.handed]) {
+      expect(entry.statements.at(-1)).toBe('commit');
+    }
+  });
+
   it('chains every admin type that emit writes, not only its own', async () => {
     const { db, queries } = createRecordingDb([], chainResponder());
     const repo = createEventsRepository(db, { now: () => NOW });
