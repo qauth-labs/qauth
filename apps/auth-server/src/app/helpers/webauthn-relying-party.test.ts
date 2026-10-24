@@ -1,3 +1,4 @@
+import { RealmWithoutIssuerError } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -62,14 +63,18 @@ describe('resolveRealmRelyingParty', () => {
 describe('passkeyCeremonyOrigins', () => {
   it("puts the realm issuer's origin first, then the client's operator-set origins, once each", () => {
     const apk = 'android:apk-key-hash:sYUC8p5I9SxqFernBPHmDxz_YVZXmVJdW8s-m3RTTqE';
-    expect(passkeyCeremonyOrigins('https://auth.example.com', [])).toEqual([
+    expect(passkeyCeremonyOrigins({ issuer: 'https://auth.example.com' }, [])).toEqual([
       'https://auth.example.com',
     ]);
     expect(
-      passkeyCeremonyOrigins('https://auth.example.com:8443/auth', [
+      passkeyCeremonyOrigins({ issuer: 'https://auth.example.com:8443/auth' }, [
         apk,
         'https://auth.example.com:8443',
       ])
     ).toEqual(['https://auth.example.com:8443', apk]);
+  });
+
+  it('refuses a realm without an issuer, whose pages have no origin yet', () => {
+    expect(() => passkeyCeremonyOrigins({ issuer: null }, [])).toThrow(RealmWithoutIssuerError);
   });
 });

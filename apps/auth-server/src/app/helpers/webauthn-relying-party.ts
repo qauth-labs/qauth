@@ -3,6 +3,7 @@ import {
   type ResolvedRelyingPartyId,
   resolveRelyingPartyId,
 } from '@qauth-labs/fastify-plugin-federation';
+import { expectedOrigin, type RealmRelyingPartyFields } from '@qauth-labs/shared-validation';
 
 /**
  * The default realm's passkey relying party (ADR-019 Decision 2, issue #467).
@@ -84,16 +85,19 @@ export function servesAssociationFiles(relyingParty: RealmRelyingParty): boolean
 
 /**
  * The origins a passkey ceremony started for a client accepts (ADR-017
- * Decision 14, issue #467): the realm's own origin, where the hosted pages
- * run, then the client's operator-set `webauthn_allowed_origins` (a native
- * app's `android:apk-key-hash:` origin, or a first-party web front-end under a
+ * Decision 14, issues #467 and #553): the realm's own origin,
+ * `expectedOrigin(realm)`, where the hosted pages run, then the client's
+ * operator-set `webauthn_allowed_origins` (a native app's
+ * `android:apk-key-hash:` origin, or a first-party web front-end under a
  * parent-domain RP ID). The realm origin comes from the realm's issuer, never
  * from the request (ADR-019 Decision 1). Each is checked against the RP ID
  * when the ceremony starts.
+ *
+ * @throws RealmWithoutIssuerError when the realm has no issuer yet
  */
 export function passkeyCeremonyOrigins(
-  realmIssuer: string,
+  realm: Pick<RealmRelyingPartyFields, 'issuer'>,
   clientOrigins: readonly string[]
 ): string[] {
-  return [...new Set([new URL(realmIssuer).origin, ...clientOrigins])];
+  return [...new Set([expectedOrigin(realm), ...clientOrigins])];
 }
