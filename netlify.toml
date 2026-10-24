@@ -6,7 +6,8 @@
 # was deleted when this file landed. The site's lint/typecheck/test/build
 # coverage did not go with it — `ci.yml` runs `nx affected` for each of those
 # targets, one job per target, which picks up `docs-site` whenever the diff
-# touches it or anything it reads.
+# touches it or anything it reads. The records under docs/ count through the
+# `test` target's inputs; apps/docs-site/README.md says why they must stay.
 #
 # Settings here OVERRIDE the equivalents in the Netlify UI, which is the point:
 # the build is reproducible from the repository rather than from a dashboard
