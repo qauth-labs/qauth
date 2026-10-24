@@ -8,9 +8,12 @@ import {
   pgTable,
   smallint,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+
+import { bytea } from './sql-helpers';
 
 /**
  * Postgres `xid8`, the 64-bit transaction id that never wraps around, read and
@@ -56,9 +59,30 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  * ## Expand only
  *
  * The migration that creates the table holds only `CREATE TABLE` and
- * `CREATE INDEX`. The per-role grants (insert only for a writer) belong to
- * the topology area; the hash-chain columns of admin events and the trigger
- * that refuses updates come with #459.
+ * `CREATE INDEX`. The per-role grants belong to the topology area; this
+ * library ships the statements (`eventsWriterGrantStatements`).
+ *
+ * ## The admin chain (#459)
+ *
+ * A realm's admin events form one hash chain. Each admin row stores the
+ * `hash` of the realm's admin row before it as `prev_hash`, 32 zero bytes for
+ * the first, and its own `hash` is SHA-256 over `prev_hash` and the RFC 8785
+ * canonical JSON of the envelope the row holds (`eventChainHash`). Only admin
+ * rows carry the two columns, and every admin row written since migration
+ * 0032 does. The chain runs in `seq` order: `emitAdminEvent` holds a per-realm
+ * advisory lock from reading the chain head to the end of its transaction,
+ * and the identity's `CACHE 1` hands out `seq` values in the order the inserts
+ * run. `idx_events_chain_link` lets no two rows of a realm follow the same
+ * hash, so even a writer that skipped the lock cannot fork the chain, and the
+ * trigger `events_admin_follows_head` refuses an admin row whose `prev_hash`
+ * is not the head's, or whose `seq` was not the identity's or is not past the
+ * head's.
+ *
+ * ## No updates
+ *
+ * A trigger refuses every `UPDATE` on the table, for every role whose
+ * statements fire it, the owner included. Deletes are the retention job's
+ * (#536), by grant: a writer holds `INSERT` and `SELECT` only.
  */
 export const events = pgTable(
   'events',
@@ -104,6 +128,13 @@ export const events = pgTable(
      * 1 for every row this release writes; a reader refuses a later one.
      */
     schemaVersion: smallint('schema_version').notNull(),
+    /**
+     * The `hash` of the realm's admin row before this one in the chain, or 32
+     * zero bytes for the first. Set on admin rows only.
+     */
+    prevHash: bytea('prev_hash'),
+    /** SHA-256 over `prev_hash` and the envelope's canonical JSON. Set on admin rows only. */
+    hash: bytea('hash'),
   },
   (t) => [
     unique('events_id_unique').on(t.id),
@@ -121,11 +152,28 @@ export const events = pgTable(
     ),
     check('events_subject_complete', sql`(${t.subjectType} is null) = (${t.subjectId} is null)`),
     check('events_schema_version_positive', sql`${t.schemaVersion} >= 1`),
+    check('events_chain_hashes_paired', sql`(${t.prevHash} is null) = (${t.hash} is null)`),
+    check(
+      'events_prev_hash_sha256',
+      sql`${t.prevHash} is null or octet_length(${t.prevHash}) = 32`
+    ),
+    check('events_hash_sha256', sql`${t.hash} is null or octet_length(${t.hash}) = 32`),
+    // Added NOT VALID by migration 0032: rows written before it are not
+    // checked, every row written since is.
+    check('events_admin_chained', sql`(${t.category} = 'admin') = (${t.hash} is not null)`),
     // Readers: a realm's rows in (xid, seq) order, from a position.
     index('idx_events_realm_position').on(t.realmId, t.xid, t.seq),
     index('idx_events_realm_type').on(t.realmId, t.type),
     index('idx_events_subject_id').on(t.subjectId),
     // Retention removes the oldest rows first (#536).
     index('idx_events_time').on(t.time),
+    // The admin chain: no two rows of a realm follow the same hash, and the
+    // head and the verifier read a realm's admin rows in seq order.
+    uniqueIndex('idx_events_chain_link')
+      .on(t.realmId, t.prevHash)
+      .where(sql`${t.prevHash} is not null`),
+    index('idx_events_chain_order')
+      .on(t.realmId, t.seq)
+      .where(sql`${t.hash} is not null`),
   ]
 );

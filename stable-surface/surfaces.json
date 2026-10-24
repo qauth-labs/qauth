@@ -42,6 +42,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-admin-change-applied-v1",
+      "description": "The urn:qauth:event:admin.change_applied:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, ADR-020 §3, #459).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/admin.change_applied.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-api-key-created-v1",
       "description": "The urn:qauth:event:api_key.created:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",

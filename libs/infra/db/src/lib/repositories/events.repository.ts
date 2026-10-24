@@ -1,21 +1,30 @@
 import {
+  type AdminApproval,
+  adminChangeApplied,
+  buildAdminDiff,
   type EventEnvelope,
   EventValidationError,
   getEventType,
   parseEvent,
 } from '@qauth-labs/shared-events';
-import { and, eq, gte, inArray, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
 
 import type {
+  AdminEventInput,
   Database,
   DbClient,
+  DbTransaction,
   EmitEvent,
+  EventChainBreakReason,
+  EventChainPoint,
+  EventChainReport,
   EventPage,
   EventReadFilters,
   EventsRepository,
   EventsRepositoryOptions,
   StoredEvent,
 } from '../../types';
+import { EVENT_CHAIN_GENESIS_HASH, EVENT_CHAIN_LOCK_PREFIX, eventChainHash } from '../events/chain';
 import {
   compareEventPositions,
   decodeEventPosition,
@@ -39,7 +48,17 @@ export const EVENT_READ_LIMIT_MAX = 1000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const DEFAULT_VERIFY_BATCH_SIZE = 500;
+
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+
 type NewEventRow = typeof events.$inferInsert;
+
+/** A checked event: the row that stores it and the envelope it is. */
+interface BuiltEvent {
+  row: NewEventRow & { id: string; realmId: string };
+  envelope: EventEnvelope;
+}
 
 /** An emitted event of any type, before it is checked: what `emit` sees at run time. */
 type UncheckedEvent = Omit<EmitEvent, 'type' | 'data'> & { type: string; data: unknown };
@@ -64,7 +83,12 @@ function nulPaths(value: unknown, path: string): string[] {
  * @throws {EventValidationError} on an unknown type or an event that fails
  *   `parseEvent`, or one Postgres could not store
  */
-function buildEventRow(event: UncheckedEvent, at: number): NewEventRow {
+/** Whether a value is an object with no own member. */
+function isEmptyObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && Object.keys(value).length === 0;
+}
+
+function buildEvent(event: UncheckedEvent, at: number): BuiltEvent {
   const definition = getEventType(event.type);
   if (!definition) {
     throw new EventValidationError('unknown event type', [`${event.type} is not in the registry`]);
@@ -80,7 +104,12 @@ function buildEventRow(event: UncheckedEvent, at: number): NewEventRow {
     ...(event.actor === undefined ? {} : { actor: event.actor }),
     ...(event.subject === undefined ? {} : { subject: event.subject }),
     ...(event.client === undefined ? {} : { client: event.client }),
-    ...(event.request === undefined ? {} : { request: event.request }),
+    // An empty `request` is left out: a row stores it as three NULL columns,
+    // which read back as no `request`, so an admin event's hash covers what a
+    // reader gets.
+    ...(event.request === undefined || isEmptyObject(event.request)
+      ? {}
+      : { request: event.request }),
     data: event.data,
   });
   // Neither `text` nor `jsonb` can hold U+0000, and a failed insert would
@@ -92,7 +121,7 @@ function buildEventRow(event: UncheckedEvent, at: number): NewEventRow {
       unstorable.map((path) => `${path}: holds a NUL character, which Postgres cannot store`)
     );
   }
-  return {
+  const row = {
     id: envelope.id,
     realmId: envelope.realm,
     category: envelope.category,
@@ -110,6 +139,7 @@ function buildEventRow(event: UncheckedEvent, at: number): NewEventRow {
     data: envelope.data,
     schemaVersion: EVENT_ROW_SCHEMA_VERSION,
   };
+  return { row, envelope };
 }
 
 async function insertEvent(client: DbClient, row: NewEventRow): Promise<string> {
@@ -118,10 +148,23 @@ async function insertEvent(client: DbClient, row: NewEventRow): Promise<string> 
   return row.id;
 }
 
-/** A row of the read, as node-postgres returns it: `bigint` and `xid8` as text. */
-interface ReadRow extends Record<string, unknown> {
-  horizon: string;
-  seq: string | null;
+/**
+ * The columns a reader turns back into an envelope, named as {@link EnvelopeRow}
+ * names them: `bigint` and `xid8` as text.
+ */
+const ENVELOPE_COLUMNS = sql`${events.seq}::text as "seq", ${events.xid}::text as "xid",
+  ${events.id} as "id", ${events.realmId} as "realm_id", ${events.category} as "category",
+  ${events.type} as "type", ${events.time}::text as "time",
+  ${events.actorType} as "actor_type", ${events.actorId} as "actor_id",
+  ${events.actorDelegationChain} as "actor_delegation_chain",
+  ${events.subjectType} as "subject_type", ${events.subjectId} as "subject_id",
+  ${events.clientId} as "client_id", ${events.requestId} as "request_id",
+  ${events.requestIp} as "request_ip", ${events.requestUserAgent} as "request_user_agent",
+  ${events.data} as "data", ${events.schemaVersion} as "schema_version"`;
+
+/** A stored row, as {@link ENVELOPE_COLUMNS} reads it. */
+interface EnvelopeRow extends Record<string, unknown> {
+  seq: string;
   xid: string;
   id: string;
   realm_id: string;
@@ -141,13 +184,22 @@ interface ReadRow extends Record<string, unknown> {
   schema_version: number;
 }
 
+/** A row of the read: the horizon, and a row's columns, all `null` when none qualified. */
+type ReadRow = Record<string, unknown> & { horizon: string; seq: string | null };
+
+/** An admin row with its chain columns. */
+interface ChainRow extends EnvelopeRow {
+  prev_hash: Buffer;
+  hash: Buffer;
+}
+
 /**
  * The envelope a stored row holds, with every member the row has and none it
- * lacks.
+ * lacks: the envelope the row's writer emitted.
  *
  * @throws {Error} on a row written in a later layout than this release reads
  */
-function toStoredEvent(row: ReadRow & { seq: string }): StoredEvent {
+function envelopeOf(row: EnvelopeRow): EventEnvelope {
   if (row.schema_version !== EVENT_ROW_SCHEMA_VERSION) {
     throw new Error(
       `events: event ${row.id} is stored in layout ${row.schema_version}, which this release cannot read`
@@ -182,14 +234,94 @@ function toStoredEvent(row: ReadRow & { seq: string }): StoredEvent {
     ...(Object.keys(request).length === 0 ? {} : { request }),
     data: row.data,
   } as EventEnvelope;
+  return event;
+}
+
+/** A stored row, as a reader of the stream gets it. */
+function toStoredEvent(row: EnvelopeRow): StoredEvent {
   return {
     position: encodeEventPosition({
       realmId: row.realm_id,
       xid: BigInt(row.xid),
       seq: BigInt(row.seq),
     }),
-    event,
+    event: envelopeOf(row),
   };
+}
+
+/**
+ * Write an admin event as the next link of its realm's chain, in the
+ * caller's transaction. See {@link EventsRepository.emit}.
+ *
+ * @throws {Error} when the stored row does not hash as written; nothing is
+ *   then committed, since the error rolls back the caller's transaction
+ */
+async function appendToChain(tx: DbTransaction, { row, envelope }: BuiltEvent): Promise<string> {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${EVENT_CHAIN_LOCK_PREFIX}::text || (${row.realmId})::uuid::text, 0))`
+  );
+  const [head] = await tx
+    .select({ hash: events.hash })
+    .from(events)
+    .where(and(eq(events.realmId, row.realmId), isNotNull(events.hash)))
+    .orderBy(desc(events.seq))
+    .limit(1);
+  const prevHash = head?.hash ?? EVENT_CHAIN_GENESIS_HASH;
+  const hash = eventChainHash(prevHash, envelope);
+
+  // In a savepoint: when the row as Postgres stores it does not hash to its
+  // hash, the chain would break at this row for good, so the insert is
+  // undone even when the caller catches the error and commits.
+  await tx.transaction(async (savepoint) => {
+    await savepoint.insert(events).values({ ...row, prevHash, hash });
+    const { rows } = await savepoint.execute<ChainRow>(sql`
+      select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
+      from ${events} where ${events.id} = ${row.id}
+    `);
+    if (rows.length !== 1 || checkChainRow(rows[0], prevHash) !== undefined) {
+      throw new Error(
+        `events: admin event ${row.id} does not hash as it was written; nothing was emitted`
+      );
+    }
+  });
+  return row.id;
+}
+
+/** Why an admin row does not continue the chain after `expectedPrev`, if it does not. */
+function checkChainRow(row: ChainRow, expectedPrev: Buffer): EventChainBreakReason | undefined {
+  if (!Buffer.isBuffer(row.prev_hash) || !row.prev_hash.equals(expectedPrev)) {
+    return 'prev_hash_mismatch';
+  }
+  let computed: Buffer;
+  try {
+    computed = eventChainHash(row.prev_hash, envelopeOf(row));
+  } catch {
+    return 'unreadable_row';
+  }
+  return Buffer.isBuffer(row.hash) && computed.equals(row.hash) ? undefined : 'hash_mismatch';
+}
+
+/** The stored form of an approval: the members its schema names, nothing else. */
+function storedApproval(approval: AdminApproval): AdminApproval {
+  return {
+    approverId: approval.approverId,
+    credentialId: approval.credentialId,
+    approverCreatedBy: {
+      type: approval.approverCreatedBy.type,
+      ...(approval.approverCreatedBy.id === undefined ? {} : { id: approval.approverCreatedBy.id }),
+    },
+    ...(approval.approvedAt === undefined ? {} : { approvedAt: approval.approvedAt }),
+  };
+}
+
+function checkChainPoint(point: EventChainPoint): EventChainPoint {
+  if (typeof point.seq !== 'bigint' || point.seq < 0n) {
+    throw new TypeError('events: a chain point needs a seq, a bigint of 0 or more');
+  }
+  if (typeof point.hash !== 'string' || !SHA256_HEX.test(point.hash)) {
+    throw new TypeError('events: a chain point needs its hash as 64 hex digits');
+  }
+  return { seq: point.seq, hash: point.hash.toLowerCase() };
 }
 
 function checkRealmId(realmId: string): string {
@@ -228,15 +360,122 @@ export function createEventsRepository(
   options: EventsRepositoryOptions = {}
 ): EventsRepository {
   const now = options.now ?? Date.now;
+  const batchSize = options.verifyBatchSize ?? DEFAULT_VERIFY_BATCH_SIZE;
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
+    throw new TypeError('createEventsRepository: verifyBatchSize must be a positive integer');
+  }
+
+  async function emit(tx: DbTransaction, event: UncheckedEvent): Promise<string> {
+    const built = buildEvent(event, now());
+    return built.row.category === 'admin' ? appendToChain(tx, built) : insertEvent(tx, built.row);
+  }
 
   return {
-    async emit(tx, event) {
-      return insertEvent(tx, buildEventRow(event, now()));
-    },
+    emit,
 
     async emitInOwnTransaction(event) {
+      const built = buildEvent(event, now());
+      if (built.row.category === 'admin') {
+        // READ COMMITTED whatever the server's default, so the head is read
+        // after the lock is taken, not from a snapshot taken while waiting.
+        return defaultDb.transaction((tx) => appendToChain(tx, built), {
+          isolationLevel: 'read committed',
+        });
+      }
       // One INSERT on the root database is a transaction of its own.
-      return insertEvent(defaultDb, buildEventRow(event, now()));
+      return insertEvent(defaultDb, built.row);
+    },
+
+    async emitAdminEvent(tx, input: AdminEventInput) {
+      if (!input.actor) {
+        throw new TypeError('emitAdminEvent: an admin change needs the actor who made it');
+      }
+      const data = {
+        operation: input.operation,
+        target: { type: input.target.type, id: input.target.id },
+        diff: buildAdminDiff(input.before, input.after, { secretFields: input.secretFields }),
+        approvals: (input.approvals ?? []).map(storedApproval),
+      };
+      return emit(tx, {
+        type: adminChangeApplied.type,
+        realm: input.realm,
+        actor: input.actor,
+        ...(input.client === undefined ? {} : { client: input.client }),
+        ...(input.request === undefined ? {} : { request: input.request }),
+        data,
+      });
+    },
+
+    async verifyChain(realmId, from): Promise<EventChainReport> {
+      const realm = checkRealmId(realmId);
+      const start = checkChainPoint(
+        from ?? { seq: 0n, hash: EVENT_CHAIN_GENESIS_HASH.toString('hex') }
+      );
+      return defaultDb.transaction(
+        async (tx) => {
+          let expectedPrev: Buffer = Buffer.from(start.hash, 'hex');
+          let after = start.seq;
+          let rowsChecked = 0;
+          let head: (EventChainPoint & { id: string }) | null = null;
+
+          // A point after the start is a row the caller saw: it must still be
+          // there, unchanged, or cutting the chain back to before it, or
+          // rewriting it, would verify.
+          if (start.seq > 0n) {
+            const { rows: anchor } = await tx.execute<ChainRow>(sql`
+              select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
+              from ${events}
+              where ${events.realmId} = ${realm} and ${events.seq} = ${start.seq.toString()}::bigint
+            `);
+            const [point] = anchor;
+            const reason: EventChainBreakReason | undefined = !point
+              ? 'anchor_missing'
+              : !Buffer.isBuffer(point.hash) || !point.hash.equals(expectedPrev)
+                ? 'anchor_mismatch'
+                : checkChainRow(point, point.prev_hash) && 'anchor_mismatch';
+            if (reason) {
+              return {
+                ok: false,
+                realmId: realm,
+                from: start,
+                rowsChecked,
+                break: { id: point?.id ?? null, seq: start.seq, reason },
+              };
+            }
+          }
+
+          for (;;) {
+            const { rows } = await tx.execute<ChainRow>(sql`
+              select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
+              from ${events}
+              where ${events.realmId} = ${realm} and ${events.hash} is not null
+                and ${events.seq} > ${after.toString()}::bigint
+              order by ${events.seq}
+              limit ${batchSize}
+            `);
+            for (const row of rows) {
+              const seq = BigInt(row.seq);
+              const reason = checkChainRow(row, expectedPrev);
+              if (reason) {
+                return {
+                  ok: false,
+                  realmId: realm,
+                  from: start,
+                  rowsChecked,
+                  break: { id: row.id, seq, reason },
+                };
+              }
+              rowsChecked += 1;
+              expectedPrev = row.hash;
+              head = { id: row.id, seq, hash: row.hash.toString('hex') };
+            }
+            if (rows.length < batchSize) break;
+            after = BigInt(rows[rows.length - 1].seq);
+          }
+          return { ok: true, realmId: realm, from: start, rowsChecked, head };
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' }
+      );
     },
 
     async readAfter(realmId, position, limit, filters = {}): Promise<EventPage> {
@@ -265,15 +504,7 @@ export function createEventsRepository(
         select "horizon"."xmin"::text as "horizon", "page".*
         from (select pg_snapshot_xmin(pg_current_snapshot()) as "xmin") as "horizon"
         left join lateral (
-          select ${events.seq}::text as "seq", ${events.xid}::text as "xid", ${events.id} as "id",
-            ${events.realmId} as "realm_id", ${events.category} as "category",
-            ${events.type} as "type", ${events.time}::text as "time",
-            ${events.actorType} as "actor_type", ${events.actorId} as "actor_id",
-            ${events.actorDelegationChain} as "actor_delegation_chain",
-            ${events.subjectType} as "subject_type", ${events.subjectId} as "subject_id",
-            ${events.clientId} as "client_id", ${events.requestId} as "request_id",
-            ${events.requestIp} as "request_ip", ${events.requestUserAgent} as "request_user_agent",
-            ${events.data} as "data", ${events.schemaVersion} as "schema_version"
+          select ${ENVELOPE_COLUMNS}
           from ${events}
           where ${where}
           order by ${events.xid}, ${events.seq}
@@ -282,7 +513,7 @@ export function createEventsRepository(
       `);
 
       const page = rows
-        .filter((row): row is ReadRow & { seq: string } => row.seq !== null)
+        .filter((row): row is ReadRow & EnvelopeRow => row.seq !== null)
         .map(toStoredEvent);
       let next: EventPosition;
       if (page.length === limit) {

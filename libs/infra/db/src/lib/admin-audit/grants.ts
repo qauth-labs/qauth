@@ -1,3 +1,7 @@
+import { quoteRoleName, type TablePrivilege } from '../role-grants';
+
+export type { TablePrivilege } from '../role-grants';
+
 /**
  * Database grants for the admin audit log (ADR-019 Decision 7, issue #448).
  *
@@ -13,31 +17,12 @@
  * statements, but an owner can disable a trigger.
  */
 
-/** Privilege on a table, as `GRANT` spells it. */
-export type TablePrivilege = 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE';
-
 /** What a role that writes the admin audit log holds, by table. */
 export const ADMIN_AUDIT_LOG_WRITER_GRANTS: Readonly<Record<string, readonly TablePrivilege[]>> =
   Object.freeze({
     admin_audit_log: Object.freeze(['SELECT', 'INSERT'] as const),
     admin_audit_log_checkpoints: Object.freeze(['SELECT'] as const),
   });
-
-/** Postgres truncates identifiers to 63 bytes (NAMEDATALEN - 1). */
-const MAX_IDENTIFIER_BYTES = 63;
-
-/**
- * Quote a role name as a Postgres identifier.
- *
- * @throws TypeError on an empty name, a NUL byte or a name over 63 bytes,
- *   which Postgres would truncate to some other role's name.
- */
-function quoteRole(role: string): string {
-  if (role === '' || role.includes('\0') || Buffer.byteLength(role) > MAX_IDENTIFIER_BYTES) {
-    throw new TypeError('adminAuditLogWriterGrantStatements: not a valid role name');
-  }
-  return `"${role.replaceAll('"', '""')}"`;
-}
 
 /**
  * The statements that give `role` exactly {@link ADMIN_AUDIT_LOG_WRITER_GRANTS}:
@@ -47,7 +32,7 @@ function quoteRole(role: string): string {
  * @param role - An existing database role, as the operator named it.
  */
 export function adminAuditLogWriterGrantStatements(role: string): string[] {
-  const grantee = quoteRole(role);
+  const grantee = quoteRoleName(role, 'adminAuditLogWriterGrantStatements');
   return [
     `REVOKE ALL ON TABLE "admin_audit_log", "admin_audit_log_checkpoints" FROM ${grantee}`,
     `REVOKE ALL ON FUNCTION "admin_audit_log_prune"(uuid, bigint) FROM ${grantee}`,

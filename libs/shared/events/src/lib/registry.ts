@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { adminDiffSchema, scanAdminDiff } from './admin-diff';
 import { EVENT_SEVERITIES, type EventTypeDefinition, RELEASE_TAG_PATTERN } from './definition';
 import { envelopeSchema, EVENT_CATEGORIES, SUBJECT_TYPES, typedEnvelopeSchema } from './envelope';
 import {
@@ -10,6 +11,7 @@ import {
   parseEventType,
 } from './identifier';
 import { type PayloadFinding, scanJsonSchema, scanPayload, scanValues } from './payload-rules';
+import { ADMIN_EVENT_TYPES } from './types/admin';
 import { CLIENT_EVENT_TYPES } from './types/client';
 import { OAUTH_EVENT_TYPES } from './types/oauth';
 import { REQUEST_EVENT_TYPES } from './types/request';
@@ -26,6 +28,7 @@ export const EVENT_TYPES = [
   ...CLIENT_EVENT_TYPES,
   ...WALLET_EVENT_TYPES,
   ...REQUEST_EVENT_TYPES,
+  ...ADMIN_EVENT_TYPES,
 ] as const;
 
 /** The identifier of every registered type, as a union. */
@@ -83,6 +86,9 @@ const describeIssues = (issues: readonly z.core.$ZodIssue[]) =>
 const describeFindings = (findings: readonly PayloadFinding[]) =>
   findings.map((finding) => `/data${finding.path}: ${finding.message}`);
 
+/** A member name as a JSON Pointer segment (RFC 6901). */
+const escapeMember = (member: string) => member.replace(/~/g, '~0').replace(/\//g, '~1');
+
 /**
  * Check an event before it is stored or sent: its envelope, its type (which
  * must be registered), its `data` against the type's schema, its subject
@@ -120,9 +126,15 @@ export function parseEvent(input: unknown) {
     );
   }
   const { data, ...members } = typed.data;
+  const diffMembers = definition.diff === undefined ? [] : [definition.diff];
   problems.push(
     ...scanValues(members).map((finding) => `${finding.path}: ${finding.message}`),
-    ...describeFindings(scanPayload(data, { personalData: definition.personalData ?? [] }))
+    ...describeFindings(
+      scanPayload(data, { personalData: definition.personalData ?? [], valuesOnly: diffMembers })
+    ),
+    ...describeFindings(
+      diffMembers.flatMap((member) => scanAdminDiff(data[member], `/${escapeMember(member)}`))
+    )
   );
   if (problems.length > 0) {
     throw new EventValidationError(`not a valid ${definition.type} event`, problems);
@@ -186,6 +198,16 @@ export function validateRegistry(
       !(SUBJECT_TYPES as readonly string[]).includes(definition.subject)
     ) {
       problems.push(`${at}: the subject must be one of ${SUBJECT_TYPES.join(', ')}`);
+    }
+    if (definition.diff !== undefined) {
+      if (definition.category !== 'admin') {
+        problems.push(`${at}: only an admin type carries a diff`);
+      }
+      const member =
+        definition.data instanceof z.ZodObject ? definition.data.shape[definition.diff] : undefined;
+      if (member !== adminDiffSchema) {
+        problems.push(`${at}: data.${definition.diff} must be adminDiffSchema, as it is`);
+      }
     }
     if (definition.data instanceof z.ZodObject) {
       let published: unknown;

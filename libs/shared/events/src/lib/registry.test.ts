@@ -316,3 +316,92 @@ describe('parseEvent', () => {
     );
   });
 });
+
+describe('admin events (#459)', () => {
+  const ADMIN_TYPE = 'urn:qauth:event:admin.change_applied:v1-rc.0';
+  const adminEvent = (data: Record<string, unknown> = {}) => ({
+    id: '0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42',
+    type: ADMIN_TYPE,
+    time: '2026-10-24T09:30:00.000Z',
+    realm: '0199f2b4-1a2b-7c3d-8e4f-5a6b7c8d9e0f',
+    category: 'admin',
+    actor: { type: 'user', id: '0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a' },
+    data: {
+      operation: 'clients.update',
+      target: { type: 'client', id: 'notes-app' },
+      diff: [{ path: '/displayName', before: 'Notes', after: 'Team notes' }],
+      approvals: [],
+      ...data,
+    },
+  });
+
+  it('registers the admin type with its diff member', () => {
+    const definition = getEventType(ADMIN_TYPE);
+    expect(definition).toMatchObject({ category: 'admin', diff: 'diff' });
+  });
+
+  // The acceptance criterion of #459: approvals with two credential ids are
+  // stored and returned in the envelope.
+  it('accepts both approvals of a two-admin operation and returns them in the envelope', () => {
+    const approvals = [
+      {
+        approverId: '0199f2b4-3c4d-7e5f-8a6b-7c8d9e0f1a2b',
+        credentialId: 'cred-requester-passkey',
+        approverCreatedBy: { type: 'operator_cli', id: 'root' },
+        approvedAt: '2026-10-24T09:29:00.000Z',
+      },
+      {
+        approverId: '0199f2b4-4d5e-7f6a-9b7c-8d9e0f1a2b3c',
+        credentialId: 'cred-second-admin-passkey',
+        approverCreatedBy: { type: 'user', id: '0199f2b4-3c4d-7e5f-8a6b-7c8d9e0f1a2b' },
+      },
+    ];
+    const parsed = parseEvent(adminEvent({ approvals }));
+    expect(parsed.data['approvals']).toEqual(approvals);
+  });
+
+  it('reads the names in a diff as the resource’s: personal data passes, a masked secret too', () => {
+    expect(() =>
+      parseEvent(
+        adminEvent({
+          diff: [
+            { path: '/email', before: 'a@example.test', after: 'b@example.test' },
+            { path: '/smtp/password', before: '***', after: '***' },
+            { path: '/webhooks', after: [{ url: '***', signingSecret: '***', name: 'ops' }] },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['a secret path holding a value', [{ path: '/smtpPassword', after: 'hunter2' }]],
+    ['a secret member inside a value', [{ path: '/hooks', after: [{ secret: 'whsec_a' }] }]],
+    [
+      'a value shaped like a token',
+      [{ path: '/note', after: 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl' }],
+    ],
+  ])('refuses a diff with %s', (_label, diff) => {
+    expect(() => parseEvent(adminEvent({ diff }))).toThrow(EventValidationError);
+  });
+
+  it('still reads the names of the other members', () => {
+    expect(() => parseEvent(adminEvent({ resetLink: 'https://x.example' }))).toThrow(
+      EventValidationError
+    );
+  });
+
+  it('refuses a diff on a type that is not admin, or a diff member of another schema', () => {
+    const userType = sample({
+      diff: 'diff',
+      data: z.strictObject({ diff: getEventType(ADMIN_TYPE)?.data.shape['diff'] as z.ZodType }),
+    });
+    expect(validate([userType]).join('\n')).toContain('only an admin type carries a diff');
+    const otherSchema = sample({
+      category: 'admin',
+      diff: 'diff',
+      data: z.strictObject({ diff: z.array(z.string()) }),
+    });
+    expect(validate([otherSchema]).join('\n')).toContain('must be adminDiffSchema');
+  });
+});

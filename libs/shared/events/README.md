@@ -9,18 +9,21 @@ the JSON Schema files under `apps/docs-site/public/schemas/events/`.
 
 ## What it holds
 
-| Module                      | What                                                                                                     |
-| --------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `lib/envelope.ts`           | The envelope: `id`, `type`, `time`, `realm`, `category`, `actor`, `subject`, `client`, `request`, `data` |
-| `lib/identifier.ts`         | Event type identifiers, `urn:qauth:event:<name>:v<N>`, with `-rc.<M>` for a release candidate            |
-| `lib/definition.ts`         | `defineEventType`, and what a registry entry holds                                                       |
-| `lib/types/*.ts`            | The registered types, by area                                                                            |
-| `lib/registry.ts`           | `EVENT_TYPES`, `getEventType`, `parseEvent`, `validateRegistry`                                          |
-| `lib/payload-rules.ts`      | The payload rules and their scanner (`scanPayload`, `scanJsonSchema`)                                    |
-| `lib/legacy.ts`             | Today's audit and log event names, mapped to registered types                                            |
-| `lib/json-schema.ts`        | The published JSON Schema of the envelope and of each type                                               |
-| `lib/docs-page.ts`          | The docs page, rendered from the registry                                                                |
-| `scripts/export-schemas.ts` | Writes the schema files and the page. The library's only I/O; nothing imports it                         |
+| Module                        | What                                                                                                     |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `lib/envelope.ts`             | The envelope: `id`, `type`, `time`, `realm`, `category`, `actor`, `subject`, `client`, `request`, `data` |
+| `lib/identifier.ts`           | Event type identifiers, `urn:qauth:event:<name>:v<N>`, with `-rc.<M>` for a release candidate            |
+| `lib/definition.ts`           | `defineEventType`, and what a registry entry holds                                                       |
+| `lib/types/*.ts`              | The registered types, by area                                                                            |
+| `lib/registry.ts`             | `EVENT_TYPES`, `getEventType`, `parseEvent`, `validateRegistry`                                          |
+| `lib/payload-rules.ts`        | The payload rules and their scanner (`scanPayload`, `scanJsonSchema`)                                    |
+| `lib/admin-diff.ts`           | An admin event's diff: `buildAdminDiff` (changed fields, secrets masked as `***`) and `scanAdminDiff`    |
+| `lib/always-on.ts`            | `findEventSwitches`: the names of keys or fields that would read like a switch for events                |
+| `lib/admin-event-coverage.ts` | A test utility: every admin route that changes something emitted an admin event in its test              |
+| `lib/legacy.ts`               | Today's audit and log event names, mapped to registered types                                            |
+| `lib/json-schema.ts`          | The published JSON Schema of the envelope and of each type                                               |
+| `lib/docs-page.ts`            | The docs page, rendered from the registry                                                                |
+| `scripts/export-schemas.ts`   | Writes the schema files and the page. The library's only I/O; nothing imports it                         |
 
 ```ts
 import { type EventDataOf, eventRequest, parseEvent } from '@qauth-labs/shared-events';

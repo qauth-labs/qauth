@@ -64,6 +64,14 @@ export interface EventTypeDefinition<
    * address (payload rule 1). Empty for every type today.
    */
   readonly personalData?: readonly string[];
+  /**
+   * The member of `data` that holds an admin diff (`adminDiffSchema`): a
+   * changed resource's fields, before and after. The payload rules read that
+   * member's values but not its field names, which are the resource's own;
+   * the masking rule (`scanAdminDiff`) holds there instead. Only an `admin`
+   * type has one.
+   */
+  readonly diff?: string;
   /** The SSF mapping slot; see {@link SsfMapping}. */
   readonly ssf?: SsfMapping;
   /**

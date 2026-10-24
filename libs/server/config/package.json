@@ -9,5 +9,8 @@
     "dotenv": "catalog:",
     "tslib": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/shared-events": "workspace:*"
   }
 }

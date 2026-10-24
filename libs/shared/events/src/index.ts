@@ -1,3 +1,6 @@
+export * from './lib/admin-diff';
+export * from './lib/admin-event-coverage';
+export * from './lib/always-on';
 export * from './lib/artifacts';
 export * from './lib/definition';
 export * from './lib/docs-page';
@@ -7,3 +10,4 @@ export * from './lib/json-schema';
 export * from './lib/legacy';
 export * from './lib/payload-rules';
 export * from './lib/registry';
+export * from './lib/types/admin';
