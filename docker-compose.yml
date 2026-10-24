@@ -83,6 +83,12 @@ services:
       # key store; the first boot imports the JWT keys and SESSION_COOKIE_SECRET
       # into it and refuses without a KEK. REQUIRED in production.
       # Generate with: openssl rand -base64 32
+      # KEK_PATH and KEK_PREVIOUS_PATH are read inside this container, so the
+      # file must be mounted here too, for example as a Compose secret: add
+      #   secrets: [qauth_kek]
+      # to this service, a top-level
+      #   secrets: { qauth_kek: { file: ./qauth-kek } }
+      # and KEK_PATH=/run/secrets/qauth_kek in .env.
       KEK_PROVIDER: ${KEK_PROVIDER:-}
       KEK: ${KEK:-}
       KEK_PATH: ${KEK_PATH:-}
