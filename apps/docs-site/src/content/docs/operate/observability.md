@@ -235,10 +235,22 @@ DATABASE_URL=postgresql://qauth:pw@db:5432/qauth \
   pnpm nx run infra-db:events:verify-chain -- --realm=<realm name>
 ```
 
-The command only reads. It exits 0 and prints the chain's head when every
-admin event verifies, and exits 1 at the first event that was changed, or that
-follows one that was removed. `--realm-id=<uuid>` names a realm that no longer
-exists, and `--json` prints the report as JSON.
+The command only reads, so run it as a database role that may read the
+`events` table, such as its owner; a role given only the event writer's grants
+cannot. `--realm-id=<uuid>` names a realm that no longer exists, and `--json`
+prints the report as JSON. Its exit code tells a broken chain from a check
+that could not run, so a monitor does not report a database outage as
+tampering:
+
+| Exit code | Meaning                                                                                                        |
+| --------- | -------------------------------------------------------------------------------------------------------------- |
+| `0`       | Every admin event verifies. It prints the chain's head.                                                        |
+| `1`       | The chain breaks. It prints the first event that was changed, or that follows one that was removed.            |
+| `2`       | A usage error: an unknown flag, a missing realm, or no `DATABASE_URL`. Nothing was read.                       |
+| `3`       | The check could not run: the database is unreachable or failing, or no realm and no event has the realm given. |
+
+With exit code `3` the reason is on standard error and nothing is on standard
+output. The command waits 10 seconds for a connection.
 
 The chain shows a changed or removed event, but not a chain rewritten from
 some event to the end, or the newest events cut, by someone who can write the

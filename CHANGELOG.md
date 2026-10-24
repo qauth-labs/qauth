@@ -194,7 +194,10 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` report the first
   admin event that was changed, or that follows one that was removed; run from
   a head kept outside the database, they also fail when the chain was cut back
-  to before that head. A second trigger refuses an admin row that does not
+  to before that head. The command exits 0 when the chain verifies, 1 when it
+  breaks, 2 on a usage error and 3 when the check could not run, such as with
+  the database unreachable or the realm not found, so a monitor does not report
+  an outage as a tampered chain ([#827]). A second trigger refuses an admin row that does not
   follow the realm's head or sets its own `seq`. A trigger now refuses every
   `UPDATE` on `events`, the owner's included. The migration adds two nullable columns, checks, two indexes and the
   trigger; the check that admin rows are chained is added `NOT VALID`, so rows

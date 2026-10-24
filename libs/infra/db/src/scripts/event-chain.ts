@@ -1,7 +1,7 @@
 /**
- * Verification of a realm's admin event chain from the command line (issue
- * #459): `events:verify-chain` reports the first admin event that breaks the
- * chain, or the head when none does.
+ * Verification of a realm's admin event chain from the command line (issues
+ * #459 and #827): `events:verify-chain` reports the first admin event that
+ * breaks the chain, or the head when none does.
  *
  * An operator runs it on a host that holds the database credentials, like
  * the other operator scripts. It only reads. The logic lives here, apart from
@@ -24,12 +24,29 @@ export interface VerifyChainArgs {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 
+/**
+ * The exit codes of `events:verify-chain`, so a monitor tells a broken chain
+ * from a check that could not run, such as during a database outage.
+ */
+export const VERIFY_CHAIN_EXIT = Object.freeze({
+  /** Every admin event after the starting point verifies. */
+  verified: 0,
+  /** The chain breaks: an admin event was changed or removed. */
+  broken: 1,
+  /** The arguments or the environment are wrong; nothing was read. */
+  usage: 2,
+  /** The check could not run: the database unreachable or failing, or the realm not found. */
+  cannotRun: 3,
+} as const);
+
 export const VERIFY_CHAIN_USAGE =
   'Usage: verify-event-chain.ts (--realm=<realm name> | --realm-id=<uuid>)\n' +
   '                             [--from-seq=<seq> --from-hash=<hex>] [--json]\n' +
   "       Checks the realm's admin event chain and reports the first event that breaks it.\n" +
   '       --from-seq and --from-hash start after the head an earlier run printed.\n' +
-  '       Exits 0 when the chain verifies, 1 when it breaks. Set DATABASE_URL in the environment.';
+  '       Set DATABASE_URL in the environment. Exits 0 when the chain verifies, 1 when it\n' +
+  '       breaks, 2 on a usage error, and 3 when the check could not run (the database\n' +
+  '       unreachable or failing, the realm not found).';
 
 /**
  * Parse the arguments from `process.argv`. Returns null when the realm is
