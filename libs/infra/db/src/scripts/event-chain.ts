@@ -24,6 +24,9 @@ export interface VerifyChainArgs {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 
+/** The largest `seq`, a Postgres `bigint`. */
+const MAX_SEQ = 9_223_372_036_854_775_807n;
+
 /**
  * The exit codes of `events:verify-chain`, so a monitor tells a broken chain
  * from a check that could not run, such as during a database outage.
@@ -74,6 +77,8 @@ export function parseVerifyChainArgs(argv: readonly string[]): VerifyChainArgs |
   let from: EventChainPoint | undefined;
   if (fromSeq !== undefined && fromHash !== undefined) {
     if (!/^(0|[1-9][0-9]*)$/.test(fromSeq) || !SHA256_HEX.test(fromHash)) return null;
+    // `seq` is a bigint: a larger value is a usage error, not a failed run.
+    if (BigInt(fromSeq) > MAX_SEQ) return null;
     from = { seq: BigInt(fromSeq), hash: fromHash.toLowerCase() };
   }
   return {

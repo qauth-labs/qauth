@@ -504,7 +504,7 @@ describe('admin events integration (real Postgres)', () => {
         `SELECT proname, prosecdef, proconfig FROM pg_proc
           WHERE proname IN ('events_no_update', 'events_admin_follows_head',
                             'events_admin_chain_head', 'events_own_row',
-                            'events_xid_from_transaction')
+                            'events_oldest_unread_time', 'events_xid_from_transaction')
           ORDER BY proname`
       );
       const pinned = ['search_path=pg_catalog, pg_temp'];
@@ -512,6 +512,7 @@ describe('admin events integration (real Postgres)', () => {
         { proname: 'events_admin_chain_head', prosecdef: true, proconfig: pinned },
         { proname: 'events_admin_follows_head', prosecdef: true, proconfig: pinned },
         { proname: 'events_no_update', prosecdef: false, proconfig: pinned },
+        { proname: 'events_oldest_unread_time', prosecdef: true, proconfig: pinned },
         { proname: 'events_own_row', prosecdef: true, proconfig: pinned },
         { proname: 'events_xid_from_transaction', prosecdef: false, proconfig: pinned },
       ]);
@@ -737,12 +738,14 @@ describe('admin events integration (real Postgres)', () => {
         `SELECT f AS function,
                 has_function_privilege($1, f, 'EXECUTE') AS writer,
                 has_function_privilege($2, f, 'EXECUTE') AS nobody
-           FROM unnest(ARRAY['events_admin_chain_head(uuid)', 'events_own_row(uuid)']) AS f`,
+           FROM unnest(ARRAY['events_admin_chain_head(uuid)', 'events_own_row(uuid)',
+                             'events_oldest_unread_time()']) AS f`,
         [ROLE, NOBODY]
       );
       expect(functions).toEqual([
         { function: 'events_admin_chain_head(uuid)', writer: true, nobody: false },
         { function: 'events_own_row(uuid)', writer: true, nobody: false },
+        { function: 'events_oldest_unread_time()', writer: true, nobody: false },
       ]);
     });
 
@@ -774,6 +777,8 @@ describe('admin events integration (real Postgres)', () => {
         '42501'
       );
       expect(await sqlState(writerStore.verifyChain(realm))).toBe('42501');
+      // The lag the auth server, a writer, reports on /metrics.
+      expect(await writerStore.oldestUnreadEventAge()).toBeGreaterThanOrEqual(0);
       // The owner reads what the writer wrote.
       expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 2 });
       expect((await store.readAfter(realm, eventStreamStart(realm), 10)).events).toHaveLength(3);
@@ -790,8 +795,21 @@ describe('admin events integration (real Postgres)', () => {
         [realm, randomUUID()]
       );
       expect(heads).toEqual([{ hash: head.hash, none: null }]);
-      // Another transaction's row, committed: not returned.
-      expect((await writer.query('SELECT * FROM events_own_row($1)', [id])).rows).toEqual([]);
+      // In a transaction that has written a row, so it has an xid: another
+      // transaction's committed row is not returned, its own row is.
+      await writerDb().transaction(async (tx: DbTransaction) => {
+        const own = await writerStore.emit(tx, {
+          type: 'urn:qauth:event:user.signed_in:v1-rc.0',
+          realm,
+          actor: { type: 'user', id: ADMIN_ID },
+          subject: { type: 'user', id: ADMIN_ID },
+          data: { method: 'password' },
+        });
+        const other = await tx.execute(sql`select "id" from "events_own_row"(${id}::uuid)`);
+        const mine = await tx.execute(sql`select "id" from "events_own_row"(${own}::uuid)`);
+        expect(other.rows).toEqual([]);
+        expect(mine.rows).toEqual([{ id: own }]);
+      });
     });
 
     // #827's review: a writer that sets xid itself could put a row behind a

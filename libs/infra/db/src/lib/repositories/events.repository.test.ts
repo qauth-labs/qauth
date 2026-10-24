@@ -481,7 +481,8 @@ describe('oldestUnreadEventAge', () => {
     const repo = createEventsRepository(db, { now: () => NOW });
 
     await expect(repo.oldestUnreadEventAge()).resolves.toBe(42.5);
-    expect(queries[0].text).toContain('>= pg_snapshot_xmin(pg_current_snapshot())');
+    // Through the function, so a role with only the writer's grants reads it.
+    expect(queries[0].text).toContain('"events_oldest_unread_time"()');
   });
 });
 

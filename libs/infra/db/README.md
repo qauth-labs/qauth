@@ -280,7 +280,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `emitInOwnTransaction(event)` is the same for a caller without a transaction: one `INSERT`, a transaction of its own.
   - `emitAdminEvent(tx, { realm, actor, operation, target, before, after, secretFields?, approvals?, client?, request? })` records one admin change as an `admin.change_applied` event in the caller's transaction (#459). It builds the diff from `before` and `after` with `buildAdminDiff` from `@qauth-labs/shared-events`: changed fields only, nested objects diffed, arrays whole, every secret field `***`. A command-line tool on the server host passes `operatorCliActor()`, which names the operating-system user.
   - An event of an `admin` type joins its realm's hash chain, whichever call writes it. See [Admin events and the hash chain](#admin-events-and-the-hash-chain).
-  - `verifyChain(realmId, from?)` checks the realm's admin chain after `from` (by default its start) and returns `{ ok: true, head }` or `{ ok: false, break: { id, seq, reason } }` for the first admin event that does not verify. `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` runs it from the command line, and exits 0 when the chain verifies, 1 when it breaks, 2 on a usage error and 3 when the check could not run: the database unreachable or failing, or no realm and no event with the realm given (#827).
+  - `verifyChain(realmId, from?)` checks the realm's admin chain after `from` (by default its start) and returns `{ ok: true, head }` or `{ ok: false, break: { id, seq, reason } }` for the first admin event that does not verify. `pnpm --dir libs/infra/db exec tsx src/scripts/verify-event-chain.ts --realm=<name>` runs it from the command line, and exits 0 when the chain verifies, 1 when it breaks, 2 on a usage error and 3 when the check could not run: the database unreachable or failing, or no realm and no event with the realm given (#827). The Nx target `infra-db:events:verify-chain` runs the same script, but Nx reports every failure as 1.
   - `readAfter(realmId, position, limit, filters?)` returns `{ events, next }`: the realm's events after `position`, oldest first in `(xid, seq)` order, at most `limit` (1 to 1000), each with its own `position`. `filters` narrows by `types`, `category`, `subjectId`, `clientId` and `fromTime`. Read on from `next`.
   - `oldestUnreadEventAge()` returns how long, in seconds, the oldest committed event has been held back from readers. It returns no event, so it takes no realm.
   - A position (`EventPosition`) is opaque text that names its realm, `xid` and `seq`. Start a realm's stream with `eventStreamStart(realmId)`. A position of another realm, or one that does not parse, throws `EventPositionError`.
@@ -511,8 +511,10 @@ default.
   the error. The writer reads through two `SECURITY DEFINER` functions, not
   the table: `events_admin_chain_head(realm_id)` returns the realm's head
   hash, and `events_own_row(id)` returns the row only to the transaction that
-  wrote it. `verifyChain` and `events:verify-chain` read the table: run them
-  as a role that may, such as the table owner, not as a writer.
+  wrote it. A third, `events_oldest_unread_time()`, gives the auth server, a
+  writer, the store's lag for `/metrics`. `verifyChain` and
+  `events:verify-chain` read the table: run them as a role that may, such as
+  the table owner, not as a writer.
 - **What the chain shows.** The hash is unkeyed: whoever can rewrite a row and
   every row after it, or cut the newest rows, leaves a chain that verifies.
   Keep the head `verifyChain` returns outside the database, and verify from it
@@ -522,6 +524,16 @@ default.
   the head: a single row changed there shows only in a run from the start, so
   run both. Rows after the kept head rewritten to the end, or cut, leave no
   break; keep each new head.
+- **The `xid` is in the hash.** A full `pg_dump` and restore keeps each row's
+  `xid` as data and loads the rows before it creates the triggers, so the
+  chain still verifies. A `pg_restore --data-only` into a migrated schema is
+  refused row by row by `events_xid_from_transaction`; it needs
+  `--disable-triggers`, as the table owner. Rows chained by a build of `main`
+  between #825 and #827 hashed without the `xid` and fail verification at the
+  first of them; that database is for development, so reset it.
+- **Grants.** Run `eventsWriterGrantStatements(role)` again for a role that
+  got the writer grants from an earlier build: the statements revoke what the
+  role held and grant `INSERT` and `EXECUTE` on the three functions.
 
 #### Base Repository Interface
 

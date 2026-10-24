@@ -568,13 +568,11 @@ export function createEventsRepository(
     },
 
     async oldestUnreadEventAge() {
-      // Postgres 18 answers this from idx_events_realm_position with a skip
-      // scan: one descent per realm, to the rows at or above the horizon.
-      const { rows } = await defaultDb.execute<{ oldest: string | null }>(sql`
-        select min(${events.time})::text as "oldest"
-        from ${events}
-        where ${events.xid} >= pg_snapshot_xmin(pg_current_snapshot())
-      `);
+      // Through a function (migration 0033), so a role that holds only the
+      // writer's grants, as the auth server may, reads the lag without SELECT.
+      const { rows } = await defaultDb.execute<{ oldest: string | null }>(
+        sql`select "events_oldest_unread_time"()::text as "oldest"`
+      );
       const oldest = rows[0]?.oldest;
       if (oldest === null || oldest === undefined) return 0;
       return Math.max(0, now() - Number(oldest)) / 1000;

@@ -454,6 +454,11 @@ describe('masking', () => {
       []
     );
     expect(scanAdminDiff([{ path: '/signingKeys', after: [MASK, 'hunter2'] }])).not.toEqual([]);
+    // A list of private keys only becomes a list of markers, which the check
+    // accepts too: emitAdminEvent runs it over the diff it built.
+    const privateOnly = buildAdminDiff({}, { signingKeys: [privateJwk, { ...privateJwk }] });
+    expect(privateOnly).toEqual([{ path: '/signingKeys', after: [MASK, MASK] }]);
+    expect(scanAdminDiff(privateOnly)).toEqual([]);
   });
 
   it('reads a long URL in linear time', () => {

@@ -862,13 +862,14 @@ function secretShaped(path: string): PayloadFinding {
 const escapePointer = escapeSegment;
 
 /**
- * Whether a list holds JWKs and markers only, at least one JWK: what
- * {@link buildAdminDiff} leaves of a list of JWKs with private ones in it.
+ * Whether a list holds JWKs and markers only, and is not empty: what
+ * {@link buildAdminDiff} leaves of a list of JWKs with private ones in it,
+ * down to a list of private keys only, each one a marker.
  */
 function isMaskedJwkList(value: unknown): boolean {
   return (
     Array.isArray(value) &&
-    value.some((item) => isJwkValue(item)) &&
+    value.length > 0 &&
     value.every((item) => item === ADMIN_DIFF_SECRET_MARKER || isJwkValue(item))
   );
 }

@@ -1,10 +1,10 @@
--- #827 (ADR-019 Decision 7): the two reads a role that writes events needs,
--- as functions, so the role holds INSERT on events and EXECUTE on these two,
--- and no SELECT. With SELECT on the table a writer could read every realm's
+-- #827 (ADR-019 Decision 7): the three reads a role that writes events
+-- needs, as functions, so the role holds INSERT on events and EXECUTE on
+-- these three, and no SELECT. With SELECT on the table a writer could read every realm's
 -- events: request IPs, user agents, and admin diffs that hold personal data.
 -- And a trigger that keeps a row's xid the inserting transaction's (last).
 --
--- The two read functions are SECURITY DEFINER: they read the table as its
+-- The three read functions are SECURITY DEFINER: they read the table as its
 -- owner and return only what the writer needs. Their search_path is pinned,
 -- and EXECUTE is revoked from PUBLIC; `eventsWriterGrantStatements` grants it
 -- to a writing role.
@@ -42,6 +42,22 @@ AS $$
     WHERE e."id" = p_id AND e."xid" = pg_current_xact_id_if_assigned()
 $$;--> statement-breakpoint
 REVOKE ALL ON FUNCTION "events_own_row"(uuid) FROM PUBLIC;--> statement-breakpoint
+-- events_oldest_unread_time: when the oldest event a reader cannot see yet
+-- was written (epoch ms), or NULL when no committed event is held back: the
+-- event store's lag, which the auth server, a writer, reports on /metrics.
+-- It shows a time and nothing of the event. Postgres 18 answers it from
+-- idx_events_realm_position with a skip scan, one descent per realm.
+CREATE FUNCTION "events_oldest_unread_time"() RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+  SELECT min(e."time")
+    FROM public."events" e
+    WHERE e."xid" >= pg_snapshot_xmin(pg_current_snapshot())
+$$;--> statement-breakpoint
+REVOKE ALL ON FUNCTION "events_oldest_unread_time"() FROM PUBLIC;--> statement-breakpoint
 -- events_xid_from_transaction: a row's xid is the transaction that inserts
 -- it, never a value the writer supplies. Readers take rows in (xid, seq)
 -- order below their snapshot's xmin, so a row inserted with an older xid

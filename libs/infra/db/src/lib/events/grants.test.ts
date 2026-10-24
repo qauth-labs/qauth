@@ -17,11 +17,12 @@ describe('eventsWriterGrantStatements', () => {
     expect(EVENTS_WRITER_FUNCTIONS).toEqual([
       '"events_admin_chain_head"(uuid)',
       '"events_own_row"(uuid)',
+      '"events_oldest_unread_time"()',
     ]);
     expect(eventsWriterGrantStatements('qauth_app')).toEqual([
       'REVOKE ALL ON TABLE "events" FROM "qauth_app"',
       'GRANT INSERT ON TABLE "events" TO "qauth_app"',
-      'GRANT EXECUTE ON FUNCTION "events_admin_chain_head"(uuid), "events_own_row"(uuid) TO "qauth_app"',
+      'GRANT EXECUTE ON FUNCTION "events_admin_chain_head"(uuid), "events_own_row"(uuid), "events_oldest_unread_time"() TO "qauth_app"',
     ]);
   });
 

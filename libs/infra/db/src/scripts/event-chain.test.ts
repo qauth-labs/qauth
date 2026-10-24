@@ -35,6 +35,7 @@ describe('parseVerifyChainArgs', () => {
     ['two realms', ['--realm=a', `--realm-id=${REALM_ID}`]],
     ['half a starting point', ['--realm=a', '--from-seq=1']],
     ['a seq that is not a number', ['--realm=a', '--from-seq=-1', `--from-hash=${HASH}`]],
+    ['a seq past a bigint', ['--realm=a', '--from-seq=9223372036854775808', `--from-hash=${HASH}`]],
     ['a hash that is not 64 hex digits', ['--realm=a', '--from-seq=1', '--from-hash=abc']],
     ['a realm id that is not a UUID', ['--realm-id=default']],
     ['an unknown flag', ['--realm=a', '--fix']],

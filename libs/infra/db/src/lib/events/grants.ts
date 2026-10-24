@@ -30,6 +30,7 @@ export const EVENTS_WRITER_GRANTS: Readonly<Record<string, readonly TablePrivile
 export const EVENTS_WRITER_FUNCTIONS: readonly string[] = Object.freeze([
   '"events_admin_chain_head"(uuid)',
   '"events_own_row"(uuid)',
+  '"events_oldest_unread_time"()',
 ]);
 
 /**
