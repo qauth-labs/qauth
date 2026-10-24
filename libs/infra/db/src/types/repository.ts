@@ -1215,8 +1215,9 @@ export type EventChainReport =
        * The newest admin row, with its event id, or `null` when no admin row
        * follows `from`. Kept outside the database, it is the point a later
        * verification starts from: that run fails when the chain up to it was
-       * cut or rewritten. Rows cut after it leave no break; the next head is
-       * then older than expected.
+       * cut or rewritten. It reads no row before the point, so a single row
+       * changed there shows only in a run from the start. Rows cut after it
+       * leave no break; the next head is then older than expected.
        */
       head: (EventChainPoint & { id: string }) | null;
     }
@@ -1331,9 +1332,11 @@ export interface EventsRepository {
    * envelope must hash to its own `hash`. A changed row breaks the chain at
    * that row; a removed one at the row after it. A point after the start must
    * still be an admin row of the realm with that hash and an envelope that
-   * hashes to it (`anchor_missing`, `anchor_mismatch`). Reads run in one
-   * REPEATABLE READ transaction, so a concurrent write cannot produce a false
-   * break.
+   * hashes to it (`anchor_missing`, `anchor_mismatch`). No row before the
+   * point is read: a run from a kept head shows a chain cut back or rewritten
+   * up to it, but a single row changed before it shows only in a run from the
+   * start. Reads run in one REPEATABLE READ transaction, so a concurrent write
+   * cannot produce a false break.
    *
    * The retention job (#536) removes the oldest rows, a point it starts from
    * included; it will keep that point as an anchor of its own and check it

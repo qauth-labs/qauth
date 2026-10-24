@@ -83,6 +83,11 @@ function nulPaths(value: unknown, path: string): string[] {
  * @throws {EventValidationError} on an unknown type or an event that fails
  *   `parseEvent`, or one Postgres could not store
  */
+/** Whether a value is an object with no own member. */
+function isEmptyObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && Object.keys(value).length === 0;
+}
+
 function buildEvent(event: UncheckedEvent, at: number): BuiltEvent {
   const definition = getEventType(event.type);
   if (!definition) {
@@ -99,7 +104,12 @@ function buildEvent(event: UncheckedEvent, at: number): BuiltEvent {
     ...(event.actor === undefined ? {} : { actor: event.actor }),
     ...(event.subject === undefined ? {} : { subject: event.subject }),
     ...(event.client === undefined ? {} : { client: event.client }),
-    ...(event.request === undefined ? {} : { request: event.request }),
+    // An empty `request` is left out: a row stores it as three NULL columns,
+    // which read back as no `request`, so an admin event's hash covers what a
+    // reader gets.
+    ...(event.request === undefined || isEmptyObject(event.request)
+      ? {}
+      : { request: event.request }),
     data: event.data,
   });
   // Neither `text` nor `jsonb` can hold U+0000, and a failed insert would

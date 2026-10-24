@@ -509,6 +509,16 @@ describe('emitAdminEvent', () => {
     expect(queries.slice(-2).map((q) => q.text)).toEqual(['rollback to savepoint sp1', 'commit']);
   });
 
+  it('leaves an empty request out, so the stored row hashes as it was written', async () => {
+    const { db, queries } = createRecordingDb([], chainResponder());
+    const repo = createEventsRepository(db, { now: () => NOW });
+
+    await db.transaction((tx) => repo.emitAdminEvent(tx, { ...ADMIN_CHANGE, request: {} }));
+
+    expect(queries.map((q) => q.text)).toContain('release savepoint sp1');
+    expect(insertedColumns(insertOf(queries))['request_id']).toBeNull();
+  });
+
   it('chains every admin type that emit writes, not only its own', async () => {
     const { db, queries } = createRecordingDb([], chainResponder());
     const repo = createEventsRepository(db, { now: () => NOW });

@@ -500,8 +500,10 @@ at nothing.
   Keep the head `verifyChain` returns outside the database, and verify from it
   later: `verifyChain(realmId, head)` first checks that the head's own row is
   still there with its hash (`anchor_missing`, `anchor_mismatch`), so a chain
-  cut back to before it, or rewritten up to it, fails. Rows cut after the kept
-  head leave no break; the next head is then older than expected.
+  cut back to before it, or rewritten up to it, fails. It reads no row before
+  the head: a single row changed there shows only in a run from the start, so
+  run both. Rows after the kept head rewritten to the end, or cut, leave no
+  break; keep each new head.
 
 #### Base Repository Interface
 

@@ -239,10 +239,13 @@ The chain shows a changed or removed event, but not a chain rewritten from
 some event to the end, or the newest events cut, by someone who can write the
 database. Keep the head it prints somewhere outside the database, and run the
 next check from it with `--from-seq=<seq> --from-hash=<hex>`. That run first
-checks that the kept head is still there with the same hash, then the events
-after it. It fails when the chain was cut back to before the kept head, or
-rewritten up to it or after it. Events cut after the kept head leave no break:
-the new head is then older than it should be.
+checks that the kept head is still there with the same hash, so it fails when
+the chain was cut back to before the kept head or rewritten up to it. Then it
+checks the events after the kept head, as a full check does. It does not read
+the events before the kept head: one event changed there shows only in a full
+check, without `--from-…`, so run both. And as in a full check, events after
+the kept head that were rewritten to the end, or cut, leave no break: keep each
+new head it prints.
 
 ### Example Prometheus scrape config
 
