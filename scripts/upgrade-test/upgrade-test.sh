@@ -312,15 +312,23 @@ logs() {
 }
 
 down() {
-  local containers
-  containers="$(docker ps -aq --filter "name=^$PREFIX-")"
-  [ -z "$containers" ] || docker rm -f $containers >/dev/null
+  local containers=()
+  mapfile -t containers < <(docker ps -aq --filter "name=^$PREFIX-")
+  [ "${#containers[@]}" -eq 0 ] || docker rm -f "${containers[@]}" >/dev/null
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
+}
+
+# On the way out of `all`: the logs when a step failed, then a clean slate.
+finish() {
+  local status=$?
+  [ "$status" -eq 0 ] || logs
+  down
+  exit "$status"
 }
 
 all() {
   require_baseline
-  trap 'status=$?; [ $status -eq 0 ] || logs; down; exit $status' EXIT
+  trap finish EXIT
   down
   baseline_images
   head_images
