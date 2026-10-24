@@ -32,6 +32,9 @@ const parsedEnv = configured.parse(envSchema);
  */
 export const envDeprecationWarnings: readonly EnvDeprecationWarning[] = configured.deprecations;
 
+/** The keys that switch on an item of the experimental-feature registry. */
+const switchKeys = serverSwitchKeys();
+
 /**
  * Experimental keys and values this deployment sets (ADR-018 §5). `main.ts`
  * logs each one at boot, once the logger exists.
@@ -42,7 +45,7 @@ export const envDeprecationWarnings: readonly EnvDeprecationWarning[] = configur
  * deployment sees one line per experimental feature, not two.
  */
 export const envExperimentalWarnings: readonly ConfigWarning[] = configured.experimental.filter(
-  (warning) => !serverSwitchKeys().has(warning.variable)
+  (warning) => !switchKeys.has(warning.variable)
 );
 
 /**
