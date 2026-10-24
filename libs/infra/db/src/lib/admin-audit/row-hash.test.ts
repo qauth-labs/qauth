@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { adminAuditLog } from '../schema/admin-audit';
 import {
+  ADMIN_AUDIT_CHAIN_FORMAT,
   ADMIN_AUDIT_GENESIS_HASH,
   adminAuditHashPayload,
   type AdminAuditRowContent,
@@ -12,8 +13,8 @@ import {
 } from './row-hash';
 
 /**
- * The admin audit row hash (issue #448): SHA-256 over the previous hash and
- * the RFC 8785 canonical JSON of the row. These tests pin the chain format, so
+ * The admin audit row hash (issue #448): SHA-256 over the chain format's id,
+ * the previous hash and the RFC 8785 canonical JSON of the row. These tests pin the chain format, so
  * a change to it shows up here before it breaks every stored chain.
  */
 const ROW: AdminAuditRowContent = {
@@ -44,7 +45,12 @@ describe('adminAuditHashPayload', () => {
 });
 
 describe('computeAdminAuditRowHash', () => {
-  it('is SHA-256 over prev_hash and the canonical JSON of the row (format version 1)', () => {
+  it('names its format as a release candidate until 1.0.0', () => {
+    // ADR-018 §5: every QAuth-defined version is `1-rc.<M>` until 1.0.0.
+    expect(ADMIN_AUDIT_CHAIN_FORMAT).toBe('qauth-admin-audit-chain/1-rc.0');
+  });
+
+  it('is SHA-256 over the format id, prev_hash and the canonical JSON of the row', () => {
     const canonical =
       '{"act_chain":null,"actor_id":"0192f1c4-2222-7000-8000-000000000002","actor_kind":"human_admin",' +
       '"actor_realm_id":"0192f1c4-3333-7000-8000-000000000003","approvals":[],"created_at":1800000000000,' +
@@ -53,6 +59,7 @@ describe('computeAdminAuditRowHash', () => {
       `"realm_id":"0192f1c4-1111-7000-8000-000000000001","request_digest":"${'ab'.repeat(32)}",` +
       '"seq":1,"trace_id":"trace-1"}';
     const expected = createHash('sha256')
+      .update('qauth-admin-audit-chain/1-rc.0\0', 'utf8')
       .update(ADMIN_AUDIT_GENESIS_HASH)
       .update(canonical, 'utf8')
       .digest();

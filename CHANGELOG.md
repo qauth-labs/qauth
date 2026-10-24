@@ -120,7 +120,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Schema**: migration 0026 adds the admin audit log ([#448], ADR-019
   Decision 7, ADR-020 §3). `admin_audit_log` keeps one hash chain per target
   realm: each row carries a `seq` without a gap, the previous row's hash and
-  its own, SHA-256 over that hash and the RFC 8785 canonical JSON of the row.
+  its own, SHA-256 over the chain format's id (`qauth-admin-audit-chain/1-rc.0`,
+  a release candidate until 1.0.0), that hash and the RFC 8785 canonical JSON
+  of the row.
   A row records the actor and its kind (human admin, service account,
   break-glass operator or host operator), the full act chain when the actor
   acted for a user, the operation id, class, effects and outcome, the diff with
