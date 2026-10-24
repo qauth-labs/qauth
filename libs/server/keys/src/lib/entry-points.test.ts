@@ -22,6 +22,8 @@ describe('package entry points', () => {
     'createKeyFactory',
     'createInProcessSigner',
     'runKekProviderContract',
+    'prepareEnvironmentKeys',
+    'bootRealmKeys',
   ])('keeps %s out of the public entry point and in custody', (name) => {
     expect(publicEntry).not.toHaveProperty(name);
     expect(custody).toHaveProperty(name);

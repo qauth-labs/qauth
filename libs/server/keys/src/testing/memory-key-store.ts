@@ -1,14 +1,14 @@
 import type {
   NewStoredKey,
   NewStoredKeyRow,
-  RealmKeyStore,
   StoredKeyFilter,
   StoredKeyStatus,
   StoredKeySummary,
 } from '../lib/key-store';
+import type { RealmKeyBootStore, StoredPublicKey } from '../lib/realm-key-boot';
 
 /**
- * An in-memory {@link RealmKeyStore} for this library's unit tests. Never
+ * An in-memory {@link RealmKeyBootStore} for this library's unit tests. Never
  * exported from the package entry point.
  *
  * A transaction keeps everything or nothing: when its work throws, the rows
@@ -36,7 +36,7 @@ export interface MemoryKeyRow {
   readonly publicJwk?: Record<string, unknown>;
 }
 
-export interface MemoryKeyStore extends RealmKeyStore<MemoryTx> {
+export interface MemoryKeyStore extends RealmKeyBootStore<MemoryTx> {
   /** The committed rows, oldest first. */
   readonly rows: MemoryKeyRow[];
   /** Every call, in order, with the transaction it ran in. */
@@ -98,6 +98,19 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
             (filter.scopeId === undefined || key.scopeId === filter.scopeId) &&
             (filter.status === undefined || key.status === filter.status)
         );
+    },
+
+    async lockRealm(_realmId: string, tx: MemoryTx): Promise<void> {
+      calls.push({ method: 'lockRealm', tx });
+    },
+
+    async listPublicKeys(realmId: string, tx: MemoryTx): Promise<readonly StoredPublicKey[]> {
+      calls.push({ method: 'listPublicKeys', tx });
+      return rows.flatMap(({ key, publicJwk }) =>
+        key.realmId === realmId && publicJwk !== undefined
+          ? [{ kid: key.kid, purpose: key.purpose, status: key.status, publicJwk }]
+          : []
+      );
     },
 
     async create(input: NewStoredKey, tx: MemoryTx): Promise<unknown> {
