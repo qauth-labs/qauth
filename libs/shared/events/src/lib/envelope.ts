@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { EVENT_TYPE_PATTERN } from './identifier';
+import { scanValues } from './payload-rules';
 
 /**
  * The event envelope (ADR-018 §3 and §5, ADR-019 Decision 8): what every
@@ -151,6 +152,11 @@ function cut(value: string, max: number): string {
  * is written in its IPv4 form, and an address in any other unpublished form is
  * left out.
  *
+ * A `traceId` or `userAgent` shaped like a token or a key is left out too.
+ * `parseEvent` refuses such a value anywhere in the envelope, so keeping it
+ * would let a client make every event of its request fail on demand: a 500
+ * instead of the answer the request should get, and no event recorded.
+ *
  * @returns the member, or `undefined` when none of the three is present
  */
 export function eventRequest(input: {
@@ -159,13 +165,19 @@ export function eventRequest(input: {
   readonly userAgent?: string | null;
 }): EventRequest | undefined {
   const request: { traceId?: string; ip?: string; userAgent?: string } = {};
-  if (input.traceId) request.traceId = cut(input.traceId, TRACE_ID_MAX);
+  if (input.traceId) {
+    const traceId = cut(input.traceId, TRACE_ID_MAX);
+    if (scanValues(traceId).length === 0) request.traceId = traceId;
+  }
   if (input.ip) {
     const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(input.ip);
     const ip = mapped ? mapped[1] : input.ip;
     if (requestSchema.shape.ip.safeParse(ip).success) request.ip = ip;
   }
-  if (input.userAgent) request.userAgent = cut(input.userAgent, USER_AGENT_MAX);
+  if (input.userAgent) {
+    const userAgent = cut(input.userAgent, USER_AGENT_MAX);
+    if (scanValues(userAgent).length === 0) request.userAgent = userAgent;
+  }
   return Object.keys(request).length > 0 ? request : undefined;
 }
 

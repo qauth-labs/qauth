@@ -32,6 +32,16 @@ describe('eventRequest', () => {
     expect(eventRequest({ ip: '203.0.113.5, 198.51.100.1' })).toBeUndefined();
   });
 
+  it('leaves out a trace id or User-Agent shaped like a token or a key', () => {
+    const jws = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln';
+    expect(eventRequest({ traceId: jws, ip: '203.0.113.5', userAgent: `Bearer ${jws}` })).toEqual({
+      ip: '203.0.113.5',
+    });
+    expect(eventRequest({ traceId: 'req-1', userAgent: '-----BEGIN PRIVATE KEY----- x' })).toEqual({
+      traceId: 'req-1',
+    });
+  });
+
   it('returns undefined when there is nothing to record', () => {
     expect(eventRequest({})).toBeUndefined();
     expect(eventRequest({ traceId: null, ip: '', userAgent: undefined })).toBeUndefined();

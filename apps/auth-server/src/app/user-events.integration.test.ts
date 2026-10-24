@@ -522,6 +522,23 @@ describe('user events go to the event store (real containers)', () => {
     });
   }, 120_000);
 
+  it('answers a request whose User-Agent looks like a token as any other, and records it without it', async () => {
+    await withDeployment(async (app) => {
+      // `parseEvent` refuses a token-shaped value anywhere in an event. Kept,
+      // such a header would fail the registration's event, and so the
+      // registration, only when the address is free: a 500 against a 202.
+      const headers = { 'user-agent': 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln' };
+      const payload = { email: 'events-token-agent@example.test', password: E2E_PASSWORD };
+      const free = await app.inject({ method: 'POST', url: '/auth/register', headers, payload });
+      const taken = await app.inject({ method: 'POST', url: '/auth/register', headers, payload });
+      expect([free.statusCode, taken.statusCode]).toEqual([202, 202]);
+
+      const registered = await eventsOfType(app, 'urn:qauth:event:user.registered:v1-rc.0');
+      expect(registered).toHaveLength(1);
+      expect(registered[0].request?.userAgent).toBeUndefined();
+    });
+  }, 120_000);
+
   it('stores no secret in any event of a run across the endpoints', async () => {
     await withDeployment(async (app, secrets) => {
       const email = 'events-run@example.test';
