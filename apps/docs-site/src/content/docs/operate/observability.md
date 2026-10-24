@@ -21,6 +21,7 @@ events exported as OpenTelemetry logs, and recommended alerting.
 | **Metrics**               | `GET /metrics` in Prometheus text format via `prom-client`       |
 | **Event export**          | Every event as an OpenTelemetry log record, off by default       |
 | **Background jobs**       | Periodic jobs, one node at a time under a Postgres advisory lock |
+| **Event delivery**        | Each event to each delivery destination, at least once           |
 | **Alerting**              | Prometheus Alertmanager rules (see below)                        |
 
 ## Structured Logging
@@ -155,6 +156,9 @@ process/runtime metrics plus QAuth counters and gauges:
 | `qauth_job_runs_total`                   | counter | `job`, `result`      | Background job runs by outcome.                                     |
 | `qauth_events_oldest_unread_age_seconds` | gauge   | none                 | Seconds the oldest committed event has been held back from readers. |
 | `qauth_events_telemetry_dropped_total`   | counter | `reason`             | Event log records not exported; present only when the export is on. |
+| `qauth_events_pending`                   | gauge   | `kind`               | Event deliveries not finished yet, by delivery route.               |
+| `qauth_events_delivery_lag_seconds`      | gauge   | none                 | Seconds the oldest event that waits for a delivery has waited.      |
+| `qauth_events_delivery_attempts_total`   | counter | `kind`, `result`     | Event delivery attempts by route and result.                        |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -175,6 +179,10 @@ each list as **open** — a new call site can add a value without a schema chang
 - `reason` on `qauth_events_telemetry_dropped_total` is `queue_full` or
   `export_failed`; see
   [Events as OpenTelemetry logs](#events-as-opentelemetry-logs).
+- `kind` is a delivery route, such as `webhook` or `ssf`. `result` on
+  `qauth_events_delivery_attempts_total` is `delivered`, `retry` (failed, tried
+  again later) or `failed` (failed for good); see
+  [Event delivery](#event-delivery).
 
 The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
@@ -215,6 +223,44 @@ SELECT pid, datname, xact_start, state, query
 FROM pg_stat_activity
 WHERE backend_xid IS NOT NULL
 ORDER BY xact_start;
+```
+
+### Event delivery
+
+The delivery role hands every event to every destination of a delivery route,
+such as a webhook subscription, at least once and with the event's own id. It
+runs in the auth server, beside the other roles. No route is built yet, so
+today it only publishes its metrics.
+
+A delivery that fails is tried again after 30 seconds, then after twice as long
+each time, at most 6 hours, less up to 20% at random. After the last of its 12
+attempts it ends `failed` and stays in the delivery history.
+`EVENT_DELIVERY_MAX_ATTEMPTS`, `EVENT_DELIVERY_RETRY_INITIAL_DELAY` and
+`EVENT_DELIVERY_RETRY_MAX_DELAY` change the schedule (see
+[Configuration](/operate/configuration/)). A destination that is down holds
+only its own deliveries: the others go on.
+
+- `qauth_events_pending{kind}` counts the deliveries not finished yet. It grows
+  while a destination fails and falls as the retries succeed or run out.
+- `qauth_events_delivery_lag_seconds` is how long the oldest event that waits
+  for a delivery has waited, the time before the role picked it up included.
+  It is 0 while no route has a destination, and about a second in normal
+  operation.
+- `qauth_events_delivery_attempts_total{kind,result}` counts the attempts. A
+  rising `result="failed"` rate means destinations that stay down past the last
+  retry.
+
+Both gauges are read from the database at each scrape; a failed read shows
+`NaN` and logs a warning. To see which destinations fail and why:
+
+```sql
+SELECT destination_kind, destination_id, status, count(*),
+       max(attempt_count) AS attempts, max(last_status_code) AS last_status,
+       max(last_error_class) AS last_error
+FROM event_deliveries
+WHERE status <> 'delivered'
+GROUP BY 1, 2, 3
+ORDER BY 4 DESC;
 ```
 
 ### Admin event chain
