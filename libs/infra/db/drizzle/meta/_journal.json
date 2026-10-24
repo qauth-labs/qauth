@@ -225,6 +225,13 @@
       "when": 1792819197367,
       "tag": "0031_audit_logs_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792827094349,
+      "tag": "0032_admin_event_chain",
+      "breakpoints": true
     }
   ]
 }
