@@ -73,6 +73,9 @@ describe('DropOldestLogRecordProcessor', () => {
     );
 
     for (const n of [1, 2, 3]) processor.onEmit(record(n));
+    // Not on the caller's stack: the exporter serializes a batch synchronously.
+    expect(script.batches).toEqual([]);
+    await vi.advanceTimersByTimeAsync(0);
     expect(script.batches.map(bodies)).toEqual([['event-1', 'event-2', 'event-3']]);
     script.settle();
     await vi.advanceTimersByTimeAsync(0);
@@ -93,7 +96,10 @@ describe('DropOldestLogRecordProcessor', () => {
       script.exporter
     );
 
-    for (let n = 1; n <= 9; n += 1) {
+    processor.onEmit(record(1));
+    processor.onEmit(record(2));
+    await vi.advanceTimersByTimeAsync(0);
+    for (let n = 3; n <= 9; n += 1) {
       processor.onEmit(record(n));
       expect(processor.queueLength).toBeLessThanOrEqual(3);
     }
@@ -122,10 +128,31 @@ describe('DropOldestLogRecordProcessor', () => {
 
     processor.onEmit(record(1));
     processor.onEmit(record(2));
+    await vi.advanceTimersByTimeAsync(0);
     script.settle(ExportResultCode.FAILED);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(dropped).toEqual([[2, 'export_failed']]);
+  });
+
+  it('sends what waited through a slow export as soon as it ends, once it has waited the delay', async () => {
+    const script = scriptedExporter();
+    const { processor } = queue(
+      { maxExportBatchSize: 10, scheduleDelayMillis: 100 },
+      script.exporter
+    );
+
+    processor.onEmit(record(1));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(script.batches.map(bodies)).toEqual([['event-1']]);
+    processor.onEmit(record(2));
+    // Its delay ends while the first export is still out.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(script.batches).toHaveLength(1);
+
+    script.settle();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(script.batches.map(bodies)).toEqual([['event-1'], ['event-2']]);
   });
 
   it('gives up a batch whose export never reports, and ignores a late answer', async () => {

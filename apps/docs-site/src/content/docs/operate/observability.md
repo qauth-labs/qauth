@@ -306,8 +306,8 @@ one.
   URL-encoded `name=value` pairs separated by commas. The configuration page
   treats it as a secret.
 - `OTEL_EXPORTER_OTLP_TIMEOUT` is how long one export may take, its retries
-  included (10000 ms by default). `OTEL_EXPORTER_OTLP_COMPRESSION` is `gzip`
-  or `none`.
+  included: 10000 ms by default, an hour at most. `OTEL_EXPORTER_OTLP_COMPRESSION`
+  is `gzip` or `none`.
 - `OTEL_EXPORTER_OTLP_CERTIFICATE` names a PEM file of CA certificates for a
   collector behind TLS with a private CA. `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`
   and `OTEL_EXPORTER_OTLP_CLIENT_KEY` name the client certificate and key for
@@ -317,9 +317,11 @@ one.
 - `OTEL_SERVICE_NAME` sets the records' `service.name` (`qauth-auth-server` by
   default). `OTEL_RESOURCE_ATTRIBUTES` is not read.
 
-The server checks these values at boot: a malformed URL, header list, timeout
-or compression refuses to start, with the variable's name in the error. The
-error never repeats a header value.
+When the export is on, the server checks these values at boot: a malformed
+URL, header list, timeout or compression refuses to start, with the variable's
+name in the error. The error never repeats a header value. When the export is
+off, the server leaves them alone. They are process-wide, and another
+OpenTelemetry component of yours may read them.
 
 The records are JSON-encoded OTLP (`http/json`). `OTEL_EXPORTER_OTLP_PROTOCOL`
 is not read, and gRPC is not supported. The OpenTelemetry Collector's `otlp`
@@ -390,25 +392,31 @@ that personal data.
 
 ### Queue, drops and limits
 
-Export never fails or slows a request. Each committed event's record goes into
-a queue in memory, and the server sends it from there:
+Export never fails a request, and a request never waits for the collector.
+When an event commits, the request builds its record and puts it in a queue
+in memory. The server sends the queue's records later, on its own:
 
 - The queue holds up to 2048 records. When it is full, each new record pushes
   out the oldest one, so a collector that comes back receives the latest
   events.
-- Records go out in batches of up to 512, at most a second after the first one
-  arrived, and one batch at a time.
-- A batch the collector refuses, or cannot be sent before
+- Records go out in batches of up to 512, one batch at a time. A batch leaves
+  once 512 records wait, or a second after the first of them arrived. Records
+  that arrive while a batch is out wait for it to end.
+- A batch the collector refuses, or that cannot be sent before
   `OTEL_EXPORTER_OTLP_TIMEOUT`, is dropped after the exporter's own retries.
-  It is not sent again.
+  It is not sent again. If an export has not reported 5 seconds after that
+  timeout, its batch is given up and the next one goes out.
 - When the server stops, it spends up to 5 seconds sending what is queued. It
   logs how many records were left unsent, and drops them.
 
-`qauth_events_telemetry_dropped_total` counts every record that was not
-exported. `reason="queue_full"` counts records pushed out of a full queue, and
-`reason="export_failed"` counts records in batches that failed. The counter is
-on `/metrics` only while the export is on. A rule like this one tells you when
-the collector falls behind or cannot be reached:
+`qauth_events_telemetry_dropped_total` counts the records the queue gives up.
+`reason="queue_full"` counts records pushed out of a full queue, and
+`reason="export_failed"` counts records in batches that failed or were given
+up. The server logs two other losses instead of counting them: the records
+left at shutdown (a warning), and an event that fails the event contract,
+which the event store's own check already keeps out (an error). The counter
+is on `/metrics` only while the export is on. A rule like this one tells you
+when the collector falls behind or cannot be reached:
 
 ```yaml
 - alert: QAuthEventExportDropping

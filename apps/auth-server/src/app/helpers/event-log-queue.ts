@@ -13,9 +13,13 @@ import type {
  * queue is full and counts nothing; this one drops the oldest, so a collector
  * that comes back receives what happened last, and reports every drop.
  *
- * Nothing here waits for the network on the caller's behalf: `onEmit` only
- * queues. One batch is exported at a time; while it is out, new records wait
- * in the queue, which never holds more than `maxQueueSize`.
+ * Nothing here works on the caller's behalf beyond queueing: `onEmit` only
+ * adds the record and sets a timer, and even a full batch is serialized and
+ * sent on a later turn of the event loop, never on the stack of the request
+ * whose commit filled it. One batch is exported at a time; while it is out,
+ * new records wait in the queue, which never holds more than `maxQueueSize`.
+ * Only a batch given up at `exportTimeoutMillis` can leave its request still
+ * open in the exporter while the next one goes out.
  */
 
 /** Why a record was not exported. */
@@ -55,6 +59,10 @@ export const DEFAULT_EVENT_LOG_QUEUE_LIMITS: EventLogQueueLimits = Object.freeze
 export class DropOldestLogRecordProcessor implements LogRecordProcessor {
   private readonly queue: ReadableLogRecord[] = [];
   private timer: NodeJS.Timeout | undefined;
+  /** When the pending timer fires, in epoch milliseconds. */
+  private timerDue = 0;
+  /** When the oldest queued record arrived, while any is queued. */
+  private queuedSince = 0;
   private exporting: Promise<void> | undefined;
   /** The size of the batch being sent, or 0. */
   private sending = 0;
@@ -78,21 +86,17 @@ export class DropOldestLogRecordProcessor implements LogRecordProcessor {
 
   onEmit(record: SdkLogRecord): void {
     if (this.stopped) return;
+    if (this.queue.length === 0) this.queuedSince = Date.now();
     this.queue.push(record);
     if (this.queue.length > this.limits.maxQueueSize) {
       this.queue.shift();
       this.onDropped(1, 'queue_full');
     }
-    if (this.queue.length >= this.limits.maxExportBatchSize) {
-      this.drain();
-    } else if (this.timer === undefined) {
-      this.timer = setTimeout(() => {
-        this.timer = undefined;
-        this.drain();
-      }, this.limits.scheduleDelayMillis);
-      // A pending batch never keeps the process alive; shutdown() sends it.
-      this.timer.unref();
-    }
+    // A full batch leaves on the next turn of the event loop: the exporter
+    // serializes it synchronously, and the caller is a request's commit.
+    this.scheduleDrain(
+      this.queue.length >= this.limits.maxExportBatchSize ? 0 : this.limits.scheduleDelayMillis
+    );
   }
 
   /** Export every queued record, one batch at a time, and wait for the last one. */
@@ -145,26 +149,39 @@ export class DropOldestLogRecordProcessor implements LogRecordProcessor {
     }
   }
 
+  /** Drain after `delayMillis`, unless a drain is already due no later than that. */
+  private scheduleDrain(delayMillis: number): void {
+    const due = Date.now() + delayMillis;
+    if (this.timer !== undefined && this.timerDue <= due) return;
+    this.clearTimer();
+    this.timerDue = due;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.drain();
+    }, delayMillis);
+    // A pending batch never keeps the process alive; close() sends it.
+    this.timer.unref();
+  }
+
   /** Start the next export unless one is out or nothing is queued. */
   private drain(): void {
     if (this.exporting !== undefined || this.queue.length === 0) return;
     this.clearTimer();
     const batch = this.queue.splice(0, this.limits.maxExportBatchSize);
+    if (this.queue.length > 0) this.queuedSince = Date.now();
     this.sending = batch.length;
     this.exporting = this.send(batch).finally(() => {
       this.exporting = undefined;
       this.sending = 0;
-      // What arrived during the export goes out as a full batch now, or
-      // after the schedule delay.
+      // What arrived during the export goes out as a full batch now, or once
+      // the oldest of it has waited the schedule delay. This runs in the
+      // exporter's callback, not in a request.
       if (this.stopped || this.queue.length === 0) return;
       if (this.queue.length >= this.limits.maxExportBatchSize) {
         this.drain();
-      } else if (this.timer === undefined) {
-        this.timer = setTimeout(() => {
-          this.timer = undefined;
-          this.drain();
-        }, this.limits.scheduleDelayMillis);
-        this.timer.unref();
+      } else {
+        const waited = Date.now() - this.queuedSince;
+        this.scheduleDrain(Math.max(0, this.limits.scheduleDelayMillis - waited));
       }
     });
   }
