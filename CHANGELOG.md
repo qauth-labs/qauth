@@ -303,7 +303,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delegation chain of a delegated request. Where a change has a transaction,
   its event commits in it: a registration (now recorded too, as
   `user.registered`), an authorization code's issue and redemption, a refresh
-  rotation, a consent revocation and a wallet link. Every other write is
+  rotation, a consent revocation and a wallet link. A redemption and a
+  rotation sign their tokens in that transaction too, after the code or the
+  refresh token is spent and before the event, so a token that cannot be
+  signed rolls them back: the code or the refresh token stays usable, and no
+  `token.issued` records a token that was never made. Every other write is
   awaited and fails the request when it fails, as the audit write did; the
   developer API's client and API key events stay best-effort. A failure event
   carries the OAuth `error` and a `reason` code instead of an exception

@@ -1885,6 +1885,36 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     );
   });
 
+  it('signs inside the redemption transaction, before token.issued, so a signing failure records none', async () => {
+    // token.issued records tokens that exist. Signed after the compare-and-set
+    // and before the event, a token that cannot be signed rolls the redemption
+    // back: the code stays unspent, and no token.issued commits.
+    const { fastify, ctx } = setupAuthCodeStub();
+    let open = false;
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        open = true;
+        try {
+          return await cb({ tx: true });
+        } finally {
+          open = false;
+        }
+      }
+    );
+    const signedInTransaction: boolean[] = [];
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockImplementation(async () => {
+      signedInTransaction.push(open);
+      throw new Error('signing failed');
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow();
+    expect(signedInTransaction).toEqual([true]);
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+  });
+
   it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
     // Models the concurrent-redemption window: a code passes findByCode (it was
     // still live when read), but a parallel exchange consumed it first, so the
@@ -2167,6 +2197,41 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       headers: { 'user-agent': 'vitest', ...headers },
     };
   }
+
+  it('signs inside the rotation transaction, before token.issued, so a signing failure records none', async () => {
+    // As for a code: a token that cannot be signed rolls the rotation back,
+    // so the presented refresh token stays live and no token.issued commits.
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+    let open = false;
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        open = true;
+        try {
+          return await cb({ tx: 'rotation' });
+        } finally {
+          open = false;
+        }
+      }
+    );
+    const signedInTransaction: boolean[] = [];
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockImplementation(async () => {
+      signedInTransaction.push(open);
+      throw new Error('signing failed');
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).rejects.toThrow();
+    expect(signedInTransaction).toEqual([true]);
+    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+  });
 
   it('rotates the token and returns new access+refresh for a confidential client', async () => {
     const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
