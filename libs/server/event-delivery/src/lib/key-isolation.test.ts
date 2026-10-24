@@ -282,6 +282,19 @@ const nxBoundaries = (
 const { readCachedProjectGraph } = requireFromHere('nx/src/devkit-exports') as {
   readCachedProjectGraph(): unknown;
 };
+const { readFileMapCache } = requireFromHere('nx/src/devkit-internals') as {
+  readFileMapCache(): unknown;
+};
+
+/** Whether both caches the rule needs are there; it skips every file without either. */
+function nxCachesPresent(): boolean {
+  try {
+    readCachedProjectGraph();
+  } catch {
+    return false;
+  }
+  return readFileMapCache() !== null;
+}
 
 /**
  * The `@nx/enforce-module-boundaries` options of `.oxlintrc.json`, which has
@@ -305,13 +318,11 @@ function literally(text: string): RegExp {
 }
 
 describe('the Nx constraint of the delivery role', () => {
-  // The rule reads the project graph Nx caches. A run of Nx leaves one; a
-  // plain `vitest run` (CI's coverage job) may not, and then the rule skips
-  // every file, so build it first.
+  // The rule reads the project graph and the file map Nx caches. A run of Nx
+  // leaves both; a plain `vitest run` (CI's coverage job) may not, and then the
+  // rule skips every file, so build them first.
   beforeAll(() => {
-    try {
-      readCachedProjectGraph();
-    } catch {
+    if (!nxCachesPresent()) {
       execFileSync('pnpm', ['exec', 'nx', 'show', 'projects'], {
         cwd: WORKSPACE_ROOT,
         stdio: 'ignore',
