@@ -460,6 +460,21 @@ describe('validateIdJagAssertion — deny paths', () => {
     );
   });
 
+  it('rejects a `jti` longer than the event that records it holds, before burning it', async () => {
+    const { fastify, store } = fastifyStub();
+    const assertion = await makeAssertion({ jti: 'j'.repeat(256) });
+
+    await expectRejection(
+      validateIdJagAssertion(fastify, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        resolver: trustedResolver(),
+      }),
+      'claims_invalid'
+    );
+    expect(store.size).toBe(0);
+  });
+
   it('rejects an assertion with no `client_id` claim', async () => {
     const { fastify } = fastifyStub();
     const assertion = await makeAssertion({ clientId: 42 });
