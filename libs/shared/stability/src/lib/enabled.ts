@@ -45,6 +45,20 @@ export function enabledExperimentalItems<Config>(
   );
 }
 
+/**
+ * The configuration keys that switch a server item on. Such a key warns at
+ * boot through its item, once the item is on, rather than on its own.
+ */
+export function serverSwitchKeys(
+  items: readonly ExperimentalItem[] = EXPERIMENTAL_ITEMS
+): ReadonlySet<string> {
+  return new Set(
+    items.flatMap((item) =>
+      item.surface === 'server' && item.switchKey !== null ? [item.switchKey] : []
+    )
+  );
+}
+
 /** One boot warning: the server logs one per enabled item (ADR-018 §5). */
 export interface ExperimentalBootWarning {
   /** The item's id. */

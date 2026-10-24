@@ -29,6 +29,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
+import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
@@ -113,6 +114,12 @@ export interface AppOptions {
 
 export async function app(fastify: FastifyInstance, opts: AppOptions) {
   const { defaultRealmBoot = true, realmLookup, ...pluginOptions } = opts;
+
+  // ADR-018 §5: an experimental feature may change in a minor release, so a
+  // deployment that turns one on is told so at every boot: one `warn` line per
+  // item, with its id and docs link. Logged here rather than in `main.ts`, so
+  // every boot of the app, a test harness's included, says it.
+  logExperimentalFeatures(fastify.log);
 
   await fastify.register(databasePlugin, {
     config: {

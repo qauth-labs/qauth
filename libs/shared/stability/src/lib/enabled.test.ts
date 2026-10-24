@@ -6,6 +6,7 @@ import {
   experimentalDocsUrl,
   type ExperimentalSwitches,
   headingAnchor,
+  serverSwitchKeys,
 } from './enabled';
 import { sampleItem } from './fixtures';
 import { EXPERIMENTAL_ITEMS } from './items';
@@ -85,5 +86,15 @@ describe('the docs link', () => {
     expect(experimentalDocsUrl({ id })).toBe(
       `https://docs.qauth.dev/reference/experimental-features/#${anchor}`
     );
+  });
+});
+
+describe('serverSwitchKeys', () => {
+  it('lists the switch key of every server item, built or not, and no SDK import path', () => {
+    expect([...serverSwitchKeys()].sort()).toEqual([
+      'FIRST_PARTY_LOGIN_ENABLED',
+      'OID4VP_VERIFIER_PROFILE',
+      'PASS_THROUGH_LEG_ENABLED',
+    ]);
   });
 });
