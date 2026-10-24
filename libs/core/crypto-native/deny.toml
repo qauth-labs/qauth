@@ -42,7 +42,7 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = false
 deny = [
-  # aws-lc-sys 0.43.0 ships PREGENERATED bindings. If a bump reintroduces
+  # aws-lc-sys 0.46.0 ships PREGENERATED bindings. If a bump reintroduces
   # bindgen, the build-time surface grows a libclang dependency and the
   # generated FFI stops being reviewable from the lockfile alone — that must be
   # an explicit, reviewed decision, not a silent transitive change.

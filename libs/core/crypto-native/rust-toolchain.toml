@@ -5,6 +5,6 @@
 # "stable", which floats), and bump it deliberately in the same PR that re-runs
 # the noble<->native cross-verification suite.
 [toolchain]
-channel = "1.94.1"
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

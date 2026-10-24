@@ -12,11 +12,12 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # napi-rs bindings for the Node addon surface.
-napi = { version = "2", default-features = false, features = ["napi8"] }
-napi-derive = "2"
-# aws-lc-rs ML-DSA-65 (FIPS 204) via the `unstable` PQC surface. EXACT-pinned:
-# a pre-1.x-stable PQC API on the signing path — upgrade only deliberately.
-aws-lc-rs = { version = "=1.17.3", features = ["unstable"] }
+napi = { version = "3", default-features = false, features = ["napi8"] }
+napi-derive = "3"
+# aws-lc-rs ML-DSA-65 (FIPS 204). 1.18 moved ML-DSA from the `unstable` module
+# into `aws_lc_rs::signature`, so the `unstable` feature is no longer enabled.
+# EXACT-pinned: a young PQC API on the signing path — upgrade only deliberately.
+aws-lc-rs = { version = "=1.18.2" }
 
 [build-dependencies]
 napi-build = "2"
