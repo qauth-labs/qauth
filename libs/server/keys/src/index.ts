@@ -3,7 +3,7 @@
 // This entry point holds nothing that touches a KEK or key material. The KEK
 // provider, the envelope, key generation, the key factory and the in-process
 // signer are in `@qauth-labs/server-keys/custody`, which only the signer's
-// wiring may import (eslint.config.mjs, issue #464).
+// wiring may import (.oxlintrc.json, issue #464).
 export {
   isKeyCustodyError,
   KekAccessDeniedError,

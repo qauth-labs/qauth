@@ -14,7 +14,8 @@ scope) and PR body format (`Closes #N` / `Fixes #N` + bullets), follow the
 
 ```bash
 git status                      # no unintended uncommitted changes
-pnpm nx affected -t lint        # lint passes
+pnpm nx affected -t lint dependency-checks   # Oxlint, and @nx/dependency-checks on package.json files
+pnpm format:check               # Oxfmt finds nothing to reformat
 pnpm nx affected -t test        # tests pass
 pnpm nx affected -t typecheck   # types pass
 ```

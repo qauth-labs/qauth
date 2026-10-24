@@ -548,6 +548,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Action for contributors**: install Node.js 26 (`nvm use` reads `.nvmrc`)
   and `npm install --global pnpm@12.14.0`.
 
+- Lint and formatting run on Oxc. Oxlint checks the rules ESLint checked,
+  through the same `lint` target, and Oxfmt formats what Prettier formatted,
+  with the same options and Tailwind class order. ESLint keeps one rule,
+  `@nx/dependency-checks` on package.json files, as the new `dependency-checks`
+  target. CI now checks the formatting of every file, Markdown and YAML
+  included, in a new `format` job; before, it checked only the files ESLint
+  linted. `.prettierrc` and `.prettierignore` are gone: the settings are in
+  `.oxlintrc.json` and `.oxfmtrc.json`, and `pnpm format` and the pre-commit
+  hook run Oxfmt. The switch reformats 28 files once; `.git-blame-ignore-revs`
+  lists that commit.
+
+  **Action for contributors**: run `pnpm install`, then point your editor's
+  linter and formatter at Oxlint and Oxfmt. A Prettier extension left on would
+  format with Prettier's defaults, since the repository no longer has a
+  Prettier config.
+
 [#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#448]: https://github.com/qauth-labs/qauth/issues/448

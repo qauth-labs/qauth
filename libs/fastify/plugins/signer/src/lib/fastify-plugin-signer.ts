@@ -26,7 +26,7 @@ declare module 'fastify' {
  *
  * This project is the only one, beside `@qauth-labs/server-keys` itself, that
  * may import `@qauth-labs/server-keys/custody`, the KEK provider and envelope
- * API (eslint.config.mjs). Everything else signs through `fastify.signer`.
+ * API (.oxlintrc.json). Everything else signs through `fastify.signer`.
  *
  * Registering it loads the KEK: outside production an unset KEK falls back to
  * the published development KEK with a warning, and `NODE_ENV=production`

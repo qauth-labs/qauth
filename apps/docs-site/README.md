@@ -73,12 +73,13 @@ There used to be one: `.github/workflows/docs.yml` built the site in Actions and
 uploaded the prebuilt output through the Netlify CLI, which needed a
 `NETLIFY_AUTH_TOKEN` and a `NETLIFY_SITE_ID`. It was removed in favour of
 Netlify's own CD. The site's checks did not go with it — `ci.yml` runs
-`nx affected` for lint, typecheck, test and build, one job per target, which
-covers `docs-site` (its drift invariants included) whenever the diff touches it
-or anything it reads. The records under `docs/adr/` and `docs/security/` sit
-outside the project; `nx affected` still selects it for them because its `test`
-target lists both trees among its inputs in `project.json`. Keep them there:
-without them, a change to a record alone would run none of the site's checks.
+`nx affected` for lint, typecheck, test and build, one job per target (the lint
+job also runs `dependency-checks`), which covers `docs-site` (its drift
+invariants included) whenever the diff touches it or anything it reads. The
+records under `docs/adr/` and `docs/security/` sit outside the project;
+`nx affected` still selects it for them because its `test` target lists both
+trees among its inputs in `project.json`. Keep them there: without them, a
+change to a record alone would run none of the site's checks.
 
 Two settings in `netlify.toml` are load-bearing, and both are documented at the
 lines that set them:

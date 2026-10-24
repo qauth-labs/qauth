@@ -3,8 +3,8 @@
 //
 // ADR-019 provisions the KEK to the signer role alone, so only the signer's
 // wiring may import this entry point; everything else reaches keys through the
-// `Signer` interface of `@qauth-labs/server-keys`. A `no-restricted-imports`
-// rule in eslint.config.mjs enforces it (issue #464).
+// `Signer` interface of `@qauth-labs/server-keys`. The key custody guard in
+// .oxlintrc.json enforces it (issue #464).
 export {
   encodeKeyAad,
   KEY_AAD_VERSION,

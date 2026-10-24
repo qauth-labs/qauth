@@ -74,7 +74,7 @@ for good after `maxAttempts`.
 ## No keys
 
 The role holds no private key and loads none (ADR-019 Decision 9). This library depends only on
-the shared layer: the Nx constraint for `type:event-delivery` in `eslint.config.mjs` refuses any
+the shared layer: the Nx constraint for `type:event-delivery` in `.oxlintrc.json` refuses any
 other workspace library, and `key-isolation.test.ts` walks every import path from the library's
 source and fails on one that reaches key custody, the config library, core-crypto, server-jwt,
 the signer's wiring or `jose`.

@@ -390,7 +390,7 @@ describe('every provisioning path admits the token-exchange grant (#381)', () =>
   // The seed-manifest path is asserted from the other side of the Nx boundary,
   // in `libs/infra/db/src/lib/schema/grant-type-enum.test.ts`: `apps/auth-server`
   // is deliberately decoupled from `@qauth-labs/infra-db` (see the depConstraints
-  // in eslint.config.mjs), so importing the pg enum here to check it would break
+  // in .oxlintrc.json), so importing the pg enum here to check it would break
   // the layering this project enforces.
 
   it('developer API: POST /api/clients accepts the URN', () => {
