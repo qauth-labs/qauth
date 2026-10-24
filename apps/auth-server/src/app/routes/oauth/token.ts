@@ -1772,7 +1772,13 @@ async function handleJwtBearer(
     // to ONE opaque `invalid_grant` on the wire. Telling a caller whether an
     // issuer is allowlisted, whether a `kid` exists, or whether a `jti` was
     // already burned turns this endpoint into an oracle for each of those.
+    // The event carries the reason as a code; the validator's message, which
+    // may name the unverified issuer, goes to the operator's log.
     const reason = err instanceof IdJagValidationError ? err.reason : 'unexpected';
+    fastify.log.warn(
+      { reqId: request.id, reason, detail: err instanceof Error ? err.message : 'unknown error' },
+      'token endpoint: identity assertion refused'
+    );
     await emitRequestFailed(ctx, 'invalid_grant', reason);
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }

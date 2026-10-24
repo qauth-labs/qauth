@@ -3846,6 +3846,11 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
       { grantType: JWT_BEARER_GRANT, error: 'invalid_grant', reason: 'replayed' },
     ]);
+    // The validator's message stays in the operator's log, never in the event.
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'replayed', detail: expect.any(String) }),
+      'token endpoint: identity assertion refused'
+    );
   });
 
   it('rejects an assertion with NO `resource` claim', async () => {
