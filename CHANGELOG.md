@@ -453,8 +453,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes a new case id. See `test-vectors/README.md`.
 
 - **An upgrade test in CI** ([#475], ADR-018 §5). The new `upgrade-test` job
-  runs once per release tag in `upgrade-baselines.json` (today `v0.1.0-rc.2`
-  and `v0.1.3`).
+  runs once per release tag in `upgrade-baselines.json` (today `v0.1.3`;
+  releases only, never release candidates).
   It builds that release's images from its tag, writes data through its HTTP
   API (verified users, clients, a code flow with PKCE and its tokens, a
   consent, an API key), runs this commit's migration runner and nothing else,

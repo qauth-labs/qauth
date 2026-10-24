@@ -11,7 +11,7 @@
  * Prints two `key=value` lines, and appends them to the file `--output` names
  * (the CI step's output file):
  *
- *   baselines=["v0.1.0-rc.2", ...]   the matrix, as JSON
+ *   baselines=["v0.1.3", ...]   the matrix, as JSON
  *   rolling=report|block             what a failing rolling leg does
  *
  * Exit codes:

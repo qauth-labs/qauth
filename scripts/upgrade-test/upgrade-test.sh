@@ -12,8 +12,8 @@
 # (`-e KEK`), so no printed command carries one.
 #
 # Usage:
-#   UPGRADE_BASELINE=v0.1.0-rc.2 scripts/upgrade-test/upgrade-test.sh all
-#   UPGRADE_BASELINE=v0.1.0-rc.2 scripts/upgrade-test/upgrade-test.sh <command>
+#   UPGRADE_BASELINE=v0.1.3 scripts/upgrade-test/upgrade-test.sh all
+#   UPGRADE_BASELINE=v0.1.3 scripts/upgrade-test/upgrade-test.sh <command>
 #
 # Commands, in the order the job runs them:
 #   baseline-images  build the baseline's auth-server and migration-runner

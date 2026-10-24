@@ -43,8 +43,9 @@ job also runs the [wire suite](../wire-suite/README.md) against the new build on
 database.
 
 The checks use only what every baseline answers. Where releases differ, the helper accepts each
-answer: registration answers `201` with a user in the 0.1.0 release candidates and `202` with no
-user from 0.1.0 on, so the user id comes from the login token.
+answer. Registration answers `202` with no user, so the user id comes from the login token.
+
+Baselines are releases, never release candidates: an operator upgrades from a release.
 
 ## The rolling leg
 
@@ -59,7 +60,7 @@ You need Docker and a workspace install (`pnpm install`). One command builds the
 every step and removes the containers:
 
 ```bash
-UPGRADE_BASELINE=v0.1.0-rc.2 scripts/upgrade-test/upgrade-test.sh all
+UPGRADE_BASELINE=v0.1.3 scripts/upgrade-test/upgrade-test.sh all
 ```
 
 Its ports default to `3000` (the server), `5432` (Postgres) and `8025` (Mailpit's API) on

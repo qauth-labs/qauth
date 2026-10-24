@@ -10,9 +10,8 @@ import type { PkcePair } from './pkce';
  * with the method, the path and the body the server sent, so a CI log names
  * the request that broke.
  *
- * Where releases differ, the helper accepts each release's answer: registration
- * answers 201 with the new user in the 0.1.0 release candidates and 202 with
- * no user from 0.1.0 on, so the user id comes from the login token's `sub`,
+ * Where releases differ, the helper accepts each release's answer. Registration
+ * answers 202 with no user, so the user id comes from the login token's `sub`,
  * never from the registration.
  */
 
@@ -103,7 +102,7 @@ export async function register(baseUrl: string, email: string, password: string)
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  await readJson('POST /auth/register', response, [201, 202]);
+  await readJson('POST /auth/register', response, [202]);
 }
 
 /**
