@@ -24,7 +24,7 @@ export const PASSKEY_KEYS = defineKeys([
     owner: 'passkeys',
     default: { computed: "the default realm's host, from `JWT_ISSUER`" },
     since: '0.2.0',
-    docs: "The default realm's passkey RP ID: its host, or a parent domain with `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`; locked once the realm has a passkey, after which another value refuses to boot.",
+    docs: "The default realm's passkey RP ID, stored on the realm at boot: its host, or a parent domain that is not a public suffix, with `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`; locked once the realm has a passkey, after which another value refuses to boot.",
   },
   {
     name: 'WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN',
