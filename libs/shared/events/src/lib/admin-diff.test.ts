@@ -350,6 +350,76 @@ describe('masking', () => {
     expect(scanAdminDiff([{ path: '/signingKey', after: publicJwk }])).toEqual([]);
   });
 
+  it('masks an ML-DSA private key: an AKP JWK with `priv` or `seed`', () => {
+    const publicAkp = { kty: 'AKP', alg: 'ML-DSA-65', pub: 'cHVi' };
+    for (const member of ['priv', 'seed']) {
+      const privateAkp = { ...publicAkp, [member]: 'c2VlZA' };
+      expect(buildAdminDiff({}, { signingKey: privateAkp })).toEqual([
+        { path: '/signingKey', after: MASK },
+      ]);
+      expect(scanAdminDiff([{ path: '/signingKey', after: privateAkp }])).not.toEqual([]);
+    }
+    expect(buildAdminDiff({}, { signingKey: publicAkp })).toEqual([
+      { path: '/signingKey', after: publicAkp },
+    ]);
+  });
+
+  it('masks the value of a name and value pair whose name holds a secret', () => {
+    const headers = [
+      { name: 'X-Api-Key', value: 'sk_live_abc123' },
+      { name: 'Authorization', value: 'Token ghp_abc' },
+      { name: 'X-Tenant', value: 'acme' },
+    ];
+    expect(buildAdminDiff({ headers: [] }, { headers })).toEqual([
+      {
+        path: '/headers',
+        before: [],
+        after: [
+          { name: 'X-Api-Key', value: MASK },
+          { name: 'Authorization', value: MASK },
+          { name: 'X-Tenant', value: 'acme' },
+        ],
+      },
+    ]);
+    // A pair diffed member by member, and one named by `key`.
+    expect(
+      buildAdminDiff(
+        { smtp: { key: 'SMTP_PASSWORD', value: 'hunter1' } },
+        { smtp: { key: 'SMTP_PASSWORD', value: 'hunter2' } }
+      )
+    ).toEqual([{ path: '/smtp/value', before: MASK, after: MASK }]);
+    expect(
+      scanAdminDiff([{ path: '/headers', after: [{ name: 'X-Api-Key', value: 'sk_live_abc123' }] }])
+    ).toEqual([expect.objectContaining({ path: '/0/after/0/value', rule: 'secret_field' })]);
+  });
+
+  it('masks an Authorization value, and shows prose that starts with a scheme', () => {
+    const diff = buildAdminDiff(
+      {},
+      {
+        a: 'Token ghp_abc123',
+        b: 'DPoP eyJ0eXAi',
+        c: 'Digest username="u", realm="r", response="x"',
+        d: 'Basic plan for teams',
+        e: 'Bearer of record',
+      }
+    );
+    expect(diff).toEqual([
+      { path: '/a', after: MASK },
+      { path: '/b', after: MASK },
+      { path: '/c', after: MASK },
+      { path: '/d', after: 'Basic plan for teams' },
+      { path: '/e', after: 'Bearer of record' },
+    ]);
+  });
+
+  it('keeps a member name that only starts with a scheme, such as "Basic tier"', () => {
+    expect(buildAdminDiff({}, { plans: { 'Basic tier': 5 } })).toEqual([
+      { path: '/plans', after: { 'Basic tier': 5 } },
+    ]);
+    expect(scanAdminDiff([{ path: '/plans', after: { 'Basic tier': 5 } }])).toEqual([]);
+  });
+
   it('refuses a member name shaped like a secret, which no mask can hide', () => {
     expect(() => buildAdminDiff({}, { allow: { [`Bearer ${COMPACT_JWS}`]: true } })).toThrow(
       /member name under \/allow is shaped like a secret/
@@ -411,13 +481,16 @@ describe('scanAdminDiff', () => {
     expect(
       scanAdminDiff([
         { path: '/upstream', after: 'https://u:pw@host.example/' },
-        { path: '/allow', after: { 'Basic dTpw': true } },
+        { path: '/allow', after: { 'https://u:pw@host.example/': true } },
         { path: '/key', after: { kty: 'oct', k: 'c2VjcmV0' } },
         { path: '/revokeRefreshToken', before: false, after: true },
       ])
     ).toEqual([
       expect.objectContaining({ path: '/0/after', rule: 'secret_value' }),
-      expect.objectContaining({ path: '/1/after/Basic dTpw', rule: 'secret_value' }),
+      expect.objectContaining({
+        path: '/1/after/https:~1~1u:pw@host.example~1',
+        rule: 'secret_value',
+      }),
       expect.objectContaining({ path: '/2/after', rule: 'secret_field' }),
     ]);
   });

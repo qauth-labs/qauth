@@ -30,13 +30,16 @@ import { fieldNameWords, type PayloadFinding, scanValues } from './payload-rules
  * ({@link namesASecret}), marked or not. A secret field is masked whole and
  * never diffed inside, and a change of its value is still listed, so a
  * rotated secret shows as changed without showing either value. A boolean is
- * never masked: a flag holds no secret.
+ * never masked: a flag holds no secret. In a name and value pair, such as a
+ * custom header `{ name: 'X-Api-Key', value: '…' }`, the `value` is secret
+ * when the name holds a secret.
  *
  * A value shaped like a secret is masked wherever it sits
  * ({@link isSecretShaped}): a token, a signed or encrypted object, a key, a
- * URL with a password, an `Authorization` header value, or a private JWK. A
- * member name shaped like one cannot be masked without changing the
- * resource's shape, so it is refused.
+ * URL with a password, an `Authorization` header value, or a private JWK
+ * (an AKP key's `priv` or `seed` included). A member name shaped like a
+ * token, a key or a URL with a password cannot be masked without changing
+ * the resource's shape, so it is refused.
  */
 
 /**
@@ -378,11 +381,45 @@ export function namesASecret(name: string): boolean {
 /** A URL with a password in it: `scheme://user:password@host`. */
 const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]*@/i;
 
-/** An `Authorization` header value. */
-const AUTHORIZATION_VALUE = /^\s*(?:basic|bearer|digest)\s+\S/i;
+/**
+ * An `Authorization` header value: a scheme that carries a credential and one
+ * token68 after it (RFC 9110 §11.4), so prose such as "Basic plan for teams"
+ * or "Bearer of record" stays visible.
+ */
+const AUTHORIZATION_VALUE =
+  /^\s*(?:basic|bearer|token|dpop|ssws|apikey|api-key)\s+[A-Za-z0-9._~+/-]+=*\s*$/i;
 
-/** The members a JWK holds only when it is a private or a symmetric key (RFC 7518 §6). */
-const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k', 'oth'] as const;
+/** A `Digest` header value: the scheme and its first parameter. */
+const DIGEST_VALUE = /^\s*digest\s+[a-z][a-z0-9-]*\s*=/i;
+
+/**
+ * The members a JWK holds only when it is a private or a symmetric key: RFC
+ * 7518 §6's, and `priv` and `seed`, which hold the private key of an AKP
+ * (ML-DSA) key, as QAuth's own ML-DSA-65 keys do.
+ */
+const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k', 'oth', 'priv', 'seed'] as const;
+
+/**
+ * The members that name the other half of a name and value pair, as a list of
+ * headers or settings holds them: `{ name: 'X-Api-Key', value: '…' }`.
+ */
+const PAIR_NAME_MEMBERS = ['name', 'key', 'header', 'field', 'variable'] as const;
+
+/**
+ * Whether an object is a name and value pair whose name holds a secret, so
+ * its `value` member is secret: `{ name: 'Authorization', value: 'Token …' }`
+ * or `{ key: 'SMTP_PASSWORD', value: '…' }`.
+ */
+function isSecretPair(value: unknown): boolean {
+  return (
+    isPlainObject(value) &&
+    Object.hasOwn(value, 'value') &&
+    PAIR_NAME_MEMBERS.some((member) => {
+      const name = value[member];
+      return typeof name === 'string' && namesASecret(name);
+    })
+  );
+}
 
 /**
  * Whether a value is shaped like a secret whatever its name: a string shaped
@@ -392,11 +429,7 @@ const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k', 'oth'] as con
  */
 export function isSecretShaped(value: unknown): boolean {
   if (typeof value === 'string') {
-    return (
-      scanValues(value).length > 0 ||
-      URL_WITH_PASSWORD.test(value) ||
-      AUTHORIZATION_VALUE.test(value)
-    );
+    return isSecretShapedName(value) || AUTHORIZATION_VALUE.test(value) || DIGEST_VALUE.test(value);
   }
   if (isPlainObject(value)) {
     return (
@@ -420,9 +453,18 @@ function isJwkValue(value: unknown): boolean {
  */
 const hiddenByName = (key: string, value: unknown) => namesASecret(key) && !isJwkValue(value);
 
+/**
+ * Whether a member name is shaped like a secret: a token, a signed or
+ * encrypted object, a key, or a URL with a password. An `Authorization` value
+ * is not looked for here: a name such as "Basic tier" is a name.
+ */
+function isSecretShapedName(name: string): boolean {
+  return scanValues(name).length > 0 || URL_WITH_PASSWORD.test(name);
+}
+
 /** Refuse a member name shaped like a secret, which no mask can hide. */
 function checkMemberName(key: string, at: readonly string[]): void {
-  if (isSecretShaped(key)) {
+  if (isSecretShapedName(key)) {
     throw new TypeError(
       `buildAdminDiff: a member name under ${pointer(at) || '/'} is shaped like a secret`
     );
@@ -450,6 +492,7 @@ function maskWithin(
     });
   }
   if (value === null || typeof value !== 'object') return value;
+  const pair = isSecretPair(value);
   // `Object.fromEntries` defines own properties, so a member named
   // `__proto__` stays a member and never becomes a prototype.
   return Object.fromEntries(
@@ -459,7 +502,7 @@ function maskWithin(
       const member = value[key];
       return [
         key,
-        marked(marks, path) || hiddenByName(key, member)
+        marked(marks, path) || hiddenByName(key, member) || (pair && key === 'value')
           ? masked(member)
           : maskWithin(member, path, marks),
       ];
@@ -476,6 +519,8 @@ function diffObjects(
 ): void {
   // Sorted, so one change gives one diff whatever order the members came in.
   const keys = [...new Set([...presentKeys(before), ...presentKeys(after)])].sort();
+  // A pair's value is secret when either side names a secret.
+  const pair = isSecretPair(before) || isSecretPair(after);
   for (const key of keys) {
     checkMemberName(key, at);
     const path = [...at, key];
@@ -483,7 +528,7 @@ function diffObjects(
     const hasAfter = Object.hasOwn(after, key) && after[key] !== undefined;
     const old = before[key];
     const now = after[key];
-    const byMark = marked(marks, path);
+    const byMark = marked(marks, path) || (pair && key === 'value');
     const secret = byMark || namesASecret(key);
     const side = (value: JsonValue) =>
       byMark || hiddenByName(key, value) ? masked(value) : maskWithin(value, path, marks);
@@ -579,9 +624,11 @@ function unmaskedWithin(value: unknown, at: string): PayloadFinding[] {
     return value.flatMap((item, index) => unmaskedWithin(item, `${at}/${index}`));
   }
   if (value === null || typeof value !== 'object') return [];
+  const pair = isSecretPair(value);
   return Object.entries(value).flatMap(([key, member]) => {
     const path = `${at}/${escapePointer(key)}`;
-    if (isSecretShaped(key)) return [secretShaped(path)];
+    if (isSecretShapedName(key)) return [secretShaped(path)];
+    if (pair && key === 'value') return holdsMask(member) ? [] : [unmasked(path, key)];
     if (!namesASecret(key)) return unmaskedWithin(member, path);
     return holdsMask(member) ? [] : [unmasked(path, key)];
   });
@@ -605,7 +652,7 @@ export function scanAdminDiff(diff: unknown, at = ''): PayloadFinding[] {
     if (!isPlainObject(change) || typeof change['path'] !== 'string') return [];
     const base = `${at}/${index}`;
     const segments = pointerSegments(change['path']);
-    if (segments.some(isSecretShaped)) return [secretShaped(`${base}/path`)];
+    if (segments.some(isSecretShapedName)) return [secretShaped(`${base}/path`)];
     const secretName = segments.find(namesASecret);
     return (['before', 'after'] as const).flatMap((side) => {
       if (!Object.hasOwn(change, side)) return [];
