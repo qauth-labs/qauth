@@ -195,3 +195,30 @@ describe('authEnvSchema MAX_CLIENTS_PER_DEVELOPER', () => {
     }
   });
 });
+
+/**
+ * SESSION_LAST_SEEN_INTERVAL (ADR-019 Decision 3, issue #469): how often, at
+ * most, a browser session's `last_seen_at` is written. One minute by default,
+ * as ADR-019 decides; the operator may change it.
+ */
+describe('authEnvSchema SESSION_LAST_SEEN_INTERVAL', () => {
+  const parse = (raw?: string) =>
+    authEnvSchema.parse(raw === undefined ? {} : { SESSION_LAST_SEEN_INTERVAL: raw })
+      .SESSION_LAST_SEEN_INTERVAL;
+
+  it('defaults to 60 seconds', () => {
+    expect(parse()).toBe(60);
+  });
+
+  it('accepts whole seconds from 1 to a day', () => {
+    expect(parse('1')).toBe(1);
+    expect(parse('300')).toBe(300);
+    expect(parse('86400')).toBe(86_400);
+  });
+
+  it('refuses zero, a negative, a fraction, more than a day or a non-number', () => {
+    for (const raw of ['0', '-1', '1.5', '86401', 'often']) {
+      expect(() => parse(raw), raw).toThrow();
+    }
+  });
+});

@@ -273,6 +273,21 @@ export const authEnvSchema = z.object({
     .default(24 * 60 * 60),
 
   /**
+   * How often, at most, a browser session's `last_seen_at` is written, in
+   * seconds (ADR-019 Decision 3, issue #469). Default 60, as ADR-019 decides.
+   * The session service judges the realm's idle limit from the stored value,
+   * so the idle time it sees may lag by up to this long; a realm whose idle
+   * limit is shorter than twice this interval gets half its idle limit
+   * instead. A longer interval means fewer writes. At most a day.
+   */
+  SESSION_LAST_SEEN_INTERVAL: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 60 * 60)
+    .default(60),
+
+  /**
    * Whether to set the Secure attribute on the session cookie. Defaults true;
    * tests and local dev can set false to use plain HTTP. Production MUST
    * keep this true — the __Host- prefix will reject the cookie otherwise.
