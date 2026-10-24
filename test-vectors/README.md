@@ -97,7 +97,7 @@ pnpm exec nx run shared-test-vectors:schema-export --skip-nx-cache  # rewrite th
 
 `validate` rejects a missing member, a wrong `schema` id, an unknown member, a duplicate case id, a
 JWK not marked as a throwaway key, and an `id` that does not match the file's path. The
-`test-vectors` project's `test` target depends on it, so CI's unit job runs it.
+`test-vectors` project's `test` target depends on it, so CI's `affected (test)` job runs it.
 
 TypeScript tests read a file with `loadVectors(id)` from `@qauth-labs/shared-test-vectors`
 (`libs/shared/test-vectors`), which validates it first. A test fails when a committed vector file is

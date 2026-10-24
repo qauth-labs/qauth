@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative, resolve, sep } from 'node:path';
 
 import { ESLint } from 'eslint';
@@ -254,12 +256,45 @@ describe('the delivery role has no import path to key-loading code', () => {
   });
 });
 
+/**
+ * Nx's readers of the two caches the rule loads, the project graph and the file
+ * map, through `require` because this library's TypeScript settings (CommonJS,
+ * `node` resolution) cannot see the `exports` subpaths Nx publishes them under.
+ * Typed with only the members used here.
+ */
+const requireNx = createRequire(__filename);
+const { readCachedProjectGraph } = requireNx('nx/src/devkit-exports') as {
+  readCachedProjectGraph(): unknown;
+};
+const { readFileMapCache } = requireNx('nx/src/devkit-internals') as {
+  readFileMapCache(): unknown;
+};
+
+/** Whether both caches the rule needs are there; it skips every file without either. */
+function nxCachesPresent(): boolean {
+  try {
+    readCachedProjectGraph();
+  } catch {
+    return false;
+  }
+  return readFileMapCache() !== null;
+}
+
 describe('the Nx constraint of the delivery role', () => {
   let eslint: ESLint;
 
+  // The rule reads the project graph and the file map Nx caches. A run of Nx
+  // leaves both; a plain `vitest run` (CI's coverage job) may not, and then the
+  // rule skips every file, so build them first.
   beforeAll(() => {
+    if (!nxCachesPresent()) {
+      execFileSync('pnpm', ['exec', 'nx', 'show', 'projects'], {
+        cwd: WORKSPACE_ROOT,
+        stdio: 'ignore',
+      });
+    }
     eslint = new ESLint({ cwd: `${WORKSPACE_ROOT}/` });
-  });
+  }, 120_000);
 
   async function boundaryMessages(code: string): Promise<string[]> {
     const [result] = await eslint.lintText(code, { filePath: DELIBERATE });
