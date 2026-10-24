@@ -107,6 +107,12 @@
 > before QAuth 1.0.0 a step URN is a release candidate, `urn:qauth:ia:<name>:v1-rc.<M>`, as ADR-018
 > §5 now requires of every QAuth-defined identifier. The release that ships 1.0.0 drops the suffix.
 > Decision 3, F1b and the wire examples are edited in place. No rule changed.
+>
+> **Amended 2026-10-24** (before any implementation) with #458: the auth server records events in
+> the event store and writes no `audit_logs` row. Where §11 says audit, read `emitUserEvent`: an
+> event of a registered type, in the transaction of the change it records. The audit rules of §11
+> hold for the event's `data`; the row fields it names map to the envelope (`ip_address` to
+> `request.ip`, `userId` to the subject). No rule changed.
 
 ## Context
 
@@ -1285,7 +1291,8 @@ HMACs.**
 | `acr_values_supported`                                                                                                                                                                                                                                                                                                                            | not published; an ADR-010 amendment that makes both endpoints honour `acr_values` would add it (RFC 9470 §7 "Authorization Server Metadata")                                                      |
 | `challenge_endpoint` of attestation -11 §6.3 "Providing Challenges through the Challenge Endpoint"                                                                                                                                                                                                                                                | never: combined mode takes freshness from DPoP nonces, and the name collides                                                                                                                      |
 
-Audit goes through `fastify.repositories.auditLogs.create` under the rule of
+Audit goes through `emitUserEvent` (the event store, #458; before it,
+`fastify.repositories.auditLogs.create`) under the rule of
 [ADR-011 §8](./011-enterprise-managed-authorization.md) "Audit": never a password, code, `otp`,
 `auth_session`, assertion, key, WebAuthn signature or bot-challenge token. The identifier appears
 only as the throttle HMAC while no user is resolved, and `userId` is set only after a factor

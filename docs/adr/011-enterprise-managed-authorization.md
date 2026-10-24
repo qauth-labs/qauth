@@ -18,6 +18,10 @@
 >
 > **Amended 2026-10-23:** §2 now records that an ID-JAG is single-use, a deliberate
 > departure from `-04` §4.4.3. The code did not change.
+>
+> **Amended 2026-10-24 (#458):** the auth server records events in the event store
+> (ADR-019 Decision 8) and writes no `audit_logs` row. §8 now says how these paths
+> are recorded: through `emitUserEvent`, as `token.issued` and `token.request_failed`.
 
 ## Context
 
@@ -442,14 +446,17 @@ This is a break, made while the record is days old so that no deprecation window
 
 ### 8. Audit
 
-Every accept and every reject on both paths is written through
-`fastify.repositories.auditLogs.create`, matching the shape already used
-throughout `token.ts` (`userId`, `oauthClientId`, `event`, `eventType: 'token'`,
-`success`, `ipAddress`, `userAgent`, `metadata`). The `metadata` records the
-reason, the asserted issuer, the `jti` and the target `resource` — **never the
-assertion itself, never a key, never a secret**. A rejected assertion from an
-unknown issuer is exactly the event a security team needs to see, so the reject
-path is audited at least as carefully as the accept path.
+Every accept and every reject on both paths is recorded through `emitUserEvent`
+(`apps/auth-server/src/app/helpers/user-events.ts`), as every event of the token
+endpoint is: `token.issued` for an accept, with the asserted issuer
+(`idJagIssuer`), the `jti` (`idJagId`) and the target resource; `token.request_failed`
+for a reject, with the OAuth `error` and the refusal's `reason` code. The validator's
+own message, which may name an unverified issuer, goes to the server log. An event
+holds **never the assertion itself, never a key, never a secret**, and the event
+contract's payload rules refuse one that would. A rejected assertion from an unknown
+issuer is exactly the event a security team needs to see, so the reject path is
+recorded at least as carefully as the accept path. (Before #458 this was written
+through `fastify.repositories.auditLogs.create`.)
 
 ## Consequences
 

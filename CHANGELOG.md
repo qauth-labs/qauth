@@ -159,8 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs site's new **Events** page (`reference/events`) is generated from the
   registry. Every type is a release candidate (`:v1-rc.0`) until QAuth 1.0.0:
   nothing about it is promised before then, a breaking change raises the
-  candidate number, and 1.0.0 drops the suffix. Nothing emits these events
-  yet: the event store and the emitters come next.
+  candidate number, and 1.0.0 drops the suffix. The auth server emits them
+  since [#458].
 
 - **Passkeys: the WebAuthn provider and the relying-party settings** ([#467],
   ADR-017 Decision 14, ADR-019 Decision 2). One WebAuthn `CredentialProvider`
@@ -215,8 +215,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opaque and names its realm. Every read needs a realm id. The price is lag: a
   transaction left open holds back the events written after it began, and the
   new gauge `qauth_events_oldest_unread_age_seconds` on `/metrics` shows how
-  long. The migration only creates the table and its indexes. Nothing emits
-  events yet: the emitters, the delivery role and the event API come next.
+  long. The migration only creates the table and its indexes. The auth server
+  writes its events there since [#458]; the delivery role and the event API
+  come next.
 
 - **Schema**: migration 0030 reshapes the `sessions` table for browser sessions
   ([#468], ADR-019 Decision 3). Each row is one account signed in on one
@@ -292,6 +293,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes a new case id. See `test-vectors/README.md`.
 
 ### Changed
+
+- **BREAKING (operators who read `audit_logs`)**: the auth server records what
+  a person or a client did as events in the event store ([#458], ADR-019
+  Decision 8) and writes no `audit_logs` row. One emitter, `emitUserEvent`,
+  replaces the 89 writes in `apps/auth-server` and the client-suspension tool's:
+  it fills the realm, the request id as trace id, the client address and
+  `User-Agent`, the subject, the client and the actor, with the RFC 8693
+  delegation chain of a delegated request. Where a change has a transaction,
+  its event commits in it: a registration (now recorded too, as
+  `user.registered`), an authorization code's issue and redemption, a refresh
+  rotation, a consent revocation and a wallet link. Every other write is
+  awaited and fails the request when it fails, as the audit write did; the
+  developer API's client and API key events stay best-effort. A failure event
+  carries the OAuth `error` and a `reason` code instead of an exception
+  message, and an event no longer holds the address a failed sign-in typed, a
+  session id or a token subject. What a refused client or identity assertion
+  said about itself goes to the server log. The structured log lines of
+  `logAuthEvent` are unchanged.
+
+  Migration 0031 copies every `audit_logs` row into `events`, with the type the
+  event contract's map gives its name, its time, and the realm of its user, its
+  client or the default realm. `data` keeps only the members the type
+  declares; a required member an old row cannot supply gets a fixed value
+  (`unknown` for a code). The table stays, read-only, until a contract
+  migration drops it after one release.
+
+  **Action for operators**: move any query, export or alert that reads
+  `audit_logs` to `events`; the Events page (`reference/events`) maps each old
+  name to its type. Rows a previous release writes while the upgrade rolls out,
+  after migration 0031 has run, stay in `audit_logs`; the copy is idempotent, so
+  running its statement again picks them up.
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
   same mechanism every future rename uses, instead of code of its own. It
@@ -406,6 +438,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#452]: https://github.com/qauth-labs/qauth/issues/452
 [#456]: https://github.com/qauth-labs/qauth/issues/456
 [#457]: https://github.com/qauth-labs/qauth/issues/457
+[#458]: https://github.com/qauth-labs/qauth/issues/458
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#464]: https://github.com/qauth-labs/qauth/issues/464

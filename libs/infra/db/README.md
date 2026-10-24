@@ -331,7 +331,10 @@ try {
 
 #### Audit Log Realm Filtering
 
-For security and multi-tenancy, audit logs can be filtered by realm:
+`audit_logs` is read-only since #458: the auth server records events in the
+[event store](#event-store), and migration 0031 copied every audit row there.
+The table and its repository stay until a contract migration drops them after
+one release; until then its rows can still be read, filtered by realm:
 
 ```typescript
 import { createDatabase } from '@qauth-labs/infra-db';
@@ -370,6 +373,18 @@ statement or an event that records no change, calls `emitInOwnTransaction`,
 which writes the event in a short transaction of its own. Never emit after the
 change's transaction has committed: the change would stay and the event could
 be lost.
+
+The auth server does not call the repository directly: its routes call
+`emitUserEvent` (`apps/auth-server/src/app/helpers/user-events.ts`, #458),
+which fills the realm, the request, the subject, the client and the actor, and
+passes the route's transaction when it has one.
+
+**The audit log's rows.** Migration 0031 copied every `audit_logs` row into
+`events`: the type from `LEGACY_EVENT_MAP`, the type's category, `created_at`
+as the time, the realm of the row's user, else its client, else the one its
+metadata names, else the operator realm. `data` holds only the members the
+type declares, and a required member an old row could not supply gets a fixed
+value (`unknown`, `false`, `[]`, `0` or the nil UUID). The copy is idempotent.
 
 ```typescript
 import { createEventsRepository, eventStreamStart } from '@qauth-labs/infra-db';
@@ -527,7 +542,7 @@ The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for
 
 Both seeders mark their clients `provisioned_by_operator = true`, and so does the system client the auth-server creates for its own login. Only such a client receives authorization error responses by automatic redirect (RFC 9700 §4.11.2); every client created through `POST /oauth/register`, a CIMD document or `POST /api/clients` gets them on an issuer page. A `--rotate` run sets the marker on the clients it rewrites, which is how an operator marks a client that migration 0023's backfill left unmarked.
 
-`oauth_clients.enabled` is the client owner's switch: `PATCH /api/clients/:id` may set it either way. An operator who must keep a client off **suspends** it instead (`oauth_clients.suspended`, `suspended_at`). A suspended client is refused wherever a disabled one is, no route writes the column, and a CIMD re-resolution never touches it. `db:suspend-oauth-client` sets or lifts it in one transaction with an `oauth.client.suspended` / `oauth.client.suspension_lifted` audit row; the equivalent by hand is `UPDATE oauth_clients SET suspended = true, suspended_at = <epoch ms> WHERE client_id = '<client_id>'`. Lifting a suspension leaves `enabled` as it is. Migration 0023 suspends every client that was disabled when it ran, since the row does not record whether the operator or the owner disabled it.
+`oauth_clients.enabled` is the client owner's switch: `PATCH /api/clients/:id` may set it either way. An operator who must keep a client off **suspends** it instead (`oauth_clients.suspended`, `suspended_at`). A suspended client is refused wherever a disabled one is, no route writes the column, and a CIMD re-resolution never touches it. `db:suspend-oauth-client` sets or lifts it in one transaction with a `client.suspended` / `client.suspension_lifted` event (actor `operator_cli`, the operating-system user when there is one); the equivalent by hand is `UPDATE oauth_clients SET suspended = true, suspended_at = <epoch ms> WHERE client_id = '<client_id>'`. Lifting a suspension leaves `enabled` as it is. Migration 0023 suspends every client that was disabled when it ran, since the row does not record whether the operator or the owner disabled it.
 
 ## Project Structure
 
@@ -559,7 +574,7 @@ libs/infra/db/
 │   │   │   ├── tokens.ts       # email_verification_tokens, authorization_codes, refresh_tokens
 │   │   │   ├── consents.ts     # oauth_consents
 │   │   │   ├── sessions.ts     # sessions, session_clients (ADR-019 Decision 3)
-│   │   │   ├── audit.ts        # audit_logs (with agent attribution)
+│   │   │   ├── audit.ts        # audit_logs (read-only since #458)
 │   │   │   ├── admin-audit.ts  # admin_audit_log, admin_audit_log_checkpoints (ADR-019 Decision 7)
 │   │   │   ├── roles.ts        # roles, user_roles (Phase 5+, currently unused)
 │   │   │   ├── keys.ts         # realm_keys, realm_public_keys (ADR-019 Decision 9)
@@ -618,7 +633,7 @@ libs/infra/db/
 
 - **sessions**: Browser sessions (ADR-019 Decision 3, #468): one row per account signed in on one browser, in one realm. The `id` (`uuidv7()`) is the session's `sid`. Holds the authentication (`auth_time`, `amr`, `assurance_level`), the address and user agent at creation, `last_seen_at`, the absolute end `expires_at`, and `revoked_at` with `revoked_reason` (set together). `(user_id, realm_id)` references `users (id, realm_id)`, so a session never names a user of another realm. Not stored here: the cookie, the CSRF values and the consent scopes. The auth server does not read or write it yet; Redis still holds the live sessions until the session service (#469) lands
 - **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Deleting the session or the client deletes its rows
-- **audit_logs**: Comprehensive audit logging for security events
+- **audit_logs**: The audit log of the releases before the event store; read-only since #458, its rows copied into `events`
 - **api_keys**: Environment-gated static developer API keys (ADR-008 §6)
 - **roles**: Role-based access control (Phase 5+)
 - **user_roles**: User-role assignments

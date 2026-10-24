@@ -80,7 +80,7 @@ QAuth applies: rate limits on login/token/register/resend; minimum response time
 | Errors       | Generic message for auth failure; `@qauth-labs/shared-errors`   |
 | Rate limit   | Global + per-route; Redis; env-driven; stricter on auth flows   |
 | Secrets      | Env/secrets manager; never in code/images/logs; ADR-001 for JWT |
-| Audit        | `audit_logs` for auth/token events; IP, userAgent, no secrets   |
+| Audit        | `emitUserEvent` → `events`; IP, userAgent, no secrets (#458)    |
 | Dependencies | `pnpm audit`; fix or document; track CVEs                       |
 
 These align with OWASP API Security Top 10 (2023), OWASP Top 10:2025 auth guidance, and current dependency/CVE best practice.

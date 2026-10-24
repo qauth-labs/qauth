@@ -84,10 +84,11 @@ apart.
 > ⚠️ **Token-exchange events are not log lines.** `logAuthEvent` is called only
 > from `routes/auth/login.ts`, `routes/auth/logout.ts` and
 > `routes/auth/register.ts`. The `oauth.token.exchange.*` names exist as members
-> of the event type union, but the token endpoint records them **only as rows in
-> the `audit_logs` table**, never through the logger. An alert built on an
-> `oauth.token.exchange.success` log line will never fire — query the audit table
-> for those instead.
+> of the event type union, but the token endpoint records them **only as events**
+> (`token.issued`, `token.request_failed`) in the event store, never through the
+> logger. An alert built on an `oauth.token.exchange.success` log line will never
+> fire — read the event store for those instead. Since 0.2.0 nothing writes the
+> `audit_logs` table; it stays read-only until a later release drops it.
 
 Each emitted line carries:
 

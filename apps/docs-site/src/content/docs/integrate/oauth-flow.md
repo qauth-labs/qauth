@@ -400,8 +400,9 @@ Rules and guarantees:
   `act` chain may not exceed 4 actors); deeper requests get `invalid_request`.
 - **No refresh token** is issued — a delegated token is short-lived; the agent
   re-exchanges as needed.
-- Every exchange (success and failure) is written to `audit_logs`, including the
-  actor and delegation depth.
+- Every exchange (success and failure) is recorded as an event
+  (`token.issued`, `token.request_failed`), including the acting agent, its
+  delegation chain and the delegation depth.
 
 ---
 
@@ -522,7 +523,8 @@ _not_ authorization constraints are still tolerated, so a later spec revision
 does not break existing deployments.
 
 Every rejection returns a bare `invalid_grant` (RFC 6749 §5.2). The specific
-reason is written to the audit log and never to the wire: a caller learning which
+reason is recorded as the event's `reason` code and in the server log, and never sent
+on the wire: a caller learning which
 check failed would learn whether an issuer is allowlisted, whether a `jti` was
 already burned, and whether a `kid` exists — all oracles.
 
