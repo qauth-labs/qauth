@@ -81,10 +81,11 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         kid: string;
         algorithm: string;
         status: StoredKeyStatus;
+        pair_id: string | null;
         publish_at: string | null;
         created_at: string;
       }>(
-        `SELECT kid, algorithm, status, publish_at, created_at FROM realm_keys
+        `SELECT kid, algorithm, status, pair_id, publish_at, created_at FROM realm_keys
          WHERE ${conditions.join(' AND ')} ORDER BY created_at, id`,
         values
       );
@@ -93,6 +94,7 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         kid: row.kid,
         algorithm: row.algorithm,
         status: row.status,
+        pairId: row.pair_id,
         publishAt: row.publish_at === null ? null : Number(row.publish_at),
         createdAt: Number(row.created_at),
       }));

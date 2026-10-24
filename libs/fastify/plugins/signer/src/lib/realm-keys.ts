@@ -5,6 +5,7 @@ import {
   KEY_ALGORITHMS,
   type KeyAlgorithm,
   KeyCreationRefusedError,
+  type KeyPurpose,
 } from '@qauth-labs/server-keys';
 import {
   bootRealmKeys,
@@ -58,24 +59,56 @@ export interface RealmKeysDependencies {
 /**
  * The message logged at every boot for a key variable whose key is in the
  * store. It names the variable, never its value.
+ *
+ * Tokens and the session cookie are still signed with the variables until
+ * they move onto the signer (#491, #493), and a signing variable that holds a
+ * new key replaces the stored one until rotation through the store ships
+ * (#544, #551). So the variable stays set until then.
  */
-export function keyVariableWarning(variable: string): string {
-  return `${variable} is no longer read: its key is in the realm's key store. Remove the variable.`;
+export function keyVariableWarning(variable: string, purpose: KeyPurpose): string {
+  return purpose === 'cookie_hmac'
+    ? `${variable} is in the realm's key store, but the session cookie is still signed with the variable: keep it set until the upgrade guide says to remove it.`
+    : `${variable} is in the realm's key store, but tokens are still signed with the variable: keep it set until the upgrade guide says to remove it. A new key in it replaces the stored key at boot.`;
+}
+
+/**
+ * The message logged at boot for a key variable that held a new key, which
+ * replaced the realm's active key of its algorithm. The log line carries the
+ * new and the retired `kid`s.
+ */
+export function keyReplacedWarning(variables: readonly string[], algorithm: string): string {
+  return `${variables.join(' and ')} held a new ${algorithm} key: the realm's key store now holds it as the active key, and retired and unpublished the key it replaced at once. Tokens that key signed no longer verify.`;
+}
+
+/**
+ * The message logged at every boot for a key variable whose key the store
+ * holds, but not as its active key: a key a replacement retired. The log line
+ * carries both `kid`s.
+ */
+export function keyInactiveWarning(
+  variables: readonly string[],
+  algorithm: string,
+  status: string
+): string {
+  return `${variables.join(' and ')} holds an ${algorithm} key the realm's key store holds as ${status}, not as its active key, and the store does not make it active again: once tokens are signed through the key store, its active key signs. Set the variable to the active key, or to a new key to replace it.`;
 }
 
 /**
  * Run the key boot step for a realm named by `settings.realmName`: import
- * each configured key the realm's store lacks, create the standard keys it
- * still lacks, and an RS256 signing key on a fresh realm (`bootRealmKeys`).
+ * each configured key the realm's store lacks, replacing the active key of its
+ * algorithm, create the standard keys it still lacks, and an RS256 signing key
+ * on a fresh realm (`bootRealmKeys`).
  *
- * Then log one line with what was imported and generated, by `kid`, and one
- * warning per key variable that is still set: its key is in the store, so the
- * variable is no longer read and should be removed.
+ * Then log one line with what was imported and generated, by `kid`, one
+ * warning per replaced key and per variable that holds a retired key, and one
+ * warning per key variable that is still set: tokens and the session cookie
+ * are still signed with it, so it stays set.
  *
  * @throws Error when the realm does not exist
  * @throws the errors of `bootRealmKeys`: an `InvalidConfigurationError` names
- *   the variables when a configured key cannot be imported, or when an import
- *   would use the published development KEK
+ *   the variables when a configured key cannot be imported, when an import
+ *   would use the published development KEK, for half a hybrid pair, or for a
+ *   new key under a stored key's configured `kid`
  */
 export async function bootRealmKeysByName(
   deps: RealmKeysDependencies & { readonly log: Pick<FastifyBaseLogger, 'info' | 'warn'> },
@@ -116,11 +149,25 @@ export async function bootRealmKeysByName(
     'realm keys ready'
   );
 
-  const variables = new Set(
-    [...result.imported, ...result.alreadyStored].flatMap((key) => key.variables)
-  );
-  for (const variable of variables) {
-    deps.log.warn({ variable, realm: realm.name }, keyVariableWarning(variable));
+  for (const { purpose, algorithm, kid, variables, retiredKids } of result.replaced) {
+    deps.log.warn(
+      { realm: realm.name, purpose, algorithm, kid, retiredKids, variables },
+      keyReplacedWarning(variables, algorithm)
+    );
+  }
+  for (const { purpose, algorithm, kid, status, activeKid, variables } of result.inactive) {
+    deps.log.warn(
+      { realm: realm.name, purpose, algorithm, kid, status, activeKid, variables },
+      keyInactiveWarning(variables, algorithm, status)
+    );
+  }
+
+  const variables = new Map<string, KeyPurpose>();
+  for (const key of [...result.imported, ...result.alreadyStored, ...result.inactive]) {
+    for (const variable of key.variables) variables.set(variable, key.purpose);
+  }
+  for (const [variable, purpose] of variables) {
+    deps.log.warn({ variable, realm: realm.name }, keyVariableWarning(variable, purpose));
   }
   return result;
 }

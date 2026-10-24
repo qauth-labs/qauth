@@ -291,7 +291,7 @@ const result = await bootRealmKeys({
     cookieSecret: { value: secret, variables: ['SESSION_COOKIE_SECRET'] },
   },
 });
-// result.imported, result.alreadyStored and result.generated name keys by kid; no material.
+// result.imported, .replaced, .alreadyStored, .inactive and .generated name keys by kid; no material.
 ```
 
 | Variable                                           | Becomes                                                                                        |
@@ -306,6 +306,13 @@ const result = await bootRealmKeys({
   generated key. The cookie key gets a random `kid`.
 - A signing key counts as stored when the realm has a published key with the same public key,
   whatever its `kid`. So the import happens once, and removing `JWT_RS256_KID` later changes nothing.
+- A signing key the store lacks, while the realm has an active key of its algorithm, replaces that
+  key: the stored key, and its hybrid partner, are retired and unpublished at once (`replaced`).
+  Until rotation through the store ships (manual rotation #544, emergency retirement #551),
+  changing the variable is how a deployment replaces a signing key. Tokens are still signed with the
+  variables until #491, so the store follows what signs.
+- A variable that holds a key the store keeps, but not as its active key (one a replacement
+  retired), changes nothing; it is reported in `inactive`.
 - It all runs in one transaction under `lockRealm`, a transaction-level advisory lock: nodes that
   boot together import once.
 - After the import, `provisionRealmKeys` fills the standard keys still missing. A fresh realm, one
@@ -318,10 +325,11 @@ when:
 - a key must be imported and the KEK is the published development KEK (no `KEK` or `KEK_PATH`);
 - a configured public key is not the private key's public half, or an RSA key is shorter than 2048
   bits;
-- a variable holds another key than the realm's active key of its algorithm: a stored key changes by
-  rotation, not through the variable;
 - a variable holds a key the realm marked `compromised`;
-- the ML-DSA-65 key would join an Ed25519 key already stored without it.
+- one key of the hybrid pair is new to the store and the other is not: both keys of a pair are
+  stored, and replaced, together;
+- a new key comes with a configured `kid` (`JWT_RS256_KID`, `JWT_MLDSA_KID`) that is already
+  another stored key's: a new key needs a new `kid`.
 
 The `OID4VP_*` keys are not imported here; #546 moves the verifier key into the store.
 

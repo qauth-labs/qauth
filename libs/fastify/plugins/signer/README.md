@@ -65,12 +65,13 @@ await fastify.register(signerPlugin, {
 });
 ```
 
-- It imports each key variable the realm's store lacks, creates the standard keys still missing,
-  and gives a fresh realm an RS256 signing key, under the realm's advisory lock
-  (`lockRealm` of the realm keys repository).
-- It logs `realm keys ready` with the `kid`s it imported and generated, and one warning per key
-  variable still set: the variable is no longer read and should be removed
-  (`keyVariableWarning`).
+- It imports each key variable the realm's store lacks, replacing the active key of its algorithm,
+  creates the standard keys still missing, and gives a fresh realm an RS256 signing key, under the
+  realm's advisory lock (`lockRealm` of the realm keys repository).
+- It logs `realm keys ready` with the `kid`s it imported and generated, one warning per replaced
+  key with the retired `kid`s (`keyReplacedWarning`), one per variable that holds a key the store
+  retired (`keyInactiveWarning`), and one per key variable still set (`keyVariableWarning`): tokens
+  and the session cookie are still signed with the variables (#491, #493), so they stay set.
 - A refusal rejects `ready()`. The message names the variables, never a value. See the
   [server-keys README](../../../server/keys/README.md#importing-the-key-variables) for the
   refusals.

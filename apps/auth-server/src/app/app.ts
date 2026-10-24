@@ -126,6 +126,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     // still missing (an RS256 signing key too on a fresh deployment), and
     // warns about every key variable still set. Tokens and the session cookie
     // keep using the variables until they move onto the signer (#491, #493).
+    // A signing variable that holds a new key replaces the stored key until
+    // rotation through the store ships (#544, #551).
     await fastify.register(signerPlugin, {
       db: fastify.db,
       kekEnv: process.env,

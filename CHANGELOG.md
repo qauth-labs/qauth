@@ -223,10 +223,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a fresh deployment), and gives a fresh realm an RS256 signing key too;
   while `JWT_PRIVATE_KEY` stays required, every deployment imports its
   signing key instead. It is one transaction, so two nodes that boot together import once. A
-  warning at every boot names each key variable that is still set and says it
-  is no longer read and should be removed. Tokens and the session cookie keep
-  using the variables until they move onto the signer, so for now remove
-  none.
+  warning at every boot names each key variable that is still set and says to
+  keep it: tokens and the session cookie keep using the variables until they
+  move onto the signer. Until rotation through the store ships, a signing
+  variable that holds a new key replaces the stored key of its algorithm, as
+  changing the variable replaced the key before: the stored key is retired and
+  leaves the JWKS at once, and the boot warns with both `kid`s.
 - `/.well-known/jwks.json` publishes the Ed25519 key with its thumbprint `kid`,
   and the RS256 key with its thumbprint `kid` when `JWT_RS256_KID` is unset;
   ID tokens signed with RS256 carry that `kid` ([#485]). The keys themselves
@@ -296,9 +298,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variables, when a key variable must be imported and the KEK is the published
   development KEK. The boot also stops when `JWT_PUBLIC_KEY` or
   `JWT_RS256_PUBLIC_KEY` is not the public half of its private key, when
-  `JWT_RS256_PRIVATE_KEY` is shorter than 2048 bits, and when a key variable
-  holds another key than the one the store imported from it: a stored key
-  changes by rotation, not through the variable.
+  `JWT_RS256_PRIVATE_KEY` is shorter than 2048 bits, when a new key comes
+  with a `JWT_RS256_KID` or `JWT_MLDSA_KID` that already names a stored key,
+  and, with hybrid signing on, when only one key of the pair is new.
 
   **Action for operators**: before upgrading, set `KEK` or `KEK_PATH` to the
   base64 of 32 random bytes (`openssl rand -base64 32`) and keep a copy where

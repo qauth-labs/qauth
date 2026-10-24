@@ -67,6 +67,16 @@
 >
 > - Decision 4 and the open questions: the Interaction API is served at `/interaction/v1-rc.<M>`
 >   until the release that ships 1.0.0, which serves `/interaction/v1`.
+>
+> **Amended 2026-10-24** with the maintainer's decision of that day on key variables that change
+> after the import. Refusing them closed the only way to replace a signing key, because rotation
+> through the store has not shipped yet. A warning replaces the refusal until it ships.
+>
+> - The answer on existing issuers: until manual rotation and emergency retirement ship, a key
+>   variable that holds a new signing key replaces the store's active key of its algorithm at boot.
+>   The replaced key is retired and leaves the JWKS at once, as a variable change took it out of
+>   the JWKS before the key store, and the server warns. Once they ship, the boot refuses such a
+>   variable again.
 
 ## Context
 
@@ -976,7 +986,8 @@ The maintainer answered these on 2026-10-09. Each answer is a decision of this r
   default realm, in single-realm mode. Keys from environment variables are imported once into the
   encrypted store at first boot. Existing clients and tokens keep working. After the import, the
   server warns at every boot while any imported key variable is still set, and the upgrade guide
-  tells operators to remove them. The guide also has them configure every internal host name a
+  tells operators to remove them. Until manual rotation and emergency retirement ship, a key
+  variable that holds a new signing key replaces the stored key (amendment of 2026-10-24). The guide also has them configure every internal host name a
   server-side caller already uses, such as the developer portal's `AUTH_SERVER_URL`, as an endpoint
   host (Decision 1).
 - **ADR-013's return leg.** The endpoint the wallet returns to stays on the auth server, under the

@@ -35,7 +35,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { EnvironmentKeySettings } from '../types';
 import { signerPlugin } from './fastify-plugin-signer';
-import { createRealmKey, keyVariableWarning } from './realm-keys';
+import { createRealmKey, keyReplacedWarning, keyVariableWarning } from './realm-keys';
 
 const KEK_ENV = { KEK: Buffer.alloc(32, 0xa1).toString('base64'), NODE_ENV: 'test' };
 const REALM = 'master';
@@ -265,10 +265,40 @@ describe('realm key boot integration (real Postgres)', () => {
       'SESSION_COOKIE_SECRET',
     ]);
     for (const entry of variableWarnings) {
-      expect(entry.msg).toBe(keyVariableWarning(entry.variable ?? ''));
-      expect(entry.msg).toContain('is no longer read');
+      const purpose = entry.variable === 'SESSION_COOKIE_SECRET' ? 'cookie_hmac' : 'token_signing';
+      expect(entry.msg).toBe(keyVariableWarning(entry.variable ?? '', purpose));
+      expect(entry.msg).toContain('keep it set');
     }
     await second.app.close();
+  });
+
+  it('replaces the stored key when its variable holds a new one; the JWKS drops the old key at once', async () => {
+    const first = await boot(OLD_VARIABLES);
+    await first.app.close();
+    const next = pemPair('ed25519');
+
+    const { app, warnings } = await boot({
+      ...OLD_VARIABLES,
+      ed25519: { privateKey: { value: next.privateKey, variables: ['JWT_PRIVATE_KEY'] } },
+    });
+
+    const { rows } = await databases[0].pool.query<{ status: string }>(
+      `SELECT status FROM realm_keys
+       WHERE realm_id = $1 AND purpose = 'token_signing' AND algorithm = 'EdDSA'`,
+      [await realmId()]
+    );
+    expect(rows.map((row) => row.status).sort()).toEqual(['active', 'retired']);
+    const published = (await app.signer.getJwks('local', await realmId())).keys.map((key) =>
+      JSON.stringify(publicMembers(key))
+    );
+    const publicJwk = (pem: string) =>
+      JSON.stringify(publicMembers(createPublicKey(pem).export({ format: 'jwk' })));
+    expect(published).toContain(publicJwk(next.publicKey));
+    expect(published).not.toContain(publicJwk(ED25519.publicKey));
+    expect(warnings).toContainEqual(
+      expect.objectContaining({ msg: keyReplacedWarning(['JWT_PRIVATE_KEY'], 'EdDSA') })
+    );
+    await app.close();
   });
 
   it('imports once when two nodes boot together', async () => {
