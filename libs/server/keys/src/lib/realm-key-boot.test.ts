@@ -5,12 +5,15 @@ import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
 import { KEK_A, localProvider } from '../testing/keks';
-import { createMemoryKeyStore, type MemoryKeyStore } from '../testing/memory-key-store';
+import {
+  createMemoryKeyStore,
+  type MemoryKeyStore,
+  type MemoryStoredKey,
+} from '../testing/memory-key-store';
 import { openKeyMaterial } from './envelope';
 import type { EnvironmentKeySettings, EnvironmentKeySource } from './environment-keys';
 import type { KekProvider } from './kek-provider';
 import { KeyCreationRefusedError } from './key-creation-errors';
-import type { NewStoredKeyRow } from './key-store';
 import { bootRealmKeys, type BootRealmKeysOptions } from './realm-key-boot';
 
 const REALM = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
@@ -64,7 +67,7 @@ function inventory(store: MemoryKeyStore): string[] {
   return store.rows.map(({ key }) => `${key.purpose}/${key.algorithm}`).sort();
 }
 
-function storedKey(store: MemoryKeyStore, kid: string): NewStoredKeyRow {
+function storedKey(store: MemoryKeyStore, kid: string): MemoryStoredKey {
   const row = store.rows.find(({ key }) => key.kid === kid);
   if (row === undefined) throw new Error(`no stored key ${kid}`);
   return row.key;

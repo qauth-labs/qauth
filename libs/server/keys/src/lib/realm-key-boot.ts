@@ -319,6 +319,7 @@ async function importKeys<Tx>(
       kekRef: sealed.kekRef,
       aadVersion: sealed.aadVersion,
       activateAt: at,
+      createdAt: at,
     };
     if (key.publicJwk !== undefined) {
       await store.create({ key: { ...row, publishAt: at }, publicJwk: { ...key.publicJwk } }, tx);
