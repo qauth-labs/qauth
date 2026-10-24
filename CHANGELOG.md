@@ -216,6 +216,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stable-surface/approved-breaks.json` does not approve. See
   `stable-surface/README.md`.
 
+- **Shared test vectors** ([#478], ADR-018 §6 and §7). The new top-level
+  `test-vectors/` directory holds language-neutral vector files that every SDK
+  and the server's own tests run. A file is plain JSON in the `qauth-vectors/1`
+  format (`test-vectors/schema/vector-file.schema.json`): a header and cases of
+  `input` and `expected`. The first files cover PKCE S256 (with RFC 7636
+  Appendix B), Standard Webhooks signatures (generated with the reference
+  library `standardwebhooks@1.1.1`), `act` chain flattening with the delegation
+  depth cap of 4, and the access token checks of RFC 9068 §4.
+  `pnpm exec nx run test-vectors:validate` checks every file and runs in CI's
+  unit job; `@qauth-labs/shared-test-vectors` gives TypeScript tests
+  `loadVectors(id)`. Vectors are append-only: changing a case's expected result
+  takes a new case id. See `test-vectors/README.md`.
+
 ### Changed
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
@@ -304,6 +317,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#467]: https://github.com/qauth-labs/qauth/issues/467
 [#468]: https://github.com/qauth-labs/qauth/issues/468
 [#470]: https://github.com/qauth-labs/qauth/issues/470
+[#478]: https://github.com/qauth-labs/qauth/issues/478
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 
 ## [0.1.3] - 2026-10-21

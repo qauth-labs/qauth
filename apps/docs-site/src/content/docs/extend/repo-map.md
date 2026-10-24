@@ -3,7 +3,7 @@ title: Repository map
 description: The apps/ and libs/ layout, the Nx scope tags and the eslint boundary constraints derived from them, where new code belongs, and the Windows CRLF gotcha that breaks nx lint on files you never touched.
 sidebar:
   order: 3
-lastVerified: '2026-10-22'
+lastVerified: '2026-10-24'
 ---
 
 QAuth is an Nx monorepo with two trees: `apps/` for deployable entry points and `libs/` for
@@ -43,6 +43,7 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/shared/errors`              | `@qauth-labs/shared-errors`             | `scope:shared`                         |
 | `libs/shared/validation`          | `@qauth-labs/shared-validation`         | `scope:shared`                         |
 | `libs/shared/testing`             | `@qauth-labs/shared-testing`            | `scope:shared`                         |
+| `libs/shared/test-vectors`        | `@qauth-labs/shared-test-vectors`       | `scope:shared`                         |
 | `libs/ui`                         | `@qauth-labs/ui`                        | `scope:ui`                             |
 | `libs/infra/db`                   | `@qauth-labs/infra-db`                  | `scope:infra`                          |
 | `libs/infra/cache`                | `@qauth-labs/infra-cache`               | `scope:infra`                          |
@@ -113,7 +114,7 @@ components).
 The practical effect: if you find yourself wanting to import something into `libs/core/crypto` or
 `libs/shared/*`, the answer is almost always to invert the dependency — take the value as a
 parameter, or return data the caller interprets — rather than to loosen the tag. `libs/core/crypto`
-and all three `libs/shared/*` libraries import **no** workspace package today; keep it that way.
+and every `libs/shared/*` library import **no** workspace package today; keep it that way.
 
 Note one sharp edge in how Nx implements an empty list: it reports a violation only when the
 imported project **has at least one tag**. A brand-new lib whose `project.json` you forgot to tag
@@ -228,6 +229,7 @@ Projects cannot be imported by a relative or absolute path, and must begin with 
 | Domain logic with no Fastify and no I/O              | `libs/server/<area>`                                |
 | A database table, migration, or repository           | `libs/infra/db`                                     |
 | The graph of a flow or a screen (ADR-021)            | `graphs/flows/<area>/<flow>/` (`graphs/README.md`)  |
+| A shared test vector (ADR-018 §6)                    | `test-vectors/<area>/` (`test-vectors/README.md`)   |
 | The Fastify wiring that exposes the above to the app | `libs/fastify/plugins/<area>`                       |
 | An HTTP route                                        | `apps/auth-server/src/app/routes/<dir>`             |
 | Configuration schema an app must read                | `libs/server/config` (already dual-tagged for this) |
