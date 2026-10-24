@@ -34,24 +34,45 @@ describe('SIGNER_POLICY', () => {
         'signJws:token_signing',
         'signJws:event_signing',
         'signHybrid',
+        'signWebhook',
+        'signClientAssertion',
         'getCookieSecrets',
         'encrypt',
         'decrypt',
         'getVerificationKeys',
         'getJwks',
+        'getUpstreamJwks',
       ],
-      web: ['getCookieSecrets', 'getVerificationKeys', 'getJwks'],
+      web: ['getCookieSecrets', 'getVerificationKeys', 'getJwks', 'getUpstreamJwks'],
       api: [
         'signJws:token_signing',
         'signHybrid',
+        'signClientAssertion',
         'encrypt',
         'decrypt',
         'getVerificationKeys',
         'getJwks',
+        'getUpstreamJwks',
       ],
-      delivery: ['signJws:event_signing', 'getVerificationKeys', 'getJwks'],
-      admin: ['getVerificationKeys', 'getJwks'],
+      delivery: [
+        'signJws:event_signing',
+        'signWebhook',
+        'getVerificationKeys',
+        'getJwks',
+        'getUpstreamJwks',
+      ],
+      admin: ['getVerificationKeys', 'getJwks', 'getUpstreamJwks'],
     });
+  });
+
+  it('lets delivery sign webhooks and api sign client assertions, and no other role but local', () => {
+    expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'signWebhook'))).toEqual([
+      'local',
+      'delivery',
+    ]);
+    expect(
+      SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'signClientAssertion'))
+    ).toEqual(['local', 'api']);
   });
 
   it('lets local call every operation', () => {

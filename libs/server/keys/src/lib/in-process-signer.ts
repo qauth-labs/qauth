@@ -24,6 +24,7 @@ import {
 import { openKeyMaterial } from './envelope';
 import { KeyDecryptionError } from './errors';
 import type { KekProvider } from './kek-provider';
+import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
 import { isRealmId } from './realm-id';
 import type {
@@ -33,10 +34,12 @@ import type {
   EncryptRequest,
   JwsKeyAlgorithm,
   RealmJwks,
+  SignClientAssertionRequest,
   Signer,
   SignerOperation,
   SignHybridRequest,
   SignJwsRequest,
+  SignWebhookRequest,
   VerificationKey,
 } from './signer';
 import {
@@ -44,21 +47,31 @@ import {
   SignerAccessDeniedError,
   SignerKeyNotFoundError,
   SignerRequestRefusedError,
+  UpstreamClientNotFoundError,
 } from './signer-errors';
 import type {
   PublicKeyRecord,
   SignerKeyRecord,
   SignerKeyStore,
+  UpstreamClientRecord,
   WrappedSignerKey,
 } from './signer-key-store';
 import { isSignerCallAllowed, isSignerCaller, type SignerCaller } from './signer-policy';
 import {
+  CLIENT_ASSERTION_TYP,
   isJwsSigningPurpose,
   isTypAllowed,
   type JwsSigningPurpose,
   type JwsTyp,
   REALM_JWKS_PURPOSES,
 } from './signer-typ';
+import {
+  formatWebhookSignature,
+  isWebhookId,
+  isWebhookTimestamp,
+  MAX_WEBHOOK_ID_LENGTH,
+  webhookSignedContent,
+} from './webhook-signature';
 
 /**
  * The in-process signer (ADR-019 Decision 9, issue #464): the {@link Signer}
@@ -93,7 +106,18 @@ import {
  *   key-custody error of the KEK provider, and the call fails.
  * - It never returns key material or a key object, and never puts either in
  *   an error or a log line. The cookie HMAC secret is the one secret it hands
- *   out, as a fresh copy.
+ *   out, as a fresh copy. A webhook secret is imported as a non-extractable
+ *   HMAC key and only signs.
+ *
+ * ## Scoped keys
+ *
+ * A webhook subscription's secrets and an upstream provider's client-assertion
+ * keys are read per realm, purpose and scope, under the same refresh interval,
+ * and unwrapped under the scope they belong to: a row moved to another
+ * subscription or provider does not open. The client id an assertion names is
+ * read from the provider's configuration at most once per interval; a provider
+ * that has none is read again on the next call. A rotation, or a deletion with
+ * the subscription or provider, reaches a node within one interval.
  */
 
 /** The default size limit of the unwrapped-key cache, in keys. */
@@ -137,11 +161,16 @@ export interface InProcessSignerOptions {
   readonly now?: () => number;
 }
 
-/** An unwrapped key, as the cache holds it. */
+/**
+ * An unwrapped key, as the cache holds it. `hmac` is the cookie HMAC secret,
+ * which the signer hands out; `hmac-key` is any other HMAC secret, which only
+ * signs.
+ */
 type LoadedKey =
   | { readonly kind: 'jws'; readonly key: CryptoKey }
   | { readonly kind: 'ml-dsa'; readonly key: MlDsaKey }
   | { readonly kind: 'hmac'; readonly secret: Buffer }
+  | { readonly kind: 'hmac-key'; readonly key: CryptoKey }
   | { readonly kind: 'aes'; readonly key: CryptoKey };
 
 /** A store answer and when it was read. */
@@ -154,6 +183,8 @@ interface Timed<T> {
 const REQUEST_FIELDS = {
   signJws: ['realmId', 'purpose', 'scopeId', 'typ', 'algorithm', 'claims'],
   signHybrid: ['realmId', 'typ', 'claims'],
+  signWebhook: ['realmId', 'subscriptionId', 'id', 'timestamp', 'body'],
+  signClientAssertion: ['realmId', 'providerId', 'audience', 'algorithm', 'claims'],
   encrypt: ['realmId', 'plaintext', 'context'],
   decrypt: ['realmId', 'ciphertext', 'context'],
 } as const satisfies Partial<Record<SignerOperation, readonly string[]>>;
@@ -172,6 +203,12 @@ const JWS_IMPORT_PARAMS: Readonly<
  * RFC 9964), as the `realm_public_keys` CHECK lists them.
  */
 const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k', 'priv'] as const;
+
+/** The claims the signer sets on a client assertion. */
+const CLIENT_ASSERTION_RESERVED_CLAIMS = ['iss', 'sub', 'aud'] as const;
+
+/** The longest client-assertion audience the signer accepts. */
+const MAX_AUDIENCE_LENGTH = 2048;
 
 function isJwsKeyAlgorithm(value: unknown): value is JwsKeyAlgorithm {
   return typeof value === 'string' && Object.hasOwn(JWS_IMPORT_PARAMS, value);
@@ -221,6 +258,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   // One store read per slot at a time: concurrent callers share it.
   const pendingReads = new Map<string, Promise<unknown>>();
   const issuers = new BoundedCache<string, string>(keyCacheSize);
+  const upstreamClients = new BoundedCache<string, Timed<UpstreamClientRecord>>(keyCacheSize);
 
   function isFresh(entry: Timed<unknown> | undefined): boolean {
     return entry !== undefined && now() - entry.readAt < refreshIntervalMs;
@@ -292,6 +330,29 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     });
   }
 
+  /**
+   * The client id of the realm's configuration for `providerId`, read at most
+   * once per refresh interval. A provider without one is not kept, so its
+   * configuration is used as soon as it exists.
+   */
+  async function upstreamClient(realmId: string, providerId: string): Promise<string> {
+    const slot = `upstream\u0000${realmId}\u0000${providerId}`;
+    const cached = upstreamClients.get(slot);
+    if (cached !== undefined && isFresh(cached)) return cached.value.clientId;
+    const record = await sharedRead(slot, async (readAt) => {
+      const found = await store.findUpstreamClient(realmId, providerId);
+      if (found === undefined || typeof found.clientId !== 'string' || found.clientId === '') {
+        upstreamClients.delete(slot);
+        return undefined;
+      }
+      const value = Object.freeze({ clientId: found.clientId });
+      upstreamClients.set(slot, { value, readAt });
+      return value;
+    });
+    if (record === undefined) throw new UpstreamClientNotFoundError(realmId);
+    return record.clientId;
+  }
+
   /** The realm's published keys, read at most once per refresh interval. */
   async function listPublicKeys(realmId: string): Promise<readonly PublicKeyRecord[]> {
     const cached = publicLists.get(realmId);
@@ -317,9 +378,10 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   async function activeKey(
     realmId: string,
     purpose: KeyPurpose,
-    algorithm: string
+    algorithm: string,
+    scopeId: string | null = null
   ): Promise<SignerKeyRecord> {
-    const active = (await listKeys(realmId, purpose, null)).filter(
+    const active = (await listKeys(realmId, purpose, scopeId)).filter(
       (key) => key.status === 'active' && key.algorithm === algorithm
     );
     // The one-active-key index makes two impossible; refuse rather than pick.
@@ -374,7 +436,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     }
     const material = await openKeyMaterial(kekProvider, row, identity);
     try {
-      return await importMaterial(identity.algorithm, material);
+      return await importMaterial(identity.purpose, identity.algorithm, material);
     } catch (error) {
       if (error instanceof KeyDecryptionError) throw error;
       // The import error is dropped: it may describe the material.
@@ -384,7 +446,11 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     }
   }
 
-  async function importMaterial(algorithm: string, material: Buffer): Promise<LoadedKey> {
+  async function importMaterial(
+    purpose: string,
+    algorithm: string,
+    material: Buffer
+  ): Promise<LoadedKey> {
     if (isJwsKeyAlgorithm(algorithm)) {
       const key = await crypto.subtle.importKey(
         'pkcs8',
@@ -403,8 +469,20 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         });
         return Object.freeze({ kind: 'ml-dsa', key });
       }
-      case 'HS256':
-        return Object.freeze({ kind: 'hmac', secret: ownCopy(material) });
+      case 'HS256': {
+        // Only the cookie HMAC secret is handed out (ADR-019 Decision 9).
+        if (purpose === 'cookie_hmac') {
+          return Object.freeze({ kind: 'hmac', secret: ownCopy(material) });
+        }
+        const key = await crypto.subtle.importKey(
+          'raw',
+          bufferSource(material),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign']
+        );
+        return Object.freeze({ kind: 'hmac-key', key });
+      }
       case 'A256GCM': {
         const key = await crypto.subtle.importKey('raw', bufferSource(material), 'AES-GCM', false, [
           'encrypt',
@@ -417,12 +495,22 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     }
   }
 
-  function identityOf(realmId: string, purpose: KeyPurpose, record: SignerKeyRecord): KeyIdentity {
-    return { realmId, purpose, scopeId: null, kid: record.kid, algorithm: record.algorithm };
+  function identityOf(
+    realmId: string,
+    purpose: KeyPurpose,
+    record: SignerKeyRecord,
+    scopeId: string | null = null
+  ): KeyIdentity {
+    return { realmId, purpose, scopeId, kid: record.kid, algorithm: record.algorithm };
   }
 
-  async function jwsKey(realmId: string, purpose: KeyPurpose, record: SignerKeyRecord) {
-    const loaded = await loadKey(identityOf(realmId, purpose, record));
+  async function jwsKey(
+    realmId: string,
+    purpose: KeyPurpose,
+    record: SignerKeyRecord,
+    scopeId: string | null = null
+  ) {
+    const loaded = await loadKey(identityOf(realmId, purpose, record, scopeId));
     if (loaded.kind !== 'jws') throw new KeyDecryptionError({ detail: 'not a JWS signing key' });
     return loaded.key;
   }
@@ -430,6 +518,17 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   async function aesKey(realmId: string, record: SignerKeyRecord): Promise<CryptoKey> {
     const loaded = await loadKey(identityOf(realmId, 'data_at_rest', record));
     if (loaded.kind !== 'aes') throw new KeyDecryptionError({ detail: 'not an AES-GCM key' });
+    return loaded.key;
+  }
+
+  /** The webhook secret of `record`, as a key that only signs. */
+  async function webhookKey(
+    realmId: string,
+    subscriptionId: string,
+    record: SignerKeyRecord
+  ): Promise<CryptoKey> {
+    const loaded = await loadKey(identityOf(realmId, 'webhook_signing', record, subscriptionId));
+    if (loaded.kind !== 'hmac-key') throw new KeyDecryptionError({ detail: 'not an HMAC key' });
     return loaded.key;
   }
 
@@ -556,6 +655,106 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       return Object.freeze({ token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 });
     },
 
+    async signWebhook(caller: SignerCaller, request: SignWebhookRequest): Promise<string> {
+      const fields = readRequest(request, REQUEST_FIELDS.signWebhook);
+      authorize(caller, 'signWebhook');
+      const realmId = resolveRealmId(fields['realmId']);
+      const subscriptionId = resolveScope(fields['subscriptionId'], 'subscription id');
+      const id = fields['id'];
+      if (!isWebhookId(id)) {
+        throw new SignerRequestRefusedError(
+          'INVALID_WEBHOOK_ID',
+          `A webhook id is 1 to ${MAX_WEBHOOK_ID_LENGTH} printable ASCII characters, ` +
+            'without a full stop or a space'
+        );
+      }
+      const timestamp = fields['timestamp'];
+      if (!isWebhookTimestamp(timestamp)) {
+        throw new SignerRequestRefusedError(
+          'INVALID_TIMESTAMP',
+          'A webhook timestamp is a whole, non-negative number of seconds since the epoch'
+        );
+      }
+      const body = resolveWebhookBody(fields['body']);
+
+      const records = await listKeys(realmId, 'webhook_signing', subscriptionId);
+      const usable = (status: SignerKeyRecord['status']) =>
+        records.filter((key) => key.status === status && key.algorithm === 'HS256');
+      const active = usable('active');
+      if (active.length !== 1) {
+        throw new SignerKeyNotFoundError(realmId, 'webhook_signing', { algorithm: 'HS256' });
+      }
+      // During a rotation the next secret signs too, so a receiver that has
+      // already switched verifies the message (Standard Webhooks, "webhook
+      // headers"). The key list is oldest first, so the order is stable.
+      const content = bufferSource(webhookSignedContent(id, timestamp, body));
+      const signatures: string[] = [];
+      for (const record of [active[0], ...usable('next')]) {
+        const key = await webhookKey(realmId, subscriptionId, record);
+        signatures.push(formatWebhookSignature(await crypto.subtle.sign('HMAC', key, content)));
+      }
+      return signatures.join(' ');
+    },
+
+    async signClientAssertion(
+      caller: SignerCaller,
+      request: SignClientAssertionRequest
+    ): Promise<string> {
+      const fields = readRequest(request, REQUEST_FIELDS.signClientAssertion);
+      authorize(caller, 'signClientAssertion');
+      const realmId = resolveRealmId(fields['realmId']);
+      const providerId = resolveScope(fields['providerId'], 'provider id');
+      const audience = fields['audience'];
+      if (
+        typeof audience !== 'string' ||
+        audience.length === 0 ||
+        audience.length > MAX_AUDIENCE_LENGTH
+      ) {
+        throw new SignerRequestRefusedError(
+          'INVALID_AUDIENCE',
+          'A client assertion audience is one string: the upstream issuer identifier'
+        );
+      }
+      const definition = KEY_PURPOSES.upstream_client_assertion;
+      const algorithm = fields['algorithm'] ?? definition.defaultAlgorithm;
+      if (
+        !isJwsKeyAlgorithm(algorithm) ||
+        !(definition.algorithms as readonly string[]).includes(algorithm)
+      ) {
+        throw new SignerRequestRefusedError(
+          'ALGORITHM_NOT_ALLOWED',
+          'Client assertions are signed with ' + definition.algorithms.join(', ')
+        );
+      }
+      const claims = resolveClaims(fields['claims'], CLIENT_ASSERTION_RESERVED_CLAIMS);
+      // RFC 7523 §3 requires exp; OpenID Connect Core §9 requires jti for
+      // private_key_jwt.
+      if (
+        typeof claims['exp'] !== 'number' ||
+        !Number.isFinite(claims['exp']) ||
+        typeof claims['jti'] !== 'string' ||
+        claims['jti'].length === 0
+      ) {
+        throw new SignerRequestRefusedError(
+          'MISSING_CLAIM',
+          'A client assertion carries exp, a number, and jti, a non-empty string'
+        );
+      }
+
+      const clientId = await upstreamClient(realmId, providerId);
+      const record = await activeKey(realmId, 'upstream_client_assertion', algorithm, providerId);
+      const key = await jwsKey(realmId, 'upstream_client_assertion', record, providerId);
+      return signJwt(
+        { iss: clientId, sub: clientId, aud: audience, ...claims } as JWTPayload,
+        key,
+        {
+          alg: algorithm,
+          kid: record.kid,
+          typ: CLIENT_ASSERTION_TYP,
+        }
+      );
+    },
+
     async getCookieSecrets(caller: SignerCaller, realmIdInput: string): Promise<CookieSecrets> {
       authorize(caller, 'getCookieSecrets');
       const realmId = resolveRealmId(realmIdInput);
@@ -660,6 +859,32 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         .map(publicJwkOf);
       return Object.freeze({ keys: Object.freeze(keys) });
     },
+
+    async getUpstreamJwks(
+      caller: SignerCaller,
+      realmIdInput: string,
+      providerIdInput: string
+    ): Promise<RealmJwks> {
+      authorize(caller, 'getUpstreamJwks');
+      const realmId = resolveRealmId(realmIdInput);
+      const providerId = resolveScope(providerIdInput, 'provider id');
+      // `realm_public_keys` names no scope; the provider's keys are those its
+      // key list names. Read first, so a changed list refreshes the public keys.
+      const kids = new Set(
+        (await listKeys(realmId, 'upstream_client_assertion', providerId)).map((key) => key.kid)
+      );
+      const at = now();
+      const keys = sortForPublication(await listPublicKeys(realmId))
+        .filter(
+          (record) =>
+            record.purpose === 'upstream_client_assertion' &&
+            kids.has(record.kid) &&
+            record.status !== 'compromised' &&
+            isPublishedAt(record, at)
+        )
+        .map(publicJwkOf);
+      return Object.freeze({ keys: Object.freeze(keys) });
+    },
   } satisfies Signer);
 }
 
@@ -693,6 +918,31 @@ function resolveRealmId(realmId: unknown): string {
   return realmId.toLowerCase();
 }
 
+/** A subscription or provider id: the scope id of its keys, as the key factory stores it. */
+function resolveScope(scopeId: unknown, name: string): string {
+  if (!isScopeId(scopeId)) {
+    throw new SignerRequestRefusedError(
+      'INVALID_SCOPE_ID',
+      `A ${name} is a non-empty, well-formed string of at most ${MAX_SCOPE_ID_LENGTH} characters`
+    );
+  }
+  return scopeId;
+}
+
+/** A webhook body as the bytes that are sent: bytes as given, text as UTF-8. */
+function resolveWebhookBody(body: unknown): Uint8Array {
+  if (body instanceof Uint8Array) return body;
+  // A lone surrogate would be sent as U+FFFD: what is signed would not be
+  // what the caller meant to send.
+  if (typeof body === 'string' && Buffer.from(body, 'utf8').toString('utf8') === body) {
+    return Buffer.from(body, 'utf8');
+  }
+  throw new SignerRequestRefusedError(
+    'INVALID_BODY',
+    'A webhook body is a byte array or well-formed text'
+  );
+}
+
 function resolveTyp(purpose: JwsSigningPurpose, typ: unknown): JwsTyp {
   if (!isTypAllowed(purpose, typ)) {
     throw new SignerRequestRefusedError(
@@ -711,44 +961,59 @@ function describePurpose(purpose: unknown): string {
 }
 
 /**
- * The claims as plain JSON data, refusing `iss`.
+ * The claims as plain JSON data, refusing the claims the signer sets: `iss`,
+ * and for a client assertion `sub` and `aud` too.
  *
  * The claims are serialized and parsed once, so what the signer checks is what
  * it signs: a `toJSON` method could otherwise turn checked claims into
  * different ones, an `iss` among them, at signing time.
  */
-function resolveClaims(claims: unknown): Record<string, unknown> {
+function resolveClaims(
+  claims: unknown,
+  reserved: readonly string[] = ['iss']
+): Record<string, unknown> {
+  const setsReserved = (value: object) => reserved.some((claim) => Object.hasOwn(value, claim));
   if (
     typeof claims !== 'object' ||
     claims === null ||
     Array.isArray(claims) ||
-    Object.hasOwn(claims, 'iss')
+    setsReserved(claims)
   ) {
-    throw claimsRefusal(claims);
+    throw claimsRefusal(claims, reserved);
   }
   let normalized: unknown;
   try {
     normalized = JSON.parse(JSON.stringify(claims));
   } catch {
     // The serializer's message is dropped: it may quote a claim.
-    throw claimsRefusal(claims);
+    throw claimsRefusal(claims, reserved);
   }
   if (
     typeof normalized !== 'object' ||
     normalized === null ||
     Array.isArray(normalized) ||
-    Object.hasOwn(normalized, 'iss')
+    setsReserved(normalized)
   ) {
-    throw claimsRefusal(normalized);
+    throw claimsRefusal(normalized, reserved);
   }
   return normalized as Record<string, unknown>;
 }
 
-function claimsRefusal(claims: unknown): SignerRequestRefusedError {
-  if (typeof claims === 'object' && claims !== null && Object.hasOwn(claims, 'iss')) {
+function claimsRefusal(claims: unknown, reserved: readonly string[]): SignerRequestRefusedError {
+  const set =
+    typeof claims === 'object' && claims !== null
+      ? reserved.find((claim) => Object.hasOwn(claims, claim))
+      : undefined;
+  if (set === 'iss' && reserved.length === 1) {
     return new SignerRequestRefusedError(
       'RESERVED_CLAIM',
       "The claims set 'iss'; the signer sets it from the realm row"
+    );
+  }
+  if (set !== undefined) {
+    return new SignerRequestRefusedError(
+      'RESERVED_CLAIM',
+      `The claims set '${set}'; the signer sets ${reserved.join(', ')}`
     );
   }
   return new SignerRequestRefusedError('INVALID_CLAIMS', 'The claims are not a JSON object');

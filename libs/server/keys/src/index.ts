@@ -16,11 +16,16 @@ export {
 } from './lib/errors';
 export {
   ActiveKeyConflictError,
+  type KeyChangeRefusalReason,
+  KeyChangeRefusedError,
   type KeyCreationRefusalReason,
   KeyCreationRefusedError,
   KeyIdConflictError,
+  NextKeyConflictError,
 } from './lib/key-creation-errors';
 export {
+  DEFAULT_KEY_PREPUBLISH_DAYS,
+  DEFAULT_KEY_RETIRED_RETENTION_DAYS,
   DEFAULT_KEY_ROTATION_PERIOD_DAYS,
   getKeyPurpose,
   isKeyPurpose,
@@ -41,11 +46,13 @@ export {
   type EncryptRequest,
   type JwsKeyAlgorithm,
   type RealmJwks,
+  type SignClientAssertionRequest,
   type Signer,
   SIGNER_OPERATIONS,
   type SignerOperation,
   type SignHybridRequest,
   type SignJwsRequest,
+  type SignWebhookRequest,
   type VerificationKey,
 } from './lib/signer';
 export {
@@ -59,6 +66,7 @@ export {
   SignerKeyNotFoundError,
   type SignerRefusalReason,
   SignerRequestRefusedError,
+  UpstreamClientNotFoundError,
 } from './lib/signer-errors';
 export {
   isSignerCallAllowed,
@@ -69,6 +77,7 @@ export {
   type SignerGrant,
 } from './lib/signer-policy';
 export {
+  CLIENT_ASSERTION_TYP,
   isJwsSigningPurpose,
   isTypAllowed,
   JWS_SIGNING_PURPOSES,
@@ -77,3 +86,8 @@ export {
   type JwsTyp,
   REALM_JWKS_PURPOSES,
 } from './lib/signer-typ';
+export {
+  MAX_WEBHOOK_ID_LENGTH,
+  WEBHOOK_SECRET_PREFIX,
+  WEBHOOK_SIGNATURE_VERSION,
+} from './lib/webhook-signature';

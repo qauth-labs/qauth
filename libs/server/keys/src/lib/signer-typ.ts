@@ -16,8 +16,9 @@
  * that carries a logout `events` claim.
  *
  * A purpose that is not listed is not signed through `signJws` at all. The
- * purposes added later (webhooks and client assertions, #547; the OID4VP
- * request key, #546) get their own operations or entries here.
+ * scoped purposes have their own operations (`signWebhook`,
+ * `signClientAssertion`, #547); the OID4VP request key (#546) gets its own
+ * operation or an entry here.
  */
 export const JWS_TYP_BY_PURPOSE = Object.freeze({
   /**
@@ -60,6 +61,13 @@ export function isTypAllowed(purpose: JwsSigningPurpose, typ: unknown): typ is J
  * Security Event Tokens. The other published purposes appear elsewhere: the
  * federation keys in the entity configuration, the OID4VP keys in the request
  * object and its certificate, and an upstream client-assertion key in the JWKS
- * served to that provider (#547).
+ * served to that provider (`getUpstreamJwks`, #547).
  */
 export const REALM_JWKS_PURPOSES: readonly JwsSigningPurpose[] = JWS_SIGNING_PURPOSES;
+
+/**
+ * The `typ` of a client assertion: a client authentication JWT, explicitly
+ * typed as draft-ietf-oauth-rfc7523bis §4 asks. It is a `typ` no realm verifier
+ * accepts, so an assertion is never usable as a QAuth token.
+ */
+export const CLIENT_ASSERTION_TYP = 'client-authentication+jwt';

@@ -134,6 +134,13 @@ const CALLS: Record<keyof RealmKeysRepository, (repo: RealmKeysRepository) => Pr
     repo.listByRealm(REALM_ID, { purpose: 'token_signing', scopeId: null, status: 'active' }),
   listPublicByRealm: (repo) => repo.listPublicByRealm(REALM_ID),
   getWrappedForSigner: (repo) => repo.getWrappedForSigner(REALM_ID, KID),
+  updateStatus: (repo) =>
+    repo.updateStatus(REALM_ID, KID, {
+      status: 'retired',
+      retireAt: 1_800_000_000_000,
+      unpublishAt: 1_801_209_600_000,
+    }),
+  deleteByScope: (repo) => repo.deleteByScope(REALM_ID, 'webhook_signing', 'subscription-1'),
 };
 
 async function run(method: keyof RealmKeysRepository): Promise<CapturedQuery[]> {
@@ -247,6 +254,71 @@ describe('createRealmKeysRepository — statements', () => {
       /order by "realm_public_keys"\."purpose" asc, "realm_public_keys"\."publish_at" asc, "realm_public_keys"\."kid" asc/
     );
     expect(query.values).toEqual([REALM_ID]);
+  });
+
+  it('updateStatus retires the key and closes its public window inside one transaction', async () => {
+    const queries = await run('updateStatus');
+    const texts = queries.map((query) => query.text.toLowerCase());
+
+    expect(texts).toHaveLength(4);
+    expect(texts[0]).toBe('begin');
+    expect(texts[1]).toContain(
+      'update "realm_keys" set "status" = $1, "retire_at" = $2, "unpublish_at" = $3'
+    );
+    expect(texts[1]).toContain('"realm_keys"."status" = $6');
+    expect(queries[1].values).toEqual([
+      'retired',
+      1_800_000_000_000,
+      1_801_209_600_000,
+      REALM_ID,
+      KID,
+      'active',
+    ]);
+    // The status reaches the public row through the foreign key; only the
+    // window is written there.
+    expect(texts[2]).toContain('update "realm_public_keys" set "unpublish_at" = $1');
+    expect(texts[2]).not.toContain('"status"');
+    expect(queries[2].values).toEqual([1_801_209_600_000, REALM_ID, KID]);
+    expect(texts[3]).toBe('commit');
+  });
+
+  it('updateStatus activates only a next key and leaves the public row to its foreign key', async () => {
+    const { db, queries } = createRecordingDb([CREATED_ROW]);
+
+    await createRealmKeysRepository(db).updateStatus(REALM_ID, KID, {
+      status: 'active',
+      activateAt: 1_800_000_000_000,
+    });
+
+    const texts = queries.map((query) => query.text.toLowerCase());
+    expect(texts.filter((text) => text.startsWith('update'))).toHaveLength(1);
+    expect(texts[1]).toContain('update "realm_keys" set "status" = $1, "activate_at" = $2');
+    expect(queries[1].values).toEqual(['active', 1_800_000_000_000, REALM_ID, KID, 'next']);
+  });
+
+  it('updateStatus writes no public row for an unpublished key, nor for a key it did not move', async () => {
+    for (const rows of [[CREATED_ROW], []]) {
+      const { db, queries } = createRecordingDb(rows);
+
+      await createRealmKeysRepository(db).updateStatus(REALM_ID, KID, {
+        status: 'retired',
+        retireAt: 1_800_000_000_000,
+        unpublishAt: rows.length === 0 ? 1_801_209_600_000 : null,
+      });
+
+      expect(queries.some((query) => query.text.includes('"realm_public_keys"'))).toBe(false);
+    }
+  });
+
+  it('deleteByScope deletes the keys of one realm, purpose and scope only', async () => {
+    const [query] = await run('deleteByScope');
+    const text = query.text.toLowerCase();
+
+    expect(text).toContain('delete from "realm_keys"');
+    expect(text).toContain('"realm_keys"."realm_id" = $1');
+    expect(text).toContain('"realm_keys"."purpose" = $2');
+    expect(text).toContain('"realm_keys"."scope_id" = $3');
+    expect(query.values).toEqual([REALM_ID, 'webhook_signing', 'subscription-1']);
   });
 
   it('listByRealm without a filter narrows by realm only', async () => {

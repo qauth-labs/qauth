@@ -51,6 +51,9 @@ interface KeyRow {
   aad_version: number;
   publish_at: string | null;
   activate_at: string | null;
+  retire_at: string | null;
+  unpublish_at: string | null;
+  created_at: string;
 }
 
 /** A `realm_public_keys` row as node-postgres returns it. */
@@ -62,6 +65,7 @@ interface PublicKeyRow {
   status: string;
   public_jwk: Record<string, unknown>;
   publish_at: string;
+  unpublish_at: string | null;
 }
 
 const NOW = 1_800_000_000_000;
@@ -429,6 +433,83 @@ describe('key creation integration (real Postgres)', () => {
       expect(await keyRows(realmId)).toEqual([]);
       const { rows } = await db().query('SELECT id FROM realms WHERE id = $1', [realmId]);
       expect(rows).toEqual([]);
+    });
+  });
+
+  describe('scoped keys (#547)', () => {
+    const DAY_MS = 86_400_000;
+
+    it('shows a webhook secret once and stores only its sealed form', async () => {
+      const realmId = await seedRealm();
+
+      const [key] = await factory().createKey({
+        realmId,
+        purpose: 'webhook_signing',
+        scopeId: 'sub-1',
+      });
+
+      const [row] = await keyRows(realmId);
+      const material = await open(row);
+      expect(key.secret).toBe(`whsec_${material.toString('base64')}`);
+      expectNoPlaintextKey(row, material);
+      expect(await publicRows(realmId)).toEqual([]);
+      expect(Number(row.created_at)).toBe(NOW);
+    });
+
+    it('rotates an upstream key and keeps the retired one published for the retention', async () => {
+      const realmId = await seedRealm();
+      let clock = NOW;
+      const keys = factory({ now: () => clock });
+      const scope = { realmId, purpose: 'upstream_client_assertion', scopeId: 'idp-1' } as const;
+      const [old] = await keys.createKey(scope);
+      const [next] = await keys.createKey({ ...scope, status: 'next' });
+
+      await expect(keys.activateNextKey(scope)).rejects.toMatchObject({
+        reason: 'OVERLAP_NOT_ELAPSED',
+      });
+      clock += 7 * DAY_MS;
+      await keys.activateNextKey(scope);
+
+      const statuses = Object.fromEntries(
+        (await keyRows(realmId)).map((row) => [
+          row.kid,
+          [row.status, row.activate_at, row.retire_at, row.unpublish_at],
+        ])
+      );
+      expect(statuses).toEqual({
+        [old.kid]: ['retired', String(NOW), String(clock), String(clock + 14 * DAY_MS)],
+        [next.kid]: ['active', String(clock), null, null],
+      });
+      const published = Object.fromEntries(
+        (await publicRows(realmId)).map((row) => [row.kid, [row.status, row.unpublish_at]])
+      );
+      expect(published).toEqual({
+        [old.kid]: ['retired', String(clock + 14 * DAY_MS)],
+        [next.kid]: ['active', null],
+      });
+    });
+
+    it('deletes a scope with its public rows, inside the owner’s transaction', async () => {
+      const realmId = await seedRealm();
+      const keys = factory();
+      const scope = { realmId, purpose: 'upstream_client_assertion', scopeId: 'idp-1' } as const;
+      await keys.createKey(scope);
+      await keys.createKey({ ...scope, status: 'next' });
+      await keys.createKey({ ...scope, scopeId: 'idp-2' });
+
+      const client = await db().connect();
+      try {
+        await client.query('BEGIN');
+        await expect(keys.deleteScopedKeys({ ...scope, tx: client })).resolves.toHaveLength(2);
+        await client.query('ROLLBACK');
+      } finally {
+        client.release();
+      }
+      expect(await keyRows(realmId)).toHaveLength(3);
+
+      await expect(keys.deleteScopedKeys(scope)).resolves.toHaveLength(2);
+      expect((await keyRows(realmId)).map((row) => row.scope_id)).toEqual(['idp-2']);
+      expect(await publicRows(realmId)).toHaveLength(1);
     });
   });
 });

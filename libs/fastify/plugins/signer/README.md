@@ -49,9 +49,12 @@ const token = await fastify.signer.signJws('local', {
 
 - `createRepositorySignerKeyStore(db)`: the `SignerKeyStore` the signer reads, over
   `realms.findById` and the realm keys repository (`listByRealm`, `getWrappedForSigner`,
-  `listPublicByRealm`).
+  `listPublicByRealm`). No upstream provider configuration exists yet, so `findUpstreamClient`
+  finds none and `signClientAssertion` signs nothing; the upstream-login work adds that read.
 - `createRepositoryKeyStore(db)`: the `RealmKeyStore` the key factory writes through, over the realm
-  keys repository. A transaction runs on `db`, or as a savepoint inside the caller's transaction.
+  keys repository (`findByKid`, `listByRealm`, `create`, `updateStatus`, `deleteByScope`). A
+  transaction runs on `db`, or as a savepoint inside the caller's transaction, so a subscription or
+  provider can be deleted with its keys (`deleteScopedKeys`).
 
 ## Testing
 

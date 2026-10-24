@@ -656,5 +656,106 @@ describe('realm_keys integration (real Postgres)', () => {
         unpublishAt: null,
       });
     });
+
+    it('updateStatus moves a rotation one step and the public row follows', async () => {
+      const realmId = await seedRealm();
+      const scoped = { purpose: 'upstream_client_assertion', algorithm: 'RS256', scopeId: 'idp-1' };
+      const old = await keys.create({
+        key: keyRow(realmId, { ...scoped, publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const next = await keys.create({
+        key: keyRow(realmId, { ...scoped, status: 'next' as const, publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const switchAt = PUBLISH_AT + 7 * 86_400_000;
+      const unpublishAt = switchAt + 14 * 86_400_000;
+
+      // Retire first: the one-active index refuses the other order.
+      await expect(
+        keys.updateStatus(realmId, next.kid, { status: 'active', activateAt: switchAt })
+      ).rejects.toMatchObject({
+        cause: { code: '23505', constraint: 'idx_realm_keys_one_active' },
+      });
+      const retired = await keys.updateStatus(realmId, old.kid, {
+        status: 'retired',
+        retireAt: switchAt,
+        unpublishAt,
+      });
+      const activated = await keys.updateStatus(realmId, next.kid, {
+        status: 'active',
+        activateAt: switchAt,
+      });
+
+      expect(retired).toMatchObject({ status: 'retired', retireAt: switchAt, unpublishAt });
+      expect(retired).not.toHaveProperty('ciphertext');
+      expect(activated).toMatchObject({ status: 'active', activateAt: switchAt, retireAt: null });
+      const published = await keys.listPublicByRealm(realmId);
+      expect(published.find((key) => key.kid === old.kid)).toMatchObject({
+        status: 'retired',
+        unpublishAt,
+      });
+      expect(published.find((key) => key.kid === next.kid)).toMatchObject({
+        status: 'active',
+        unpublishAt: null,
+      });
+    });
+
+    it('updateStatus leaves a key that is not in the status the step starts from', async () => {
+      const realmId = await seedRealm();
+      const active = await keys.create({ key: keyRow(realmId) });
+      const retired = await keys.create({ key: keyRow(realmId, { status: 'retired' }) });
+      const retire = { status: 'retired', retireAt: PUBLISH_AT, unpublishAt: null } as const;
+
+      await expect(
+        keys.updateStatus(realmId, active.kid, { status: 'active', activateAt: PUBLISH_AT })
+      ).resolves.toBeUndefined();
+      await expect(keys.updateStatus(realmId, retired.kid, retire)).resolves.toBeUndefined();
+      await expect(
+        keys.updateStatus(await seedRealm(), active.kid, retire)
+      ).resolves.toBeUndefined();
+      expect((await keys.findByKid(realmId, active.kid))?.status).toBe('active');
+    });
+
+    it('deleteByScope removes one scope and its public rows, and nothing else', async () => {
+      const realmId = await seedRealm();
+      const otherRealm = await seedRealm();
+      const webhook = { purpose: 'webhook_signing', algorithm: 'HS256' };
+      const upstream = { purpose: 'upstream_client_assertion', algorithm: 'RS256' };
+      const gone = [
+        await keys.create({ key: keyRow(realmId, { ...webhook, scopeId: 'sub-1' }) }),
+        await keys.create({
+          key: keyRow(realmId, { ...webhook, scopeId: 'sub-1', status: 'next' as const }),
+        }),
+      ];
+      const kept = [
+        await keys.create({ key: keyRow(realmId, { ...webhook, scopeId: 'sub-2' }) }),
+        await keys.create({
+          key: keyRow(realmId, { ...upstream, scopeId: 'sub-1', publishAt: PUBLISH_AT }),
+          publicJwk: PUBLIC_JWK,
+        }),
+        await keys.create({ key: keyRow(realmId) }),
+        await keys.create({ key: keyRow(otherRealm, { ...webhook, scopeId: 'sub-1' }) }),
+      ];
+
+      const deleted = await keys.deleteByScope(realmId, 'webhook_signing', 'sub-1');
+
+      expect(deleted.sort()).toEqual(gone.map((key) => key.kid).sort());
+      expect((await keys.listByRealm(realmId)).map((key) => key.kid).sort()).toEqual(
+        kept
+          .slice(0, 3)
+          .map((key) => key.kid)
+          .sort()
+      );
+      expect(await keys.listByRealm(otherRealm)).toHaveLength(1);
+      expect((await keys.listPublicByRealm(realmId)).map((key) => key.kid)).toEqual([kept[1].kid]);
+
+      // The provider's keys go the same way, with their public rows.
+      await expect(
+        keys.deleteByScope(realmId, 'upstream_client_assertion', 'sub-1')
+      ).resolves.toEqual([kept[1].kid]);
+      await expect(keys.listPublicByRealm(realmId)).resolves.toEqual([]);
+      await expect(keys.deleteByScope(realmId, 'webhook_signing', 'sub-1')).resolves.toEqual([]);
+    });
   });
 });

@@ -12,6 +12,12 @@ import type { StoredKeyStatus } from './key-store';
  * keys (#461). Nothing here writes: the signer never creates a key.
  */
 
+/** What the signer reads of an upstream provider's configuration (#547). */
+export interface UpstreamClientRecord {
+  /** The client id QAuth is registered under at the provider: an assertion's `iss` and `sub`. */
+  readonly clientId: string;
+}
+
 /** A stored key's metadata. No material. */
 export interface SignerKeyRecord {
   readonly kid: string;
@@ -60,4 +66,13 @@ export interface SignerKeyStore {
   getWrappedKey(realmId: string, kid: string): Promise<WrappedSignerKey | undefined>;
   /** Every published key of the realm, whatever its status or window. */
   listPublicKeys(realmId: string): Promise<readonly PublicKeyRecord[]>;
+  /**
+   * The realm's configuration of one upstream provider, or `undefined` when
+   * the realm has none. Upstream login (ADR-018 §3) owns that configuration;
+   * the signer reads only the client id it signs assertions as.
+   */
+  findUpstreamClient(
+    realmId: string,
+    providerId: string
+  ): Promise<UpstreamClientRecord | undefined>;
 }

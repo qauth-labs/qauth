@@ -44,6 +44,8 @@ export {
 } from './lib/kek-provider-contract';
 export { computeKekRef, DEV_KEK_DEFAULT, KEK_BYTES } from './lib/kek-sources';
 export {
+  type ActivatedKey,
+  type ActivateNextKeyInput,
   type CreatedKey,
   createKeyFactory,
   type CreateKeyInput,
@@ -51,6 +53,7 @@ export {
   type KeyFactoryOptions,
   MAX_SCOPE_ID_LENGTH,
   type ProvisionRealmKeysOptions,
+  type ScopedKeyInput,
 } from './lib/key-factory';
 export {
   assertAllowedBySigningMode,
@@ -69,6 +72,7 @@ export type {
   RealmKeyStore,
   StoredKeyFilter,
   StoredKeyStatus,
+  StoredKeyStatusChange,
   StoredKeySummary,
 } from './lib/key-store';
 export {
@@ -82,5 +86,6 @@ export type {
   PublicKeyRecord,
   SignerKeyRecord,
   SignerKeyStore,
+  UpstreamClientRecord,
   WrappedSignerKey,
 } from './lib/signer-key-store';

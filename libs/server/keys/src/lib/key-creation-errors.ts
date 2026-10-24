@@ -1,5 +1,6 @@
 /**
- * The typed errors of key creation (issue #463).
+ * The typed errors of key creation (issue #463), and of the rotation and
+ * deletion of scoped keys (issue #547).
  *
  * A refusal is decided before any key is generated or stored, so nothing is
  * left behind. Messages name purposes, algorithms and `kid`s, all of which are
@@ -95,6 +96,81 @@ export class KeyIdConflictError extends Error {
     Object.setPrototypeOf(this, KeyIdConflictError.prototype);
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, KeyIdConflictError);
+    }
+  }
+}
+
+/**
+ * A new `next` key would be the second `next` key of its realm, purpose, scope
+ * and algorithm. Raised before the insert. A rotation has one key waiting: a
+ * webhook subscriber was shown that key's secret, and an upstream provider
+ * may already hold its public half. Activate it, or delete the scope, first.
+ */
+export class NextKeyConflictError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'NEXT_KEY_CONFLICT';
+  readonly purpose: string;
+  readonly algorithm: string;
+
+  constructor(purpose: string, algorithm: string) {
+    super(`The realm already holds a next '${algorithm}' key for purpose '${purpose}'`);
+    this.name = 'NextKeyConflictError';
+    this.purpose = purpose;
+    this.algorithm = algorithm;
+    Object.setPrototypeOf(this, NextKeyConflictError.prototype);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, NextKeyConflictError);
+    }
+  }
+}
+
+/** Why a change to stored keys was refused, as a stable value to branch on. */
+export type KeyChangeRefusalReason =
+  /** The realm id is not a UUID. */
+  | 'INVALID_REALM_ID'
+  /** The purpose is not in `KEY_PURPOSES`. */
+  | 'UNKNOWN_PURPOSE'
+  /** The purpose is not scoped. Only scoped keys rotate and are deleted this way. */
+  | 'UNSCOPED_PURPOSE'
+  /** The scope id is missing, empty, too long or not well-formed text. */
+  | 'INVALID_SCOPE_ID'
+  /** The purpose does not allow the algorithm. */
+  | 'ALGORITHM_NOT_ALLOWED'
+  /** The scope holds no `next` key of the algorithm to activate. */
+  | 'NO_NEXT_KEY'
+  /** The `next` key has not been published, or handed out, for the whole window yet. */
+  | 'OVERLAP_NOT_ELAPSED'
+  /** Another writer moved one of the keys while the rotation ran. Nothing changed. */
+  | 'KEY_CHANGED';
+
+/** The reasons that describe the stored keys rather than the request. */
+const KEY_STATE_REASONS: readonly KeyChangeRefusalReason[] = [
+  'NO_NEXT_KEY',
+  'OVERLAP_NOT_ELAPSED',
+  'KEY_CHANGED',
+];
+
+/**
+ * A rotation step (`activateNextKey`) or a scope deletion (`deleteScopedKeys`)
+ * the factory does not run. Nothing was changed. Branch on {@link reason}.
+ */
+export class KeyChangeRefusedError extends Error {
+  readonly code = 'KEY_CHANGE_REFUSED';
+  /** 409 when the stored keys are not ready, 400 when the request is malformed. */
+  readonly statusCode: 400 | 409;
+  readonly reason: KeyChangeRefusalReason;
+  /** For `OVERLAP_NOT_ELAPSED`: the first moment, in epoch ms, the step may run. */
+  readonly notBefore: number | undefined;
+
+  constructor(reason: KeyChangeRefusalReason, message: string, notBefore?: number) {
+    super(message);
+    this.name = 'KeyChangeRefusedError';
+    this.reason = reason;
+    this.statusCode = KEY_STATE_REASONS.includes(reason) ? 409 : 400;
+    this.notBefore = notBefore;
+    Object.setPrototypeOf(this, KeyChangeRefusedError.prototype);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, KeyChangeRefusedError);
     }
   }
 }

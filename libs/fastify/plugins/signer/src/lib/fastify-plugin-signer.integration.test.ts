@@ -1,5 +1,6 @@
 /**
- * Real-Postgres integration tests for the signer's wiring (issue #464).
+ * Real-Postgres integration tests for the signer's wiring (issues #464 and
+ * #547).
  *
  * The keys are created through the key factory over the realm keys
  * repository (`createRepositoryKeyStore`), and the plugin's signer reads them
@@ -18,7 +19,7 @@ import {
   createRealmsRepository,
   type DatabaseInstance,
 } from '@qauth-labs/infra-db';
-import { SignerKeyNotFoundError } from '@qauth-labs/server-keys';
+import { SignerKeyNotFoundError, UpstreamClientNotFoundError } from '@qauth-labs/server-keys';
 import { createKeyFactory, createLocalKekProvider } from '@qauth-labs/server-keys/custody';
 import {
   applyQauthMigrations,
@@ -93,22 +94,27 @@ describe('signer wiring integration (real Postgres)', () => {
     return realm.id;
   }
 
-  async function provision(realmId: string): Promise<void> {
-    await createKeyFactory({
+  function keyFactory() {
+    return createKeyFactory({
       store: createRepositoryKeyStore(db()),
       kekProvider: createLocalKekProvider({ env: KEK_ENV, warn: () => undefined }),
       enabledSignatureAlgorithms: ['EdDSA'],
       hybridSigning: false,
-    }).provisionRealmKeys(realmId);
+    });
   }
 
-  async function app(): Promise<FastifyInstance> {
+  async function provision(realmId: string): Promise<void> {
+    await keyFactory().provisionRealmKeys(realmId);
+  }
+
+  async function app(refreshIntervalMs?: number): Promise<FastifyInstance> {
     const instance = Fastify({ logger: false });
     await instance.register(signerPlugin, {
       db: db(),
       kekEnv: KEK_ENV,
       enabledSignatureAlgorithms: ['EdDSA'],
       hybridSigning: false,
+      ...(refreshIntervalMs !== undefined ? { refreshIntervalMs } : {}),
     });
     await instance.ready();
     return instance;
@@ -177,5 +183,99 @@ describe('signer wiring integration (real Postgres)', () => {
     expect(statements.length).toBeGreaterThan(0);
     expect(statements.every((text) => /^\s*select/i.test(text))).toBe(true);
     await server.close();
+  });
+
+  describe('scoped keys (#547)', () => {
+    /** Every key row and public row of the realm, as `kid` and scope. */
+    async function rowsOf(realmId: string) {
+      const keys = await database?.pool.query<{ kid: string; scope_id: string | null }>(
+        'SELECT kid, scope_id FROM realm_keys WHERE realm_id = $1 ORDER BY created_at, kid',
+        [realmId]
+      );
+      const published = await database?.pool.query<{ kid: string }>(
+        'SELECT kid FROM realm_public_keys WHERE realm_id = $1 ORDER BY kid',
+        [realmId]
+      );
+      return { keys: keys?.rows ?? [], published: (published?.rows ?? []).map((row) => row.kid) };
+    }
+
+    it("removes a subscription's key rows when the subscription is deleted, in the same transaction", async () => {
+      const realmId = await seedRealm('a.example.test');
+      await provision(realmId);
+      const keys = keyFactory();
+      const scope = { realmId, purpose: 'webhook_signing', scopeId: 'sub-1' } as const;
+      const [active] = await keys.createKey(scope);
+      const [next] = await keys.createKey({ ...scope, status: 'next' });
+      const [kept] = await keys.createKey({ ...scope, scopeId: 'sub-2' });
+      const server = await app(0);
+      const request = { realmId, subscriptionId: 'sub-1', id: 'evt_1', timestamp: 1, body: '{}' };
+      expect((await server.signer.signWebhook('delivery', request)).split(' ')).toHaveLength(2);
+
+      // The owner's deletion calls the hook in its own transaction; a
+      // failure after it takes the key rows back with it.
+      await expect(
+        db().transaction(async (tx) => {
+          await keys.deleteScopedKeys({ ...scope, tx });
+          throw new Error('the subscription delete failed');
+        })
+      ).rejects.toThrow('the subscription delete failed');
+      expect((await rowsOf(realmId)).keys.map((row) => row.kid)).toContain(active.kid);
+
+      const deleted = await db().transaction((tx) => keys.deleteScopedKeys({ ...scope, tx }));
+
+      expect([...deleted].sort()).toEqual([active.kid, next.kid].sort());
+      const remaining = (await rowsOf(realmId)).keys;
+      expect(remaining.filter((row) => row.scope_id !== null)).toEqual([
+        { kid: kept.kid, scope_id: 'sub-2' },
+      ]);
+      expect(remaining.filter((row) => row.scope_id === null)).toHaveLength(4);
+      await expect(server.signer.signWebhook('delivery', request)).rejects.toBeInstanceOf(
+        SignerKeyNotFoundError
+      );
+      await server.close();
+    });
+
+    it("removes a provider's keys with their public rows, and its JWKS empties", async () => {
+      const realmId = await seedRealm('a.example.test');
+      await provision(realmId);
+      const keys = keyFactory();
+      const scope = { realmId, purpose: 'upstream_client_assertion', scopeId: 'idp-1' } as const;
+      const [active] = await keys.createKey(scope);
+      const server = await app(0);
+      expect(
+        (await server.signer.getUpstreamJwks('admin', realmId, 'idp-1')).keys.map((key) => key.kid)
+      ).toEqual([active.kid]);
+      const publishedBefore = (await rowsOf(realmId)).published;
+
+      await keys.deleteScopedKeys(scope);
+
+      expect((await rowsOf(realmId)).published).toEqual(
+        publishedBefore.filter((kid) => kid !== active.kid)
+      );
+      await expect(server.signer.getUpstreamJwks('admin', realmId, 'idp-1')).resolves.toEqual({
+        keys: [],
+      });
+      await server.close();
+    });
+
+    it('signs no client assertion until upstream login supplies the provider configuration', async () => {
+      const realmId = await seedRealm('a.example.test');
+      await keyFactory().createKey({
+        realmId,
+        purpose: 'upstream_client_assertion',
+        scopeId: 'idp-1',
+      });
+      const server = await app();
+
+      await expect(
+        server.signer.signClientAssertion('api', {
+          realmId,
+          providerId: 'idp-1',
+          audience: 'https://idp.example.test',
+          claims: { jti: 'j', exp: 1_800_000_060 },
+        })
+      ).rejects.toBeInstanceOf(UpstreamClientNotFoundError);
+      await server.close();
+    });
   });
 });

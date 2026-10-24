@@ -10,6 +10,7 @@ import type {
   RealmKey,
   RealmKeyFilter,
   RealmKeysRepository,
+  RealmKeyStatusChange,
   RealmPublicKey,
   WrappedRealmKey,
 } from '../../types';
@@ -149,6 +150,61 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
         .where(and(eq(realmKeys.realmId, realmId), eq(realmKeys.kid, kid)))
         .limit(1);
       return key;
+    },
+
+    async updateStatus(
+      realmId: string,
+      kid: string,
+      change: RealmKeyStatusChange,
+      tx?: DbClient
+    ): Promise<RealmKey | undefined> {
+      const invoker = tx ?? defaultDb;
+      // The status the step starts from: a key that a concurrent rotation
+      // already moved matches nothing.
+      const from = change.status === 'active' ? 'next' : 'active';
+      const columns =
+        change.status === 'active'
+          ? { status: change.status, activateAt: change.activateAt }
+          : { status: change.status, retireAt: change.retireAt, unpublishAt: change.unpublishAt };
+      return invoker.transaction(async (innerTx) => {
+        const [updated] = await innerTx
+          .update(realmKeys)
+          .set(columns)
+          .where(
+            and(eq(realmKeys.realmId, realmId), eq(realmKeys.kid, kid), eq(realmKeys.status, from))
+          )
+          .returning(REALM_KEY_COLUMNS);
+        // The status already reached the public row through its foreign key;
+        // its JWKS window is its own column.
+        if (updated !== undefined && change.status === 'retired' && change.unpublishAt !== null) {
+          await innerTx
+            .update(realmPublicKeys)
+            .set({ unpublishAt: change.unpublishAt })
+            .where(and(eq(realmPublicKeys.realmId, realmId), eq(realmPublicKeys.kid, kid)))
+            .returning({ kid: realmPublicKeys.kid });
+        }
+        return updated;
+      });
+    },
+
+    async deleteByScope(
+      realmId: string,
+      purpose: string,
+      scopeId: string,
+      tx?: DbClient
+    ): Promise<string[]> {
+      const invoker = tx ?? defaultDb;
+      const deleted = await invoker
+        .delete(realmKeys)
+        .where(
+          and(
+            eq(realmKeys.realmId, realmId),
+            eq(realmKeys.purpose, purpose),
+            eq(realmKeys.scopeId, scopeId)
+          )
+        )
+        .returning({ kid: realmKeys.kid });
+      return deleted.map(({ kid: deletedKid }) => deletedKid);
     },
   };
 }

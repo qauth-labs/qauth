@@ -239,8 +239,10 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createOid4vpRequestStatesRepository(db)`**: OID4VP request/response correlation (T4)
   - Realm-scoped, unique `state_hash`, single-use via `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on.
 - **`createRealmKeysRepository(db)`**: Per-realm, per-purpose keys, envelope-encrypted (ADR-019 Decision 9)
-  - `create()`, `findByKid()`, `listByRealm()`, `getWrappedForSigner()`
+  - `create()`, `findByKid()`, `listByRealm()`, `listPublicByRealm()`, `getWrappedForSigner()`, `updateStatus()`, `deleteByScope()`
   - `create({ key, publicJwk? })` writes the `realm_keys` row and, for a published purpose, its `realm_public_keys` row in one transaction, copying the mirror columns from the key row.
+  - `updateStatus(realmId, kid, change)` moves one key a rotation step, `next` → `active` or `active` → `retired`, and only from that status. The status reaches the public row through its foreign key; a retirement also writes the public row's `unpublish_at`.
+  - `deleteByScope(realmId, purpose, scopeId)` deletes the keys of one webhook subscription or upstream provider, with their public rows. It never matches an unscoped key.
   - `getWrappedForSigner(realmId, kid)` is the **only** method that returns `ciphertext`, `iv` and `wrapped_dek`. Every other method returns a `RealmKey` without them; a unit test fails when another method selects one.
 - **`createSessionsRepository(db)`**: Browser sessions (ADR-019 Decision 3, #468)
   - `create()`, `findById(realmId, id)`, `updateLastSeen(realmId, id, { minIntervalMs? })`, `revoke(realmId, id, reason)`, `listActiveForUser(realmId, userId)`
