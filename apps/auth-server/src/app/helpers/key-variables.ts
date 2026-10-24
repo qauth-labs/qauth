@@ -1,0 +1,125 @@
+import { createPrivateKey, createPublicKey } from 'node:crypto';
+
+import type {
+  EnvironmentKeySettings,
+  EnvironmentKeySource,
+} from '@qauth-labs/fastify-plugin-signer';
+import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
+import { calculateJwkThumbprint, type JWK } from 'jose';
+
+/**
+ * The key variables of a deployment from before the key store, handed to the
+ * key boot step (ADR-019 Decision 9, issue #485).
+ *
+ * At its first boot after the upgrade, the default realm imports these keys
+ * into its encrypted store; at every boot, each one still set gets a warning
+ * that names it. The configuration has already read the `*_PATH` files, so the
+ * values come from the parsed configuration, and the variable names from the
+ * raw environment: a warning names exactly the variables the operator set.
+ */
+
+/** The parsed settings this module reads. */
+export interface KeyVariableConfig {
+  readonly JWT_PRIVATE_KEY?: string;
+  readonly JWT_PUBLIC_KEY?: string;
+  readonly JWT_RS256_PRIVATE_KEY?: string;
+  readonly JWT_RS256_PUBLIC_KEY?: string;
+  readonly JWT_RS256_KID?: string;
+  readonly JWT_MLDSA_PRIVATE_KEY?: string;
+  readonly JWT_MLDSA_KID?: string;
+  readonly HYBRID_SIGNING_ENABLED: boolean;
+  readonly SESSION_COOKIE_SECRET: string;
+}
+
+/**
+ * The key settings for the boot step: each key whose variable is set.
+ *
+ * - The ML-DSA-65 seed only with hybrid signing on: the JWT plugin reads it
+ *   only then, and the store keeps it only as the second key of a hybrid pair.
+ * - `SESSION_COOKIE_SECRET` only when the operator set it, and never the
+ *   development default the configuration falls back to: a fresh deployment
+ *   generates its cookie key instead.
+ *
+ * @param config - the parsed configuration (`env`)
+ * @param raw - the environment it was parsed from (`process.env`)
+ */
+export function keyVariableSettings(
+  config: KeyVariableConfig,
+  raw: Readonly<Record<string, string | undefined>>
+): EnvironmentKeySettings {
+  const source = (
+    value: string | undefined,
+    ...names: string[]
+  ): EnvironmentKeySource | undefined => {
+    if (value === undefined || value.length === 0) return undefined;
+    return { value, variables: names.filter((name) => (raw[name]?.trim() ?? '') !== '') };
+  };
+
+  const ed25519 = source(config.JWT_PRIVATE_KEY, 'JWT_PRIVATE_KEY', 'JWT_PRIVATE_KEY_PATH');
+  const ed25519Public = source(config.JWT_PUBLIC_KEY, 'JWT_PUBLIC_KEY', 'JWT_PUBLIC_KEY_PATH');
+  const rs256 = source(
+    config.JWT_RS256_PRIVATE_KEY,
+    'JWT_RS256_PRIVATE_KEY',
+    'JWT_RS256_PRIVATE_KEY_PATH'
+  );
+  const rs256Public = source(
+    config.JWT_RS256_PUBLIC_KEY,
+    'JWT_RS256_PUBLIC_KEY',
+    'JWT_RS256_PUBLIC_KEY_PATH'
+  );
+  const rs256Kid = source(config.JWT_RS256_KID, 'JWT_RS256_KID');
+  const mlDsa = config.HYBRID_SIGNING_ENABLED
+    ? source(config.JWT_MLDSA_PRIVATE_KEY, 'JWT_MLDSA_PRIVATE_KEY', 'JWT_MLDSA_PRIVATE_KEY_PATH')
+    : undefined;
+  const mlDsaKid = source(config.JWT_MLDSA_KID, 'JWT_MLDSA_KID');
+  const cookieSecret =
+    config.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT
+      ? undefined
+      : source(config.SESSION_COOKIE_SECRET, 'SESSION_COOKIE_SECRET');
+
+  return {
+    ...(ed25519 === undefined
+      ? {}
+      : {
+          ed25519: {
+            privateKey: ed25519,
+            ...(ed25519Public === undefined ? {} : { publicKey: ed25519Public }),
+          },
+        }),
+    ...(rs256 === undefined
+      ? {}
+      : {
+          rs256: {
+            privateKey: rs256,
+            ...(rs256Public === undefined ? {} : { publicKey: rs256Public }),
+            ...(rs256Kid === undefined ? {} : { kid: rs256Kid }),
+          },
+        }),
+    ...(mlDsa === undefined
+      ? {}
+      : { mlDsa: { seed: mlDsa, ...(mlDsaKid === undefined ? {} : { kid: mlDsaKid }) } }),
+    // Only a secret the operator set in the environment: the configuration
+    // fills an unset one with the development default.
+    ...(cookieSecret === undefined || cookieSecret.variables.length === 0 ? {} : { cookieSecret }),
+  };
+}
+
+/**
+ * The `kid` the key store gives a key from a PEM private key when no `kid` is
+ * configured: the RFC 7638 SHA-256 thumbprint of its public key, derived with
+ * `node:crypto`. The JWT plugin publishes the same `kid`, so the served JWKS
+ * names each key as the store does.
+ *
+ * @returns the thumbprint, or `undefined` when the PEM does not parse; the
+ *   JWT plugin and the key boot step each refuse such a key with their own
+ *   message
+ */
+export async function thumbprintKid(privateKeyPem: string): Promise<string | undefined> {
+  let jwk: JWK;
+  try {
+    jwk = createPublicKey(createPrivateKey(privateKeyPem)).export({ format: 'jwk' }) as JWK;
+  } catch {
+    return undefined;
+  }
+  return calculateJwkThumbprint(jwk, 'sha256');
+}

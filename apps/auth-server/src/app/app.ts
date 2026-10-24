@@ -20,6 +20,7 @@ import {
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
+import { signerPlugin } from '@qauth-labs/fastify-plugin-signer';
 import {
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
@@ -30,6 +31,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
+import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
@@ -73,9 +75,10 @@ const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities
 /** Options for {@link app}. */
 export interface AppOptions {
   /**
-   * Run the default realm's boot step (#484) when the server is ready. On
-   * unless set to `false`, which only a boot with no database does: the
-   * OpenAPI export and the error-handler wiring test.
+   * Run the boot steps that need the database when the server is ready: the
+   * default realm's (#484) and its keys' (#485). On unless set to `false`,
+   * which only a boot with no database does: the OpenAPI export and the
+   * error-handler wiring test.
    */
   defaultRealmBoot?: boolean;
 }
@@ -112,6 +115,25 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       passkeys: {
         rpId: env.WEBAUTHN_RP_ID,
         allowParentDomain: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
+      },
+    });
+
+    // The signer's wiring and the default realm's key boot step (ADR-019
+    // Decision 9, #485). The plugin loads the KEK: NODE_ENV=production refuses
+    // to start without one. Its `onReady` hook runs after the default realm's,
+    // which creates the realm: under the realm's key lock it imports each key
+    // variable the realm's encrypted store lacks, creates the standard keys
+    // still missing (an RS256 signing key too on a fresh deployment), and
+    // warns about every key variable still set. Tokens and the session cookie
+    // keep using the variables until they move onto the signer (#491, #493).
+    await fastify.register(signerPlugin, {
+      db: fastify.db,
+      kekEnv: process.env,
+      enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+      hybridSigning: env.HYBRID_SIGNING_ENABLED,
+      realmKeysBoot: {
+        realmName: env.DEFAULT_REALM_NAME,
+        environmentKeys: keyVariableSettings(env, process.env),
       },
     });
   }
@@ -348,9 +370,21 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     },
   });
 
+  // The `kid`s the key store gives the imported keys (#485): the RFC 7638
+  // thumbprint, or JWT_RS256_KID when set. Published here too, so the JWKS
+  // names each key as the store does. The ML-DSA key keeps JWT_MLDSA_KID
+  // alone: the plugin resolves a hybrid token's ML-DSA key by `pqc_kid`, and
+  // a kid that appeared now would refuse every hybrid token issued without one.
+  const ed25519KeyId = await thumbprintKid(env.JWT_PRIVATE_KEY);
+  const rs256KeyId =
+    env.JWT_RS256_PRIVATE_KEY === undefined
+      ? undefined
+      : env.JWT_RS256_KID || (await thumbprintKid(env.JWT_RS256_PRIVATE_KEY));
+
   await fastify.register(jwtPlugin, {
     privateKey: env.JWT_PRIVATE_KEY,
     publicKey: env.JWT_PUBLIC_KEY,
+    ...(ed25519KeyId === undefined ? {} : { keyId: ed25519KeyId }),
     issuer: env.JWT_ISSUER,
     accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
@@ -364,7 +398,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       ? {
           rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
           ...(env.JWT_RS256_PUBLIC_KEY ? { rs256PublicKey: env.JWT_RS256_PUBLIC_KEY } : {}),
-          ...(env.JWT_RS256_KID ? { rs256KeyId: env.JWT_RS256_KID } : {}),
+          ...(rs256KeyId ? { rs256KeyId } : {}),
         }
       : {}),
     // RFC 7009 revocation: the shared `requireJwt` preHandler consults this

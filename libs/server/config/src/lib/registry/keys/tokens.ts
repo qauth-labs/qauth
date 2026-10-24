@@ -88,7 +88,7 @@ export const TOKEN_KEYS = defineKeys([
     default: { computed: 'none; set this or `JWT_PRIVATE_KEY_PATH`' },
     since: '0.1.0',
     secret: true,
-    docs: 'The Ed25519 private key, PEM, that signs the tokens QAuth issues.',
+    docs: "The Ed25519 private key, PEM, that signs the tokens QAuth issues; imported into the default realm's key store at the first boot after the upgrade.",
   },
   {
     name: 'JWT_PRIVATE_KEY_PATH',
@@ -106,7 +106,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'key-custody',
     default: null,
     since: '0.1.0',
-    docs: 'The Ed25519 public key, PEM; derived from the private key when unset.',
+    docs: "The Ed25519 public key, PEM; derived from the private key when unset, and refused at boot when it is not the private key's public half.",
   },
   {
     name: 'JWT_PUBLIC_KEY_PATH',

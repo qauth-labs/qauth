@@ -34,6 +34,31 @@ if ! grep -q "JWT_PRIVATE_KEY" .env || grep -q "JWT_PRIVATE_KEY=\"\"" .env; then
     exit 1
 fi
 
+# The value Compose would pass for a variable: the shell's when it is set,
+# otherwise the last assignment in .env, without surrounding quotes.
+compose_value() {
+    local name="$1"
+    if [ -n "${!name:-}" ]; then
+        printf '%s' "${!name}"
+        return
+    fi
+    sed -n "s/^${name}=//p" .env | tail -n 1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# Check that a KEK is set: the server wraps every stored key with it, and
+# refuses to start without one when NODE_ENV=production (#485). Only the
+# default `local` provider reads KEK or KEK_PATH; another KEK_PROVIDER brings
+# its own key.
+kek_provider="$(compose_value KEK_PROVIDER)"
+if [ -z "$kek_provider" ] || [ "$kek_provider" = "local" ]; then
+    if [ -z "$(compose_value KEK)" ] && [ -z "$(compose_value KEK_PATH)" ]; then
+        echo -e "${RED}❌ KEK not set, in the shell or in .env!${NC}"
+        echo -e "${YELLOW}   Generate one with: openssl rand -base64 32${NC}"
+        echo -e "   Then set KEK=<the output> in .env, and keep a copy with your backups"
+        exit 1
+    fi
+fi
+
 echo -e "${GREEN}✅ Environment check passed${NC}"
 echo ""
 

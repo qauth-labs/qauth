@@ -830,6 +830,13 @@ export interface RealmKeysRepository {
     scopeId: string,
     tx?: DbClient
   ): Promise<string[]>;
+  /**
+   * Take the realm's key lock for the rest of the transaction `tx`: a
+   * transaction-level advisory lock, released at commit or rollback. The key
+   * boot step (#485) holds it while it imports and creates a realm's keys, so
+   * nodes that boot together do that one at a time.
+   */
+  lockRealm(realmId: string, tx: DbClient): Promise<void>;
 }
 
 /**

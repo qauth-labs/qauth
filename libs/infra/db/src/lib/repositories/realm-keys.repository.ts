@@ -3,7 +3,7 @@ import {
   isUniqueConstraintError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, asc, eq, isNull, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNull, type SQL, sql } from 'drizzle-orm';
 
 import type {
   NewRealmKeyInput,
@@ -43,6 +43,14 @@ const REALM_KEY_COLUMNS = {
   unpublishAt: realmKeys.unpublishAt,
   compromisedAt: realmKeys.compromisedAt,
 } as const;
+
+/**
+ * The prefix of the advisory lock text of {@link RealmKeysRepository.lockRealm};
+ * the realm id follows it. Postgres hashes the text to a `bigint`, and the
+ * `qauth:` prefix keeps it apart from the realm provisioning lock and from keys
+ * other software on the database might choose.
+ */
+const REALM_KEYS_LOCK_PREFIX = 'qauth:realm-keys:';
 
 /**
  * Factory for the realm keys repository (ADR-019 Decision 9, issue #461).
@@ -136,6 +144,12 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
           asc(realmPublicKeys.publishAt),
           asc(realmPublicKeys.kid)
         );
+    },
+
+    async lockRealm(realmId: string, tx: DbClient): Promise<void> {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${REALM_KEYS_LOCK_PREFIX + realmId.toLowerCase()}, 0))`
+      );
     },
 
     async getWrappedForSigner(

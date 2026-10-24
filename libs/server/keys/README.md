@@ -5,10 +5,11 @@ envelope encryption, the provider of the key-encryption key (KEK) that protects 
 signer, the one component that uses them
 ([ADR-019 Decision 9](../../../docs/adr/019-deployment-topology-and-trust-boundaries.md)).
 
-> **Status:** the library, its default provider and the in-process signer are complete. The
-> signer's wiring, [`@qauth-labs/fastify-plugin-signer`](../../fastify/plugins/signer/README.md),
-> is not registered yet: token signing moves onto it with #491, and the import of the environment
-> keys at first boot (#485) builds on it.
+> **Status:** the library, its default provider, the in-process signer and the key boot step are
+> complete. The auth-server registers the signer's wiring,
+> [`@qauth-labs/fastify-plugin-signer`](../../fastify/plugins/signer/README.md), for the key boot
+> step that imports the environment keys at first boot (#485). Token signing moves onto the signer
+> with #491, and the session cookie with #493.
 
 ## Entry points
 
@@ -45,6 +46,8 @@ keys; the material stays as it is.
 - **`createKeyFactory`**: `createKey` and `provisionRealmKeys`, which generate, seal and store keys,
   and `activateNextKey` and `deleteScopedKeys` for the scoped keys. See
   [Creating keys](#creating-keys) and [Scoped keys](#scoped-keys).
+- **`bootRealmKeys`**: a realm's key boot step, which imports the key variables and creates the
+  standard keys the realm lacks. See [Importing the key variables](#importing-the-key-variables).
 
 The library may import only `scope:core` and `scope:shared` libraries. Its `type:key-custody` tag
 carries that rule in `eslint.config.mjs`.
@@ -267,6 +270,60 @@ This library may not import `@qauth-labs/infra-db`, so it writes through a `Real
 shaped like the realm keys repository (#461): `findByKid`, `listByRealm`, `create`, `updateStatus`
 and `deleteByScope`. The signer's wiring builds it from the repository:
 `createRepositoryKeyStore(db)` in `@qauth-labs/fastify-plugin-signer`.
+
+## Importing the key variables
+
+Before the key store, a deployment configured its keys in environment variables. ADR-019's answer
+on existing issuers imports them once, at the first boot after the upgrade, into the default realm's
+store (#485). `bootRealmKeys` is that step; the signer's wiring runs it at every boot, on every node.
+
+```typescript
+import { bootRealmKeys } from '@qauth-labs/server-keys/custody';
+
+const result = await bootRealmKeys({
+  store, // a RealmKeyBootStore: the factory's store, plus lockRealm and listPublicKeys
+  kekProvider,
+  enabledSignatureAlgorithms: cryptoEnv.enabledSignatureAlgorithms,
+  hybridSigning: cryptoEnv.HYBRID_SIGNING_ENABLED,
+  realmId,
+  environmentKeys: {
+    ed25519: { privateKey: { value: pem, variables: ['JWT_PRIVATE_KEY'] } },
+    cookieSecret: { value: secret, variables: ['SESSION_COOKIE_SECRET'] },
+  },
+});
+// result.imported, result.alreadyStored and result.generated name keys by kid; no material.
+```
+
+| Variable                                           | Becomes                                                                                        |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `JWT_PRIVATE_KEY` (or `_PATH`)                     | The active Ed25519 `token_signing` key.                                                        |
+| `JWT_RS256_PRIVATE_KEY` (or `_PATH`)               | The active RS256 `token_signing` key.                                                          |
+| `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`)               | With hybrid signing on only: the ML-DSA-65 key, in one hybrid pair with the Ed25519 key.       |
+| `SESSION_COOKIE_SECRET`                            | The first `cookie_hmac` key, when the realm has none. Its UTF-8 bytes, so HMACs stay the same. |
+| `JWT_PUBLIC_KEY`, `JWT_RS256_PUBLIC_KEY` (`_PATH`) | Nothing: the public key is derived with `node:crypto`, and one that differs stops the boot.    |
+
+- The `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, else the RFC 7638 thumbprint, as for a
+  generated key. The cookie key gets a random `kid`.
+- A signing key counts as stored when the realm has a published key with the same public key,
+  whatever its `kid`. So the import happens once, and removing `JWT_RS256_KID` later changes nothing.
+- It all runs in one transaction under `lockRealm`, a transaction-level advisory lock: nodes that
+  boot together import once.
+- After the import, `provisionRealmKeys` fills the standard keys still missing. A fresh realm, one
+  with no `token_signing` key that imported none, also gets an RS256 `token_signing` key: OpenID
+  Connect requires an OP to support RS256 ID tokens.
+
+It stores nothing and throws an `InvalidConfigurationError`, naming the variables and never a value,
+when:
+
+- a key must be imported and the KEK is the published development KEK (no `KEK` or `KEK_PATH`);
+- a configured public key is not the private key's public half, or an RSA key is shorter than 2048
+  bits;
+- a variable holds another key than the realm's active key of its algorithm: a stored key changes by
+  rotation, not through the variable;
+- a variable holds a key the realm marked `compromised`;
+- the ML-DSA-65 key would join an Ed25519 key already stored without it.
+
+The `OID4VP_*` keys are not imported here; #546 moves the verifier key into the store.
 
 ## The signer
 

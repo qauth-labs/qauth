@@ -482,6 +482,9 @@ importers:
       '@qauth-labs/fastify-plugin-pkce':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/pkce
+      '@qauth-labs/fastify-plugin-signer':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/signer
       '@qauth-labs/server-config':
         specifier: workspace:*
         version: link:../../libs/server/config

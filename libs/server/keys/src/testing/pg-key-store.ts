@@ -2,21 +2,21 @@ import type { Pool, PoolClient } from 'pg';
 
 import type {
   NewStoredKey,
-  RealmKeyStore,
   StoredKeyFilter,
   StoredKeyStatus,
   StoredKeySummary,
 } from '../lib/key-store';
+import type { RealmKeyBootStore, StoredPublicKey } from '../lib/realm-key-boot';
 
 /**
- * A {@link RealmKeyStore} over a node-postgres pool, for this library's
+ * A {@link RealmKeyBootStore} over a node-postgres pool, for this library's
  * integration tests. Never exported from the package entry point.
  *
  * This library may not import `@qauth-labs/infra-db`, so the tests write the
  * two tables with plain SQL against the real migrated schema. The repository
  * the signer's wiring passes in production (#461) writes the same columns.
  */
-export function createPgKeyStore(pool: Pool): RealmKeyStore<PoolClient> {
+export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
   let savepoints = 0;
 
   return {
@@ -95,6 +95,30 @@ export function createPgKeyStore(pool: Pool): RealmKeyStore<PoolClient> {
         status: row.status,
         publishAt: row.publish_at === null ? null : Number(row.publish_at),
         createdAt: Number(row.created_at),
+      }));
+    },
+
+    async lockRealm(realmId: string, tx: PoolClient): Promise<void> {
+      // The lock the realm keys repository takes (`lockRealm`, #485).
+      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `qauth:realm-keys:${realmId}`,
+      ]);
+    },
+
+    async listPublicKeys(realmId: string, tx: PoolClient): Promise<readonly StoredPublicKey[]> {
+      const { rows } = await tx.query<{
+        kid: string;
+        purpose: string;
+        status: StoredPublicKey['status'];
+        public_jwk: Record<string, unknown>;
+      }>('SELECT kid, purpose, status, public_jwk FROM realm_public_keys WHERE realm_id = $1', [
+        realmId,
+      ]);
+      return rows.map((row) => ({
+        kid: row.kid,
+        purpose: row.purpose,
+        status: row.status,
+        publicJwk: row.public_jwk,
       }));
     },
 

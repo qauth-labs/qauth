@@ -24,6 +24,15 @@ export {
   TAG_BYTES,
 } from './lib/envelope';
 export {
+  describeSource,
+  type EnvironmentKey,
+  type EnvironmentKeySettings,
+  type EnvironmentKeySource,
+  MIN_RSA_MODULUS_BITS,
+  prepareEnvironmentKeys,
+  type PrepareEnvironmentKeysOptions,
+} from './lib/environment-keys';
+export {
   createInProcessSigner,
   DEFAULT_SIGNER_KEY_CACHE_SIZE,
   DEFAULT_SIGNER_REFRESH_INTERVAL_MS,
@@ -82,6 +91,14 @@ export {
   kekProviderPackage,
   loadKekProvider,
 } from './lib/load-kek-provider';
+export {
+  bootRealmKeys,
+  type BootRealmKeysOptions,
+  type EnvironmentKeyOutcome,
+  type RealmKeyBootStore,
+  type RealmKeysBootResult,
+  type StoredPublicKey,
+} from './lib/realm-key-boot';
 export type {
   PublicKeyRecord,
   SignerKeyRecord,

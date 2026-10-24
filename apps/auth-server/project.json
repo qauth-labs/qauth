@@ -98,6 +98,15 @@
       "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
       "executor": "nx:noop"
     },
+    "keys:create": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/keys-create.ts",
+        "cwd": "apps/auth-server",
+        "forwardAllArgs": true
+      },
+      "description": "Create one key for a realm, purpose and algorithm in the realm's encrypted key store (ADR-019 Decision 9, #485), for example an RS256 signing key for an OpenID Foundation run: `pnpm nx run auth-server:keys:create --purpose=token_signing --algorithm=RS256`. Run it on a host that holds the KEK, with the server's environment (DATABASE_URL, KEK or KEK_PATH, SIGNING_ALGORITHM_MODE, HYBRID_SIGNING_ENABLED, DEFAULT_REALM_NAME)."
+    },
     "openapi-export": {
       "executor": "nx:run-commands",
       "options": {

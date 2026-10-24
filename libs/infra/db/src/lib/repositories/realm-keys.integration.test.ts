@@ -555,6 +555,36 @@ describe('realm_keys integration (real Postgres)', () => {
   });
 
   describe('repository', () => {
+    it('lockRealm holds the realm until the transaction ends, and only that realm', async () => {
+      if (!ctx) throw new Error('no ctx');
+      const realmId = await seedRealm();
+      const otherRealm = await seedRealm();
+
+      /** Whether another connection could take the realm's lock right now. */
+      async function lockFree(id: string): Promise<boolean> {
+        const client = await pool().connect();
+        try {
+          await client.query('BEGIN');
+          const { rows } = await client.query<{ free: boolean }>(
+            'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS free',
+            [`qauth:realm-keys:${id}`]
+          );
+          await client.query('ROLLBACK');
+          return rows[0].free;
+        } finally {
+          client.release();
+        }
+      }
+
+      await ctx.database.db.transaction(async (tx) => {
+        await keys.lockRealm(realmId, tx);
+        expect(await lockFree(realmId)).toBe(false);
+        expect(await lockFree(otherRealm)).toBe(true);
+      });
+
+      expect(await lockFree(realmId)).toBe(true);
+    });
+
     it('getWrappedForSigner returns the stored bytes unchanged', async () => {
       const realmId = await seedRealm();
       const row = keyRow(realmId);

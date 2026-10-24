@@ -25,7 +25,7 @@ export const KEK_KEYS = defineKeys([
     },
     since: '0.2.0',
     secret: true,
-    docs: 'The KEK of the `local` provider, as the base64 of 32 random bytes, for example from `openssl rand -base64 32`.',
+    docs: 'The KEK of the `local` provider, as the base64 of 32 random bytes, for example from `openssl rand -base64 32`; the boot stops when a key variable must be imported into the key store and no KEK is set.',
   },
   {
     name: 'KEK_PATH',

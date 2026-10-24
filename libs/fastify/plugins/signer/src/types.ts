@@ -3,6 +3,10 @@ import type { DbClient } from '@qauth-labs/infra-db';
 import type { KekEnv } from '@qauth-labs/server-keys/custody';
 import type { FastifyPluginOptions } from 'fastify';
 
+import type { RealmKeysBootSettings } from './lib/realm-keys';
+
+export type { EnvironmentKeySettings, EnvironmentKeySource } from '@qauth-labs/server-keys/custody';
+
 /** Options of `signerPlugin`. */
 export interface SignerPluginOptions extends FastifyPluginOptions {
   /**
@@ -24,4 +28,12 @@ export interface SignerPluginOptions extends FastifyPluginOptions {
   keyCacheSize?: number;
   /** How long the signer trusts a key lookup before it reads the store again, in ms. */
   refreshIntervalMs?: number;
+  /**
+   * Run the key boot step for this realm when the server is ready (#485):
+   * import the keys the deployment configured in variables, create the
+   * standard keys the realm lacks, and log a warning per key variable still
+   * set. Absent: the plugin reads nothing at boot, as for a boot with no
+   * database.
+   */
+  realmKeysBoot?: RealmKeysBootSettings;
 }
