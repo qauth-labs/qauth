@@ -10,7 +10,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 const path = process.argv[2] ?? new URL('../pkce/s256.json', import.meta.url);
 const file = JSON.parse(readFileSync(path, 'utf8'));
-if (file.schema !== 'qauth-vectors/1') {
+if (file.schema !== 'qauth-vectors/1-rc.0') {
   throw new Error(`unsupported vector format ${JSON.stringify(file.schema)}`);
 }
 

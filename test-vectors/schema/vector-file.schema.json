@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:qauth:schema:qauth-vectors/1",
-  "title": "qauth-vectors/1",
+  "$id": "urn:qauth:schema:qauth-vectors/1-rc.0",
+  "title": "qauth-vectors/1-rc.0",
   "description": "A QAuth shared test vector file. Two rules sit outside this schema and are checked by the validator: case ids are unique within a file, and every JWK (an object with a kty member) has a kid that starts with \"throwaway-test-\".",
   "type": "object",
   "properties": {
     "schema": {
       "type": "string",
-      "const": "qauth-vectors/1",
+      "const": "qauth-vectors/1-rc.0",
       "description": "The format version. A reader refuses a file whose version it does not know."
     },
     "id": {

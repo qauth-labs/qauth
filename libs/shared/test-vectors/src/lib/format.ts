@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * The shared test vector format, `qauth-vectors/1` (ADR-018 §6 and §7).
+ * The shared test vector format, `qauth-vectors/1-rc.0` (ADR-018 §6 and §7).
  *
  * A vector file is plain JSON that any language reads: a header (`schema`,
  * `id`, `description`, `source`) and a list of cases, each an `input` and the
@@ -15,7 +15,7 @@ import { z } from 'zod';
  */
 
 /** The format version every file names in its `schema` member. */
-export const VECTOR_SCHEMA_ID = 'qauth-vectors/1';
+export const VECTOR_SCHEMA_ID = 'qauth-vectors/1-rc.0';
 
 /**
  * The prefix of a JWK's `kid` in a vector file. Every key in a file is a

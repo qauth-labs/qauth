@@ -17,7 +17,7 @@
         "cwd": "libs/shared/test-vectors"
       },
       "metadata": {
-        "description": "Validate every vector file under test-vectors/ against the qauth-vectors/1 format: required members, the schema id, no unknown members, unique case ids, throwaway-marked JWKs, and an id that matches the file's path. This directory holds no code, so the validator lives in libs/shared/test-vectors; its sources are inputs here because this project does not depend on that one (the dependency runs the other way, so a vector edit reaches every test that loads vectors)."
+        "description": "Validate every vector file under test-vectors/ against the qauth-vectors/1-rc.0 format: required members, the schema id, no unknown members, unique case ids, throwaway-marked JWKs, and an id that matches the file's path. This directory holds no code, so the validator lives in libs/shared/test-vectors; its sources are inputs here because this project does not depend on that one (the dependency runs the other way, so a vector edit reaches every test that loads vectors)."
       }
     },
     "test": {

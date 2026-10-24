@@ -91,7 +91,7 @@ has no webhook signer to run the last file against, so the vector library checks
 
 A test reads a file with `loadVectors(id)` from `@qauth-labs/shared-test-vectors` and rebuilds each
 case's whole `expected` object from the code under test, so a wrong value anywhere in a case fails
-that case. `pnpm exec nx run test-vectors:validate` checks every file against the `qauth-vectors/1`
+that case. `pnpm exec nx run test-vectors:validate` checks every file against the `qauth-vectors/1-rc.0`
 format. The `test-vectors` project's `test` target depends on it, so it runs in this tier.
 
 Vectors are append-only: changing a case's expected result takes a new case id. The

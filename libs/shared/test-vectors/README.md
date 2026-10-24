@@ -1,6 +1,6 @@
 # @qauth-labs/shared-test-vectors
 
-The TypeScript side of the shared test vectors (#478, ADR-018 §6 and §7): the `qauth-vectors/1`
+The TypeScript side of the shared test vectors (#478, ADR-018 §6 and §7): the `qauth-vectors/1-rc.0`
 format, its validator, and `loadVectors` for tests. The vector files themselves, and how another
 language reads them, are in [`test-vectors/`](../../../test-vectors/README.md) at the repository
 root.

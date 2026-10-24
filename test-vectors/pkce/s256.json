@@ -1,5 +1,5 @@
 {
-  "schema": "qauth-vectors/1",
+  "schema": "qauth-vectors/1-rc.0",
   "id": "pkce/s256",
   "description": "PKCE with the S256 method, as the token endpoint checks it (RFC 7636 §4.6). input.code_verifier is the code_verifier the client sends; input.code_challenge is the code_challenge stored from its authorization request. expected.computed_challenge is BASE64URL(SHA256(ASCII(code_verifier))), base64url without padding, when code_verifier is a valid verifier (43 to 128 characters from A-Z, a-z, 0-9, \"-\", \".\", \"_\" and \"~\"), and null when it is not. expected.accepted is true only when the verifier is valid and computed_challenge equals code_challenge exactly.",
   "source": "RFC 7636 §4.1, §4.2, §4.6 and Appendix B",

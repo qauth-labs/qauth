@@ -218,7 +218,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Shared test vectors** ([#478], ADR-018 §6 and §7). The new top-level
   `test-vectors/` directory holds language-neutral vector files that every SDK
-  and the server's own tests run. A file is plain JSON in the `qauth-vectors/1`
+  and the server's own tests run. A file is plain JSON in the `qauth-vectors/1-rc.0`
   format (`test-vectors/schema/vector-file.schema.json`): a header and cases of
   `input` and `expected`. The first files cover PKCE S256 (with RFC 7636
   Appendix B), Standard Webhooks signatures (generated with the reference

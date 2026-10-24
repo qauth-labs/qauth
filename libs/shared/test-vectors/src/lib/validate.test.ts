@@ -53,14 +53,17 @@ describe('validateVectorFile', () => {
     ]);
   });
 
-  it.each(['qauth-vectors/2', 'qauth-vectors/0', 'QAUTH-VECTORS/1', ''])(
-    'rejects the schema id %j',
-    (schema) => {
-      expect(messages({ ...validFile(), schema })).toEqual([
-        expect.stringMatching(/^schema: .*qauth-vectors\/1/),
-      ]);
-    }
-  );
+  it.each([
+    'qauth-vectors/1',
+    'qauth-vectors/1-rc.1',
+    'qauth-vectors/2',
+    'QAUTH-VECTORS/1-RC.0',
+    '',
+  ])('rejects the schema id %j', (schema) => {
+    expect(messages({ ...validFile(), schema })).toEqual([
+      expect.stringMatching(/^schema: .*qauth-vectors\/1-rc\.0/),
+    ]);
+  });
 
   it('rejects a duplicate case id and names the first use', () => {
     const file = validFile();

@@ -1,5 +1,5 @@
 {
-  "schema": "qauth-vectors/1",
+  "schema": "qauth-vectors/1-rc.0",
   "id": "agent/act-chain",
   "description": "Reading the RFC 8693 act (actor) claim of a delegated QAuth access token, and QAuth's delegation depth cap of 4 (ADR-007 §2). input.act is the token's act claim; input has no act member when the token is not delegated. expected.chain is the actors' sub values, outermost (the most recent actor) first, walking the nested act members: only sub is read, a link whose sub is not a non-empty string is skipped, and the walk stops once the chain holds 4 entries. expected.depth is the number of nested act objects, counting every link (0 without act, 1 for a single actor). expected.within_cap is whether depth is at most 4; QAuth refuses to mint a token-exchange token whose act chain would be deeper, so a verified QAuth token always has within_cap true.",
   "source": "RFC 8693 §4.1 (the act claim); QAuth ADR-007 §2 and its maximum delegation depth of 4",

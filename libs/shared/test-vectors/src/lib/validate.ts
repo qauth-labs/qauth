@@ -30,7 +30,7 @@ function formatPath(path: readonly PropertyKey[]): string {
  * Check a parsed vector file against the format. Returns every problem, or
  * an empty list for a valid file.
  *
- * Rejects a missing member, a `schema` other than `qauth-vectors/1`, an
+ * Rejects a missing member, a `schema` other than `qauth-vectors/1-rc.0`, an
  * unknown member at the top level or in a case, a duplicate case id, a JWK
  * not marked as a throwaway test key, and an `id` that does not match the
  * file's path.

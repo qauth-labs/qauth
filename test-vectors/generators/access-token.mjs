@@ -95,7 +95,7 @@ const cases = [
 ];
 
 const file = {
-  schema: 'qauth-vectors/1',
+  schema: 'qauth-vectors/1-rc.0',
   id: 'jwt/access-token',
   description:
     'Access token checks a resource server runs on a QAuth JWT access token (RFC 9068 §4). input.token is a compact JWS signed with EdDSA (Ed25519). Select the key from input.jwks by the token header\'s kid, accept only EdDSA, and verify with input.now (Unix seconds) as the current time; the expected issuer is input.issuer and the expected audience is input.audience. Every case gives the same result with any clock tolerance from 0 to 60 seconds. expected.valid says whether the token passes; a valid token\'s expected.claims is its verified payload; an invalid token\'s expected.reason names the one check it fails: "typ" (the header typ is not at+jwt), "iss", "aud", "exp" or "signature". Each case is wrong in exactly one way. The JWKS holds a throwaway test key, generated from a fixed seed for this file.',

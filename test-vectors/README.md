@@ -8,7 +8,7 @@ run them against its code. A vector file is plain JSON: no code, nothing generat
 
 ```text
 test-vectors/
-  schema/vector-file.schema.json   the format, qauth-vectors/1, as JSON Schema (draft 2020-12)
+  schema/vector-file.schema.json   the format, qauth-vectors/1-rc.0, as JSON Schema (draft 2020-12)
   <area>/<name>.json               one vector file; its id is "<area>/<name>"
   examples/pkce-s256.mjs           a plain Node reader for pkce/s256, 35 lines
   generators/*.mjs                 the scripts that wrote the generated files
@@ -32,7 +32,7 @@ A file has exactly these members. Any other member makes it invalid.
 
 | Member        | Meaning                                                                                                              |
 | ------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `schema`      | The format version, `"qauth-vectors/1"`.                                                                             |
+| `schema`      | The format version, `"qauth-vectors/1-rc.0"`.                                                                        |
 | `id`          | The file's path under `test-vectors/` without `.json`, such as `"pkce/s256"`.                                        |
 | `description` | What the cases test and what `input` and `expected` mean in this file. A reader implements the check from this text. |
 | `source`      | Where the cases come from: a specification section, or the tool and version that generated them.                     |
@@ -57,7 +57,7 @@ Values follow three rules:
 
 A reader needs a JSON parser and the primitive under test, nothing else:
 
-1. Read the file and refuse it unless `schema` is `"qauth-vectors/1"`.
+1. Read the file and refuse it unless `schema` is `"qauth-vectors/1-rc.0"`.
 2. For each case, compute a result from `input` the way the file's `description` says.
 3. Compare the result with `expected` as JSON values, not as text, and report the case by its
    `id`.
@@ -81,8 +81,12 @@ are unique, and every JWK `kid` starts with `throwaway-test-`.
 - **Changing a case's expected result needs a new case id.** The old case is then wrong, so the same
   change removes it, and its id stays retired. An SDK pinned to an older commit keeps the old case
   and its old meaning.
-- **Changing the format is a new format version**, `qauth-vectors/2`, with its own schema. A reader
-  refuses a version it does not know, so a new member never arrives unannounced.
+- **The format is a release candidate until QAuth 1.0.0**, `qauth-vectors/1-rc.<M>`, and nothing
+  about it is promised yet. A breaking change before then raises `<M>` and comes with its own
+  schema, so a format id never names two formats. The release that ships 1.0.0 drops the suffix,
+  and `qauth-vectors/1` is the promise; after that a breaking change is `qauth-vectors/2`. This is
+  the rule event type ids follow (ADR-018 §5).
+- **A reader refuses a format id it does not know**, so a new member never arrives unannounced.
 
 ## Working on the files
 

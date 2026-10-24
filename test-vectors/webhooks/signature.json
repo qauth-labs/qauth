@@ -1,5 +1,5 @@
 {
-  "schema": "qauth-vectors/1",
+  "schema": "qauth-vectors/1-rc.0",
   "id": "webhooks/signature",
   "description": "Standard Webhooks signatures. input.secret is the signing secret in its whsec_ form: the bytes after the prefix, base64-decoded, are the HMAC key. input.id, input.timestamp (Unix seconds) and input.body (text, signed as its UTF-8 bytes) are the webhook-id, webhook-timestamp and body of one message. expected.signature is the webhook-signature header value, \"v1,\" followed by the standard base64 of HMAC-SHA256(key, id + \".\" + timestamp + \".\" + body). Every secret except the one in reference-library-example is a throwaway test secret: it decodes to an ASCII string that says so.",
   "source": "Standard Webhooks specification, \"Signature scheme\"; generated with the reference JavaScript library standardwebhooks@1.1.1 (npm) by test-vectors/generators/webhooks-signature.mjs",
