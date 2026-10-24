@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative, resolve, sep } from 'node:path';
 
 import { ESLint } from 'eslint';
@@ -254,12 +256,32 @@ describe('the delivery role has no import path to key-loading code', () => {
   });
 });
 
+/**
+ * Nx's reader of its cached project graph, through `require` because this
+ * library's TypeScript settings (CommonJS, `node` resolution) cannot see the
+ * `exports` subpath Nx publishes it under. Typed with only the member used here.
+ */
+const { readCachedProjectGraph } = createRequire(__filename)('nx/src/devkit-exports') as {
+  readCachedProjectGraph(): unknown;
+};
+
 describe('the Nx constraint of the delivery role', () => {
   let eslint: ESLint;
 
+  // The rule reads the project graph Nx caches. A run of Nx leaves one; a
+  // plain `vitest run` (CI's coverage job) may not, and then the rule skips
+  // every file, so build it first.
   beforeAll(() => {
+    try {
+      readCachedProjectGraph();
+    } catch {
+      execFileSync('pnpm', ['exec', 'nx', 'show', 'projects'], {
+        cwd: WORKSPACE_ROOT,
+        stdio: 'ignore',
+      });
+    }
     eslint = new ESLint({ cwd: `${WORKSPACE_ROOT}/` });
-  });
+  }, 120_000);
 
   async function boundaryMessages(code: string): Promise<string[]> {
     const [result] = await eslint.lintText(code, { filePath: DELIBERATE });
