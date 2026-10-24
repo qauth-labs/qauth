@@ -1,0 +1,220 @@
+name: Upgrade test
+
+# Upgrades from earlier releases (#475, ADR-018 §5). For each release tag in
+# upgrade-baselines.json, the `upgrade-test` job builds that release's
+# auth-server and migration-runner images from its tag, starts it, writes data
+# through its HTTP API (users, clients, a code flow with PKCE and its tokens, a
+# consent, an API key), stops it, runs THIS commit's migration runner and
+# nothing else, starts this commit's server and checks that nothing was lost.
+# Then it runs the released server again on the migrated database: the
+# rolling-upgrade leg, the proof of "expand, then contract".
+#
+# Every step calls scripts/upgrade-test/upgrade-test.sh, which a developer can
+# run whole (`... upgrade-test.sh all`), and which prints each docker command
+# before it runs it. The checks live in apps/upgrade-test.
+#
+# Path-filtered on pull requests, like crypto-native.yml: the job builds four
+# images and runs three servers, so it runs when a pull request touches the
+# migrations, the runner or the server, or the test itself, and on every push
+# to main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'libs/infra/db/**'
+      - 'apps/migration-runner/**'
+      - 'apps/auth-server/**'
+      - 'apps/upgrade-test/**'
+      - 'scripts/upgrade-test/**'
+      - 'upgrade-baselines.json'
+      - '.github/workflows/upgrade-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The matrix: one entry per line of upgrade-baselines.json, so a new baseline
+  # needs no other change. Also decides what a failing rolling leg does:
+  # `report` (the job stays green) until the repository has a release at or
+  # after v1.0.0-rc.0, `block` from then on (scripts/upgrade-test/lib.mjs).
+  baselines:
+    runs-on: ubuntu-latest
+    outputs:
+      baselines: ${{ steps.read.outputs.baselines }}
+      rolling: ${{ steps.read.outputs.rolling }}
+    steps:
+      # The tags are the input: every baseline must be one, and the rolling
+      # rule reads them.
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Read upgrade-baselines.json
+        id: read
+        run: node scripts/upgrade-test/baselines.mjs --output "$GITHUB_OUTPUT"
+
+  upgrade-test:
+    name: upgrade-test (${{ matrix.baseline }})
+    needs: baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: ${{ fromJSON(needs.baselines.outputs.baselines) }}
+    env:
+      UPGRADE_BASELINE: ${{ matrix.baseline }}
+    steps:
+      # The baseline is built from its tag, so the tags must be here.
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          version: 12.14.0
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: 'pnpm'
+
+      # For the test itself (Vitest, pg, argon2), the wire suite and the
+      # wire-suite client seed. The servers and the migrations run from the
+      # images, never from this install.
+      - run: pnpm install --frozen-lockfile
+
+      # The baseline's images, cached by tag and by the hash of the two
+      # Dockerfiles they are built from. A tag does not move, so the cache
+      # misses once per baseline (and again if the cache is evicted).
+      - name: Hash the baseline's Dockerfiles
+        id: baseline
+        run: |
+          set -euo pipefail
+          hash="$(git show "refs/tags/$UPGRADE_BASELINE:apps/auth-server/Dockerfile" \
+            "refs/tags/$UPGRADE_BASELINE:apps/migration-runner/Dockerfile" | sha256sum | cut -c1-16)"
+          echo "dockerfiles=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the baseline's images
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/baseline-images.tar.zst
+          key: upgrade-baseline-${{ matrix.baseline }}-${{ steps.baseline.outputs.dockerfiles }}
+
+      - name: Build the baseline's images from its tag
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          scripts/upgrade-test/upgrade-test.sh baseline-images
+          docker save "qauth-upgrade/auth-server:$UPGRADE_BASELINE" \
+            "qauth-upgrade/migration-runner:$UPGRADE_BASELINE" \
+            | zstd -T0 -3 -q -o "$RUNNER_TEMP/baseline-images.tar.zst"
+
+      # Saved at once rather than at the end of the job, so a failing upgrade
+      # does not throw the build away.
+      - name: Cache the baseline's images
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/baseline-images.tar.zst
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Load the baseline's images
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: zstd -dc "$RUNNER_TEMP/baseline-images.tar.zst" | docker load
+
+      - name: Build this commit's images
+        run: scripts/upgrade-test/upgrade-test.sh head-images
+
+      - name: Start Postgres, Redis and Mailpit, and generate the shared keys
+        run: |
+          set -euo pipefail
+          scripts/upgrade-test/upgrade-test.sh services
+          scripts/upgrade-test/upgrade-test.sh secrets
+
+      - name: 'Baseline: run its migration runner on the empty database'
+        run: scripts/upgrade-test/upgrade-test.sh baseline-migrate
+
+      - name: 'Baseline: start its server'
+        run: scripts/upgrade-test/upgrade-test.sh start baseline
+
+      - name: 'Baseline: write the test data through its HTTP API'
+        run: scripts/upgrade-test/upgrade-test.sh populate
+
+      - name: 'Baseline: stop its server'
+        run: scripts/upgrade-test/upgrade-test.sh stop baseline
+
+      # The upgrade. Nothing else runs between the baseline server and the new
+      # one: ADR-018 §5 says every upgrade completes by running the migration
+      # runner, with no manual step.
+      - name: "Upgrade: run this commit's migration runner (the only step between the two servers)"
+        run: scripts/upgrade-test/upgrade-test.sh migrate
+
+      - name: "New: start this commit's server"
+        run: scripts/upgrade-test/upgrade-test.sh start head
+
+      - name: "New: check the baseline's data"
+        run: scripts/upgrade-test/upgrade-test.sh verify
+
+      - name: 'New: smoke tests'
+        run: scripts/upgrade-test/upgrade-test.sh smoke
+
+      - name: 'New: wire suite on the upgraded database'
+        run: scripts/upgrade-test/upgrade-test.sh wire-suite
+
+      - name: 'Rolling: stop the new server'
+        run: scripts/upgrade-test/upgrade-test.sh stop head
+
+      # The rolling-upgrade leg: the OLD server on the NEW schema. Its two
+      # steps never fail the job themselves; the report step below decides.
+      - name: 'Rolling: start the baseline server on the migrated database'
+        id: rolling-start
+        continue-on-error: true
+        run: scripts/upgrade-test/upgrade-test.sh start rolling
+
+      - name: 'Rolling: smoke tests on the baseline server'
+        id: rolling-smoke
+        if: steps.rolling-start.outcome == 'success'
+        continue-on-error: true
+        run: scripts/upgrade-test/upgrade-test.sh smoke
+
+      - name: 'Rolling: report'
+        if: always() && (steps.rolling-start.outcome == 'failure' || steps.rolling-smoke.outcome == 'failure')
+        env:
+          ROLLING: ${{ needs.baselines.outputs.rolling }}
+        run: |
+          message="Rolling-upgrade leg: the $UPGRADE_BASELINE server failed on the database this commit's migrations produced. A migration removed or changed something the released code still uses (expand, then contract: ADR-018 §5). The failing assertion is in the step above; the server's log is in the next step."
+          {
+            echo "### Rolling-upgrade leg failed ($UPGRADE_BASELINE)"
+            echo
+            echo "$message"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ROLLING" = block ]; then
+            echo "::error::$message"
+            exit 1
+          fi
+          echo "::warning::$message It does not fail the job before v1.0.0-rc.0."
+
+      - name: Print the containers' logs
+        if: failure() || steps.rolling-start.outcome == 'failure' || steps.rolling-smoke.outcome == 'failure'
+        run: scripts/upgrade-test/upgrade-test.sh logs
+
+      - name: Remove the containers
+        if: always()
+        run: scripts/upgrade-test/upgrade-test.sh down
