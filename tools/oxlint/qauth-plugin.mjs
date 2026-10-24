@@ -7,6 +7,10 @@
  * `context.report`, esquery selectors as visitor keys), which is what lets an
  * ESLint rule run here unchanged. That API is outside Oxlint's semver, so
  * `oxlint` is pinned exactly in the catalog and a bump is a reviewed change.
+ *
+ * This directory is its own Nx project (`oxlint-plugin`, see project.json):
+ * @nx/oxlint makes every linted project depend on the project that holds a
+ * local JS plugin, and that must not be the root project.
  */
 
 /**

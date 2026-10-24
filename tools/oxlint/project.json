@@ -1,0 +1,9 @@
+{
+  "name": "oxlint-plugin",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [],
+  "metadata": {
+    "description": "QAuth's local Oxlint plugin (qauth-plugin.mjs), which .oxlintrc.json loads through `jsPlugins`. @nx/oxlint gives every linted project an implicit dependency on the project that holds a local JS plugin, so lint results are re-computed when the plugin changes. Without this project.json that would be the root project: every project would then be affected by any change to a root file (CHANGELOG.md, docs/), and the auth-server build, which walks its dependencies' sources (`bundle: false`), would reach the docs site through the root project. As its own project, with no tsconfig and no dependencies, it adds only this directory."
+  }
+}
