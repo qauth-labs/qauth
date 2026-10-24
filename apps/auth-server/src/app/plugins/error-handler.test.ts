@@ -112,7 +112,7 @@ async function buildProblemApp(): Promise<FastifyInstance> {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.get(
-    '/developer/v1/widgets',
+    '/developer/v1-rc.0/widgets',
     {
       schema: {
         querystring: pageQuerySchema,
@@ -125,35 +125,35 @@ async function buildProblemApp(): Promise<FastifyInstance> {
     async () => ({ items: [], nextCursor: null })
   );
   typed.get(
-    '/developer/v1/widgets/:id',
+    '/developer/v1-rc.0/widgets/:id',
     { schema: { response: { ...problemResponses(404) } } },
     async () => {
       throw new NotFoundError('Widget', 'missing');
     }
   );
-  typed.post('/developer/v1/widgets', async () => ({ created: true }));
-  app.get('/admin/v1/fail', async () => {
+  typed.post('/developer/v1-rc.0/widgets', async () => ({ created: true }));
+  app.get('/admin/v1-rc.0/fail', async () => {
     throw new Error('connection string postgres://secret@db');
   });
-  app.get('/admin/v1/conflict', async () => {
+  app.get('/admin/v1-rc.0/conflict', async () => {
     throw new UniqueConstraintError('users_email_realm_key');
   });
-  app.get('/account/v1/token', async () => {
+  app.get('/account/v1-rc.0/token', async () => {
     throw new JWTInvalidError('Invalid JWT token');
   });
-  app.post('/account/v1/password', async () => {
+  app.post('/account/v1-rc.0/password', async () => {
     throw new WeakPasswordError(undefined, ['Add another word or two.', 'Avoid common phrases.']);
   });
-  app.get('/account/v1/oauth-class', async () => {
+  app.get('/account/v1-rc.0/oauth-class', async () => {
     throw new InvalidRequestError('the cursor has expired');
   });
-  app.get('/account/v1/odd-code', async () => {
+  app.get('/account/v1-rc.0/odd-code', async () => {
     throw Object.assign(new Error('mismatched'), { statusCode: 400, code: 'NOT_FOUND' });
   });
   app.get('/opt-in', { config: { errorFormat: 'problem' } }, async () => {
     throw new ForbiddenError('No.');
   });
-  app.get('/developer/v1/opt-out', { config: { errorFormat: 'oauth' } }, async () => {
+  app.get('/developer/v1-rc.0/opt-out', { config: { errorFormat: 'oauth' } }, async () => {
     throw new ForbiddenError('No.');
   });
   app.get('/legacy', async () => {
@@ -353,7 +353,7 @@ describe('error-handler plugin', () => {
 
       const response = await app.inject({
         method: 'GET',
-        url: '/developer/v1/widgets/9b2b',
+        url: '/developer/v1-rc.0/widgets/9b2b',
         headers: { 'x-request-id': 'trace-123' },
       });
 
@@ -376,7 +376,10 @@ describe('error-handler plugin', () => {
     it('lists each failing field in errors[] with a pointer, and refuses a limit above 200', async () => {
       const app = await buildProblemApp();
 
-      const response = await app.inject({ method: 'GET', url: '/developer/v1/widgets?limit=201' });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/developer/v1-rc.0/widgets?limit=201',
+      });
 
       expect(response.statusCode).toBe(400);
       expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
@@ -393,14 +396,14 @@ describe('error-handler plugin', () => {
     it('pages with limit and cursor and answers { items, nextCursor }', async () => {
       const app = await buildProblemApp();
 
-      const response = await app.inject({ method: 'GET', url: '/developer/v1/widgets' });
+      const response = await app.inject({ method: 'GET', url: '/developer/v1-rc.0/widgets' });
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ items: [], nextCursor: null });
       for (const limit of ['0', '1.5', 'abc', '0x10', '']) {
         const refused = await app.inject({
           method: 'GET',
-          url: `/developer/v1/widgets?limit=${limit}`,
+          url: `/developer/v1-rc.0/widgets?limit=${limit}`,
         });
         expect(refused.statusCode).toBe(400);
         expect(refused.json().code).toBe('validation_error');
@@ -414,7 +417,7 @@ describe('error-handler plugin', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/developer/v1/widgets',
+        url: '/developer/v1-rc.0/widgets',
         headers: { 'content-type': 'text/x-unknown' },
         payload: 'hello',
       });
@@ -428,7 +431,7 @@ describe('error-handler plugin', () => {
     it('sends a 500 with no detail and no stack, even outside production', async () => {
       const app = await buildProblemApp();
 
-      const response = await app.inject({ method: 'GET', url: '/admin/v1/fail' });
+      const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/fail' });
 
       expect(response.statusCode).toBe(500);
       expect(response.json()).toMatchObject({ status: 500, code: 'internal_error' });
@@ -442,7 +445,7 @@ describe('error-handler plugin', () => {
     it('does not leak the constraint name of a UniqueConstraintError', async () => {
       const app = await buildProblemApp();
 
-      const response = await app.inject({ method: 'GET', url: '/admin/v1/conflict' });
+      const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/conflict' });
 
       expect(response.statusCode).toBe(409);
       expect(response.json().code).toBe('unique_constraint_violation');
@@ -454,7 +457,7 @@ describe('error-handler plugin', () => {
     it('keeps the RFC 6750 Bearer challenge beside the problem document', async () => {
       const app = await buildProblemApp();
 
-      const response = await app.inject({ method: 'GET', url: '/account/v1/token' });
+      const response = await app.inject({ method: 'GET', url: '/account/v1-rc.0/token' });
 
       expect(response.statusCode).toBe(401);
       expect(response.json().code).toBe('jwt_invalid');
@@ -466,7 +469,7 @@ describe('error-handler plugin', () => {
     it('puts weak-password feedback in errors[] under /password', async () => {
       const app = await buildProblemApp();
 
-      const response = await app.inject({ method: 'POST', url: '/account/v1/password' });
+      const response = await app.inject({ method: 'POST', url: '/account/v1-rc.0/password' });
 
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe('weak_password');
@@ -482,10 +485,10 @@ describe('error-handler plugin', () => {
       const app = await buildProblemApp();
 
       // An OAuth error class is not a published problem code: its status decides.
-      const oauthClass = await app.inject({ method: 'GET', url: '/account/v1/oauth-class' });
+      const oauthClass = await app.inject({ method: 'GET', url: '/account/v1-rc.0/oauth-class' });
       expect(oauthClass.json()).toMatchObject({ status: 400, code: 'bad_request' });
       // A published code thrown with another status is not sent with it.
-      const odd = await app.inject({ method: 'GET', url: '/account/v1/odd-code' });
+      const odd = await app.inject({ method: 'GET', url: '/account/v1-rc.0/odd-code' });
       expect(odd.json()).toMatchObject({ status: 400, code: 'bad_request' });
 
       for (const response of [oauthClass, odd]) {
@@ -506,7 +509,7 @@ describe('error-handler plugin', () => {
       expect(optIn.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
       expect(optIn.json()).toMatchObject({ status: 403, code: 'forbidden' });
 
-      for (const url of ['/developer/v1/opt-out', '/legacy']) {
+      for (const url of ['/developer/v1-rc.0/opt-out', '/legacy']) {
         const response = await app.inject({ method: 'GET', url });
         expect(response.headers['content-type']).toMatch(/^application\/json/);
         expect(response.json()).toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });

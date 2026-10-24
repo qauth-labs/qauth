@@ -141,6 +141,13 @@
 > `agent-task` RAR type (§5) and the `agent-action` event type (§7) now end
 > in `/v1`. The SCIM extension schema already ends in `1.0` (§13). No rule
 > changed.
+>
+> **Amended 2026-10-24** (before any implementation) with the maintainer's
+> decision of that day: before QAuth 1.0.0 every QAuth-defined version is a
+> release candidate (ADR-018 §5). The three URIs above now end in
+> `/v1-rc.0` and the SCIM extension schema in `1.0-rc.0`. A breaking change
+> before 1.0.0 raises the rc number; the release that ships 1.0.0 drops the
+> suffix. No rule changed.
 
 ## Context
 
@@ -679,7 +686,7 @@ broker on the child's behalf: `subject_token` is the parent's token,
 - **(b) `spawn_assertion`** — a new token-request parameter (RFC 6749 §8.2 is
   the extension point; draft-liu §5.2 adds `delegatee_id` the same way): a JWT
   typed `typ: spawn-assertion+jwt`, token-type identifier
-  `https://schemas.qauth.dev/token-type/spawn-assertion/v1`, signed by the
+  `https://schemas.qauth.dev/token-type/spawn-assertion/v1-rc.0`, signed by the
   **parent's** DPoP key with its public key in the `jwk` header: `iss` =
   parent `client_id`, `sub` = child `client_id`, `aud` = QAuth issuer
   identifier (the rfc7523bis rule), `iat`, `exp` ≤ `iat` + 60 s, `jti` (single
@@ -781,14 +788,14 @@ itself spawn and the resources it may reach, all ⊆ the parent's `aud` (GATE
 
 ### 5. Purpose — one RFC 9396 type, narrow-only
 
-QAuth's first RAR support is one type, `https://schemas.qauth.dev/agent-task/v1`,
+QAuth's first RAR support is one type, `https://schemas.qauth.dev/agent-task/v1-rc.0`,
 carried in `authorization_details` on the authorization request (root), in
 the spawn assertion (child), in the token response (RFC 9396 §7), in the JWT
 filtered to the audience (§9.1) and in introspection (§9.2):
 
 ```json
 {
-  "type": "https://schemas.qauth.dev/agent-task/v1",
+  "type": "https://schemas.qauth.dev/agent-task/v1-rc.0",
   "purpose": "Open the release PR",
   "task": "pr-open",
   "caused_by": "<parent jti, written by QAuth>",
@@ -969,7 +976,7 @@ action it reports, which signs with that node's own DPoP key and never with
 the type's registered key (below). SSF stream
 management is not required inbound in the first slice; RFC 8935 stands alone
 and SSF layers on later. One event type,
-`https://schemas.qauth.dev/secevent/agent-action/v1`, with members `action`,
+`https://schemas.qauth.dev/secevent/agent-action/v1-rc.0`, with members `action`,
 `resource`, `decision` and optional `tool`, `arguments_digest`, `outcome`;
 `toe` and `txn` are top-level SET claims (RFC 8417 §2.2), `txn` correlating
 the SETs of one tool call; the subject is `sub_id` in the `jwt_id` format
@@ -1023,8 +1030,8 @@ daemon on a laptop behind NAT cannot serve. A transmitter-initiated
 registration and an `agent-action` event type are what QAuth would take to
 the Shared Signals WG, which is extending SSF and CAEP toward agentic use
 cases; until either exists the out-of-band row is the mechanism, and the
-event URI stays QAuth's. It ends in its version, `/v1`, as ADR-018 §5
-requires of every QAuth-defined identifier, so a standard event type, if one
+event URI stays QAuth's. It ends in its version, `/v1-rc.0` until 1.0.0, as
+ADR-018 §5 requires of every QAuth-defined identifier, so a standard event type, if one
 appears, sits beside it without breaking 1.x.
 
 **The agent on a stored row, and the members that name a model.** Every
@@ -1501,7 +1508,7 @@ and every consumer treats NULL as "no agent named".
 `agentUserName` ← `handle`, `displayName`, `description`, `active`, and
 `owners[]` ← one value whose `$ref` is the owner's User resource. The draft
 defines no avatar and no platform binding, so both go in a QAuth extension
-schema, `urn:qauth:params:scim:schemas:extension:agent:1.0`, with `avatar`
+schema, `urn:qauth:params:scim:schemas:extension:agent:1.0-rc.0`, with `avatar`
 (a URI on QAuth) and `bindings[]` (below) — named as an extension, never as
 a core attribute, and offered to the SCIM WG list as feedback on the draft.
 The projection is read-only in the first slice; the developer API and the
@@ -1810,7 +1817,7 @@ RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 | Session-revoked signal                                  | Covered                                                               | SSF 1.0 §3.3 `complex`, §3.5 `jwt_id`, §7, §8.1.1; RFC 8935 push, RFC 8936 poll; CAEP 1.0 §3.1 (Final, 29 August 2025; approval announced 2 September 2025); RFC 9493 `opaque`, `iss_sub`                                                                                                                                                                                                                                                                                           |
 | Resource-side action events                             | Covered (envelope); QAuth-defined (event type)                        | RFC 8417 §2.2 (`events`, `txn`, `toe`), RFC 8935 push; the `agent-action` URI is QAuth's                                                                                                                                                                                                                                                                                                                                                                                            |
 | Agent-side transmitters and their registration          | Covered (envelope); gap (registration); QAuth-defined (members)       | RFC 8935 push with out-of-band keys; SSF 1.0 §7–§8 stream management is receiver-initiated and does not fit a NAT'd transmitter; no CAEP or SSF event type describes an agent's action (CAEP 1.0 §3 defines session, token-claims, credential, assurance-level, device-compliance and risk-level changes — states, never acts); the `model` and `reason` members and the server-written `agent_id` column are QAuth's; both gaps are what QAuth takes to the Shared Signals WG (§7) |
-| Agent identity record                                   | Proposed by draft (shape adopted); QAuth extension (avatar, bindings) | draft-wzdk-scim-agent-resource-00 §3, §4.1, §4.2 (`Agent` resource, `agentUserName`, `displayName`, `description`, `active`, `owners`; no email, no avatar, no binding), RFC 7643 §3.3 extension schemas; the `urn:qauth:…:extension:agent:1.0` schema is QAuth's; draft-ietf-wimse-aims-00 §10.3 keeps `client_id` = the acting workload, which is why the agent is not in `act` (§13)                                                                                             |
+| Agent identity record                                   | Proposed by draft (shape adopted); QAuth extension (avatar, bindings) | draft-wzdk-scim-agent-resource-00 §3, §4.1, §4.2 (`Agent` resource, `agentUserName`, `displayName`, `description`, `active`, `owners`; no email, no avatar, no binding), RFC 7643 §3.3 extension schemas; the `urn:qauth:…:extension:agent:1.0-rc.0` schema is QAuth's; draft-ietf-wimse-aims-00 §10.3 keeps `client_id` = the acting workload, which is why the agent is not in `act` (§13)                                                                                        |
 | Commit provenance                                       | Product convention; kernel process document                           | git author/committer identities; the platform-assigned attribution address (example, GitHub: App bot login and `noreply` address); `Documentation/process/coding-assistants.rst` (`Assisted-by: AGENT:MODEL`, humans only add `Signed-off-by`); a git host's signature verification reasons (example, GitHub: `unknown_key`) for the signing question (decision 12)                                                                                                                 |
 | Out-of-band approval                                    | Covered (decoupled flow); QAuth-defined (elevation, mute, budget)     | OpenID CIBA Core 1.0 §7.1 (one hint of three, `binding_message`, `requested_expiry`, profile parameters), §10.1 (poll), §11 (errors); RFC 9396 §3 (`authorization_details` in CIBA); FAPI-CIBA working copy §4.1.1 (poll, `binding_message`, confidential clients); AuthZEN AARP Draft 1 §7, §12; OID4VP 1.0 §8.4; WebAuthn Level 3; NIST SP 800-63B-4 §3.2.5                                                                                                                       |
 | Decision API                                            | Covered; WG-draft binding; QAuth context                              | AuthZEN 1.0 §6.1, §9.2, §10.1, §11.2 (Final, 11 January 2026); COAZ-MCP Binding §7.1, §11.2 (WG Draft 1); `context.qauth` is QAuth's; AARP noted                                                                                                                                                                                                                                                                                                                                    |

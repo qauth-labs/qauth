@@ -84,6 +84,11 @@ site renders stay in `docs/adr/` and `docs/security/` in this repository.
   (classes/interfaces/types), `UPPER_SNAKE_CASE` (constants), `kebab-case`
   (file names).
 - **Docs**: JSDoc/TSDoc for public APIs; concise comments for complex logic.
+- **Versioned identifiers**: until QAuth 1.0.0, every QAuth-defined version is a
+  release candidate — `v1-rc.0`, never a bare `v1` — in URNs, URIs, API paths,
+  audiences, event types and format ids (`qauth-vectors/1-rc.0`). A bare `v1`
+  is the 1.0 stability promise; a breaking change before 1.0 raises the rc
+  number ([ADR-018 §5](./docs/adr/018-1-0-scope-and-stability.md)).
 
 ## Commits & Pull Requests
 

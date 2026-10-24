@@ -58,7 +58,7 @@ async function buildFixtureDocument(): Promise<Doc> {
   await app.register(swagger, openapiOptions);
 
   app.get(
-    '/admin/v1/realms',
+    '/admin/v1-rc.0/realms',
     {
       schema: {
         operationId: 'realms.list',
@@ -74,7 +74,7 @@ async function buildFixtureDocument(): Promise<Doc> {
   );
 
   app.get(
-    '/admin/v1/realms/:realmId',
+    '/admin/v1-rc.0/realms/:realmId',
     {
       schema: {
         operationId: 'realms.get',
@@ -92,7 +92,7 @@ async function buildFixtureDocument(): Promise<Doc> {
   );
 
   app.patch(
-    '/admin/v1/realms/:realmId/policies',
+    '/admin/v1-rc.0/realms/:realmId/policies',
     {
       schema: {
         operationId: 'realms.policies.update',
@@ -121,7 +121,7 @@ async function buildFixtureDocument(): Promise<Doc> {
   );
 
   app.get(
-    '/developer/v1/clients',
+    '/developer/v1-rc.0/clients',
     {
       schema: {
         operationId: 'clients.list',
@@ -170,10 +170,10 @@ function rulesOf(doc: Doc): ConventionRule[] {
   return [...new Set(checkApiConventions(doc).violations.map((violation) => violation.rule))];
 }
 
-const LIST = (doc: Doc) => doc.paths['/admin/v1/realms'].get;
-const GET = (doc: Doc) => doc.paths['/admin/v1/realms/{realmId}'].get;
-const PATCH = (doc: Doc) => doc.paths['/admin/v1/realms/{realmId}/policies'].patch;
-const CLIENTS = (doc: Doc) => doc.paths['/developer/v1/clients'].get;
+const LIST = (doc: Doc) => doc.paths['/admin/v1-rc.0/realms'].get;
+const GET = (doc: Doc) => doc.paths['/admin/v1-rc.0/realms/{realmId}'].get;
+const PATCH = (doc: Doc) => doc.paths['/admin/v1-rc.0/realms/{realmId}/policies'].patch;
+const CLIENTS = (doc: Doc) => doc.paths['/developer/v1-rc.0/clients'].get;
 const jsonSchema = (operation: Doc, status = '200') =>
   operation.responses[status].content['application/json'].schema;
 
@@ -352,8 +352,8 @@ describe('the API conventions check — fixture document (#506)', () => {
   describe('the other rules', () => {
     it('MUTATION: a family path without its major version', () => {
       const doc = mutated((d) => {
-        d.paths['/admin/realms'] = d.paths['/admin/v1/realms'];
-        delete d.paths['/admin/v1/realms'];
+        d.paths['/admin/realms'] = d.paths['/admin/v1-rc.0/realms'];
+        delete d.paths['/admin/v1-rc.0/realms'];
         d.paths['/admin/realms'].get.operationId = 'realms.list';
       });
       expect(rulesOf(doc)).toEqual(['path-version']);

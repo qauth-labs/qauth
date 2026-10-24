@@ -61,6 +61,12 @@
 >
 > - Decision 5: pages and API answers keep `no-store`. A static file whose name carries a hash of
 >   its content may be cached as immutable. The proxy decides which responses qualify.
+>
+> **Amended 2026-10-24** with the maintainer's decision of that day: before 1.0.0 every
+> QAuth-defined version is a release candidate (ADR-018 §5).
+>
+> - Decision 4 and the open questions: the Interaction API is served at `/interaction/v1-rc.<M>`
+>   until the release that ships 1.0.0, which serves `/interaction/v1`.
 
 ## Context
 
@@ -448,7 +454,8 @@ page and the account console's applications list.
 
 **Contract.**
 
-- The path is versioned: `/interaction/v1`.
+- The path is versioned: `/interaction/v1-rc.<M>` until 1.0.0, and `/interaction/v1` from the
+  release that ships 1.0.0 (ADR-018 §5).
 - It is published as OpenAPI, plus JSON Schema for the steps.
 - It is inside the 1.0 stability promise.
 
@@ -973,9 +980,9 @@ The maintainer answered these on 2026-10-09. Each answer is a decision of this r
   server-side caller already uses, such as the developer portal's `AUTH_SERVER_URL`, as an endpoint
   host (Decision 1).
 - **ADR-013's return leg.** The endpoint the wallet returns to stays on the auth server, under the
-  Interaction API path `/interaction/v1/`. The Response Code binding and the signed `__Host-` binder
-  cookie stay as they are. The ceremony app shares the realm origin, so the cookie keeps working.
-  The ceremony app reads the flow's status only through the Interaction API.
+  Interaction API path (`/interaction/v1-rc.<M>/` until 1.0.0). The Response Code binding and the
+  signed `__Host-` binder cookie stay as they are. The ceremony app shares the realm origin, so the
+  cookie keeps working. The ceremony app reads the flow's status only through the Interaction API.
 
 ## Open questions
 

@@ -42,8 +42,8 @@ import {
  *   - `oauth`: the error shape of the specification the endpoint implements,
  *     such as RFC 6749 §5.2 on the token endpoint.
  *
- * A route under an API family prefix (`/admin/v1`, `/account/v1`,
- * `/developer/v1`) answers `problem` unless it says otherwise. Every other
+ * A route under an API family prefix (`/admin/v1-rc.0`, `/account/v1-rc.0`,
+ * `/developer/v1-rc.0`) answers `problem` unless it says otherwise. Every other
  * route keeps the body this handler sent before the API families existed,
  * until #513 makes `problem` the default and sets `oauth` on the OAuth
  * protocol endpoints.

@@ -60,7 +60,7 @@ Decision 5 requires.
 
 | Surface          | API                                                       | Session                                                                 | Runs                                                 |
 | ---------------- | --------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------- |
-| Ceremony app     | Interaction API (`/interaction/v1`)                       | None of its own; the realm's `__Host-` session cookie, same origin      | On the realm host under `/ui/*`, deployed separately |
+| Ceremony app     | Interaction API (`/interaction/v1-rc.<M>` until 1.0.0)    | None of its own; the realm's `__Host-` session cookie, same origin      | On the realm host under `/ui/*`, deployed separately |
 | Account console  | account API                                               | BFF, tokens server-side                                                 | Any host                                             |
 | Admin console    | admin API (`admin:read`, `admin:write`, `admin:security`) | BFF, a client of the operator realm, DPoP-bound tokens, passkey step-up | Any host                                             |
 | Developer portal | developer API                                             | BFF, signs in through `/oauth/authorize` (ADR-017 F0)                   | Any host                                             |
