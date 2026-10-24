@@ -19,9 +19,13 @@ import { canonicalizeJson } from '../admin-audit/canonical-json';
  * `xid` is not part of the envelope, but it decides where a reader of the
  * stream finds the row (`readAfter` reads in `(xid, seq)` order), so it is
  * hashed too (#827): a row whose `xid` was moved below a reader's position,
- * which would hide it from that reader, breaks the chain at that row. The
- * writer knows it before the insert (`pg_current_xact_id()`); `seq`, which
- * the insert assigns, is not hashed, and the chain's order covers it.
+ * which would hide it from that reader, breaks the chain at that row, and the
+ * trigger `events_xid_from_transaction` refuses a row inserted with an `xid`
+ * that is not its transaction's. The writer knows it before the insert
+ * (`pg_current_xact_id()`). `seq` is
+ * assigned by the insert, so it cannot be hashed: the chain's order catches a
+ * row moved past another admin row of its realm, not one moved within the gap
+ * to its neighbours.
  *
  * The hash is unkeyed: whoever can rewrite a row and every row after it, or
  * cut the newest rows, leaves a chain that verifies. Only a copy of the head

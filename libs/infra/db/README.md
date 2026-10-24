@@ -433,7 +433,7 @@ transactions short, and never hold one open across a network call.
 Migration 0029 is expand-only: one `CREATE TABLE` and its `CREATE INDEX`
 statements. Migration 0032 adds the hash chain of admin events and the trigger
 that refuses updates (below). Migration 0033 adds the two functions a writer
-reads through.
+reads through and the trigger that keeps each row's `xid` its transaction's.
 
 **No updates.** A trigger refuses every `UPDATE` on `events`, for every role
 whose statements fire it, the owner included, even one that matches no row.
@@ -497,6 +497,10 @@ default.
   admin row whose `prev_hash` is not the realm's head, or whose `seq` was not
   the identity's, so a role that can insert cannot make a row the head of a
   realm forever.
+- **Its own transaction's `xid`.** The trigger `events_xid_from_transaction`
+  refuses any row, admin or user, whose `xid` is not the inserting
+  transaction's (#827), so a role that can insert cannot put a row behind a
+  reader's position.
 - **Emit last.** Because the lock lasts to the end of the transaction, write the
   admin event last. A transaction that writes admin events to several realms
   writes them in a fixed order, by realm id, or two such transactions can

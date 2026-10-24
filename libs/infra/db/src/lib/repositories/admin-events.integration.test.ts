@@ -503,7 +503,8 @@ describe('admin events integration (real Postgres)', () => {
       const { rows } = await pool().query(
         `SELECT proname, prosecdef, proconfig FROM pg_proc
           WHERE proname IN ('events_no_update', 'events_admin_follows_head',
-                            'events_admin_chain_head', 'events_own_row')
+                            'events_admin_chain_head', 'events_own_row',
+                            'events_xid_from_transaction')
           ORDER BY proname`
       );
       const pinned = ['search_path=pg_catalog, pg_temp'];
@@ -512,6 +513,7 @@ describe('admin events integration (real Postgres)', () => {
         { proname: 'events_admin_follows_head', prosecdef: true, proconfig: pinned },
         { proname: 'events_no_update', prosecdef: false, proconfig: pinned },
         { proname: 'events_own_row', prosecdef: true, proconfig: pinned },
+        { proname: 'events_xid_from_transaction', prosecdef: false, proconfig: pinned },
       ]);
     });
 
@@ -790,6 +792,34 @@ describe('admin events integration (real Postgres)', () => {
       expect(heads).toEqual([{ hash: head.hash, none: null }]);
       // Another transaction's row, committed: not returned.
       expect((await writer.query('SELECT * FROM events_own_row($1)', [id])).rows).toEqual([]);
+    });
+
+    // #827's review: a writer that sets xid itself could put a row behind a
+    // reader's position, an admin row hashed over that xid included.
+    it('cannot insert a row with an xid of its own choosing, admin or user', async () => {
+      const realm = randomUUID();
+      await emitInTx(change(realm), writerStore, writerDb());
+      if (!writer) throw new Error('no writer pool');
+      const {
+        rows: [{ head }],
+      } = await writer.query('SELECT events_admin_chain_head($1) AS head', [realm]);
+      const insert = (category: string, prev: Buffer | null, hash: Buffer | null) =>
+        writer?.query(
+          `INSERT INTO events (xid, id, realm_id, category, type, time, data, schema_version, prev_hash, hash)
+           VALUES ('3'::xid8, uuidv7(), $1, $2, 'urn:qauth:event:admin.change_applied:v1-rc.0', 0, '{}', 1, $3, $4)`,
+          [realm, category, prev, hash]
+        ) ?? Promise.resolve();
+
+      for (const attempt of [
+        insert('admin', head, Buffer.alloc(32, 5)),
+        insert('user', null, null),
+      ]) {
+        await expect(attempt).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'events_xid_from_transaction',
+        });
+      }
+      expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 1 });
     });
 
     // The acceptance criteria of #459 and #827: a writer cannot read,

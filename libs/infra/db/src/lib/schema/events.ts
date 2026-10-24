@@ -92,7 +92,10 @@ export const events = pgTable(
   {
     /** Insertion order within a transaction; the tie-breaker of `(xid, seq)`. */
     seq: bigint('seq', { mode: 'bigint' }).primaryKey().generatedAlwaysAsIdentity(),
-    /** The writing transaction's id, set by the database, never by the writer. */
+    /**
+     * The writing transaction's id, set by the database, never by the writer:
+     * the trigger `events_xid_from_transaction` refuses any other value (#827).
+     */
     xid: xid8('xid')
       .notNull()
       .default(sql`pg_current_xact_id()`),

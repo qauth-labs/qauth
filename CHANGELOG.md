@@ -210,8 +210,11 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   `eventsWriterGrantStatements()` grants a writing role `INSERT` on `events`
   and `EXECUTE` on the two functions, and no `SELECT`, so a writer cannot read
   any realm's events, request IPs, user agents or admin diffs. `verifyChain`
-  and `events:verify-chain` run as a role that may read the table. The
-  migration only creates the functions.
+  and `events:verify-chain` run as a role that may read the table. A new
+  trigger, `events_xid_from_transaction`, refuses any row whose `xid` is not
+  the inserting transaction's, so a role that can insert cannot put a row,
+  admin or user, behind a reader's position. The migration only creates the
+  functions and the trigger.
 
 - **Passkeys: the WebAuthn provider and the relying-party settings** ([#467],
   ADR-017 Decision 14, ADR-019 Decision 2). One WebAuthn `CredentialProvider`

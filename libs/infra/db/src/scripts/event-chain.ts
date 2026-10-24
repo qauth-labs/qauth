@@ -33,7 +33,7 @@ export const VERIFY_CHAIN_EXIT = Object.freeze({
   verified: 0,
   /** The chain breaks: an admin event was changed or removed. */
   broken: 1,
-  /** The arguments or the environment are wrong; nothing was read. */
+  /** The arguments are wrong, or `DATABASE_URL` is not set; nothing was read. */
   usage: 2,
   /** The check could not run: the database unreachable or failing, or the realm not found. */
   cannotRun: 3,

@@ -80,6 +80,9 @@ async function main(): Promise<number> {
   const db = drizzle({
     connection: { connectionString: databaseUrl, connectionTimeoutMillis: CONNECT_TIMEOUT_MS },
   });
+  // An idle connection that fails emits on the pool; unheard, Node would exit
+  // with 1, as for a broken chain. The next query fails instead, and exits 3.
+  db.$client.on('error', () => undefined);
   try {
     let realmId = args.realmId;
     if (args.realm !== undefined) {
@@ -115,7 +118,8 @@ async function main(): Promise<number> {
     else for (const line of describeChainReport(report, label)) console.log(line);
     return report.ok ? VERIFY_CHAIN_EXIT.verified : VERIFY_CHAIN_EXIT.broken;
   } finally {
-    await db.$client.end();
+    // The verdict stands even when closing the connections fails.
+    await db.$client.end().catch(() => undefined);
   }
 }
 
