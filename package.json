@@ -33,6 +33,7 @@
     "format:check": "prettier --check .",
     "spec-matrix": "node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --vitest-report dist/wire-report.json --out-dir dist/conformance",
     "stable-surface": "node scripts/stable-surface/check.mjs",
+    "experimental-status": "node scripts/experimental-status.mjs",
     "test": "nx run-many -t test --all",
     "test:watch": "nx run-many -t test --all --watch",
     "test:ui": "vitest --ui",

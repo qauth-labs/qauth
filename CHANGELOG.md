@@ -19,8 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advanced key may change in a minor release, and an experimental key may change
   at any time.
 - The auth-server logs a warning at boot for each experimental key or value that
-  is set. The first is `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, which ADR-018
-  §4 marks experimental; the setting works as before.
+  is set. A key or value that switches on an experimental feature warns through
+  that feature instead (below).
+- **The experimental-feature registry** ([#476], ADR-018 §4 and §5).
+  `libs/shared/stability` lists the six experimental items of ADR-018 §4, each
+  with its switch, the spec it implements and the four conditions it must meet
+  to become stable, with their evidence. Only the `oid4vp-1.0-base` verifier
+  profile is built today. The docs site's new **Experimental features** page
+  (`reference/experimental-features`) is generated from it, and
+  `node scripts/experimental-status.mjs` prints each item's conditions;
+  `--check-stable` fails when an item marked stable lacks evidence.
+- The auth-server logs one warning at boot for each experimental feature that is
+  on, with the feature's id, "may change in a minor release" and its docs link:
+  `oid4vp-1.0-base` with `WALLET_FEDERATION_ENABLED=true` and
+  `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, which ADR-018 §4 marks
+  experimental; the setting works as before. With wallet sign-in off the base
+  profile does not run, and nothing is logged for it.
 - **Background jobs** ([#452], ADR-019 Decision 8). The auth-server runs
   periodic jobs in-process. A Postgres advisory lock keeps each job to one node
   per interval when several nodes share the database, and a job whose node dies
@@ -398,6 +412,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#467]: https://github.com/qauth-labs/qauth/issues/467
 [#468]: https://github.com/qauth-labs/qauth/issues/468
 [#470]: https://github.com/qauth-labs/qauth/issues/470
+[#476]: https://github.com/qauth-labs/qauth/issues/476
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 [#485]: https://github.com/qauth-labs/qauth/issues/485

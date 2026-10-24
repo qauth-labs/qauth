@@ -261,6 +261,19 @@ export default [
     rules: {},
   },
 
+  // The experimental-feature registry (#476). `scripts/experimental-status.mjs`
+  // loads libs/shared/stability through Node's own type stripping, which keeps
+  // an import of a type that is not marked `type` and then finds no such
+  // export at run time. So an import used only as a type says so. The
+  // library's tsconfig sets `erasableSyntaxOnly` for the other half: no enum,
+  // namespace or parameter property, which type stripping cannot remove.
+  {
+    files: ['libs/shared/stability/src/**/*.ts'],
+    rules: {
+      '@typescript-eslint/consistent-type-imports': ['error', { fixStyle: 'inline-type-imports' }],
+    },
+  },
+
   // Key custody guard (#464, ADR-019 Decision 9).
   //
   // ADR-019 provisions the KEK to the signer role alone. `@qauth-labs/server-keys`

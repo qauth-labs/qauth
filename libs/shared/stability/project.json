@@ -1,0 +1,28 @@
+{
+  "name": "shared-stability",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/shared/stability/src",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:utility"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        { "json": "{workspaceRoot}/tsconfig.json", "fields": ["compilerOptions"] },
+        { "externalDependencies": ["vitest", "prettier"] },
+        { "env": "CI" },
+        { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
+        "{workspaceRoot}/.prettierrc",
+        "{workspaceRoot}/apps/docs-site/src/content/docs/reference/experimental-features.md",
+        "{workspaceRoot}/docs/**/*",
+        "{workspaceRoot}/apps/**/*.ts",
+        "{workspaceRoot}/libs/**/*.ts"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The registry tests read files outside it: the generated docs page `reference/experimental-features.md` (it must match the registry; `pnpm nx test shared-stability -- -u` rewrites it, formatted with the repo's Prettier config), the decision records under docs/adr, and every `path` evidence, which may name any file in the repository, such as a test file or an audit report under docs/. Without them, editing or moving one would replay a stale pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `prettier` added to the external dependencies."
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project shared-stability --web"
+}

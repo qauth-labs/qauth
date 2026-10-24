@@ -117,7 +117,9 @@ async function start() {
       );
     }
     // ADR-018 §5: an experimental key or value may change in any release, so
-    // a deployment that sets one is told so at every boot.
+    // a deployment that sets one is told so at every boot. The switch of an
+    // experimental feature warns through its feature instead, from `app.ts`
+    // (`config/experimental-features.ts`).
     for (const experimental of envExperimentalWarnings) {
       server.log.warn({ variable: experimental.variable }, experimental.message);
     }

@@ -8,7 +8,7 @@ export const CONFIGURATION_PAGE_PATH = 'apps/docs-site/src/content/docs/operate/
  * The page's `lastVerified` date. The registry test regenerates and checks the
  * page on every run, so this changes only when the page's own prose does.
  */
-const LAST_VERIFIED = '2026-10-20';
+const LAST_VERIFIED = '2026-10-24';
 
 /** The areas, in the order each tier's section lists them. */
 const OWNER_HEADINGS: Readonly<Record<KeyOwner, string>> = {
@@ -114,7 +114,7 @@ function experimentalValuesSection(registry: readonly ConfigKey[]): string[] {
   return [
     '### Experimental values',
     '',
-    'These values of stable and advanced keys are experimental, and the server warns at boot when one is set.',
+    'These values of stable and advanced keys are experimental, and the server warns at boot when one is set. A value that switches on an [experimental feature](/reference/experimental-features/) warns through that feature instead, once the feature is on.',
     '',
     table(
       ['Key', 'Experimental values'],
@@ -175,7 +175,7 @@ export function renderConfigurationPage(registry: readonly ConfigKey[]): string 
     '',
     '- **Stable** keys follow the deprecation policy. A deprecation is announced in a minor release; the old name or behaviour keeps working, with a warning at boot, for at least 12 months, and it is removed only in a new major release.',
     '- **Advanced** keys may change in a minor release. Read the release notes before you upgrade a deployment that sets one.',
-    '- **Experimental** keys may change at any time, without a deprecation window. The server logs a warning at boot for each experimental key that is set, and for each key set to an experimental value.',
+    '- **Experimental** keys may change at any time, without a deprecation window. The server logs a warning at boot for each experimental key that is set, and for each key set to an experimental value. A key or value that switches on an [experimental feature](/reference/experimental-features/) warns through that feature instead, once the feature is on.',
     '',
     '## Roles',
     '',

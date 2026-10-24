@@ -6,6 +6,7 @@ import {
   jwtEnvSchema,
   readConfiguredEnv,
 } from '@qauth-labs/server-config';
+import { switchesExperimentalFeature } from '@qauth-labs/shared-stability';
 import { z } from 'zod';
 
 import { envSchema } from './env-schema';
@@ -31,11 +32,27 @@ const parsedEnv = configured.parse(envSchema);
  */
 export const envDeprecationWarnings: readonly EnvDeprecationWarning[] = configured.deprecations;
 
+/** The tier of each registered key, to tell an experimental key from one with experimental values. */
+const keyTiers = new Map(CONFIG_KEY_REGISTRY.map((key) => [key.name, key.tier]));
+
 /**
  * Experimental keys and values this deployment sets (ADR-018 §5). `main.ts`
  * logs each one at boot, once the logger exists.
+ *
+ * The switch of a built item of the experimental-feature registry is left
+ * out: its item warns instead, once the item is on, with the item's id and
+ * docs link (`logExperimentalFeatures`, called from `app.ts`). So a
+ * deployment sees one line per experimental feature, not two. Another
+ * experimental value of the same key keeps its own warning.
  */
-export const envExperimentalWarnings: readonly ConfigWarning[] = configured.experimental;
+export const envExperimentalWarnings: readonly ConfigWarning[] = configured.experimental.filter(
+  (warning) =>
+    !switchesExperimentalFeature({
+      key: warning.variable,
+      value: configured.env[warning.variable],
+      experimentalKey: keyTiers.get(warning.variable) === 'experimental',
+    })
+);
 
 /**
  * The app's env.

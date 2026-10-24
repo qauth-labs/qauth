@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The boot warnings `env.ts` collects for `main.ts` to log (ADR-018 §5): an
- * experimental key or value that is set. The deprecated-name warnings are
- * pinned in `env.test.ts`.
+ * experimental key or value that is set, unless it is the switch of an item of
+ * the experimental-feature registry, which warns for itself. The
+ * deprecated-name warnings are pinned in `env.test.ts`.
  *
  * The static import above also loads the library before the first case, so
  * that case's `import('./env')` does not pay for transforming it.
@@ -47,16 +48,15 @@ describe('experimental boot warnings', () => {
     ).toEqual(['oid4vp-1.0-base']);
   });
 
-  it('warns when OID4VP_VERIFIER_PROFILE is set to the experimental oid4vp-1.0-base', async () => {
+  // The value switches on the oid4vp-1.0-base item of the experimental-feature
+  // registry, which warns for itself once wallet sign-in is on, with its id and
+  // docs link (experimental-features.test.ts). A second line for the key would
+  // say the same thing twice.
+  it('leave out OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base, whose experimental feature warns instead', async () => {
     setEnv({ OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base' });
     const mod = await import('./env');
 
-    expect(mod.envExperimentalWarnings).toEqual([
-      {
-        variable: 'OID4VP_VERIFIER_PROFILE',
-        message: expect.stringMatching(/^OID4VP_VERIFIER_PROFILE=oid4vp-1\.0-base is experimental/),
-      },
-    ]);
+    expect(mod.envExperimentalWarnings).toEqual([]);
   });
 
   it.each([
@@ -79,7 +79,7 @@ describe('experimental boot warnings', () => {
     const bootLog = JSON.stringify([...mod.envDeprecationWarnings, ...mod.envExperimentalWarnings]);
 
     expect(mod.envDeprecationWarnings).toHaveLength(1);
-    expect(mod.envExperimentalWarnings).toHaveLength(1);
+    expect(mod.envExperimentalWarnings).toEqual([]);
     expect(bootLog).not.toContain('a-strong-secret');
     expect(bootLog).not.toContain('postgresql://u:p@');
     expect(bootLog).not.toContain('BEGIN PRIVATE KEY');

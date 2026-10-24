@@ -3,7 +3,7 @@ title: Configuration
 description: Every environment key QAuth reads, with its stability tier, role, default and meaning.
 sidebar:
   order: 8
-lastVerified: '2026-10-20'
+lastVerified: '2026-10-24'
 ---
 
 <!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test server-config -- -u`. -->
@@ -16,7 +16,7 @@ Every key has a tier, which says how it may change ([ADR-018 §5](/reference/rec
 
 - **Stable** keys follow the deprecation policy. A deprecation is announced in a minor release; the old name or behaviour keeps working, with a warning at boot, for at least 12 months, and it is removed only in a new major release.
 - **Advanced** keys may change in a minor release. Read the release notes before you upgrade a deployment that sets one.
-- **Experimental** keys may change at any time, without a deprecation window. The server logs a warning at boot for each experimental key that is set, and for each key set to an experimental value.
+- **Experimental** keys may change at any time, without a deprecation window. The server logs a warning at boot for each experimental key that is set, and for each key set to an experimental value. A key or value that switches on an [experimental feature](/reference/experimental-features/) warns through that feature instead, once the feature is on.
 
 ## Roles
 
@@ -342,7 +342,7 @@ No key is experimental.
 
 ### Experimental values
 
-These values of stable and advanced keys are experimental, and the server warns at boot when one is set.
+These values of stable and advanced keys are experimental, and the server warns at boot when one is set. A value that switches on an [experimental feature](/reference/experimental-features/) warns through that feature instead, once the feature is on.
 
 | Key                       | Experimental values |
 | ------------------------- | ------------------- |
