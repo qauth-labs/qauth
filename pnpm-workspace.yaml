@@ -306,6 +306,17 @@ overrides:
   # declares as an optional peer).
   typescript: '~6.0.3'
 catalog:
+  # The KMS client of the optional KEK adapter @qauth-labs/keys-aws-kms
+  # (ADR-019 Decision 9, #577): Encrypt and Decrypt of data keys, request
+  # signing, the default credential chain and bounded retries. Only that
+  # package depends on it, and the auth server does not depend on the package,
+  # so the auth-server image does not carry it. No advisory names
+  # @aws-sdk/client-kms, @aws-sdk/core, @aws-sdk/credential-provider-node,
+  # @smithy/core or the HTTP handlers (GHSA advisory database, checked
+  # 2026-10-24). 3.1152.0 is the newest release past the 7-day cooldown on
+  # that day. Caret: a transport client, whose fixes should arrive with a
+  # lockfile refresh.
+  '@aws-sdk/client-kms': '^3.1152.0'
   '@commitlint/cli': '^21.2.3'
   '@commitlint/config-conventional': '^21.2.3'
   # Nx core and every @nx/* plugin move in lockstep (nx, @nx/vite, @nx/web and
