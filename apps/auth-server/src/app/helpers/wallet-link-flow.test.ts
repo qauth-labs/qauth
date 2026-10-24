@@ -44,10 +44,27 @@ vi.mock('./wallet-presentation', () => ({
   resolveWalletPresentation: vi.fn().mockResolvedValue({ status: 'rejected' }),
 }));
 
+vi.mock('./user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./user-events')>();
+  const { checkedEmitUserEvent } = await import('../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import { WALLET_RETURN_CODE_TTL_MS } from '../constants';
 import { readWalletFlowBindings } from './session-cookie';
+import { emitUserEvent } from './user-events';
 import { advanceWalletLinkFlow, startWalletLinkFlow } from './wallet-link-flow';
-import { linkWalletPresentation } from './wallet-presentation';
+import {
+  linkWalletPresentation,
+  type WalletLinked,
+  type WalletLinkInput,
+  type WalletLinkTransaction,
+} from './wallet-presentation';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+const WALLET_LINKED = 'urn:qauth:event:wallet.linked:v1-rc.0';
+const WALLET_LINK_FAILED = 'urn:qauth:event:wallet.link_failed:v1-rc.0';
 
 function createSessionUtils() {
   const store = new Map<string, unknown>();
@@ -88,7 +105,6 @@ function makeFastify() {
         create: vi.fn(),
       },
       oid4vpRequestStates: { create: vi.fn(async (row: unknown) => row) },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     sessionUtils,
     redis: createRedis(),
@@ -181,13 +197,34 @@ async function advance(
   return { outcome, setCookies };
 }
 
-const LINKED = {
+const LINKED: WalletLinked = {
   status: 'linked',
   credentialId: 'cred-1',
   externalSub: 'alice@example.com',
   subjectSource: 'asserted-lookup',
   rebound: false,
 };
+
+/** The transaction the stubbed link runs its `onLinked` hook in. */
+const LINK_TX = { name: 'link-transaction' } as unknown as WalletLinkTransaction;
+
+/**
+ * Stub the link as `linkWalletPresentation` completes one: the caller's
+ * `onLinked` hook runs in the link's transaction, then the result returns.
+ */
+function linkAs(resolution: WalletLinked) {
+  (linkWalletPresentation as unknown as Mock).mockImplementation(
+    async (_fastify: FastifyInstance, input: WalletLinkInput) => {
+      await input.onLinked?.(LINK_TX, resolution);
+      return resolution;
+    }
+  );
+}
+
+/** The `wallet.linked` / `wallet.link_failed` events written so far. */
+function eventsOf(type: string) {
+  return emitUserEventMock.mock.calls.filter((call) => call[1] === type);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -230,7 +267,7 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
       device: 'this',
     });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
 
     // Explicit `poll` and the default alike.
@@ -240,7 +277,7 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
     expect(defaulted.outcome.status).toBe('pending');
 
     expect(linkWalletPresentation).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
     expect(polled.setCookies).toEqual([]);
     // Nothing was terminated: the flow and its signal are still there.
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
@@ -260,7 +297,7 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
     const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink({
       device: 'this',
     });
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
 
     // Inside the window: still waiting for the wallet to bring the browser back.
@@ -333,7 +370,7 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
   it('cross-device links still complete via the poll exactly as before', async () => {
     const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink();
     publishSignal(sessionUtils, flow['stateHash'], 'received');
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
 
     const { outcome, setCookies } = await advance(fastify, handle, userId, {
       cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
@@ -345,8 +382,17 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
     expect([...sessionUtils.store.keys()].some((k) => k.startsWith('wallet-login-done:'))).toBe(
       false
     );
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'auth.wallet_link.success', userId })
+    // Written in the link's own transaction.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      WALLET_LINKED,
+      {
+        credentialId: 'cred-1',
+        subjectSource: 'asserted-lookup',
+        rebound: false,
+        verifierProfile: 'oid4vp-1.0-base',
+      },
+      { tx: LINK_TX, realmId: 'realm-1', userId, actor: 'user' }
     );
   });
 });
@@ -379,7 +425,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
       device: 'this',
     });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue({ ...LINKED, rebound: true });
+    linkAs({ ...LINKED, rebound: true });
 
     const { outcome, setCookies } = await advance(fastify, handle, userId, {
       cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
@@ -387,12 +433,11 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
     });
 
     expect(outcome).toEqual({ status: 'linked', rebound: true });
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'auth.wallet_link.success',
-        userId,
-        metadata: expect.objectContaining({ rebound: true }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      WALLET_LINKED,
+      expect.objectContaining({ rebound: true }),
+      expect.objectContaining({ tx: LINK_TX, userId, actor: 'user' })
     );
 
     // The binding was NOT dropped — the original tab must still be able to
@@ -415,7 +460,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
       device: 'this',
     });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
 
     await advance(fastify, handle, userId, { cookie, via: 'return' });
@@ -436,7 +481,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
     );
 
     // The original tab: linked, once, and its binding dropped now that the
-    // marker is consumed. No second write, no second audit row.
+    // marker is consumed. No second write, no second event.
     const first = await advance(fastify, handle, userId, { cookie });
     expect(first.outcome).toEqual({ status: 'linked', rebound: false });
     expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
@@ -445,11 +490,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
     ).toEqual([]);
     expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
     expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
-    expect(
-      (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.filter(
-        (c) => (c[0] as { event: string }).event === 'auth.wallet_link.success'
-      )
-    ).toHaveLength(1);
+    expect(eventsOf(WALLET_LINKED)).toHaveLength(1);
 
     // Once.
     const second = await advance(fastify, handle, userId, { cookie });
@@ -484,7 +525,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
       device: 'this',
     });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
 
     const { outcome, setCookies } = await advance(fastify, handle, 'user-2', {
       cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
@@ -494,7 +535,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
     expect(outcome).toEqual({ status: 'expired' });
     expect(setCookies).toEqual([]);
     expect(linkWalletPresentation).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
     expect([...sessionUtils.store.keys()].some((k) => k.startsWith('wallet-login-done:'))).toBe(
       false
@@ -524,27 +565,28 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
         outcome: resolution.status,
         linkUserId: userId,
       });
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'auth.wallet_link.failure', userId })
+      // A refusal changes nothing: its event is written on its own.
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        WALLET_LINK_FAILED,
+        { reason: resolution.status, verifierProfile: 'oid4vp-1.0-base' },
+        { realmId: 'realm-1', userId, actor: 'user' }
       );
 
       // The original tab is told the SAME word the return tab showed — not
-      // "expired" — once, with its binding dropped and no second audit row.
+      // "expired" — once, with its binding dropped and no second event.
       const first = await advance(fastify, handle, userId, { cookie });
       expect(first.outcome).toEqual(resolution);
       expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
       expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
       expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
-      expect(
-        (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.filter(
-          (c) => (c[0] as { event: string }).event === 'auth.wallet_link.failure'
-        )
-      ).toHaveLength(1);
+      expect(eventsOf(WALLET_LINK_FAILED)).toHaveLength(1);
       expect((await advance(fastify, handle, userId, { cookie })).outcome).toEqual({
         status: 'expired',
       });
-      // The seam mock is shared across iterations; its call count is not.
+      // The seam mocks are shared across iterations; their call counts are not.
       (linkWalletPresentation as unknown as Mock).mockClear();
+      emitUserEventMock.mockClear();
     }
   });
 
@@ -602,20 +644,19 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
       device: 'this',
     });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
 
     // Hold the return leg between the credential write and its conclusion:
-    // the audit row is the last thing before the marker and the deletion.
-    let releaseAudit!: () => void;
-    const auditHeld = new Promise<void>((resolve) => {
-      releaseAudit = resolve;
+    // the event, in the link's transaction, is the last thing before the
+    // marker and the deletion.
+    let releaseEvent!: () => void;
+    const eventHeld = new Promise<string>((resolve) => {
+      releaseEvent = () => resolve('event-id');
     });
-    (fastify.repositories.auditLogs.create as unknown as Mock).mockImplementationOnce(
-      () => auditHeld
-    );
+    emitUserEventMock.mockImplementationOnce(() => eventHeld);
     const returning = advance(fastify, handle, userId, { cookie, via: 'return' });
-    await vi.waitFor(() => expect(fastify.repositories.auditLogs.create).toHaveBeenCalled());
+    await vi.waitFor(() => expect(emitUserEventMock).toHaveBeenCalled());
 
     // The original tab polls while the return leg is mid-completion: the flow
     // is still there, so it is `pending` — and the poll resolves nothing.
@@ -624,7 +665,7 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
     expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
 
-    releaseAudit();
+    releaseEvent();
     expect((await returning).outcome).toEqual({ status: 'linked', rebound: false });
 
     // Spy call order: the marker was set before the flow was deleted.

@@ -51,6 +51,12 @@ vi.mock('../../helpers/wallet-presentation', () => ({
   resolveWalletPresentation: vi.fn().mockResolvedValue({ status: 'rejected' }),
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import {
   generateOid4vpResponseCode,
   hashOid4vpResponseCode,
@@ -61,6 +67,7 @@ import {
   readWalletFlowBindings,
   WALLET_FLOW_COOKIE_MAX_BINDINGS,
 } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import { WALLET_LOGIN_RETURN_PATH } from '../../helpers/wallet-login-request';
 import { resolveWalletPresentation } from '../../helpers/wallet-presentation';
 import {
@@ -73,6 +80,22 @@ import loginRoute from './login';
 import walletLoginRoute, { WALLET_LOGIN_EXPIRED, WALLET_LOGIN_REFUSAL } from './wallet-login';
 
 type Handler = (request: any, reply: any) => Promise<unknown>;
+
+// Cleared by the `vi.clearAllMocks()` of the file's `beforeEach`.
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The event types emitted so far, in order. */
+function emittedTypes(): string[] {
+  return emitUserEventMock.mock.calls.map((c) => c[1]);
+}
+
+/** The wallet sign-in event of `user-1` under the test profile. */
+const WALLET_SIGNED_IN = [
+  expect.anything(),
+  'urn:qauth:event:user.signed_in:v1-rc.0',
+  { method: 'wallet', verifierProfile: 'oid4vp-1.0-base' },
+  { realmId: 'realm-1', userId: 'user-1', actor: 'user' },
+] as const;
 
 function createReply() {
   const state: {
@@ -188,7 +211,6 @@ function makeFastify() {
         create: vi.fn(async (row: unknown) => row),
         redeemResponseCode: responseCodes.redeemResponseCode,
       },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     passwordHasher: { verifyPassword: vi.fn() },
     providerRegistry: { resolve: vi.fn(), has: vi.fn().mockReturnValue(true), register: vi.fn() },
@@ -480,10 +502,12 @@ describe('wallet login — CSRF and the browser binder', () => {
 
     expect(state.statusCode).toBe(403);
     expect(fastify.repositories.oid4vpRequestStates.create).not.toHaveBeenCalled();
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+      { form: 'wallet_sign_in' },
+      { actor: 'user' }
     );
-    expect(events).toContain('ui.wallet_login.csrf_failure');
   });
 
   it('binds the flow to the browser: another browser cannot advance it', async () => {
@@ -673,10 +697,8 @@ describe('wallet login — completion', () => {
     expect(state.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
     expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
 
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
-    );
-    expect(events).toContain('ui.wallet_login.success');
+    // Without the session id or the return path.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(...WALLET_SIGNED_IN);
 
     // Terminal: the flow and its signal are gone, so it cannot be replayed.
     expect([...sessionUtils.store.keys()].some((k) => k.startsWith('wallet-login:'))).toBe(false);
@@ -907,6 +929,12 @@ describe('wallet login — refusals do not enumerate or leak (#236)', () => {
       );
       answers.push(`${state.body.status}:${state.body.message}`);
     }
+    expect(emitUserEventMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'wallet', reason: 'not_resolved', verifierProfile: 'oid4vp-1.0-base' },
+      { realmId: 'realm-1', actor: 'user' }
+    );
 
     // (2) It resolves, but to a disabled account.
     {
@@ -933,6 +961,12 @@ describe('wallet login — refusals do not enumerate or leak (#236)', () => {
       answers.push(`${state.body.status}:${state.body.message}`);
       expect(state.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
     }
+    expect(emitUserEventMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'wallet', reason: 'user_unavailable', verifierProfile: 'oid4vp-1.0-base' },
+      { realmId: 'realm-1', actor: 'user' }
+    );
 
     // (3) The wallet itself returned an error.
     {
@@ -952,6 +986,11 @@ describe('wallet login — refusals do not enumerate or leak (#236)', () => {
 
     expect(new Set(answers).size).toBe(1);
     expect(answers[0]).toBe(`rejected:${WALLET_LOGIN_REFUSAL}`);
+    // A wallet error records nothing on this side: only the two refusals did.
+    expect(emittedTypes()).toEqual([
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+    ]);
   });
 
   it('reports an expired flow for an unknown handle and for a real expired one alike', async () => {
@@ -1306,10 +1345,7 @@ describe('wallet login — the return leg (#405)', () => {
     expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
     expect(sessionMints(fastify)).toHaveLength(1);
     expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
-    );
-    expect(events).toContain('ui.wallet_login.success');
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(...WALLET_SIGNED_IN);
 
     // The signed-in page, byte for byte, with the ORIGINAL tab's continuation
     // only as a secondary link.
@@ -1627,16 +1663,14 @@ describe('wallet login — the return leg (#405)', () => {
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
 
     // Hold the return leg between the session mint and its conclusion: the
-    // audit row is the last write before the marker and the deletion.
-    let releaseAudit!: () => void;
-    const auditHeld = new Promise<void>((resolve) => {
-      releaseAudit = resolve;
+    // sign-in event is the last write before the marker and the deletion.
+    let releaseEvent!: () => void;
+    const eventHeld = new Promise<void>((resolve) => {
+      releaseEvent = resolve;
     });
-    (fastify.repositories.auditLogs.create as unknown as Mock).mockImplementationOnce(
-      () => auditHeld
-    );
+    emitUserEventMock.mockImplementationOnce(() => eventHeld.then(() => 'event-id'));
     const returning = followReturn(routes, code, cookie);
-    await vi.waitFor(() => expect(fastify.repositories.auditLogs.create).toHaveBeenCalled());
+    await vi.waitFor(() => expect(emitUserEventMock).toHaveBeenCalled());
     expect(sessionMints(fastify)).toHaveLength(1);
 
     // The original tab polls while the return leg is mid-completion: the flow
@@ -1647,7 +1681,7 @@ describe('wallet login — the return leg (#405)', () => {
     expect(resolveWalletPresentation).toHaveBeenCalledTimes(1);
     expect(sessionMints(fastify)).toHaveLength(1);
 
-    releaseAudit();
+    releaseEvent();
     expect((await returning).statusCode).toBe(200);
 
     // Spy call order: the marker was set before the flow was deleted.
@@ -1844,12 +1878,11 @@ describe('wallet login — the return leg (#405)', () => {
     }
   });
 
-  it('the return route never writes an audit row or a session on refusal', async () => {
+  it('the return route never records an event or a session on refusal', async () => {
     const { fastify, routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
       device: 'this',
     });
-    const auditRowsAtStart = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
-      .length;
+    const eventsAtStart = emitUserEventMock.mock.calls.length;
     publishSignal(sessionUtils, flow.stateHash, 'received');
     (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
@@ -1858,7 +1891,7 @@ describe('wallet login — the return leg (#405)', () => {
       await followReturn(routes, 'junk', cookie),
       await followReturn(routes, generateOid4vpResponseCode(), cookie),
       // Foreign landing: the initiating flow is rejected, and even that
-      // rejection audits nothing here.
+      // rejection records nothing here.
       await followReturn(routes, issueResponseCode(responseCodes, flow.stateHash)),
     ];
 
@@ -1866,9 +1899,7 @@ describe('wallet login — the return leg (#405)', () => {
       expect(refusal.body).toBe(REFUSAL_PAGE);
       expect(refusal.setCookies).toEqual([]);
     }
-    expect((fastify.repositories.auditLogs.create as unknown as Mock).mock.calls).toHaveLength(
-      auditRowsAtStart
-    );
+    expect(emitUserEventMock.mock.calls).toHaveLength(eventsAtStart);
     expect(sessionMints(fastify)).toEqual([]);
     expect(resolveWalletPresentation).not.toHaveBeenCalled();
   });

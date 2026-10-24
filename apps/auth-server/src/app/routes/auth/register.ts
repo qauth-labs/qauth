@@ -19,6 +19,7 @@ import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { clientAddressKey } from '../../helpers/client-address';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent } from '../../helpers/user-events';
 import { type RegisterRequest, registerResponseSchema, registerSchema } from '../../schemas/auth';
 
 /**
@@ -240,7 +241,8 @@ export default async function (fastify: FastifyInstance) {
 
       // One transaction for the whole identity write set (#228, ADR-002): a
       // users row without its credential row would be unloginable AND block
-      // re-registration, so the writes commit together.
+      // re-registration, so the writes commit together, with the account's
+      // event.
       //
       // Ordering: users first because user_credentials.user_id FKs users.id.
       // Since #230 the credentials unique index (realm_id, provider_type,
@@ -299,6 +301,16 @@ export default async function (fastify: FastifyInstance) {
               used: false,
             },
             tx
+          );
+
+          // The account's event commits with the account (ADR-019 Decision 8):
+          // a registration that rolls back, a taken address included, leaves
+          // none. A refused registration stays a log line only (below).
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:user.registered:v1-rc.0',
+            { method: 'password' },
+            { tx, realmId: realm.id, userId: created.id, actor: 'user' }
           );
 
           return created.id;

@@ -10,6 +10,7 @@ import {
   setWalletFlowCookie,
   WALLET_FLOW_COOKIE_NAME,
 } from './session-cookie';
+import { emitUserEvent } from './user-events';
 import {
   claimWalletPresentation,
   createWalletLoginFlow,
@@ -291,23 +292,6 @@ async function concludeReturnLeg(
   await terminate(fastify, handle, flow);
 }
 
-async function auditWalletLink(
-  fastify: FastifyInstance,
-  request: FastifyRequest,
-  entry: { userId: string; success: boolean; metadata: Record<string, unknown> }
-): Promise<void> {
-  await fastify.repositories.auditLogs.create({
-    userId: entry.userId,
-    oauthClientId: null,
-    event: entry.success ? 'auth.wallet_link.success' : 'auth.wallet_link.failure',
-    eventType: 'auth',
-    success: entry.success,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: entry.metadata,
-  });
-}
-
 /**
  * Read a linking flow, apply every gate, and advance it as far as it can go.
  *
@@ -335,7 +319,7 @@ async function auditWalletLink(
  *
  * ## Completion differs by surface (D6, D8)
  *
- * Both surfaces link identically and audit identically. The poll then burns
+ * Both surfaces link identically and record identical events. The poll then burns
  * this flow's cookie binding on every terminal outcome, as it always has. The
  * return leg does NOT touch the binder cookie — the wallet opened it in a NEW
  * tab, and the original tab's next poll must still be able to prove it holds
@@ -437,10 +421,25 @@ export async function advanceWalletLinkFlow(
     nonce: flow.nonce ?? '',
     clientId: flow.clientId ?? '',
     dcqlQuery: flow.dcqlQuery ?? {},
+    // The `wallet.linked` event, in the link's own transaction: it commits
+    // with the credential row, or neither does.
+    onLinked: async (tx, linked) => {
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:wallet.linked:v1-rc.0',
+        {
+          credentialId: linked.credentialId,
+          subjectSource: linked.subjectSource,
+          rebound: linked.rebound,
+          verifierProfile: flow.verifierProfile,
+        },
+        { tx, realmId: flow.realmId, userId, actor: 'user' }
+      );
+    },
   });
 
   if (via === 'poll') {
-    // By POLL the flow ends here, before the audit row, as it always has: a
+    // By POLL the flow ends here, right after the link, as it always has: a
     // cross-device link CAN be reached by a concurrent poll, so the window in
     // which two of them read the same presentation stays as narrow as it
     // was. By RETURN it ends in `concludeReturnLeg` below, AFTER the marker
@@ -454,21 +453,10 @@ export async function advanceWalletLinkFlow(
   }
 
   if (resolution.status === 'linked') {
-    await auditWalletLink(fastify, request, {
-      userId,
-      success: true,
-      metadata: {
-        credentialId: resolution.credentialId,
-        subjectSource: resolution.subjectSource,
-        rebound: resolution.rebound,
-        verifierProfile: flow.verifierProfile,
-      },
-    });
-
     if (via === 'return') {
       // The wallet opened this leg in a NEW tab; the marker is what the
       // original tab's poll will find where the flow was. Written AFTER the
-      // credential row and the audit row, so a completion marker exists only
+      // credential row and its event, so a completion marker exists only
       // for a link that happened, and BEFORE the flow is deleted, so that
       // poll never finds neither. It writes nothing when consumed.
       await concludeReturnLeg(
@@ -483,11 +471,13 @@ export async function advanceWalletLinkFlow(
     return { status: 'linked', rebound: resolution.rebound };
   }
 
-  await auditWalletLink(fastify, request, {
-    userId,
-    success: false,
-    metadata: { reason: resolution.status, verifierProfile: flow.verifierProfile },
-  });
+  // A refusal changed nothing, so its event is written on its own.
+  await emitUserEvent(
+    request,
+    'urn:qauth:event:wallet.link_failed:v1-rc.0',
+    { reason: resolution.status, verifierProfile: flow.verifierProfile },
+    { realmId: flow.realmId, userId, actor: 'user' }
+  );
 
   const refused: WalletLinkDoneOutcome = resolution.status === 'conflict' ? 'conflict' : 'rejected';
   if (via === 'return') await concludeReturnLeg(fastify, handle, flow, userId, refused);

@@ -15,6 +15,12 @@ import { oauthClients, users } from './core';
 import { agentModeEnum, auditEventTypeEnum } from './enums';
 import { EPOCH_MS_NOW } from './sql-helpers';
 
+/**
+ * The audit table of the releases before the event store. Read-only since
+ * #458: nothing writes it, migration 0031 copied its rows into `events`, and a
+ * contract migration drops it after one release. Its rows stay readable until
+ * then.
+ */
 export const auditLogs = pgTable(
   'audit_logs',
   {

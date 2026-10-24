@@ -169,6 +169,11 @@ export type WalletPresentationResolution =
     }
   | { readonly status: 'rejected' };
 
+/** The transaction a link's credential row is written in. */
+export type WalletLinkTransaction = Parameters<
+  Parameters<FastifyInstance['db']['transaction']>[0]
+>[0];
+
 /** What the linking flow knows when a presentation has arrived. */
 export interface WalletLinkInput extends WalletPresentationRequestView {
   /**
@@ -177,21 +182,32 @@ export interface WalletLinkInput extends WalletPresentationRequestView {
    * a request parameter. This value is the entire authority for the link.
    */
   readonly authenticatedUserId: string;
+  /**
+   * Called inside the link's transaction once the credential row is written,
+   * just before the `linked` result is returned: what it writes with `tx`
+   * (the `wallet.linked` event) commits with the link, or neither does. A
+   * throw rolls the link back and propagates. Not called for a conflict or a
+   * refusal, which change nothing.
+   */
+  readonly onLinked?: (tx: WalletLinkTransaction, linked: WalletLinked) => Promise<void>;
+}
+
+/** A completed link: the wallet credential row written to the session's account. */
+export interface WalletLinked {
+  readonly status: 'linked';
+  /** `user_credentials.id` of the row written. */
+  readonly credentialId: string;
+  /** The value written to `external_sub`. */
+  readonly externalSub: string;
+  /** Which of ADR-009's account-keying models produced it. */
+  readonly subjectSource: SubjectResolutionStrategyId;
+  /** Whether an existing wallet row was re-bound rather than a new one added. */
+  readonly rebound: boolean;
 }
 
 /** The outcome of attaching a wallet credential to the session's account. */
 export type WalletLinkResolution =
-  | {
-      readonly status: 'linked';
-      /** `user_credentials.id` of the row written. */
-      readonly credentialId: string;
-      /** The value written to `external_sub`. */
-      readonly externalSub: string;
-      /** Which of ADR-009's account-keying models produced it. */
-      readonly subjectSource: SubjectResolutionStrategyId;
-      /** Whether an existing wallet row was re-bound rather than a new one added. */
-      readonly rebound: boolean;
-    }
+  | WalletLinked
   /**
    * That wallet, or that `external_sub`, already belongs to a DIFFERENT account.
    *
@@ -526,6 +542,12 @@ export async function linkWalletPresentation(
 
   try {
     return await fastify.db.transaction(async (tx) => {
+      // The caller's hook, in this transaction, then the result.
+      const linked = async (resolution: WalletLinked): Promise<WalletLinked> => {
+        await input.onLinked?.(tx, resolution);
+        return resolution;
+      };
+
       const existing = await fastify.repositories.userCredentials.findByRealmProviderSub(
         input.realmId,
         WALLET_PROVIDER_TYPE,
@@ -547,13 +569,13 @@ export async function linkWalletPresentation(
           tx
         );
 
-        return {
-          status: 'linked' as const,
+        return linked({
+          status: 'linked',
           credentialId: updated.id,
           externalSub: plan.externalSub,
           subjectSource: plan.subjectSource,
           rebound: true,
-        };
+        });
       }
 
       const created = await fastify.repositories.userCredentials.create(
@@ -567,13 +589,13 @@ export async function linkWalletPresentation(
         tx
       );
 
-      return {
-        status: 'linked' as const,
+      return linked({
+        status: 'linked',
         credentialId: created.id,
         externalSub: plan.externalSub,
         subjectSource: plan.subjectSource,
         rebound: false,
-      };
+      });
     });
   } catch (error) {
     // The unique index is the authority under concurrency: two simultaneous

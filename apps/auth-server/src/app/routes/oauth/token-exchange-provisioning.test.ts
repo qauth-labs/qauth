@@ -28,6 +28,12 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
@@ -124,7 +130,6 @@ function createRegisterStub() {
           return persisted;
         }),
       },
-      auditLogs: { create: vi.fn(async (row: any) => row) },
     },
     passwordHasher: { hashPassword: vi.fn(async (v: string) => `argon2id$${v.slice(0, 8)}`) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -238,7 +243,6 @@ function createTokenStub(persistedClient: {
         revokeIfActive: vi.fn(),
         revokeFamily: vi.fn(),
       },
-      auditLogs: { create: vi.fn() },
     },
     passwordHasher: { verifyPassword: vi.fn().mockResolvedValue(true) },
     jwtUtils: {

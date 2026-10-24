@@ -44,6 +44,13 @@ export interface FindAuditLogsOptions {
 /**
  * Factory function that creates an audit logs repository
  *
+ * `audit_logs` is read-only since #458: the auth server records events in the
+ * event store (`emitUserEvent`), and migration 0031 copied the table's rows
+ * there. The table stays, and with it this repository, until a contract
+ * migration drops it after one release. `create` remains for tests that seed
+ * old rows; no application code calls it (`audit-log-writes.test.ts` in the
+ * auth server holds to that).
+ *
  * @param defaultDb - Database client to use for queries
  * @returns Repository object with audit log methods
  */

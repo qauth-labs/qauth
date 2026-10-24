@@ -1,6 +1,20 @@
 import { BadRequestError, ForbiddenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+import { emitUserEvent } from '../../helpers/user-events';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -76,7 +90,6 @@ function createFastifyStub(
   };
 
   const createdClients: any[] = [];
-  const auditLogs: any[] = [];
 
   const fastify: any = {
     withTypeProvider: () => ({
@@ -108,12 +121,6 @@ function createFastifyStub(
           return persisted;
         }),
       },
-      auditLogs: {
-        create: vi.fn(async (row: any) => {
-          auditLogs.push(row);
-          return row;
-        }),
-      },
     },
     passwordHasher: {
       hashPassword: vi.fn(async (v: string) => `argon2id$${v.slice(0, 8)}`),
@@ -129,7 +136,7 @@ function createFastifyStub(
   return {
     fastify: fastify as FastifyInstance,
     ctx,
-    state: { createdClients, auditLogs, realm },
+    state: { createdClients, realm },
   };
 }
 
@@ -179,12 +186,27 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(persisted.requirePkce).toBe(true);
     expect(persisted.realmId).toBe('realm-1');
 
-    // Audit log written
-    expect(state.auditLogs[0]).toMatchObject({
-      event: 'oauth.client.registered',
-      eventType: 'client',
-      success: true,
-    });
+    // Registration event recorded: the new client is its subject and actor.
+    const clientId = (result as { client_id: string }).client_id;
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:client.created:v1-rc.0',
+      {
+        registration: 'dynamic',
+        isPublic: true,
+        isAgent: false,
+        grantTypes: ['authorization_code', 'refresh_token'],
+        scopes: ['openid', 'email'],
+        authMethod: 'none',
+      },
+      {
+        realmId: 'realm-1',
+        subject: { type: 'client', id: clientId },
+        clientId,
+        actor: 'client',
+      }
+    );
   });
 
   it('returns a plaintext client_secret exactly once for confidential clients', async () => {
@@ -405,8 +427,13 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(result.is_agent).toBe(true);
     // Persisted on the client row.
     expect(state.createdClients[0].isAgent).toBe(true);
-    // Captured in the audit log for the registration event.
-    expect(state.auditLogs[0].metadata).toMatchObject({ isAgent: true });
+    // Captured in the registration event.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:client.created:v1-rc.0',
+      expect.objectContaining({ isAgent: true }),
+      expect.anything()
+    );
   });
 
   it('defaults to a standard (non-agent) client when is_agent is omitted', async () => {

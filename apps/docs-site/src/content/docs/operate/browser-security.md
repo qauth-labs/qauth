@@ -57,8 +57,8 @@ requires the `X-CSRF-Token` header; it is registered only when
    value is stored in the server-side session.
 2. `POST /ui/consent` must submit that `csrf_token`. The server compares the
    submitted value against the session copy with a timing-safe comparison
-   (`csrfTokensEqual`). A mismatch → `400 invalid_csrf_token` and an audit log
-   entry (`oauth.consent.csrf_failure`).
+   (`csrfTokensEqual`). A mismatch → `400 invalid_csrf_token` and a
+   `request.csrf_rejected` event with `form: consent`.
 3. The token is **burned** on a successful POST and re-minted on the next
    `GET /ui/consent`, so a captured form cannot be replayed. The token is **not**
    rotated on every GET, so opening the consent page in multiple tabs does not

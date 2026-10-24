@@ -220,8 +220,8 @@ and knows a public agent `client_id`:
   is capped at **4 actors**; a deeper request → `invalid_request`.
 - **No refresh token** is issued — a delegated token is intentionally
   short-lived; the agent re-exchanges as needed.
-- **Every exchange is audited** (success and failure), including the actor and
-  delegation depth (see §5).
+- **Every exchange is recorded** as an event (success and failure), including
+  the actor and delegation depth (see §5).
 
 For copy-paste `curl` and the full error table, see the
 [Token Exchange section of the OAuth 2.1 Flow guide](/integrate/oauth-flow/#token-exchange--agent-on-behalf-of-delegation-rfc-8693).
@@ -422,37 +422,41 @@ than redirected automatically (RFC 9700 §4.11.2; see
 
 ## 5. Per-agent action audit
 
-Every agent-attributable action is written to `audit_logs` with structured,
-queryable columns **on top of** the existing event metadata. The agent-specific
-columns are:
+Every agent-attributable action is recorded as an event in the event store
+(`token.issued`, `token.request_failed`, `step_up.elevated`; see
+[Events](/reference/events/)). The agent attribution lives in the envelope and
+the event's `data`:
 
-| Column             | What it records                                                                                                                                                                                                                                                               |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user_id`          | The end user the agent acted **on behalf of** (the subject). Null for `client_credentials` (no subject user).                                                                                                                                                                 |
-| `actor_client_id`  | The denormalized `client_id` **string** of the agent that performed the action — stored as a string (not the FK) so the attribution survives deletion of the client row.                                                                                                      |
-| `delegation_chain` | The RFC 8693 `act` chain flattened to an ordered list of actor `client_id`s — index 0 is the outermost (most recent) actor, each following entry a prior actor. Null when not delegated.                                                                                      |
-| `scope_mode`       | The effective agent scope mode (`readonly` \| `admin` \| `exec`) the action ran under — the highest-ranked mode present in the granted scope set. An audit rollup only: it does **not** imply the lower modes were granted. Null when the action carries no agent-mode scope. |
+| Member                  | What it records                                                                                                                                                                                                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `subject`               | The end user the agent acted **on behalf of**. Absent for `client_credentials` (no subject user).                                                                                                                                                                        |
+| `actor.id`              | The `client_id` **string** of the agent that performed the action. An event references no table, so the attribution survives deletion of the client row.                                                                                                                 |
+| `actor.delegationChain` | The RFC 8693 `act` chain flattened to an ordered list of actor `client_id`s — the acting agent first, each following entry a prior actor. Absent when not delegated.                                                                                                     |
+| `data.scopeMode`        | The effective agent scope mode (`readonly` \| `admin` \| `exec`) the action ran under — the highest-ranked mode present in the granted scope set. A rollup only: it does **not** imply the lower modes were granted. Absent when the action carries no agent-mode scope. |
+| `data.delegationDepth`  | How many actors the `act` chain of the issued token holds.                                                                                                                                                                                                               |
 
 What each grant attributes:
 
-- **Token Exchange** — `user_id` = the subject user, `actor_client_id` = the
-  agent, `delegation_chain` = the flattened `act` chain, `scope_mode` = the
-  highest granted agent mode. Failures are audited too, with the delegation
-  depth.
-- **`client_credentials`** (agent acting as itself) — `actor_client_id` and
-  `scope_mode` are set when the client is a verified agent; `user_id` and
-  `delegation_chain` stay null (no subject user, no `act` chain). An ordinary
-  (non-agent) machine client records **no** agent fields — existing behavior is
-  unchanged.
+- **Token Exchange** — the subject is the user, the actor the agent with its
+  delegation chain, `scopeMode` the highest granted agent mode. Failures are
+  recorded too, as `token.request_failed` with the OAuth error and a reason
+  code.
+- **`client_credentials`** (agent acting as itself) — the actor is the client,
+  with no chain and no subject user; `scopeMode` is set when the client is a
+  verified agent. An ordinary (non-agent) machine client records **no**
+  `scopeMode`.
 
-**No tokens or secrets are ever logged.** Only public client identifiers reach
-the audit table — the `subject_token` / `actor_token`, client secrets, and any
-sensitive material are never persisted. The `delegation_chain` is constrained at
-the database level to a JSON array of strings.
+**No tokens or secrets are ever recorded.** Only public client identifiers
+reach an event — the `subject_token` / `actor_token`, client secrets and any
+sensitive material never do, and the event contract's payload rules refuse an
+event that would carry one.
 
-The full granted scope set (including every `agent:*` scope) is preserved
-verbatim in the audit row's `metadata.scope`; `scope_mode` is the queryable
-rollup over that detail.
+The granted scopes (including every `agent:*` scope) are the event's
+`data.scopes`; `scopeMode` is the rollup over them.
+
+Before 0.2.0 these attributes were columns of the `audit_logs` table
+(`actor_client_id`, `delegation_chain`, `scope_mode`). The table is read-only
+since then; the upgrade copied its rows into the event store.
 
 ---
 

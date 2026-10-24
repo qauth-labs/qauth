@@ -1,7 +1,7 @@
 import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
 import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
@@ -32,7 +32,20 @@ vi.mock('../../../config/env', () => ({
 import { env } from '../../../config/env';
 import { hashEmail } from '../../helpers/auth-events';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent } from '../../helpers/user-events';
 import loginRoute from './login';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -109,9 +122,6 @@ function createFastifyStub() {
         create: vi.fn(),
       },
       refreshTokens: {
-        create: vi.fn().mockResolvedValue(undefined),
-      },
-      auditLogs: {
         create: vi.fn().mockResolvedValue(undefined),
       },
     },
@@ -282,6 +292,14 @@ describe('POST /auth/login', () => {
       refresh_token: 'rt',
       token_type: 'Bearer',
     });
+
+    // The sign-in event names the user and the system client, never the session.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:user.signed_in:v1-rc.0',
+      { method: 'password' },
+      { realmId: 'realm-1', userId: 'user-1', clientId: 'system', actor: 'user' }
+    );
   });
 
   it('mints the first-party token with no email claims, even for a verified address — ANT-2026-2O0T72HY', async () => {
@@ -439,6 +457,44 @@ describe('POST /auth/login', () => {
     if (!handler) throw new Error('Handler missing');
 
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    // No address in the event, and no subject: a wrong password confirms no user.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'password', reason: 'invalid_credentials' },
+      { realmId: 'realm-1', userId: null, actor: 'user' }
+    );
+  });
+
+  it('records an unexpected failure as a sign_in_failed event with internal_error', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockRejectedValue(
+      new Error('database unavailable')
+    );
+
+    const request = {
+      body: { email: 'user@example.com', password: 'p' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
+    };
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(request, createReply())).rejects.toThrow('database unavailable');
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'password', reason: 'internal_error' },
+      { realmId: 'realm-1', userId: null, actor: 'user' }
+    );
   });
 
   it('rejects a DISABLED user with the correct password exactly like a wrong password', async () => {
@@ -507,7 +563,7 @@ describe('POST /auth/login', () => {
      * Everything a caller of POST /auth/login can observe about one refused
      * attempt: the error the error handler turns into the response, the
      * response headers, the `/metrics` label, and the timing floor applied
-     * before the audit write.
+     * before the event.
      */
     async function refusal(setup: (fastify: FastifyInstance) => void) {
       const { fastify, ctx } = createFastifyStub();
@@ -515,6 +571,7 @@ describe('POST /auth/login', () => {
       if (!ctx.handler) throw new Error('Handler missing');
       setup(fastify);
       vi.mocked(ensureMinimumResponseTime).mockClear();
+      emitUserEventMock.mockClear();
 
       const reply = createReply();
       const error = await ctx
@@ -533,8 +590,7 @@ describe('POST /auth/login', () => {
         );
 
       const floorOrder = vi.mocked(ensureMinimumResponseTime).mock.invocationCallOrder[0];
-      const auditOrder = (fastify.repositories.auditLogs.create as unknown as Mock).mock
-        .invocationCallOrder[0];
+      const eventOrder = emitUserEventMock.mock.invocationCallOrder[0];
       return {
         fastify,
         observed: {
@@ -548,7 +604,7 @@ describe('POST /auth/login', () => {
           metric: (fastify.metrics.loginAttempts.inc as unknown as Mock).mock.calls,
           // The floor each refusal is padded to (the start time differs per run).
           floor: vi.mocked(ensureMinimumResponseTime).mock.calls.map(([, floorMs]) => floorMs),
-          floorBeforeAudit: floorOrder !== undefined && floorOrder < auditOrder,
+          floorBeforeEvent: floorOrder !== undefined && floorOrder < eventOrder,
         },
       };
     }
@@ -586,7 +642,7 @@ describe('POST /auth/login', () => {
         statusCode: 401,
       });
       expect(fresh.observed).toEqual(taken.observed);
-      expect(fresh.observed.floorBeforeAudit).toBe(true);
+      expect(fresh.observed.floorBeforeEvent).toBe(true);
       expect(fresh.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
     });
@@ -613,11 +669,11 @@ describe('POST /auth/login', () => {
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
       // The reason survives where only operators read it.
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          metadata: expect.objectContaining({ error: 'Email address not verified' }),
-        })
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+        { method: 'password', reason: 'email_not_verified' },
+        expect.objectContaining({ realmId: 'realm-1', userId: 'user-1', actor: 'user' })
       );
     });
 

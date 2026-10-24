@@ -1,6 +1,6 @@
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -21,7 +21,20 @@ vi.mock('../../helpers/oauth-client', () => ({
 }));
 
 import { signSessionId } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import logoutRoute from './logout';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -50,6 +63,7 @@ function createReply(): ReplyStub {
 
 const VALID_USER = {
   id: 'user-logout-1',
+  realmId: 'realm-1',
   email: 'logout@example.com',
   emailVerified: true,
   enabled: true,
@@ -84,9 +98,6 @@ function createFastifyStub() {
       },
       refreshTokens: {
         revokeAllForUser: vi.fn().mockResolvedValue(undefined),
-      },
-      auditLogs: {
-        create: vi.fn().mockResolvedValue(undefined),
       },
     },
     jwtUtils: {
@@ -317,7 +328,7 @@ describe('POST /auth/logout', () => {
     expect(result).toMatchObject({ success: true, message: 'Successfully logged out' });
   });
 
-  it('records tokenExpired: true in the success audit metadata for an expired token', async () => {
+  it('records the sign-out of an expired token as user.signed_out', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('expired.access.jwt');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
@@ -329,20 +340,18 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await handler(logoutRequest('Bearer expired.access.jwt'), createReply());
+    const request = logoutRequest('Bearer expired.access.jwt');
+    await handler(request, createReply());
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: VALID_USER.id,
-        event: 'user.logout.success',
-        eventType: 'auth',
-        success: true,
-        metadata: { tokenExpired: true },
-      })
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:user.signed_out:v1-rc.0',
+      {},
+      { realmId: 'realm-1', userId: VALID_USER.id, actor: 'user' }
     );
   });
 
-  it('records tokenExpired: false in the success audit metadata for a valid token', async () => {
+  it('records the sign-out of a valid token as user.signed_out', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(loginClaims());
@@ -351,14 +360,14 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await handler(logoutRequest(), createReply());
+    const request = logoutRequest();
+    await handler(request, createReply());
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'user.logout.success',
-        success: true,
-        metadata: { tokenExpired: false },
-      })
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:user.signed_out:v1-rc.0',
+      {},
+      { realmId: 'realm-1', userId: VALID_USER.id, actor: 'user' }
     );
   });
 
@@ -376,6 +385,12 @@ describe('POST /auth/logout', () => {
     // No verification, no revocation when the header is absent.
     expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_out_failed:v1-rc.0',
+      { reason: 'missing_token' },
+      expect.objectContaining({ userId: null })
+    );
   });
 
   it('throws (401) and does NOT revoke when the JWT has a bad signature / is malformed', async () => {
@@ -442,7 +457,7 @@ describe('POST /auth/logout', () => {
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
-  it('throws (401) when the user does not exist, without revoking, and audits no user id', async () => {
+  it('throws (401) when the user does not exist, without revoking, and records no user', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
@@ -456,18 +471,16 @@ describe('POST /auth/logout', () => {
 
     await expect(handler(logoutRequest(), createReply())).rejects.toThrow(JWTInvalidError);
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
-    // `audit_logs.user_id` references `users`: the deleted subject goes to
-    // metadata, or the insert fails and the 401 becomes a 500 (#754).
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'user.logout.failure',
-        userId: null,
-        metadata: expect.objectContaining({ tokenSub: 'ghost-user' }),
-      })
+    // The deleted subject names no user, so the event has no subject (#754).
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_out_failed:v1-rc.0',
+      { reason: 'subject_not_a_user' },
+      { realmId: undefined, userId: null, actor: 'user' }
     );
   });
 
-  it('writes a failure audit log (user.logout.failure) when logout fails', async () => {
+  it('records a user.sign_out_failed event when logout fails', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('tampered.jwt');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
@@ -482,15 +495,13 @@ describe('POST /auth/logout', () => {
       JWTInvalidError
     );
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'user.logout.failure',
-        eventType: 'auth',
-        success: false,
-        // userId is unknown when verification fails before identifying the user.
-        userId: null,
-        metadata: expect.objectContaining({ error: 'Invalid token signature' }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_out_failed:v1-rc.0',
+      // A refused token, never the exception message.
+      { reason: 'invalid_token' },
+      // userId is unknown when verification fails before identifying the user.
+      expect.objectContaining({ userId: null, actor: 'user' })
     );
   });
 

@@ -26,6 +26,7 @@ import { env } from '../../../config/env';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
 import { clientAddressKey } from '../../helpers/client-address';
 import { unprotectOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
+import { emitUserEvent } from '../../helpers/user-events';
 import { provisionedVerifierMaterial } from '../../helpers/verifier-identity';
 import {
   publishWalletPresentationSignal,
@@ -449,28 +450,23 @@ export default async function (fastify: FastifyInstance) {
           ),
         };
 
-        // Audited only on the accepted path. A failed submission is logged but
-        // NOT audited: the endpoint is unauthenticated by construction, so
-        // auditing failures would hand any anonymous POST an unbounded DB-write
-        // primitive. Reaching here requires holding an unconsumed `state`, which
-        // an attacker cannot manufacture.
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'oid4vp.response.received',
-          eventType: 'auth',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] ?? null,
-          metadata: {
-            requestStateId: outcome.state.id,
-            realmId: outcome.state.realmId,
+        // Recorded only on the accepted path. A failed submission is logged
+        // but records NO event: the endpoint is unauthenticated by
+        // construction, so recording failures would hand any anonymous POST an
+        // unbounded DB-write primitive. Reaching here requires holding an
+        // unconsumed `state`, which an attacker cannot manufacture.
+        //
+        // No subject and no actor: the wallet posts this, and nothing here
+        // knows a person. The type itself says it is not a sign-in.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:wallet.presentation_received:v1-rc.0',
+          {
             verifierProfile: outcome.state.verifierProfile,
             presentationCount: outcome.presentations.length,
-            // Recorded so an audit reader cannot mistake this row for a login.
-            authenticated: false,
           },
-        });
+          { realmId: outcome.state.realmId }
+        );
 
         // Park the presented bytes for the browser waiting on this request
         // (#238). Attacker-controlled text, addressed by the digest of a `state`
@@ -487,8 +483,8 @@ export default async function (fastify: FastifyInstance) {
         // valid `vp_token` came back for a `state` we issued. It carries no
         // subject, no claims and no verdict, and the UI cannot turn it into a
         // session on its own — `helpers/wallet-presentation.ts` is the seam that
-        // does that, under a cookie-bound request. Deliberately AFTER the audit
-        // entry and best-effort: a wallet's acknowledgement must not depend on a
+        // does that, under a cookie-bound request. Deliberately AFTER the event
+        // and best-effort: a wallet's acknowledgement must not depend on a
         // store the wallet has no relationship with.
         await publishWalletPresentationSignal(fastify, stateHash, 'received');
 

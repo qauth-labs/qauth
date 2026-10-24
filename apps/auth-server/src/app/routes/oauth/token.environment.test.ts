@@ -12,6 +12,12 @@ import { InvalidGrantError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
@@ -134,7 +140,6 @@ function makeAuthCodeStub(opts: {
           },
         ]),
       },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     passwordHasher: {
       verifyPassword: vi.fn().mockResolvedValue(true),

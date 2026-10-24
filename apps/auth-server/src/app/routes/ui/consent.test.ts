@@ -14,10 +14,34 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import { env } from '../../../config/env';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
+import { emitUserEvent } from '../../helpers/user-events';
 import consentRoute from './consent';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
+
+/** The event types the route emitted, in order. */
+function emittedTypes(): string[] {
+  return emitUserEventMock.mock.calls.map((c) => c[1]);
+}
+
+/** The `data` and options of the first event of a type the route emitted. */
+function emitted(type: string): { data: unknown; options: unknown } | undefined {
+  const call = emitUserEventMock.mock.calls.find((c) => c[1] === type);
+  return call === undefined ? undefined : { data: call[2], options: call[3] };
+}
 
 /** Issuer the mock AS is configured with; discovery shapes it the same way. */
 const ISSUER = 'https://auth.example.com';
@@ -106,9 +130,6 @@ function makeFastify() {
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
       users: {
         findById: vi.fn(async (id: string) => ({ id, enabled: true })),
-      },
-      auditLogs: {
-        create: vi.fn().mockResolvedValue(undefined),
       },
     },
     jwtUtils: {
@@ -392,6 +413,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
     // response, so it identifies the AS exactly like a success does.
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:consent.denied:v1-rc.0',
+      { error: 'access_denied' },
+      { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' }
+    );
   });
 
   it('rejects when CSRF token does not match', async () => {
@@ -426,6 +453,13 @@ describe('UI /ui/consent POST — allow/deny', () => {
         reply
       )
     ).rejects.toThrow(/invalid_csrf_token/);
+    // The posted client_id is not resolved before the check, so the event names no client.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+      { form: 'consent' },
+      { userId: 'user-1', actor: 'user' }
+    );
   });
 
   it('allow + allow_forever persists consent and issues an authorization code', async () => {
@@ -596,6 +630,13 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    // The resource URIs are not recorded: the reason says what diverged.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:consent.denied:v1-rc.0',
+      { error: 'invalid_target', reason: 'consent_resource_mismatch' },
+      expect.objectContaining({ userId: 'user-1', clientId: 'app-123', actor: 'user' })
+    );
   });
 
   it.each([
@@ -742,6 +783,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:consent.denied:v1-rc.0',
+      { error: 'invalid_scope', reason: 'consent_scope_mismatch' },
+      { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' }
+    );
   });
 
   it('refuses a page rendered before the allowlist grew, even after a later render re-bound the session', async () => {
@@ -1241,6 +1288,12 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:consent.denied:v1-rc.0',
+      { error: 'invalid_scope', reason: 'agent_scope_mode_exceeded' },
+      expect.objectContaining({ userId: 'user-1', clientId: 'app-123', actor: 'user' })
+    );
   });
 
   it('POST allows an in-cap scope and issues a code', async () => {
@@ -1474,11 +1527,13 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     expect(stashed?.authorizeUrl).toContain('scope=write%3Afoo');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
-    // The step-up requirement is audited.
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
+    // The step-up requirement is recorded.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:step_up.required:v1-rc.0',
+      { reason: 'fresh_authentication_required', dangerousScopes: ['write:foo'] },
+      { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' }
     );
-    expect(events).toContain('oauth.stepup.required');
   });
 
   it('mints a dangerous-scope code on a FRESH session and audits the elevation', async () => {
@@ -1508,11 +1563,14 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     expect(state.redirected).toContain('code=');
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
-    );
-    expect(events).toContain('oauth.stepup.elevation');
-    expect(events).toContain('oauth.consent.granted');
+    expect(emittedTypes()).toEqual([
+      'urn:qauth:event:step_up.elevated:v1-rc.0',
+      'urn:qauth:event:consent.granted:v1-rc.0',
+    ]);
+    expect(emitted('urn:qauth:event:consent.granted:v1-rc.0')).toEqual({
+      data: { scopes: ['write:foo'], remembered: true, dangerousScopes: ['write:foo'] },
+      options: { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' },
+    });
   });
 
   it('per-agent audit (#186): elevation by an agent client attributes actor + scope mode', async () => {
@@ -1545,15 +1603,19 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     );
 
     expect(state.redirected).toContain('code=');
-    const elevation = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
-      .map((c) => c[0])
-      .find((a) => a?.event === 'oauth.stepup.elevation');
-    expect(elevation).toMatchObject({
-      userId: 'user-1',
-      actorClientId: 'app-123',
-      scopeMode: 'exec',
+    const elevation = emitted('urn:qauth:event:step_up.elevated:v1-rc.0');
+    // The user granted the elevation and is its actor; the agent is the
+    // event's client, and the scope mode it was granted is recorded.
+    expect(elevation).toEqual({
+      data: {
+        scopes: ['agent:exec'],
+        dangerousScopes: ['agent:exec'],
+        scopeMode: 'exec',
+        authenticatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
+      },
+      options: { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' },
     });
-    // No-leak: the step-up elevation row must carry no session/CSRF secret,
+    // No-leak: the step-up elevation event must carry no session/CSRF secret,
     // no minted code, and no token material — only public identifiers.
     const serialized = JSON.stringify(elevation);
     expect(serialized).not.toContain('csrf-su');
@@ -1585,11 +1647,16 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     );
 
     expect(state.redirected).toContain('code=');
-    const elevation = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
-      .map((c) => c[0])
-      .find((a) => a?.event === 'oauth.stepup.elevation');
-    // Non-agent client: the elevation is still audited, but with no agent fields.
-    expect(elevation).toMatchObject({ actorClientId: null, scopeMode: null });
+    const elevation = emitted('urn:qauth:event:step_up.elevated:v1-rc.0');
+    // Non-agent client: the elevation is still recorded, but with no scope mode.
+    expect(elevation).toEqual({
+      data: {
+        scopes: ['write:foo'],
+        dangerousScopes: ['write:foo'],
+        authenticatedAt: expect.any(String),
+      },
+      options: { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' },
+    });
   });
 
   it('forces fresh auth for prompt=login on a stale session even with a non-dangerous scope', async () => {
@@ -1614,6 +1681,13 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
 
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    // No dangerous scope: the event carries the prompt that forced the step-up.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:step_up.required:v1-rc.0',
+      { reason: 'fresh_authentication_required', prompt: 'login' },
+      expect.objectContaining({ userId: 'user-1', clientId: 'app-123' })
+    );
   });
 
   it('mints a non-dangerous scope without step-up on a stale session (no over-gating)', async () => {

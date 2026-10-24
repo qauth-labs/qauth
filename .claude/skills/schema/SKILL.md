@@ -119,7 +119,8 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `email_verification_tokens`   | `tokens.ts`      | Token hash + `credential_id` (NOT NULL → `user_credentials.id`; `user_id` dropped in #230)                     |
 | `authorization_codes`         | `tokens.ts`      | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`                                             |
 | `refresh_tokens`              | `tokens.ts`      | Opaque refresh tokens with `family_id` (RFC 9700 rotation family) + `resource`                                 |
-| `audit_logs`                  | `audit.ts`       | Auth/token/consent/client events with agent attribution (`actor_client_id`, `delegation_chain`, `scope_mode`)  |
+| `audit_logs`                  | `audit.ts`       | Read-only since #458 (rows copied into `events` by 0031); nothing may write it — `emitUserEvent` instead       |
+| `events`                      | `events.ts`      | Event store: outbox + log (ADR-019 D8); write via `emitUserEvent(request, type, data, { tx })` in auth-server  |
 | `admin_audit_log`             | `admin-audit.ts` | Admin operations, append-only (triggers), one hash chain per target realm; write via `appendAdminAudit(tx, …)` |
 | `admin_audit_log_checkpoints` | `admin-audit.ts` | `seq` + `row_hash` of the last row each `admin_audit_log_prune()` removed; the chain verifies from there       |
 | `realm_hosts`                 | `core.ts`        | Host → realm, PK `host`; `primary` (one per realm, permanent) or `endpoint`; written via `normaliseRealmHost`  |

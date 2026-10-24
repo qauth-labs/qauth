@@ -1,6 +1,8 @@
 import { BadRequestError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
+import { emitUserEvent } from './user-events';
+
 /**
  * Consent listing and revocation, shared by the two surfaces that expose it
  * (issue #150, issue #366).
@@ -17,9 +19,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
  *
  * What must NOT differ between them is the authorization: a caller may only
  * ever see and revoke consents whose `user_id` is their own, and every
- * revocation is audited. That is why both halves live here rather than being
- * written twice — the ownership check below is the security boundary, and a
- * second copy of it is a second chance to get it wrong.
+ * revocation is recorded as a `consent.revoked` event. That is why both
+ * halves live here rather than being written twice — the ownership check
+ * below is the security boundary, and a second copy of it is a second chance
+ * to get it wrong.
  */
 
 /** One row as both surfaces render it. */
@@ -51,9 +54,9 @@ export async function listConsentsForUser(
 
 /**
  * Revoke one consent row on behalf of `userId`, with the ownership check and
- * the audit entry both surfaces owe. Every unredeemed authorization code and
- * every refresh token the user holds for that client is revoked in the same
- * transaction.
+ * the event both surfaces owe. Every unredeemed authorization code and every
+ * refresh token the user holds for that client is revoked in the same
+ * transaction, and the `consent.revoked` event commits with them.
  *
  * Throws `NotFoundError` when the row does not exist OR belongs to another
  * user — deliberately the same outcome, so the API never reveals that someone
@@ -70,7 +73,9 @@ export async function revokeConsentForUser(
   userId: string,
   consentId: string
 ): Promise<void> {
-  const rows = await fastify.repositories.oauthConsents.listActiveForUser(userId);
+  // Joined to the client in the same query: the event names the client by its
+  // public `client_id`.
+  const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(userId);
   const owned = rows.find((row) => row.id === consentId);
   if (!owned) {
     throw new NotFoundError('OAuthConsent', consentId);
@@ -80,13 +85,13 @@ export async function revokeConsentForUser(
   // same transaction: otherwise the client keeps refreshing on a grant that no
   // longer exists, and a failure between the two steps could leave the
   // consent gone (so a retry 404s) with its refresh tokens still live.
-  const refreshTokensRevoked = await fastify.db.transaction(async (tx) => {
+  await fastify.db.transaction(async (tx) => {
     try {
       await fastify.repositories.oauthConsents.revoke(consentId, tx);
     } catch (err) {
       if (err instanceof NotFoundError) {
         // Raced with another tab — idempotent success. The refresh tokens are
-        // still revoked below and the intent is still audited.
+        // still revoked below and the intent is still recorded.
       } else if (err instanceof BadRequestError) {
         throw err;
       } else {
@@ -102,22 +107,26 @@ export async function revokeConsentForUser(
       owned.oauthClientId,
       tx
     );
-    return fastify.repositories.refreshTokens.revokeAllForUserAndClient(
+    const revokedRefreshCount = await fastify.repositories.refreshTokens.revokeAllForUserAndClient(
       userId,
       owned.oauthClientId,
       'consent_revoked',
       tx
     );
-  });
 
-  await fastify.repositories.auditLogs.create({
-    userId,
-    oauthClientId: owned.oauthClientId,
-    event: 'oauth.consent.revoked',
-    eventType: 'auth',
-    success: true,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: { consentId, refreshTokensRevoked },
+    // In the same transaction: the event commits with the revocation, or
+    // neither does.
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:consent.revoked:v1-rc.0',
+      { consentId, revokedRefreshCount },
+      {
+        tx,
+        realmId: owned.realmId,
+        userId,
+        clientId: owned.clientClientId,
+        actor: 'user',
+      }
+    );
   });
 }

@@ -6,6 +6,12 @@ vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 vi.mock('../../../config/env', () => ({
   env: {
     DEFAULT_REALM_NAME: 'master',
@@ -33,7 +39,14 @@ import {
   resetFailedAttempts,
 } from '../../helpers/failed-login';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent } from '../../helpers/user-events';
 import loginRoute from './login';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 interface TestContext {
   get?: (request: any, reply: any) => Promise<unknown>;
@@ -104,9 +117,6 @@ function makeFastify() {
       userCredentials: {
         findByRealmProviderSub: vi.fn(),
         findById: vi.fn(),
-      },
-      auditLogs: {
-        create: vi.fn().mockResolvedValue(undefined),
       },
     },
     passwordHasher: {
@@ -209,10 +219,12 @@ describe('UI /ui/login — CSRF defence', () => {
     // The DB / password path must never be reached on a CSRF failure.
     expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
     expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+      { form: 'sign_in' },
+      { actor: 'user' }
     );
-    expect(events).toContain('ui.login.csrf_failure');
   });
 
   it('POST succeeds when the submitted token matches the signed cookie', async () => {
@@ -268,6 +280,15 @@ describe('UI /ui/login — CSRF defence', () => {
     const sessionId = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][0];
     const redis = (fastify as unknown as { redis: { chain: { sadd: Mock } } }).redis;
     expect(redis.chain.sadd).toHaveBeenCalledWith('user-browser-sessions:user-1', sessionId);
+
+    // The sign-in is recorded for its user, without the session id or the
+    // return path.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:user.signed_in:v1-rc.0',
+      { method: 'password' },
+      { realmId: 'realm-1', userId: 'user-1', actor: 'user' }
+    );
   });
 
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
@@ -327,6 +348,13 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      // No subject and never the typed address: a locked-out attempt names no user.
+      expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+        { method: 'password', reason: 'locked_out' },
+        { actor: 'user' }
+      );
     });
 
     it('counts the attempt before the password is verified, with the API login identifiers', async () => {
@@ -378,15 +406,16 @@ describe('UI /ui/login — CSRF defence', () => {
         redirected: state.redirected,
         body: String(state.body).replace(/name="csrf_token" value="[^"]*"/, 'CSRF'),
       });
-      /** Whether the timing floor ran before the audit write, as on every refusal. */
-      const floorFirst = (fastify: FastifyInstance) =>
+      /** Whether the timing floor ran before the event, as on every refusal. */
+      const floorFirst = () =>
         vi.mocked(ensureMinimumResponseTime).mock.invocationCallOrder.at(-1)! <
-        (fastify.repositories.auditLogs.create as unknown as Mock).mock.invocationCallOrder.at(-1)!;
+        emitUserEventMock.mock.invocationCallOrder.at(-1)!;
 
       // A just-registered FREE address, signed in with the password its
       // registrant chose: right password, unverified account.
       const fresh = await postLogin({ verifies: true, emailVerified: false });
-      const freshFloorFirst = floorFirst(fresh.fastify);
+      const freshFloorFirst = floorFirst();
+      const freshEvents = [...emitUserEventMock.mock.calls];
       // The same attempt on an address that was already registered: wrong
       // password for the owner's verified account.
       const taken = await postLogin({ verifies: false, emailVerified: true });
@@ -397,19 +426,29 @@ describe('UI /ui/login — CSRF defence', () => {
         'If you have just registered, confirm your email address first'
       );
       expect(freshFloorFirst).toBe(true);
-      expect(floorFirst(taken.fastify)).toBe(true);
+      expect(floorFirst()).toBe(true);
       expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
       expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
       expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
-      // The reason is kept where only operators read it.
-      expect(fresh.fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          metadata: { email: 'user@example.com', reason: 'email_not_verified' },
-        })
+      // The reason is kept where only operators read it, with the unverified
+      // account as the subject; the wrong password names no user.
+      expect(freshEvents).toEqual([
+        [
+          expect.anything(),
+          'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+          { method: 'password', reason: 'email_not_verified' },
+          { realmId: 'realm-1', userId: 'user-1', actor: 'user' },
+        ],
+      ]);
+      expect(emitUserEventMock).toHaveBeenLastCalledWith(
+        expect.anything(),
+        'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+        { method: 'password', reason: 'invalid_credentials' },
+        { realmId: 'realm-1', userId: null, actor: 'user' }
       );
+      expect(emitUserEventMock).toHaveBeenCalledTimes(2);
     });
 
     it('still signs in an unverified credential when an operator turns REQUIRE_VERIFIED_ACCOUNT off', async () => {
@@ -487,6 +526,12 @@ describe('UI /ui/login — CSRF defence', () => {
 
     expect(state.statusCode).toBe(401);
     expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'password', reason: 'invalid_credentials' },
+      { realmId: 'realm-1', userId: null, actor: 'user' }
+    );
   });
 
   it('POST with a tampered token whose signature does not validate is rejected (403)', async () => {
@@ -610,8 +655,9 @@ describe('UI /ui/login — return_to open-redirect guard', () => {
 });
 
 describe('UI /ui/login — the email field is bounded', () => {
-  // A refused sign-in writes the address to `audit_logs`; with no bound, one
-  // anonymous request stored a 1 MiB row. RFC 5321 caps an address at 254.
+  // A refused sign-in once wrote the address to `audit_logs`, and with no bound
+  // one anonymous request stored a 1 MiB row; the refusal page still renders it
+  // back. RFC 5321 caps an address at 254.
   it('the form schema refuses an address longer than 254 characters', async () => {
     const { fastify, ctx } = makeFastify();
     await loginRoute(fastify);

@@ -21,6 +21,7 @@ import {
   setLoginCsrfCookie,
   verifyLoginCsrfCookie,
 } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import {
   advanceWalletLinkFlow,
   startWalletLinkFlow,
@@ -366,16 +367,12 @@ export default async function (fastify: FastifyInstance) {
       // signed-in user's session.
       const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: null,
-          event: 'auth.wallet_link.csrf_failure',
-          eventType: 'security',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { surface: 'ui' },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+          { form: 'wallet_link' },
+          { userId: session.userId, actor: 'user' }
+        );
         const freshCsrf = generateCsrfToken();
         setLoginCsrfCookie(reply, freshCsrf);
         return sendHtml(

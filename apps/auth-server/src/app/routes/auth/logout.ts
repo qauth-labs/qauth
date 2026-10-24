@@ -15,11 +15,22 @@ import {
   verifySignedSessionId,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
+import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
 /**
+ * The `reason` of a refused sign-out: the one tagged where it was thrown,
+ * else `invalid_token` for a refused token and `internal_error` for anything
+ * unexpected.
+ */
+function signOutFailureReason(error: unknown): string {
+  const { error: code, reason } = failureData(error);
+  return reason ?? (code === 'server_error' ? 'internal_error' : code);
+}
+
+/**
  * Logout route
- * Handles JWT verification, refresh token revocation, and audit logging
+ * Handles JWT verification, refresh token revocation, and its sign-out events
  * Allows logout even with expired tokens (user is ending their session anyway)
  */
 export default async function (fastify: FastifyInstance) {
@@ -46,10 +57,10 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      // `userId` is set only once the lookup below confirms a user owns the
-      // token's subject; until then the subject is only `tokenSub`.
+      // `userId` (and the user's realm) is set only once the lookup below
+      // confirms a user owns the token's subject.
       let userId: string | undefined;
-      let tokenSub: string | undefined;
+      let realmId: string | undefined;
       let isExpired = false;
 
       try {
@@ -58,8 +69,11 @@ export default async function (fastify: FastifyInstance) {
         const token = fastify.jwtUtils.extractFromHeader(authHeader);
 
         if (!token) {
-          throw new JWTInvalidError(
-            'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
+          throw withEventReason(
+            new JWTInvalidError(
+              'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
+            ),
+            'missing_token'
           );
         }
 
@@ -88,10 +102,10 @@ export default async function (fastify: FastifyInstance) {
         // issued to another client or audience cannot end the user's sessions.
         // A disabled user may still sign out: logout only ends access.
         await assertManagementToken(fastify, claims, { requireActiveUser: false });
-        tokenSub = claims.sub;
+        const tokenSub = claims.sub;
 
         if (!tokenSub) {
-          throw new JWTInvalidError('Invalid JWT token');
+          throw withEventReason(new JWTInvalidError('Invalid JWT token'), 'subject_not_a_user');
         }
 
         // A subject that names no user, deleted since the token was minted,
@@ -99,9 +113,13 @@ export default async function (fastify: FastifyInstance) {
         // `invalid_token`): there is nothing left to sign out.
         const user = await fastify.repositories.users.findById(tokenSub);
         if (!user) {
-          throw new JWTInvalidError('Access token subject is not a user');
+          throw withEventReason(
+            new JWTInvalidError('Access token subject is not a user'),
+            'subject_not_a_user'
+          );
         }
         userId = user.id;
+        realmId = user.realmId;
 
         // End the user's hosted browser sessions first, so none of them can
         // obtain a new authorization code once the codes are invalidated
@@ -131,19 +149,13 @@ export default async function (fastify: FastifyInstance) {
           await revokeJti(fastify, claims.jti, claims.exp - Math.floor(Date.now() / 1000));
         }
 
-        // Log audit event (success)
-        await fastify.repositories.auditLogs.create({
-          userId: user.id,
-          oauthClientId: null,
-          event: 'user.logout.success',
-          eventType: 'auth',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            tokenExpired: isExpired,
-          },
-        });
+        // Record the sign-out
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.signed_out:v1-rc.0',
+          {},
+          { realmId: user.realmId, userId: user.id, actor: 'user' }
+        );
 
         // Structured success log (#124).
         logAuthEvent(request, 'user.logout.success', true, { userId: user.id });
@@ -159,22 +171,15 @@ export default async function (fastify: FastifyInstance) {
           reason: error instanceof Error ? error.name : 'unknown_error',
         });
 
-        // Log failed logout attempt. `audit_logs.user_id` references `users`:
-        // a subject no user owns would fail the insert and turn the refusal
-        // into a 500, so it is kept in `metadata.tokenSub` instead.
-        await fastify.repositories.auditLogs.create({
-          userId: userId ?? null,
-          oauthClientId: null,
-          event: 'user.logout.failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            error: error instanceof Error ? error.message : 'Unknown error',
-            ...(userId === undefined && tokenSub ? { tokenSub } : {}),
-          },
-        });
+        // Record the refused sign-out. Only a subject the lookup above
+        // confirmed is the event's subject: any other token subject names no
+        // user.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.sign_out_failed:v1-rc.0',
+          { reason: signOutFailureReason(error) },
+          { realmId, userId: userId ?? null, actor: 'user' }
+        );
 
         throw error;
       }

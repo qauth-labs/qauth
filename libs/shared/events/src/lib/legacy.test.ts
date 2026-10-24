@@ -20,26 +20,30 @@ function sourceFiles(dir: string): string[] {
 const QUOTED_NAME = /'([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)'/g;
 
 /**
- * Every event name the server writes today, found the way the pull request
- * of #456 lists them: the value of each `event:` property (audit rows, both
- * branches of a ternary included), each `logAuthEvent(...)` name, and the
- * `AuthEventName` union of the log-only names.
+ * The event names a source file writes, found the way the pull request of
+ * #456 listed them: `audit` holds the value of each `event:` property (an
+ * audit row, both branches of a ternary included); `log` holds each
+ * `logAuthEvent(...)` name and the `AuthEventName` union of the logged names.
  */
-function eventNamesIn(source: string): string[] {
-  const names = new Set<string>();
+function eventNamesIn(source: string): { audit: string[]; log: string[] } {
+  const audit = new Set<string>();
+  const log = new Set<string>();
   for (const match of source.matchAll(/\bevent:\s*([^\n]+)/g)) {
-    for (const name of match[1].matchAll(QUOTED_NAME)) names.add(name[1]);
+    for (const name of match[1].matchAll(QUOTED_NAME)) audit.add(name[1]);
   }
-  for (const match of source.matchAll(/logAuthEvent\(\s*\w+,\s*'([^']+)'/g)) names.add(match[1]);
+  for (const match of source.matchAll(/logAuthEvent\(\s*\w+,\s*'([^']+)'/g)) log.add(match[1]);
   const union = /export type AuthEventName =([^;]+);/.exec(source);
-  if (union) for (const name of union[1].matchAll(QUOTED_NAME)) names.add(name[1]);
-  return [...names];
+  if (union) for (const name of union[1].matchAll(QUOTED_NAME)) log.add(name[1]);
+  return { audit: [...audit], log: [...log] };
 }
 
-function searchEventNames(dir: string): Map<string, string[]> {
+/** Each name found under `dir`, with the files that write it, by kind. */
+function searchEventNames(dir: string, kind: 'audit' | 'log' | 'all'): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const file of sourceFiles(join(REPO_ROOT, dir))) {
-    for (const name of eventNamesIn(readFileSync(file, 'utf8'))) {
+    const names = eventNamesIn(readFileSync(file, 'utf8'));
+    const picked = kind === 'all' ? [...names.audit, ...names.log] : names[kind];
+    for (const name of new Set(picked)) {
       found.set(name, [...(found.get(name) ?? []), relative(REPO_ROOT, file)]);
     }
   }
@@ -47,22 +51,17 @@ function searchEventNames(dir: string): Map<string, string[]> {
 }
 
 describe('the map from earlier event names to registered types', () => {
-  const server = searchEventNames('apps/auth-server/src');
-  // The client-suspension script writes audit rows from outside the server.
-  const scripts = searchEventNames('libs/infra/db/src/scripts');
+  const server = searchEventNames('apps/auth-server/src', 'all');
+  const scripts = searchEventNames('libs/infra/db/src/scripts', 'all');
+  const logged = searchEventNames('apps/auth-server/src', 'log');
+  const logNames = LEGACY_EVENT_MAP.filter((m) => m.source === 'log').map((m) => m.event);
 
-  it('finds the event names the server writes today', () => {
-    // A guard on the search itself: it must keep finding the known names, so
-    // a change of call shape cannot empty it and pass the test below vacuously.
-    expect(server.size).toBeGreaterThanOrEqual(40);
-    for (const name of [
-      'oauth.token.exchange.failure',
-      'ui.wallet_login.success',
-      'user.register.success',
-    ]) {
-      expect(server.has(name)).toBe(true);
+  it('finds the log-only event names the server still writes', () => {
+    // A guard on the search itself: it must keep finding the log names, so a
+    // change of call shape cannot empty it and pass the tests below vacuously.
+    for (const name of ['user.login.failure', 'user.register.success', 'user.logout.success']) {
+      expect(logged.has(name), name).toBe(true);
     }
-    expect(scripts.has('oauth.client.suspended')).toBe(true);
   });
 
   // The acceptance criterion of #456: the map covers every event string a
@@ -74,11 +73,20 @@ describe('the map from earlier event names to registered types', () => {
     expect(unmapped).toEqual([]);
   });
 
-  it('holds no name that is written nowhere', () => {
-    const stale = LEGACY_EVENT_MAP.map((m) => m.event).filter(
-      (name) => !server.has(name) && !scripts.has(name)
-    );
-    expect(stale).toEqual([]);
+  // Since #458 no audit row is written: the server and the suspension tool
+  // record events, and the audit names live on only as the input of the
+  // backfill (migration 0031, whose own test keeps its copy of the map equal
+  // to this one). An audit-row write would bring an `event:` name back.
+  it('finds no audit row written anywhere any more', () => {
+    const written = [
+      ...searchEventNames('apps/auth-server/src', 'audit'),
+      ...searchEventNames('libs/infra/db/src/scripts', 'audit'),
+    ].map(([name, files]) => `${name} (${files.join(', ')})`);
+    expect(written).toEqual([]);
+  });
+
+  it('holds no log-only name that is logged nowhere', () => {
+    expect(logNames.filter((name) => !logged.has(name))).toEqual([]);
   });
 
   it('maps each name once, to a registered type', () => {
@@ -101,7 +109,6 @@ describe('the map from earlier event names to registered types', () => {
   });
 
   it('records whether a name was an audit row or only a log line', () => {
-    const logOnly = LEGACY_EVENT_MAP.filter((m) => m.source === 'log').map((m) => m.event);
-    expect(logOnly.sort()).toEqual(['user.register.failure', 'user.register.success']);
+    expect([...logNames].sort()).toEqual(['user.register.failure', 'user.register.success']);
   });
 });

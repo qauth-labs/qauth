@@ -291,7 +291,11 @@ file's \`$id\` is its URL. The envelope's own schema accepts an event of any typ
     `## Earlier event names`,
     `Before the event contract, QAuth wrote free-form event names to its audit log and its log
 lines. Each becomes a registered type. Several earlier names become one type, and the name implied
-some \`data\`, which an audit row copied into the event store receives.`,
+some \`data\`. Since 0.2.0 the auth server records events and writes no audit row; the upgrade
+copies every audit row into the event store with this map. A copied event gets the \`data\` its name
+implies and the members of the old row that have the declared form. A required member an old row
+cannot supply gets a fixed value: \`unknown\` for a code, \`false\` for a flag, an empty list, \`0\`
+for a count or the nil UUID for an id. Log lines keep their names.`,
     legacyTable(),
   ];
   return `${sections.join('\n\n')}\n`;

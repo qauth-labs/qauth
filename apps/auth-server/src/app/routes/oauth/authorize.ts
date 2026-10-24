@@ -44,7 +44,22 @@ import {
   stepUpErrorForPromptNone,
 } from '../../helpers/step-up';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
+
+/** A `snake_case` code, the form an event's `reason` takes. */
+const REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * The `reason` of the failure event for a `client_id` that resolved to no
+ * client. `resolveClient` answers `invalid_client` for an unknown client, a
+ * code for a CIMD resolution that failed, and the refusal's prose (for the
+ * operator's log) for a CIMD document it refused.
+ */
+function unresolvedClientReason(reason: string | undefined): string {
+  if (reason === undefined || reason === 'invalid_client') return 'unknown_client';
+  return REASON_CODE.test(reason) ? reason : 'cimd_client_refused';
+}
 
 /**
  * The authorize request expressed as a URL with its parameters in the query
@@ -147,23 +162,28 @@ export default async function (fastify: FastifyInstance) {
     // Client resolution priority (MCP 2025-11-25): pre-registered (DB) →
     // CIMD (https-URL client_id, fetched + SSRF-guarded + validated, then
     // idempotently materialised as a row) → unknown. A resolved CIMD
-    // client is a real persisted row, so the existing audit / auth-code /
+    // client is a real persisted row, so the existing auth-code /
     // refresh-token foreign keys work unchanged. See client-resolution.ts.
     const { client, reason } = await resolveClient(fastify, realm.id, query.client_id);
 
     if (!client) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: null,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: reason ?? 'invalid_client', client_id: query.client_id },
-      });
+      // No client resolved: the `client_id` the request named is not one,
+      // so the event names no client.
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_client', reason: unresolvedClientReason(reason) },
+        { realmId: realm.id, actor: 'client' }
+      );
       throw new BadRequestError('invalid_client');
     }
+
+    // Who the events below name until a user is known: the requesting client.
+    const clientEvent: UserEventOptions = {
+      realmId: realm.id,
+      clientId: client.clientId,
+      actor: 'client',
+    };
 
     // CIMD §: the authorization request's redirect_uri MUST exactly match
     // one of the document's redirect_uris (this list came from the
@@ -173,16 +193,12 @@ export default async function (fastify: FastifyInstance) {
     // everything downstream uses the REQUESTED URI, so the code is bound to
     // and the response goes to the port the client is listening on.
     if (!redirectUriMatchesRegistered(redirectUri, client.redirectUris)) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'redirect_uri not registered', client_id: query.client_id },
-      });
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_request', reason: 'redirect_uri_not_registered' },
+        clientEvent
+      );
       throw new BadRequestError('redirect_uri not registered');
     }
 
@@ -200,25 +216,19 @@ export default async function (fastify: FastifyInstance) {
     // matching the unregistered-URI handling.
     const policy = resolveEnvironmentPolicy(client, realm);
     if (!isRedirectUriAllowedForPolicy(redirectUri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'redirect_uri not permitted for this environment',
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        {
+          error: 'invalid_request',
           reason: !isAllowedRedirectUriScheme(redirectUri, env.REDIRECT_URI_CUSTOM_SCHEMES)
             ? 'redirect_uri_scheme_not_allowed'
             : isHttpLocalhostRedirect(redirectUri)
               ? 'http_localhost_redirect_requires_development'
               : 'http_redirect_requires_loopback',
-          client_id: query.client_id,
-          environment: policy.environment,
         },
-      });
+        clientEvent
+      );
       throw new BadRequestError('redirect_uri not permitted for this environment');
     }
 
@@ -240,16 +250,12 @@ export default async function (fastify: FastifyInstance) {
       unauthorizedReason = 'client is not registered for the code response type';
     }
     if (unauthorizedReason) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'unauthorized_client', client_id: query.client_id },
-      });
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'unauthorized_client' },
+        clientEvent
+      );
       throw new UnauthorizedClientError(unauthorizedReason);
     }
 
@@ -281,20 +287,12 @@ export default async function (fastify: FastifyInstance) {
       // choosing. `sendAuthorizationError` shows the error on the issuer for
       // such a client instead (RFC 9700 §4.11.2, ANT-2026-O8U3P920).
       if (query.prompt === 'none') {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: client.id,
-          event: 'oauth.stepup.required',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            client_id: query.client_id,
-            reason: 'prompt_none_no_session',
-            error: 'login_required',
-          },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          { reason: 'prompt_none_no_session', error: 'login_required' },
+          clientEvent
+        );
         return sendAuthorizationError(reply, client, redirectUri, {
           error: 'login_required',
           error_description: 'authentication is required but prompt=none was requested',
@@ -346,16 +344,12 @@ export default async function (fastify: FastifyInstance) {
         }
         userId = payload.sub;
       } catch {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: client.id,
-          event: 'oauth.authorize.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { error: 'access_denied', client_id: query.client_id },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:authorization.failed:v1-rc.0',
+          { error: 'access_denied' },
+          clientEvent
+        );
         return sendAuthorizationError(reply, client, redirectUri, {
           error: 'access_denied',
           error_description: 'Invalid or expired token',
@@ -373,23 +367,22 @@ export default async function (fastify: FastifyInstance) {
     // having the offending scope silently dropped, so an over-asking agent
     // gets a clear error. `filterRequestedScopes` then applies the ordinary
     // allowlist to whatever survives.
+    // The signed-in user is the subject and the actor of the events below.
+    const userEvent: UserEventOptions = {
+      realmId: realm.id,
+      userId,
+      clientId: client.clientId,
+      actor: 'user',
+    };
+
     const exceedingAgentScopes = findExceedingAgentScopesForClient(query.scope, client);
     if (exceedingAgentScopes.length > 0) {
-      await fastify.repositories.auditLogs.create({
-        userId,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'invalid_scope',
-          reason: 'agent_scope_mode_exceeded',
-          client_id: query.client_id,
-          exceeding: exceedingAgentScopes.join(' '),
-        },
-      });
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_scope', reason: 'agent_scope_mode_exceeded' },
+        userEvent
+      );
       return sendAuthorizationError(reply, client, redirectUri, {
         error: 'invalid_scope',
         error_description: 'requested scope exceeds the agent scope mode for this client',
@@ -431,20 +424,16 @@ export default async function (fastify: FastifyInstance) {
     if (!browserSession && policy.agentStepUpEnforced) {
       const bearerDangerous = scopes.filter(isDangerousScope);
       if (bearerDangerous.length > 0) {
-        await fastify.repositories.auditLogs.create({
-          userId,
-          oauthClientId: client.id,
-          event: 'oauth.stepup.required',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            client_id: query.client_id,
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          {
             reason: 'bearer_path_dangerous_scope_requires_interactive_stepup',
-            dangerous: bearerDangerous,
+            error: 'access_denied',
+            dangerousScopes: bearerDangerous,
           },
-        });
+          userEvent
+        );
         return sendAuthorizationError(reply, client, redirectUri, {
           error: 'access_denied',
           error_description:
@@ -468,20 +457,12 @@ export default async function (fastify: FastifyInstance) {
     // Decision 9: every path other than an operator-flagged first-party
     // client requires consent).
     if (!browserSession && !canSkipConsent(existingConsent, client, scopes, resources)) {
-      await fastify.repositories.auditLogs.create({
-        userId,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'access_denied',
-          reason: 'bearer_path_no_covering_consent',
-          client_id: query.client_id,
-        },
-      });
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'access_denied', reason: 'bearer_path_no_covering_consent' },
+        userEvent
+      );
       return sendAuthorizationError(reply, client, redirectUri, {
         error: 'access_denied',
         error_description:
@@ -534,22 +515,17 @@ export default async function (fastify: FastifyInstance) {
           stepUpErrorForPromptNone(stepUp) ??
           (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required');
         if (oidcError) {
-          await fastify.repositories.auditLogs.create({
-            userId,
-            oauthClientId: client.id,
-            event: 'oauth.stepup.required',
-            eventType: 'auth',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              client_id: query.client_id,
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:step_up.required:v1-rc.0',
+            {
               reason: 'prompt_none_interaction_required',
               error: oidcError,
-              elevated: stepUp.elevated,
-              dangerous: stepUp.dangerous,
+              elevatedScopes: stepUp.elevated,
+              dangerousScopes: stepUp.dangerous,
             },
-          });
+            userEvent
+          );
           return sendAuthorizationError(reply, client, redirectUri, {
             error: oidcError,
             error_description: 'user interaction is required but prompt=none was requested',
@@ -568,23 +544,18 @@ export default async function (fastify: FastifyInstance) {
         // max_age / scope / PKCE) is preserved so the round-trip is lossless —
         // stashed server-side under a handle, same as the no-session branch
         // above (#316 follow-up), so this path cannot regrow the header either.
-        await fastify.repositories.auditLogs.create({
-          userId,
-          oauthClientId: client.id,
-          event: 'oauth.stepup.required',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            client_id: query.client_id,
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          {
             reason: 'fresh_authentication_required',
-            elevated: stepUp.elevated,
-            dangerous: stepUp.dangerous,
-            prompt: prompt ?? null,
-            maxAge: query.max_age ?? null,
+            elevatedScopes: stepUp.elevated,
+            dangerousScopes: stepUp.dangerous,
+            ...(prompt === null ? {} : { prompt }),
+            ...(query.max_age === undefined ? {} : { maxAge: query.max_age }),
           },
-        });
+          userEvent
+        );
         return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
       }
 
@@ -598,21 +569,16 @@ export default async function (fastify: FastifyInstance) {
         (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes, resources))
       ) {
         if (stepUp.elevated.length > 0) {
-          await fastify.repositories.auditLogs.create({
-            userId,
-            oauthClientId: client.id,
-            event: 'oauth.stepup.required',
-            eventType: 'auth',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              client_id: query.client_id,
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:step_up.required:v1-rc.0',
+            {
               reason: 'incremental_consent_required',
-              elevated: stepUp.elevated,
-              dangerous: stepUp.dangerous,
+              elevatedScopes: stepUp.elevated,
+              dangerousScopes: stepUp.dangerous,
             },
-          });
+            userEvent
+          );
         }
         // Carry the authorize params to the consent screen. Guard the `?`
         // index: `buildAuthorizeUrlWithParams` can return a query-less path
@@ -634,7 +600,7 @@ export default async function (fastify: FastifyInstance) {
     // locked `FOR SHARE` in the transaction that inserts the code: a
     // revocation either waits for this transaction to commit, or committed
     // first and the re-read finds no covering consent, in which case no code
-    // is issued (`null`).
+    // is issued (`null`). The issued code's event commits with it.
     const createCode = async (): Promise<string | null> => {
       const code = randomBytes(32).toString('base64url');
       return fastify.db.transaction(async (tx) => {
@@ -678,6 +644,12 @@ export default async function (fastify: FastifyInstance) {
           },
           tx
         );
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:authorization.completed:v1-rc.0',
+          {},
+          { ...userEvent, tx }
+        );
         return code;
       });
     };
@@ -702,20 +674,15 @@ export default async function (fastify: FastifyInstance) {
       // the revocation gets: `access_denied` on the Bearer path (no screen
       // to show), `consent_required` under `prompt=none`, else the consent
       // screen (whose POST runs its own step-up gate).
-      await fastify.repositories.auditLogs.create({
-        userId,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          error: 'consent_required',
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        {
+          error: browserSession ? 'consent_required' : 'access_denied',
           reason: 'consent_withdrawn_during_authorization',
-          client_id: query.client_id,
         },
-      });
+        userEvent
+      );
       if (!browserSession) {
         return sendAuthorizationError(reply, client, redirectUri, {
           error: 'access_denied',
@@ -738,17 +705,6 @@ export default async function (fastify: FastifyInstance) {
       return reply.redirect(`/ui/consent${returnQuery}`, 302);
     }
     if (!code) throw new Error('Unreachable');
-
-    await fastify.repositories.auditLogs.create({
-      userId,
-      oauthClientId: client.id,
-      event: 'oauth.authorize.success',
-      eventType: 'token',
-      success: true,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: { redirectUri },
-    });
 
     return reply.redirect(
       buildRedirectUrl(redirectUri, { code, state: state ?? undefined, iss }),

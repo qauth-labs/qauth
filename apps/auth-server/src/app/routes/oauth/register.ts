@@ -9,6 +9,7 @@ import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
+import { emitUserEvent } from '../../helpers/user-events';
 import {
   type DynamicClientRegistrationRequest,
   dynamicClientRegistrationRequestSchema,
@@ -205,23 +206,25 @@ export default async function (fastify: FastifyInstance) {
         },
       });
 
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: created.id,
-        event: 'oauth.client.registered',
-        eventType: 'client',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          registrationType: 'dynamic',
-          clientId,
+      // The new client registered itself: it is the subject and the actor.
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:client.created:v1-rc.0',
+        {
+          registration: 'dynamic',
           isPublic: normalized.isPublic,
           isAgent: normalized.isAgent,
           grantTypes: normalized.grantTypes,
           scopes: normalized.scopes,
+          authMethod: normalized.tokenEndpointAuthMethod,
         },
-      });
+        {
+          realmId: realm.id,
+          subject: { type: 'client', id: clientId },
+          clientId,
+          actor: 'client',
+        }
+      );
 
       const issuedAtSeconds = Math.floor(created.createdAt / 1000);
 

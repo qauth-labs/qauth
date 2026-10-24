@@ -560,6 +560,11 @@ operator to change this."
 
 ## Surface D — activity feed and metrics tiles
 
+> **Since 0.2.0 (#458) nothing writes `audit_logs`.** The auth server records events in the event
+> store, and the upgrade copied the audit rows there. The feed reads the event store, whose reads
+> always take a realm and filter by subject and client. The repository methods below read the
+> table as it stood; it is read-only until a later release drops it.
+
 **Shipped foundation.** The audit-logs repository has four read methods.
 `findByRealmId` (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:112`),
 `findByRealmAndUserId` (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:155`) and

@@ -10,6 +10,7 @@ import {
   csrfTokensEqual,
   generateCsrfToken,
 } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 
 /**
  * Consent management JSON API (issue #150).
@@ -129,22 +130,18 @@ export default async function (fastify: FastifyInstance) {
       // closes the same-origin XSS gap that SameSite=Lax does not address.
       const provided = request.headers[CSRF_HEADER] as string | undefined;
       if (!csrfTokensEqual(provided, session.apiCsrfToken)) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: null,
-          event: 'consents.revoke.csrf_failure',
-          eventType: 'security',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { reason: 'missing_or_mismatched_csrf_token' },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+          { form: 'consent_revocation' },
+          { userId: session.userId, actor: 'user' }
+        );
         throw new BadRequestError('invalid_csrf_token');
       }
 
       const { id } = request.params as { id: string };
 
-      // Ownership check + audit live in `helpers/consent-management` so this
+      // Ownership check + event live in `helpers/consent-management` so this
       // surface and the Bearer-authenticated `/api/consents` cannot drift on
       // the security boundary (#366).
       await revokeConsentForUser(fastify, request, session.userId, id);

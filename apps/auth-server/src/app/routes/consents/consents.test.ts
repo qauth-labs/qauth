@@ -1,6 +1,6 @@
 import { BadRequestError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -10,7 +10,23 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+import { emitUserEvent } from '../../helpers/user-events';
 import consentsRoute from './index';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
+
+/** A consent id, a UUID as `oauth_consents.id` is. */
+const CONSENT_ID = '0190c000-0000-7000-8000-0000000000c1';
 
 interface TestContext {
   get?: (request: any, reply: any) => Promise<unknown>;
@@ -59,7 +75,6 @@ function makeFastify() {
     }),
     repositories: {
       oauthConsents: {
-        listActiveForUser: vi.fn(),
         listActiveForUserWithClient: vi.fn(),
         revoke: vi.fn(),
       },
@@ -68,7 +83,6 @@ function makeFastify() {
       },
       authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(0) },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
       users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
     },
@@ -209,16 +223,19 @@ describe('/consents JSON API', () => {
       ctx.delete!(
         {
           headers: { cookie: `__Host-qauth_session=${signed}` },
-          params: { id: 'c1' },
+          params: { id: CONSENT_ID },
           ip: '1.1.1.1',
         },
         reply
       )
     ).rejects.toThrow(BadRequestError);
     expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
-    // Audit logs the CSRF failure.
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'consents.revoke.csrf_failure', success: false })
+    // The CSRF refusal is recorded.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+      { form: 'consent_revocation' },
+      { userId: 'u1', actor: 'user' }
     );
   });
 
@@ -236,7 +253,7 @@ describe('/consents JSON API', () => {
       ctx.delete!(
         {
           headers: { cookie: `__Host-qauth_session=${signed}`, 'x-csrf-token': 'wrong-token' },
-          params: { id: 'c1' },
+          params: { id: CONSENT_ID },
           ip: '1.1.1.1',
         },
         reply
@@ -253,22 +270,36 @@ describe('/consents JSON API', () => {
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
       sessionWith('u1', 's2', 'valid-token')
     );
-    (fastify.repositories.oauthConsents.listActiveForUser as unknown as Mock).mockResolvedValue([
-      { id: 'c1', oauthClientId: 'cli1', scopes: ['email'], grantedAt: 1, revokedAt: null },
+    (
+      fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
+    ).mockResolvedValue([
+      {
+        id: CONSENT_ID,
+        oauthClientId: 'cli1',
+        realmId: 'realm-1',
+        clientClientId: 'app-123',
+        clientName: 'App',
+        scopes: ['email'],
+        grantedAt: 1,
+        revokedAt: null,
+      },
     ]);
     (fastify.repositories.oauthConsents.revoke as unknown as Mock).mockResolvedValue({});
+    (
+      fastify.repositories.refreshTokens.revokeAllForUserAndClient as unknown as Mock
+    ).mockResolvedValueOnce(3);
 
     const { reply, state } = createReply();
     await ctx.delete!(
       {
         headers: { cookie: `__Host-qauth_session=${signed}`, 'x-csrf-token': 'valid-token' },
-        params: { id: 'c1' },
+        params: { id: CONSENT_ID },
         ip: '1.1.1.1',
       },
       reply
     );
     expect(state.statusCode).toBe(204);
-    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith('c1', 'tx');
+    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(CONSENT_ID, 'tx');
     expect(fastify.repositories.authorizationCodes.invalidateForUserAndClient).toHaveBeenCalledWith(
       'u1',
       'cli1',
@@ -280,8 +311,12 @@ describe('/consents JSON API', () => {
       'consent_revoked',
       'tx'
     );
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'oauth.consent.revoked', success: true })
+    // Recorded in the revocation's transaction, naming the public client_id.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:consent.revoked:v1-rc.0',
+      { consentId: CONSENT_ID, revokedRefreshCount: 3 },
+      { tx: 'tx', realmId: 'realm-1', userId: 'u1', clientId: 'app-123', actor: 'user' }
     );
   });
 
@@ -293,19 +328,22 @@ describe('/consents JSON API', () => {
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
       sessionWith('u-other', 's3', 'valid-token')
     );
-    (fastify.repositories.oauthConsents.listActiveForUser as unknown as Mock).mockResolvedValue([]);
+    (
+      fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
+    ).mockResolvedValue([]);
 
     const { reply } = createReply();
     await expect(
       ctx.delete!(
         {
           headers: { cookie: `__Host-qauth_session=${signed}`, 'x-csrf-token': 'valid-token' },
-          params: { id: 'c1' },
+          params: { id: CONSENT_ID },
           ip: '1.1.1.1',
         },
         reply
       )
     ).rejects.toThrow(NotFoundError);
     expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
   });
 });

@@ -8,13 +8,14 @@
  * Requires Docker; skips locally without it, fails on CI (requireDockerOrSkip).
  */
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createOAuthClientsRepository, createRealmsRepository } from '../lib/repositories';
 import { type IntegrationDb, setupIntegrationDb } from '../lib/repositories/integration-setup';
 import { auditLogs } from '../lib/schema/audit';
 import { oauthClients } from '../lib/schema/core';
+import { events } from '../lib/schema/events';
 import { setClientSuspension } from './client-suspension';
 
 describe('setClientSuspension (real Postgres)', () => {
@@ -63,7 +64,7 @@ describe('setClientSuspension (real Postgres)', () => {
   }
 
   it('suspends, records it, and leaves the owner switch alone', async () => {
-    const { client } = await seed('susp-1', 'app-1');
+    const { realm, client } = await seed('susp-1', 'app-1');
 
     const result = await setClientSuspension(db(), {
       realm: 'susp-1',
@@ -76,17 +77,24 @@ describe('setClientSuspension (real Postgres)', () => {
     expect(stored.suspended).toBe(true);
     expect(stored.suspendedAt).toEqual(expect.any(Number));
     expect(stored.enabled).toBe(true);
-    const audit = await db()
-      .select()
-      .from(auditLogs)
-      .where(
-        and(eq(auditLogs.oauthClientId, client.id), eq(auditLogs.event, 'oauth.client.suspended'))
-      );
-    expect(audit).toHaveLength(1);
+    // The record is an event in the realm, committed with the change; no
+    // audit row is written any more (#458).
+    const recorded = await db().select().from(events).where(eq(events.realmId, realm.id));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      type: 'urn:qauth:event:client.suspended:v1-rc.0',
+      category: 'admin',
+      actorType: 'operator_cli',
+      subjectType: 'client',
+      subjectId: 'app-1',
+      clientId: 'app-1',
+      data: {},
+    });
+    expect(await db().select().from(auditLogs)).toHaveLength(0);
   });
 
   it('is idempotent and lifts only the suspension', async () => {
-    const { client } = await seed('susp-2', 'app-2', false);
+    const { realm, client } = await seed('susp-2', 'app-2', false);
     await setClientSuspension(db(), { realm: 'susp-2', clientId: 'app-2', suspend: true });
 
     const again = await setClientSuspension(db(), {
@@ -102,6 +110,16 @@ describe('setClientSuspension (real Postgres)', () => {
       suspend: false,
     });
     expect(lifted).toMatchObject({ status: 'lifted', suspended: false, enabled: false });
+    // One event per change, none for the run that changed nothing.
+    const recorded = await db()
+      .select({ type: events.type })
+      .from(events)
+      .where(eq(events.realmId, realm.id))
+      .orderBy(events.seq);
+    expect(recorded.map((event) => event.type)).toEqual([
+      'urn:qauth:event:client.suspended:v1-rc.0',
+      'urn:qauth:event:client.suspension_lifted:v1-rc.0',
+    ]);
     const stored = await row(client.id);
     expect(stored.suspended).toBe(false);
     expect(stored.suspendedAt).toBeNull();

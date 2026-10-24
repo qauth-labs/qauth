@@ -7,6 +7,7 @@ import { env } from '../../../config/env';
 import { assertStaticApiKeysAllowed, generateApiKey } from '../../helpers/api-key';
 import { clientAddressKey } from '../../helpers/client-address';
 import { createRequireManagementJwt } from '../../helpers/management-token';
+import { emitUserEvent } from '../../helpers/user-events';
 import {
   apiKeySchema,
   type CreateApiKeyRequest,
@@ -155,23 +156,26 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         last4: generated.last4,
       });
 
-      // Best-effort audit: the key (and its hash) is already committed, so a
-      // failing audit write must not 500 and lose the one-time plaintext.
+      // Best-effort event: the key (and its hash) is already committed, so a
+      // failing event write must not 500 and lose the one-time plaintext. The
+      // developer acts; the key is the subject, never its prefix.
       try {
-        await fastify.repositories.auditLogs.create({
-          userId: developerId,
-          oauthClientId: client.id,
-          event: 'api_key.created',
-          eventType: 'client',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { apiKeyId: created.id, prefix: created.prefix, clientId: client.clientId },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:api_key.created:v1-rc.0',
+          {},
+          {
+            realmId: client.realmId,
+            userId: developerId,
+            subject: { type: 'api_key', id: created.id },
+            clientId: client.clientId,
+            actor: 'user',
+          }
+        );
       } catch (err) {
         fastify.log.warn(
           { err, apiKeyId: created.id },
-          'Failed to write api_key.created audit log'
+          'Failed to record the api_key.created event'
         );
       }
 
@@ -244,20 +248,22 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
       }
 
       try {
-        await fastify.repositories.auditLogs.create({
-          userId: developerId,
-          oauthClientId: client.id,
-          event: 'api_key.revoked',
-          eventType: 'client',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { apiKeyId: revoked.id, prefix: revoked.prefix, clientId: client.clientId },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:api_key.revoked:v1-rc.0',
+          {},
+          {
+            realmId: client.realmId,
+            userId: developerId,
+            subject: { type: 'api_key', id: revoked.id },
+            clientId: client.clientId,
+            actor: 'user',
+          }
+        );
       } catch (err) {
         fastify.log.warn(
           { err, apiKeyId: revoked.id },
-          'Failed to write api_key.revoked audit log'
+          'Failed to record the api_key.revoked event'
         );
       }
 

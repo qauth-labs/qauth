@@ -180,7 +180,11 @@ export interface ValidatedIdJag {
  * silently issue a WIDER token than the enterprise authorized, so it is refused.
  */
 const idJagClaimsSchema = z.object({
-  jti: z.string().min(1).max(256),
+  // At most 255, as a client assertion's: the `token.issued` event records the
+  // `jti` as `idJagId`, which holds 255. A longer one would pass here, burn,
+  // mint a token and then fail the event, answering 500 for a grant the client
+  // cannot retry.
+  jti: z.string().min(1).max(255),
   iss: z.string().min(1).max(2048),
   sub: z.string().min(1).max(255),
   aud: z.union([z.string().min(1).max(2048), z.array(z.string().min(1).max(2048)).min(1).max(10)]),
