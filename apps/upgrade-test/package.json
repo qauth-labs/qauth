@@ -1,0 +1,14 @@
+{
+  "name": "@qauth-labs/upgrade-test",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@node-rs/argon2": "catalog:",
+    "pg": "catalog:",
+    "vitest": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:",
+    "typescript": "catalog:"
+  }
+}

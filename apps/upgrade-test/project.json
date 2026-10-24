@@ -1,0 +1,45 @@
+{
+  "name": "upgrade-test",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/upgrade-test/src",
+  "projectType": "application",
+  "tags": ["scope:upgrade-test", "type:testing"],
+  "targets": {
+    "populate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "vitest run --config vitest.upgrade.config.ts --project populate",
+        "cwd": "apps/upgrade-test",
+        "forwardAllArgs": true
+      },
+      "metadata": {
+        "description": "Write test data through a RUNNING baseline release's HTTP API and save what the verify step needs in the state file (#475, ADR-018 §5). Needs QAUTH_BASE_URL, QAUTH_UPGRADE_DATABASE_URL, QAUTH_UPGRADE_STATE and QAUTH_UPGRADE_ALLOW_WRITES=1. See apps/upgrade-test/README.md."
+      }
+    },
+    "verify": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "vitest run --config vitest.upgrade.config.ts --project verify",
+        "cwd": "apps/upgrade-test",
+        "forwardAllArgs": true
+      },
+      "metadata": {
+        "description": "After the upgrade, check that the data the populate step wrote still works on the new server: tokens, refresh, consent, API key, password. Same variables as populate."
+      }
+    },
+    "smoke": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "vitest run --config vitest.upgrade.config.ts --project smoke",
+        "cwd": "apps/upgrade-test",
+        "forwardAllArgs": true
+      },
+      "metadata": {
+        "description": "Version-agnostic smoke tests: a fresh user, client, sign-in, consent, tokens and API key on the running server. Runs against the new server after the upgrade and against the baseline server on the migrated database (the rolling-upgrade leg)."
+      }
+    }
+  }
+}

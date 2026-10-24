@@ -28,6 +28,11 @@ export default defineConfig({
       // so it cannot run here. `apps/wire-suite/vitest.wire.config.ts` runs it,
       // through the `wire-suite:run` target and the `wire-suite` CI job.
       '**/*.wire.test.ts',
+      // The upgrade test (#475) talks to a RUNNING baseline release and then to
+      // the new build. `apps/upgrade-test/vitest.upgrade.config.ts` runs it,
+      // through the `upgrade-test:populate`, `:verify` and `:smoke` targets and
+      // the `upgrade-test` CI job.
+      '**/*.upgrade.test.ts',
     ],
     server: {
       deps: {
