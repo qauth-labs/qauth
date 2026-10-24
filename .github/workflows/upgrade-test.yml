@@ -77,10 +77,11 @@ jobs:
     env:
       UPGRADE_BASELINE: ${{ matrix.baseline }}
     steps:
-      # The baseline is built from its tag, so the tags must be here.
+      # The baseline is built from its tag, so the tags must be here. A full
+      # clone, not a treeless one: `git archive` of a tag reads every tree of
+      # it, which a treeless clone would fetch one by one.
       - uses: actions/checkout@v7
         with:
-          filter: tree:0
           fetch-depth: 0
 
       - uses: pnpm/action-setup@v6

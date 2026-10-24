@@ -177,18 +177,18 @@ load_secrets() {
   export JWT_PRIVATE_KEY JWT_PUBLIC_KEY KEK SESSION_COOKIE_SECRET
 }
 
+# The runners print everything they do to the step's log, so their containers
+# are removed as they exit.
 baseline_migrate() {
   require_baseline
-  docker rm -f "$PREFIX-runner-baseline" >/dev/null 2>&1 || true
-  run docker run --name "$PREFIX-runner-baseline" --network "$NETWORK" \
+  run docker run --rm --name "$PREFIX-runner-baseline" --network "$NETWORK" \
     -e DATABASE_URL="$NETWORK_DATABASE_URL" "$BASELINE_RUNNER_IMAGE"
 }
 
 # The upgrade itself, and the only command between the baseline server and the
 # new one.
 migrate() {
-  docker rm -f "$PREFIX-runner-head" >/dev/null 2>&1 || true
-  run docker run --name "$PREFIX-runner-head" --network "$NETWORK" \
+  run docker run --rm --name "$PREFIX-runner-head" --network "$NETWORK" \
     -e DATABASE_URL="$NETWORK_DATABASE_URL" "$HEAD_RUNNER_IMAGE"
 }
 
