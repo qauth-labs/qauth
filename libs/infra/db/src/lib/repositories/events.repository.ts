@@ -152,9 +152,12 @@ async function insertEvent(client: DbClient, row: NewEventRow): Promise<string> 
 
 /**
  * The columns a reader turns back into an envelope, named as {@link EnvelopeRow}
- * names them: `bigint` and `xid8` as text.
+ * names them: `bigint` and `xid8` as text. The delivery queue (#460) reads
+ * them too, from `events` in the statement that claims a delivery.
+ *
+ * @internal
  */
-const ENVELOPE_COLUMNS = sql`${events.seq}::text as "seq", ${events.xid}::text as "xid",
+export const ENVELOPE_COLUMNS = sql`${events.seq}::text as "seq", ${events.xid}::text as "xid",
   ${events.id} as "id", ${events.realmId} as "realm_id", ${events.category} as "category",
   ${events.type} as "type", ${events.time}::text as "time",
   ${events.actorType} as "actor_type", ${events.actorId} as "actor_id",
@@ -164,8 +167,12 @@ const ENVELOPE_COLUMNS = sql`${events.seq}::text as "seq", ${events.xid}::text a
   ${events.requestIp} as "request_ip", ${events.requestUserAgent} as "request_user_agent",
   ${events.data} as "data", ${events.schemaVersion} as "schema_version"`;
 
-/** A stored row, as {@link ENVELOPE_COLUMNS} reads it. */
-interface EnvelopeRow extends Record<string, unknown> {
+/**
+ * A stored row, as {@link ENVELOPE_COLUMNS} reads it.
+ *
+ * @internal
+ */
+export interface EnvelopeRow extends Record<string, unknown> {
   seq: string;
   xid: string;
   id: string;
@@ -200,8 +207,9 @@ interface ChainRow extends EnvelopeRow {
  * lacks: the envelope the row's writer emitted.
  *
  * @throws {Error} on a row written in a later layout than this release reads
+ * @internal
  */
-function envelopeOf(row: EnvelopeRow): EventEnvelope {
+export function envelopeOf(row: EnvelopeRow): EventEnvelope {
   if (row.schema_version !== EVENT_ROW_SCHEMA_VERSION) {
     throw new Error(
       `events: event ${row.id} is stored in layout ${row.schema_version}, which this release cannot read`

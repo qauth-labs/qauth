@@ -1,0 +1,18 @@
+{
+  "name": "fastify-plugin-event-delivery",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/event-delivery/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:event-delivery-wiring"],
+  "targets": {
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts libs/fastify/plugins/event-delivery",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run the Docker-backed delivery role tests against the migrated schema (testcontainers Postgres): a crashed worker's event delivered again, two workers, retries on a fake clock, a destination that is down. Requires a running Docker daemon."
+    }
+  },
+  "// targets": "to see all targets run: nx show project fastify-plugin-event-delivery --web"
+}

@@ -6,6 +6,7 @@ import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
+import { type DeliveryRoute, eventDeliveryPlugin } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
   assertAttestingIssuersUsable,
   assertCredentialStatusConfigUsable,
@@ -121,6 +122,12 @@ export interface AppOptions {
    * fills the queue or waits for a batch. The defaults unless set.
    */
   eventTelemetryLimits?: Partial<EventLogQueueLimits>;
+  /**
+   * The event delivery routes (#460). None until the webhook (#538) and SSF
+   * (#410) routes land, and the delivery role then does nothing; a suite
+   * that watches the role passes a route of its own.
+   */
+  eventDeliveryRoutes?: readonly DeliveryRoute[];
 }
 
 declare module 'fastify' {
@@ -134,7 +141,13 @@ declare module 'fastify' {
 }
 
 export async function app(fastify: FastifyInstance, opts: AppOptions) {
-  const { defaultRealmBoot = true, realmLookup, eventTelemetryLimits, ...pluginOptions } = opts;
+  const {
+    defaultRealmBoot = true,
+    realmLookup,
+    eventTelemetryLimits,
+    eventDeliveryRoutes,
+    ...pluginOptions
+  } = opts;
 
   // ADR-018 §5: an experimental feature may change in a minor release, so a
   // deployment that turns one on is told so at every boot: one `warn` line per
@@ -547,6 +560,31 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // metrics plugins above it; it registers no route, so nothing below depends
   // on its position.
   await fastify.register(jobsPlugin);
+
+  // The delivery role (ADR-019 Decision 8, #460), in-process like the signer:
+  // it fans every new event out to the destinations of the delivery routes
+  // and delivers it to each at least once, retrying on the schedule the
+  // EVENT_DELIVERY_* keys set. It starts on `onReady` and stops on `onClose`
+  // once its attempts in flight end, so it needs the database, the signer
+  // and the metrics above it, and it signs only through a `delivery` handle
+  // of the signer. No route exists yet, so it does nothing but publish its
+  // metrics. It rides the default realm boot switch, as every database step
+  // at boot does: a boot without a database has no signer either.
+  if (defaultRealmBoot) {
+    await fastify.register(eventDeliveryPlugin, {
+      db: fastify.db,
+      signer: fastify.signer,
+      routes: eventDeliveryRoutes ?? [],
+      registry: fastify.metrics.registry,
+      settings: {
+        maxAttempts: env.EVENT_DELIVERY_MAX_ATTEMPTS,
+        retry: {
+          initialDelayMs: env.EVENT_DELIVERY_RETRY_INITIAL_DELAY * 1000,
+          maxDelayMs: env.EVENT_DELIVERY_RETRY_MAX_DELAY * 1000,
+        },
+      },
+    });
+  }
 
   // Global error handler (#365). This MUST precede every route registration
   // below — it used to sit after both AutoLoads, under a comment claiming the

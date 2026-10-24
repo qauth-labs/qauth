@@ -1,0 +1,23 @@
+{
+  "name": "@qauth-labs/fastify-plugin-event-delivery",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/infra-db": "workspace:*",
+    "@qauth-labs/server-event-delivery": "workspace:*",
+    "@qauth-labs/server-keys": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:",
+    "prom-client": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/shared-events": "workspace:*",
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@types/pg": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

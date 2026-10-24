@@ -39,6 +39,7 @@ export type KeyRole = 'deployment' | 'realm-seed';
 export type KeyOwner =
   | 'server'
   | 'observability'
+  | 'events'
   | 'storage'
   | 'realms'
   | 'tokens'

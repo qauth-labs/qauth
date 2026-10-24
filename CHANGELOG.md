@@ -297,6 +297,32 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   `telemetry` sink that it hands each event to once its transaction commits.
   The observability page (`operate/observability`) describes the setup.
 
+- **The delivery role** ([#460], ADR-019 Decisions 8 and 9). A worker in the
+  auth-server hands every event to every matching destination of a delivery
+  route, at least once and with the event's own id, so a receiver drops a
+  duplicate. Migration 0035 adds `event_deliveries`, one row per destination
+  and event, and `event_delivery_positions`, the fan-out's place in each
+  realm's stream per route kind; it is expand-only. The fan-out reads each
+  realm below the event store's horizon, one node at a time per realm and
+  kind, and a node moves only the positions of the kinds it has routes for. Workers claim
+  deliveries with `FOR UPDATE SKIP LOCKED` and a lease, so a worker that dies
+  leaves its deliveries to another, and a destination that is down holds only
+  its own deliveries. A failed attempt is retried with exponential backoff and
+  jitter (`EVENT_DELIVERY_MAX_ATTEMPTS`, `EVENT_DELIVERY_RETRY_INITIAL_DELAY`
+  and `EVENT_DELIVERY_RETRY_MAX_DELAY`, advanced keys); after the last one the
+  delivery ends `failed` and stays queryable. At shutdown the role waits for
+  its attempts in flight and releases the rest. `/metrics` gains
+  `qauth_events_pending`, `qauth_events_delivery_lag_seconds` and
+  `qauth_events_delivery_attempts_total`. The new
+  `@qauth-labs/server-event-delivery` exports `startDeliveryRole()` and the
+  route interface the webhook and SSF routes will plug into; it holds no key,
+  signs only through a signer handle, and an Nx constraint and a test keep
+  every import path to key-loading code out of it.
+  `@qauth-labs/fastify-plugin-event-delivery` runs it in-process, and
+  `minOffered(realmId)` on the queue gives the retention job the lowest
+  position every destination has finished. No route exists yet, so the role
+  does nothing but publish its metrics.
+
 - **Schema**: migration 0030 reshapes the `sessions` table for browser sessions
   ([#468], ADR-019 Decision 3). Each row is one account signed in on one
   browser, tied to a realm and a user, and its `id` is the session's `sid`. It
@@ -532,6 +558,7 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
 [#457]: https://github.com/qauth-labs/qauth/issues/457
 [#458]: https://github.com/qauth-labs/qauth/issues/458
 [#459]: https://github.com/qauth-labs/qauth/issues/459
+[#460]: https://github.com/qauth-labs/qauth/issues/460
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#464]: https://github.com/qauth-labs/qauth/issues/464
