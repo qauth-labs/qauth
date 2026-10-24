@@ -258,12 +258,103 @@ describe('masking', () => {
     ]);
   });
 
-  // The net reads names the way the payload rules do, so it also masks a
-  // field that only mentions a secret word: masking too much is the safe side.
-  it('masks a field whose name only mentions a secret word', () => {
-    expect(buildAdminDiff({ accessTokenTtl: 900 }, { accessTokenTtl: 600 })).toEqual([
-      { path: '/accessTokenTtl', before: MASK, after: MASK },
+  // Secrets a resource names in ways an event never does: the SMTP provider's
+  // own `auth.pass`, a directory bind password, a connection string.
+  it.each([
+    [
+      'an SMTP provider auth block',
+      { smtp: { auth: { user: 'u', pass: 'hunter2' } } },
+      '/smtp/auth',
+    ],
+    ['a pass field', { smtp: { pass: 'hunter2' } }, '/smtp/pass'],
+    ['a bind password', { ldap: { bindPw: 'hunter2' } }, '/ldap/bindPw'],
+    ['a DSN', { dsn: 'postgres://db/qauth' }, '/dsn'],
+    [
+      'a connection string',
+      { connectionString: 'Server=db;Uid=u;Pwd=hunter2' },
+      '/connectionString',
+    ],
+    ['an authorization value', { headers: { authorization: 'opaque' } }, '/headers/authorization'],
+    ['a salt', { salt: 'c2FsdA' }, '/salt'],
+    ['a set-up URL', { setupUrl: 'https://auth.example/setup?x=1' }, '/setupUrl'],
+    ['a magic link', { magicLinkUrl: 'https://auth.example/m/1' }, '/magicLinkUrl'],
+  ])('masks %s', (_label, after, path) => {
+    // The same resource with every string replaced: the diff descends to the field.
+    const before = JSON.parse(JSON.stringify(after), (_key, value: unknown) =>
+      typeof value === 'string' ? 'old-value' : value
+    ) as JsonObject;
+    const diff = buildAdminDiff(before, after as JsonObject);
+    expect(diff).toEqual([{ path, before: MASK, after: MASK }]);
+    expect(JSON.stringify(diff)).not.toMatch(/hunter2|old-value|opaque/);
+  });
+
+  // Security settings an admin event must show: masking them would hide the
+  // change the audit exists for, such as a redirect URI an attacker added.
+  it.each([
+    [
+      'redirectUris',
+      ['https://app.example/cb'],
+      ['https://app.example/cb', 'https://evil.example/cb'],
+    ],
+    ['jwksUri', 'https://app.example/jwks', 'https://evil.example/jwks'],
+    ['tokenEndpointAuthMethod', 'private_key_jwt', 'none'],
+    ['accessTokenTtl', 900, 3600],
+    ['authorizationCodeLifespan', 60, 600],
+    ['passwordMinScore', 3, 1],
+    ['codeChallengeMethod', 'S256', 'plain'],
+    ['secretRotatedAt', '2026-01-01T00:00:00Z', '2026-10-24T00:00:00Z'],
+    ['url', 'https://hooks.example/a', 'https://hooks.example/b'],
+  ])('shows %s', (field, before, after) => {
+    expect(buildAdminDiff({ [field]: before }, { [field]: after })).toEqual([
+      { path: `/${field}`, before, after },
     ]);
+  });
+
+  it('keeps a flag under a secret name: it holds no secret', () => {
+    expect(buildAdminDiff({ revokeRefreshToken: false }, { revokeRefreshToken: true })).toEqual([
+      { path: '/revokeRefreshToken', before: false, after: true },
+    ]);
+  });
+
+  it('masks a value shaped like a secret under a harmless name', () => {
+    const diff = buildAdminDiff(
+      {},
+      {
+        upstream: 'https://svc:hunter2@upstream.example/',
+        header: 'Basic dTpodW50ZXIy',
+        jwks: { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'pub' }] },
+        material: { kty: 'oct', k: 'c2VjcmV0' },
+      }
+    );
+    expect(diff).toEqual([
+      { path: '/header', after: MASK },
+      { path: '/jwks', after: { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'pub' }] } },
+      { path: '/material', after: MASK },
+      { path: '/upstream', after: MASK },
+    ]);
+  });
+
+  it('judges a key by its shape: a public JWK is shown, a private one masked, a marked one masked', () => {
+    const publicJwk = { kty: 'OKP', crv: 'Ed25519', x: 'cHVi' };
+    const privateJwk = { ...publicJwk, d: 'cHJpdg' };
+    expect(buildAdminDiff({}, { signingKey: publicJwk })).toEqual([
+      { path: '/signingKey', after: publicJwk },
+    ]);
+    expect(buildAdminDiff({}, { signingKey: privateJwk })).toEqual([
+      { path: '/signingKey', after: MASK },
+    ]);
+    expect(buildAdminDiff({}, { verifier: publicJwk }, { secretFields: ['verifier'] })).toEqual([
+      { path: '/verifier', after: MASK },
+    ]);
+    expect(scanAdminDiff([{ path: '/signingKey', after: privateJwk }])).not.toEqual([]);
+    expect(scanAdminDiff([{ path: '/signingKey', after: publicJwk }])).toEqual([]);
+  });
+
+  it('refuses a member name shaped like a secret, which no mask can hide', () => {
+    expect(() => buildAdminDiff({}, { allow: { [`Bearer ${COMPACT_JWS}`]: true } })).toThrow(
+      /member name under \/allow is shaped like a secret/
+    );
+    expect(() => buildAdminDiff({}, { [COMPACT_JWS]: 1 })).toThrow(/shaped like a secret/);
   });
 
   it('keeps fields that only name an id, a type or a count of a secret', () => {
@@ -314,6 +405,21 @@ describe('scanAdminDiff', () => {
     expect(
       scanAdminDiff([{ path: '/hooks', after: [{ id: 'w1', signingSecret: 'whsec_a' }] }])
     ).toEqual([expect.objectContaining({ path: '/0/after/0/signingSecret' })]);
+  });
+
+  it('reports a value or a member name shaped like a secret, and passes a masked flag', () => {
+    expect(
+      scanAdminDiff([
+        { path: '/upstream', after: 'https://u:pw@host.example/' },
+        { path: '/allow', after: { 'Basic dTpw': true } },
+        { path: '/key', after: { kty: 'oct', k: 'c2VjcmV0' } },
+        { path: '/revokeRefreshToken', before: false, after: true },
+      ])
+    ).toEqual([
+      expect.objectContaining({ path: '/0/after', rule: 'secret_value' }),
+      expect.objectContaining({ path: '/1/after/Basic dTpw', rule: 'secret_value' }),
+      expect.objectContaining({ path: '/2/after', rule: 'secret_field' }),
+    ]);
   });
 
   it('ignores what is not a diff', () => {

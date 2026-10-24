@@ -134,11 +134,21 @@ the transaction of the change it records, so the change and its event commit tog
 ```
 
 **Masking.** A secret field holds `***` on both sides, whatever its value. A field is secret
-when the operation marks it, or when its name looks like a secret by the payload rules, marked or
-not. A string shaped like a token or a key is masked wherever it sits. A changed secret is still
-listed, so a rotation shows as `***` to `***`. The field names in a diff are the resource's
-own, so the payload scanner reads a diff's values, not its names, and checks instead that every
-field named like a secret holds `***`.
+when the operation marks it, or when its name holds a secret, marked or not: a password, pass,
+PIN, secret, token, key, salt, cookie, signature, credential, `auth` or connection string, or a
+set-up, reset or other one-time link. A name whose last word only describes the secret is shown:
+`accessTokenTtl`, `tokenEndpointAuthMethod`, `signingKeyId`, `jwksUri`. A changed secret is
+still listed, so a rotation shows as `***` to `***`. A flag (`true` or `false`) is never
+masked.
+
+A value shaped like a secret is masked wherever it sits: a token, a signed or encrypted object, a
+PEM block, a URL with a password, an `Authorization` header value, or a private or symmetric JWK.
+A public JWK is shown. A member name shaped like a secret refuses the event.
+
+The field names in a diff are the resource's own, so the payload scanner reads a diff's values,
+not its names, and checks instead that every field named like a secret holds `***`. A diff may
+show personal data, such as a contact address an admin changed: admin events are read by the
+realm's admins.
 
 **Approvals.** `data.approvals` lists the approvals the operation ran on: both approvals of a
 two-admin operation, each with the approver, the passkey credential it was given with, and who

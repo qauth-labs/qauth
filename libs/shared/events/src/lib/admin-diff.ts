@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { classifyFieldName, type PayloadFinding, scanValues } from './payload-rules';
+import { fieldNameWords, type PayloadFinding, scanValues } from './payload-rules';
 
 /**
  * The diff an admin event carries (ADR-020 §3, ADR-019 Decision 7, issue
@@ -20,16 +20,23 @@ import { classifyFieldName, type PayloadFinding, scanValues } from './payload-ru
  *
  * The field names of a diff are the resource's own, not the event's, so the
  * payload rules read its values and not its names. In their place the
- * masking rule holds: a secret never enters a diff.
+ * masking rule holds: a secret never enters a diff. Personal data does: an
+ * admin event shows an admin's change to a user's contact address as it is.
  *
  * ## Masking
  *
  * A field is secret, and holds {@link ADMIN_DIFF_SECRET_MARKER} whatever its
- * value, when the caller marks it, or when its name looks like a secret by the
- * payload rules (`classifyFieldName`), marked or not. A string shaped like a
- * token or a key is masked wherever it sits. A secret field is masked whole
- * and never diffed inside, and a change of its value is still listed, so a
- * rotated secret shows as changed without showing either value.
+ * value, when the caller marks it, or when its name holds a secret
+ * ({@link namesASecret}), marked or not. A secret field is masked whole and
+ * never diffed inside, and a change of its value is still listed, so a
+ * rotated secret shows as changed without showing either value. A boolean is
+ * never masked: a flag holds no secret.
+ *
+ * A value shaped like a secret is masked wherever it sits
+ * ({@link isSecretShaped}): a token, a signed or encrypted object, a key, a
+ * URL with a password, an `Authorization` header value, or a private JWK. A
+ * member name shaped like one cannot be masked without changing the
+ * resource's shape, so it is refused.
  */
 
 /**
@@ -202,28 +209,244 @@ const marked = (marks: readonly string[][], at: readonly string[]) =>
       mark.every((segment, index) => segment === '*' || segment === at[index])
   );
 
-/** Whether a member's name looks like a secret by the payload rules. */
+/**
+ * Words that name a value which is itself a secret. Wider than the payload
+ * rules' list where a resource names secrets in ways an event never does
+ * (`smtp.auth.pass`, `bindPw`, `dsn`, `connectionString`), and narrower where
+ * a resource field only mentions one (see {@link DESCRIBING_WORDS}).
+ */
+export const DIFF_SECRET_WORDS: ReadonlySet<string> = new Set([
+  'password',
+  'passwords',
+  'passwd',
+  'passphrase',
+  'passcode',
+  'pwd',
+  'pass',
+  'pw',
+  'pin',
+  'pins',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'otp',
+  'otps',
+  'totp',
+  'hotp',
+  'seed',
+  'salt',
+  'key',
+  'keys',
+  'apikey',
+  'cookie',
+  'cookies',
+  'assertion',
+  'assertions',
+  'signature',
+  'signatures',
+  'jwt',
+  'jwts',
+  'bearer',
+  'credential',
+  'credentials',
+  'auth',
+  'authorization',
+  'code',
+  'codes',
+  'dsn',
+  'connection',
+]);
+
+/** Secret words also caught inside a longer word written without a separator. */
+export const DIFF_SECRET_STEMS: readonly string[] = [
+  'password',
+  'passwd',
+  'passphrase',
+  'passcode',
+  'secret',
+  'token',
+  'apikey',
+  'privatekey',
+  'signingkey',
+  'jwt',
+];
+
+/** Words that name a link, which is a secret only when it is a one-time link. */
+const LINK_WORDS: ReadonlySet<string> = new Set([
+  'link',
+  'links',
+  'url',
+  'urls',
+  'uri',
+  'uris',
+  'href',
+]);
+
+/** What a set-up, reset or other one-time link is called (ADR-019 Decision 7). */
+const ONE_TIME_LINK_STEMS: readonly string[] = [
+  'reset',
+  'setup',
+  'enrol',
+  'enroll',
+  'invit',
+  'magic',
+  'recover',
+  'verif',
+  'confirm',
+  'activat',
+  'onetime',
+];
+
+/**
+ * Last words that say a field describes a secret rather than holds it: its
+ * id, type, method, lifetime, policy or address. `accessTokenTtl`,
+ * `tokenEndpointAuthMethod`, `passwordMinScore`, `jwksUri` and
+ * `signingKeyId` are shown; `clientSecretHash` and `signingKey` are not.
+ */
+export const DESCRIBING_WORDS: ReadonlySet<string> = new Set([
+  'id',
+  'ids',
+  'type',
+  'types',
+  'count',
+  'method',
+  'methods',
+  'alg',
+  'algorithm',
+  'algorithms',
+  'lifespan',
+  'lifetime',
+  'ttl',
+  'timeout',
+  'expiry',
+  'expires',
+  'expiration',
+  'at',
+  'seconds',
+  'minutes',
+  'hours',
+  'days',
+  'interval',
+  'length',
+  'min',
+  'max',
+  'limit',
+  'size',
+  'bits',
+  'reuse',
+  'score',
+  'policy',
+  'policies',
+  'enabled',
+  'required',
+  'rotated',
+  'rotation',
+  'mode',
+  'format',
+  'version',
+  'endpoint',
+  'endpoints',
+  'uri',
+  'uris',
+  'url',
+  'urls',
+]);
+
+/**
+ * Whether a member's name says it holds a secret (see the module comment):
+ * a one-time link (`resetLink`, `setupUrl`); otherwise, unless its last word
+ * only describes the secret, a name with a secret word (`smtpPassword`,
+ * `pass`, `signingKey`, `connectionString`) or a secret stem (`clientsecret`).
+ */
 export function namesASecret(name: string): boolean {
-  return classifyFieldName(name) === 'secret_field';
+  const words = fieldNameWords(name);
+  if (words.length === 0) return false;
+  const joined = words.join('');
+  if (
+    words.some((word) => LINK_WORDS.has(word)) &&
+    ONE_TIME_LINK_STEMS.some((stem) => joined.includes(stem))
+  ) {
+    return true;
+  }
+  if (words.length > 1 && DESCRIBING_WORDS.has(words[words.length - 1])) return false;
+  return words.some(
+    (word) => DIFF_SECRET_WORDS.has(word) || DIFF_SECRET_STEMS.some((stem) => word.includes(stem))
+  );
 }
 
-/** Whether a string is shaped like a token, a signed or encrypted object, or a key. */
-const tokenShaped = (value: string) => scanValues(value).length > 0;
+/** A URL with a password in it: `scheme://user:password@host`. */
+const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]*@/i;
+
+/** An `Authorization` header value. */
+const AUTHORIZATION_VALUE = /^\s*(?:basic|bearer|digest)\s+\S/i;
+
+/** The members a JWK holds only when it is a private or a symmetric key (RFC 7518 §6). */
+const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k', 'oth'] as const;
+
+/**
+ * Whether a value is shaped like a secret whatever its name: a string shaped
+ * like a token, a signed or encrypted object or a key (the payload rules'
+ * value scan), a URL with a password, or an `Authorization` header value; or
+ * an object that is a private or symmetric JWK.
+ */
+export function isSecretShaped(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return (
+      scanValues(value).length > 0 ||
+      URL_WITH_PASSWORD.test(value) ||
+      AUTHORIZATION_VALUE.test(value)
+    );
+  }
+  if (isPlainObject(value)) {
+    return (
+      typeof value['kty'] === 'string' &&
+      PRIVATE_JWK_MEMBERS.some((member) => Object.hasOwn(value, member))
+    );
+  }
+  return false;
+}
+
+/** Whether a value is a JWK, or a non-empty array of JWKs: an object with a `kty`. */
+function isJwkValue(value: unknown): boolean {
+  const isJwk = (item: unknown) => isPlainObject(item) && typeof item['kty'] === 'string';
+  return isJwk(value) || (Array.isArray(value) && value.length > 0 && value.every(isJwk));
+}
+
+/**
+ * Whether a member's name hides its value: a name that holds a secret, unless
+ * the value is a JWK or JWKs, which the value rule judges instead (a private
+ * key is masked, a public key shown, a JWK Set's `keys` read through).
+ */
+const hiddenByName = (key: string, value: unknown) => namesASecret(key) && !isJwkValue(value);
+
+/** Refuse a member name shaped like a secret, which no mask can hide. */
+function checkMemberName(key: string, at: readonly string[]): void {
+  if (isSecretShaped(key)) {
+    throw new TypeError(
+      `buildAdminDiff: a member name under ${pointer(at) || '/'} is shaped like a secret`
+    );
+  }
+}
+
+/** What a secret field holds in a diff: the marker, or a flag as it is. */
+const masked = (value: JsonValue): JsonValue =>
+  typeof value === 'boolean' ? value : ADMIN_DIFF_SECRET_MARKER;
 
 /**
  * A whole value, as a change shows it: each member that is secret by name or
- * by mark, and each string shaped like a token, replaced by the marker.
+ * by mark, and each value shaped like a secret, replaced by the marker.
  */
 function maskWithin(
   value: JsonValue,
   at: readonly string[],
   marks: readonly string[][]
 ): JsonValue {
-  if (typeof value === 'string') return tokenShaped(value) ? ADMIN_DIFF_SECRET_MARKER : value;
+  if (isSecretShaped(value)) return ADMIN_DIFF_SECRET_MARKER;
   if (Array.isArray(value)) {
     return value.map((item, index) => {
       const path = [...at, String(index)];
-      return marked(marks, path) ? ADMIN_DIFF_SECRET_MARKER : maskWithin(item, path, marks);
+      return marked(marks, path) ? masked(item) : maskWithin(item, path, marks);
     });
   }
   if (value === null || typeof value !== 'object') return value;
@@ -231,12 +454,13 @@ function maskWithin(
   // `__proto__` stays a member and never becomes a prototype.
   return Object.fromEntries(
     presentKeys(value).map((key) => {
+      checkMemberName(key, at);
       const path = [...at, key];
       const member = value[key];
       return [
         key,
-        namesASecret(key) || marked(marks, path)
-          ? ADMIN_DIFF_SECRET_MARKER
+        marked(marks, path) || hiddenByName(key, member)
+          ? masked(member)
           : maskWithin(member, path, marks),
       ];
     })
@@ -253,12 +477,16 @@ function diffObjects(
   // Sorted, so one change gives one diff whatever order the members came in.
   const keys = [...new Set([...presentKeys(before), ...presentKeys(after)])].sort();
   for (const key of keys) {
+    checkMemberName(key, at);
     const path = [...at, key];
     const hasBefore = Object.hasOwn(before, key) && before[key] !== undefined;
     const hasAfter = Object.hasOwn(after, key) && after[key] !== undefined;
     const old = before[key];
     const now = after[key];
-    const secret = namesASecret(key) || marked(marks, path);
+    const byMark = marked(marks, path);
+    const secret = byMark || namesASecret(key);
+    const side = (value: JsonValue) =>
+      byMark || hiddenByName(key, value) ? masked(value) : maskWithin(value, path, marks);
 
     if (hasBefore && hasAfter && !secret && isPlainObject(old) && isPlainObject(now)) {
       diffObjects(old, now, path, marks, changes);
@@ -267,8 +495,8 @@ function diffObjects(
     if (hasBefore && hasAfter && jsonEqual(old, now)) continue;
 
     const change: AdminDiffChange = { path: pointer(path) };
-    if (hasBefore) change.before = secret ? ADMIN_DIFF_SECRET_MARKER : maskWithin(old, path, marks);
-    if (hasAfter) change.after = secret ? ADMIN_DIFF_SECRET_MARKER : maskWithin(now, path, marks);
+    if (hasBefore) change.before = side(old);
+    if (hasAfter) change.after = side(now);
     changes.push(change);
   }
 }
@@ -325,26 +553,46 @@ function unmasked(path: string, name: string): PayloadFinding {
   };
 }
 
+function secretShaped(path: string): PayloadFinding {
+  return {
+    path,
+    rule: 'secret_value',
+    message: 'the value or member name is shaped like a secret; in an admin diff it must be masked',
+  };
+}
+
 const escapePointer = escapeSegment;
 
-/** Every member under `value` named like a secret that does not hold the marker. */
+/**
+ * Whether a field named like a secret holds what {@link buildAdminDiff}
+ * leaves there: the marker, a flag, or JWKs with no private member.
+ */
+const holdsMask = (value: unknown) =>
+  value === ADMIN_DIFF_SECRET_MARKER ||
+  typeof value === 'boolean' ||
+  (isJwkValue(value) && unmaskedWithin(value, '').length === 0);
+
+/** Every unmasked secret under `value`: by member name, by value shape, or in a member name. */
 function unmaskedWithin(value: unknown, at: string): PayloadFinding[] {
+  if (isSecretShaped(value)) return [secretShaped(at)];
   if (Array.isArray(value)) {
     return value.flatMap((item, index) => unmaskedWithin(item, `${at}/${index}`));
   }
   if (value === null || typeof value !== 'object') return [];
   return Object.entries(value).flatMap(([key, member]) => {
     const path = `${at}/${escapePointer(key)}`;
+    if (isSecretShaped(key)) return [secretShaped(path)];
     if (!namesASecret(key)) return unmaskedWithin(member, path);
-    return member === ADMIN_DIFF_SECRET_MARKER ? [] : [unmasked(path, key)];
+    return holdsMask(member) ? [] : [unmasked(path, key)];
   });
 }
 
 /**
  * Check a diff against the masking rule: a change whose path names a secret
- * holds the marker on each side it has, and so does every member named like
- * a secret inside a value. The payload rules run this over a type's `diff`
- * member in place of reading its names. It cannot know what a caller marked:
+ * holds the marker (or a flag) on each side it has, and so does every member
+ * named like a secret inside a value; no value and no member name is shaped
+ * like a secret. The payload rules run this over a type's `diff` member in
+ * place of reading its names. It cannot know what a caller marked:
  * the marks are {@link buildAdminDiff}'s to apply.
  *
  * @param diff - The diff, as the event carries it.
@@ -356,12 +604,14 @@ export function scanAdminDiff(diff: unknown, at = ''): PayloadFinding[] {
   return diff.flatMap((change: unknown, index) => {
     if (!isPlainObject(change) || typeof change['path'] !== 'string') return [];
     const base = `${at}/${index}`;
-    const secretName = pointerSegments(change['path']).find(namesASecret);
+    const segments = pointerSegments(change['path']);
+    if (segments.some(isSecretShaped)) return [secretShaped(`${base}/path`)];
+    const secretName = segments.find(namesASecret);
     return (['before', 'after'] as const).flatMap((side) => {
       if (!Object.hasOwn(change, side)) return [];
       const value = change[side];
       if (secretName !== undefined) {
-        return value === ADMIN_DIFF_SECRET_MARKER ? [] : [unmasked(`${base}/${side}`, secretName)];
+        return holdsMask(value) ? [] : [unmasked(`${base}/${side}`, secretName)];
       }
       return unmaskedWithin(value, `${base}/${side}`);
     });
