@@ -774,6 +774,7 @@ interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 - [@qauth-labs/fastify-plugin-signer](./libs/fastify/plugins/signer/README.md) — the signer's wiring: KEK provider, key storage and `fastify.signer`
 - [@qauth-labs/shared-errors](./libs/shared/errors/README.md) — centralized error handling
 - [@qauth-labs/shared-validation](./libs/shared/validation/README.md) — input validation utilities
+- [@qauth-labs/shared-stability](./libs/shared/stability/README.md) — the experimental-feature registry and its promotion conditions
 - [@qauth-labs/shared-testing](./libs/shared/testing/README.md) — test helpers and fixtures
 - [@qauth-labs/ui](./libs/ui/README.md) — shared React primitives
 

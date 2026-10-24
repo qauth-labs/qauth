@@ -44,6 +44,7 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/shared/validation`          | `@qauth-labs/shared-validation`         | `scope:shared`                         |
 | `libs/shared/testing`             | `@qauth-labs/shared-testing`            | `scope:shared`                         |
 | `libs/shared/test-vectors`        | `@qauth-labs/shared-test-vectors`       | `scope:shared`                         |
+| `libs/shared/stability`           | `@qauth-labs/shared-stability`          | `scope:shared`                         |
 | `libs/ui`                         | `@qauth-labs/ui`                        | `scope:ui`                             |
 | `libs/infra/db`                   | `@qauth-labs/infra-db`                  | `scope:infra`                          |
 | `libs/infra/cache`                | `@qauth-labs/infra-cache`               | `scope:infra`                          |
