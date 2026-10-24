@@ -10,16 +10,20 @@ import type { Database, DbTransaction } from '../../types';
  * drizzle has no commit hook, so {@link trackCommits} wraps a database's
  * `transaction`. The callbacks registered on a transaction run after its
  * COMMIT has returned, in the order they were registered, and are dropped
- * when it rolls back, a failed COMMIT included. A nested transaction is a
- * savepoint: its callbacks join its parent's when the savepoint is released
- * and are dropped when it is rolled back, so they still wait for the
- * outermost COMMIT.
+ * when it rolls back: on an error, on a COMMIT that fails, and on a COMMIT
+ * that Postgres answers with `ROLLBACK`, which it does without an error when
+ * a failed statement aborted the transaction and its caller caught the error.
+ * A nested transaction is a savepoint: its callbacks join its parent's when
+ * the savepoint is released and are dropped when it is rolled back, so they
+ * still wait for the outermost COMMIT.
  */
 
 /** The callbacks of one transaction or savepoint, while it is open. */
 interface CommitScope {
   readonly callbacks: Array<() => void>;
   open: boolean;
+  /** The COMMIT was answered with `ROLLBACK`. */
+  rolledBack?: boolean;
 }
 
 type TransactionWork<T> = (tx: DbTransaction) => Promise<T>;
@@ -46,6 +50,22 @@ function enter<T>(tx: DbTransaction, scope: CommitScope, work: TransactionWork<T
 }
 
 /**
+ * Note on `scope` whether the COMMIT drizzle sends next is answered with
+ * `ROLLBACK`. Installed once the work has returned, so the work's own
+ * statements go through the method drizzle made; drizzle sends COMMIT through
+ * `tx.execute` on this same object. Its result is awaited once: drizzle's
+ * query objects run their query again on every `then`.
+ */
+function watchCommit(tx: DbTransaction, scope: CommitScope): void {
+  const execute = tx.execute.bind(tx);
+  tx.execute = (async (query: Parameters<DbTransaction['execute']>[0]) => {
+    const result = await execute(query);
+    if ((result as { command?: unknown }).command === 'ROLLBACK') scope.rolledBack = true;
+    return result;
+  }) as unknown as DbTransaction['execute'];
+}
+
+/**
  * Make the transactions opened on `db` run their {@link afterCommit}
  * callbacks once they commit. Once per database; a second call does nothing.
  *
@@ -61,10 +81,15 @@ export function trackCommits(db: Database): void {
     const scope: CommitScope = { callbacks: [], open: true };
     let result: T;
     try {
-      result = await begin((tx) => enter(tx, scope, work), config);
+      result = await begin(async (tx) => {
+        const value = await enter(tx, scope, work);
+        watchCommit(tx, scope);
+        return value;
+      }, config);
     } finally {
       scope.open = false;
     }
+    if (scope.rolledBack) return result;
     for (const callback of scope.callbacks) {
       try {
         callback();

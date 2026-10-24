@@ -269,6 +269,19 @@ describe('events integration (real Postgres)', () => {
       }
     });
 
+    it('drops the event of a transaction a caught statement error aborted, whose COMMIT Postgres answers with ROLLBACK', async () => {
+      const { repo, handed } = withSink();
+      let id = '';
+
+      await db().transaction(async (tx) => {
+        id = await repo.emit(tx, signedIn(randomUUID()));
+        await tx.execute(sql`SELECT 1 / 0`).catch(() => undefined);
+      });
+
+      expect(await countById(id)).toBe(0);
+      expect(handed).toEqual([]);
+    });
+
     it('hands over an event written in its own transaction once it is stored', async () => {
       const { repo, handed } = withSink();
       const id = await repo.emitInOwnTransaction(signedIn(randomUUID()));

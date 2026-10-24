@@ -12,8 +12,14 @@ import { afterCommit, trackCommits } from './after-commit';
  * container suite (`events.integration.test.ts`) runs it against Postgres.
  */
 
-/** A recording database; `failOn` makes the statement starting with it fail. */
-function createRecordingDb(failOn?: string): { db: Database; statements: string[] } {
+/**
+ * A recording database; `failOn` makes the statement starting with it fail,
+ * and `commitTag` is the command tag a COMMIT gets back.
+ */
+function createRecordingDb(
+  failOn?: string,
+  commitTag = 'COMMIT'
+): { db: Database; statements: string[] } {
   const statements: string[] = [];
   const client = {
     query: (config: { text?: string } | string) => {
@@ -22,7 +28,8 @@ function createRecordingDb(failOn?: string): { db: Database; statements: string[
       if (failOn !== undefined && text.startsWith(failOn)) {
         return Promise.reject(new Error(`${failOn} failed`));
       }
-      return Promise.resolve({ rows: [], rowCount: 0, fields: [], command: '' });
+      const command = text === 'commit' ? commitTag : text.split(' ')[0].toUpperCase();
+      return Promise.resolve({ rows: [], rowCount: 0, fields: [], command });
     },
   };
   return { db: drizzle(client as unknown as Pool) as unknown as Database, statements };
@@ -81,6 +88,23 @@ describe('afterCommit', () => {
         });
       })
     ).rejects.toThrow('Failed query: commit');
+    expect(called).toBe(false);
+  });
+
+  it('drops the callbacks when Postgres answers the COMMIT with ROLLBACK, as it does for an aborted transaction', async () => {
+    const { db, statements } = createRecordingDb(undefined, 'ROLLBACK');
+    trackCommits(db);
+    let called = false;
+
+    await expect(
+      db.transaction(async (tx) => {
+        afterCommit(tx, () => {
+          called = true;
+        });
+        return 'the caller caught a failed statement';
+      })
+    ).resolves.toBe('the caller caught a failed statement');
+    expect(statements).toEqual(['begin', 'commit']);
     expect(called).toBe(false);
   });
 
