@@ -491,6 +491,9 @@ importers:
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../libs/shared/errors
+      '@qauth-labs/shared-events':
+        specifier: workspace:*
+        version: link:../../libs/shared/events
       '@qauth-labs/shared-stability':
         specifier: workspace:*
         version: link:../../libs/shared/stability
