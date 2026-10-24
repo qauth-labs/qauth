@@ -3,7 +3,7 @@ title: Keys
 description: Generating and configuring QAuth's signing keys — EdDSA (required), RS256 (optional), and the ML-DSA seed (hybrid signing only) — and the PKCS#8 pitfall that wastes an afternoon.
 sidebar:
   order: 2
-lastVerified: '2026-07-27'
+lastVerified: '2026-10-24'
 ---
 
 QAuth can use up to three signing key types. This page covers generating and
@@ -17,6 +17,70 @@ come from those importers, not from convention.
 | EdDSA (Ed25519) | **Yes**                                                        | Access tokens always; ID tokens when RS256 is absent  |
 | RS256           | No — only for OIDF Basic/Config OP certification               | ID tokens, when configured (access tokens stay EdDSA) |
 | ML-DSA-65 seed  | No — only when `HYBRID_SIGNING_ENABLED=true` (default `false`) | The post-quantum half of a hybrid access token        |
+
+## The key store
+
+Keys are moving out of environment variables into an encrypted key store in
+Postgres, one set per realm and purpose
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
+Decision 9). Every stored key is wrapped with a key-encryption key (KEK), so
+**set `KEK` or `KEK_PATH` before you upgrade** and keep a copy with your
+backups: without it the stored keys cannot be read. Generate one with
+`openssl rand -base64 32`. `NODE_ENV=production` refuses to start without it.
+
+At every boot the server runs a key step for the default realm, on every node,
+after the realm's own step and under an advisory lock, so nodes that start
+together do it once:
+
+1. It imports each key variable the realm's store does not hold yet:
+   `JWT_PRIVATE_KEY` as the Ed25519 signing key, `JWT_RS256_PRIVATE_KEY` as the
+   RS256 one, `JWT_MLDSA_PRIVATE_KEY` (with `HYBRID_SIGNING_ENABLED` on) as the
+   ML-DSA-65 key of the hybrid pair, and `SESSION_COOKIE_SECRET`, when you set
+   it, as the cookie key. A `_PATH` variable counts as its variable.
+2. It creates the keys the realm still lacks: the event-signing and
+   data-at-rest keys, and the cookie key when `SESSION_COOKIE_SECRET` is unset.
+   A realm that neither holds nor imports a signing key gets an Ed25519 and an
+   RS256 signing key. That needs a deployment without `JWT_PRIVATE_KEY`, which
+   the server still requires until token signing moves onto the key store
+   (#491), so today every deployment imports its signing key.
+3. It logs a warning for each key variable that is still set, naming it.
+
+Each imported key keeps `JWT_RS256_KID` or `JWT_MLDSA_KID` as its `kid` when
+set, and otherwise gets the RFC 7638 thumbprint of its public key. The Ed25519
+key has a `kid` for the first time, and `/.well-known/jwks.json` publishes it.
+The keys themselves do not change, so tokens signed before the upgrade still
+verify.
+
+The boot stops, and names the variable, when:
+
+- a key must be imported and no KEK is set: the published development KEK
+  would protect nothing;
+- `JWT_PUBLIC_KEY` or `JWT_RS256_PUBLIC_KEY` is not the public half of its
+  private key;
+- a key variable holds another key than the one the store imported from it.
+  After the import, a key changes by rotation, not through its variable: put
+  the old value back.
+
+**For now, keep the key variables set.** The warning says they are no longer
+read, but tokens are still signed with them until token signing moves onto the
+key store (#491), and the session cookie until #493. The upgrade guide (#501)
+says when to remove them.
+
+### Adding a key: `auth-server:keys:create`
+
+On a host that holds the KEK, with the server's environment, one command
+creates a key for a realm, purpose and algorithm, for example an RS256 signing
+key for an OpenID Foundation run:
+
+```bash
+pnpm nx run auth-server:keys:create --purpose=token_signing --algorithm=RS256
+# In the auth-server image, from /app:
+tsx src/keys-create.ts --purpose token_signing --algorithm RS256
+```
+
+It prints the new key's `kid` and public JWK as one JSON line. `--realm` picks
+a realm other than `DEFAULT_REALM_NAME`. A realm has one active key per purpose
+and algorithm, so a replacement is created with `--status next`.
 
 ## The PKCS#8 vs PKCS#1 pitfall (read this first)
 
@@ -84,7 +148,9 @@ plugin catches and rethrows as:
 Failed to derive public key from private key. Please provide JWT_PUBLIC_KEY in environment variables.
 ```
 
-The server never starts. This is tracked as
+The server never starts. (The key step above derives the public key with
+`node:crypto` and has no such problem, but the JWT plugin still does until
+token signing moves onto the key store.) This is tracked as
 [issue #359](https://github.com/qauth-labs/qauth/issues/359); fixing it is out
 of scope for this documentation change. **Until it's fixed, always set both
 `JWT_PRIVATE_KEY` and `JWT_PUBLIC_KEY`** (or their `_PATH` equivalents) — do

@@ -47,7 +47,7 @@ test that cites a registered spec section counts as evidence for that row.
 You need Docker and a workspace install (`pnpm install`).
 
 1. **Configure the stack.** Copy `.env.docker.example` to `.env` and fill in `JWT_PRIVATE_KEY`,
-   `JWT_PUBLIC_KEY` and `SESSION_COOKIE_SECRET`, as the
+   `JWT_PUBLIC_KEY`, `SESSION_COOKIE_SECRET` and `KEK`, as the
    [Docker guide](https://docs.qauth.dev/operate/docker/) describes. Then raise the rate limits
    for the run, as CI does — every request of the suite comes from one address, and the defaults
    allow three registrations and five logins per window:

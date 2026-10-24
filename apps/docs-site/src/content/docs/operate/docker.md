@@ -79,7 +79,15 @@ MCowBQYDK2VwAyEA...
 -----END PUBLIC KEY-----"
 
 JWT_ISSUER=http://localhost:3000
+
+# The key-encryption key: openssl rand -base64 32. Keep a copy with your backups.
+KEK=...
 ```
+
+> **Set a KEK.** At its first boot the server imports the JWT keys and
+> `SESSION_COOKIE_SECRET` into the realm's encrypted key store, wrapped with
+> `KEK`, and refuses to start without one. See
+> [the key store](/operate/keys/#the-key-store).
 
 > **Set `JWT_PUBLIC_KEY` explicitly.** `.env.docker.example` marks it optional,
 > but omitting it currently fails EdDSA key setup at boot — see the
@@ -361,6 +369,7 @@ See `.env.docker.example` for all available variables. Key variables:
 | `DB_PASSWORD`                  | Yes      | PostgreSQL password                                                                                                                                              |
 | `JWT_PRIVATE_KEY`              | Yes      | EdDSA private key (PEM format)                                                                                                                                   |
 | `JWT_PUBLIC_KEY`               | Yes      | EdDSA public key (PEM format)                                                                                                                                    |
+| `KEK`                          | Yes      | Key-encryption key, the base64 of 32 random bytes; wraps every key in the realm key store (or `KEK_PATH`, a file holding it)                                     |
 | `JWT_ISSUER`                   | No       | JWT issuer URL (default: http://localhost:3000). At first boot it becomes the default realm's permanent issuer; a later boot with another value refuses to start |
 | `DEFAULT_REALM_ENDPOINT_HOSTS` | No       | Names server-side callers reach the auth-server by (default: `auth-server`, the developer portal's)                                                              |
 | `EMAIL_PROVIDER`               | No       | Email provider: mock, resend, smtp (default: mock)                                                                                                               |

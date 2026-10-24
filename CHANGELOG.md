@@ -53,9 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KEK_PATH`, plus `KEK_PREVIOUS` or `KEK_PREVIOUS_PATH` during a KEK rotation;
   any other `KEK_PROVIDER` value loads the optional package
   `@qauth-labs/keys-<name>`. The five keys are stable and listed on the
-  configuration page. Nothing reads them yet: the signer that stores keys
-  through this library comes next. When it does, `NODE_ENV=production` will
-  refuse an unset KEK and the published development KEK.
+  configuration page. The auth-server reads them since the key import at
+  first boot ([#485]): `NODE_ENV=production` refuses an unset KEK and the
+  published development KEK.
 
 - **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
   ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
@@ -170,8 +170,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key. The KEK provider, envelope encryption and key factory move to the
   `@qauth-labs/server-keys/custody` entry point, and a lint rule lets only the
   signer's wiring, the new `@qauth-labs/fastify-plugin-signer`, import it.
-  Nothing registers the plugin yet: tokens are still signed with the
-  environment keys until token signing moves onto the signer.
+  The auth-server registers the plugin for the key import at first boot
+  ([#485]); tokens are still signed with the environment keys until token
+  signing moves onto the signer.
 
 - **Schema**: migration 0029 adds the event store ([#457], ADR-019 Decision 8,
   ADR-018 §3). One append-only table, `events`, is both the transactional
@@ -204,6 +205,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   old table, so the migration deletes any rows it holds. Nothing reads or
   writes the new tables yet: browser sessions stay in Redis until the session
   service lands.
+
+- **The key variables move into the key store at first boot** ([#485],
+  ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
+  the default realm's step and under an advisory lock on the realm, the
+  auth-server imports each key variable the default realm's encrypted key
+  store lacks: `JWT_PRIVATE_KEY` as the Ed25519 signing key,
+  `JWT_RS256_PRIVATE_KEY` as the RS256 one, `JWT_MLDSA_PRIVATE_KEY` (with
+  `HYBRID_SIGNING_ENABLED`) as the ML-DSA-65 key of a hybrid pair with the
+  Ed25519 key, and `SESSION_COOKIE_SECRET`, when set, as the first cookie HMAC
+  key. Each `_PATH` variable counts as its variable. The public keys are
+  derived from the private keys with `node:crypto`. A key keeps
+  `JWT_RS256_KID` or `JWT_MLDSA_KID` as its `kid` when set, and otherwise gets
+  the RFC 7638 thumbprint, so the Ed25519 key has a `kid` for the first time.
+  The step then creates every standard key the realm still lacks
+  (`event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
+  on a fresh deployment), and gives a fresh realm an RS256 signing key too;
+  while `JWT_PRIVATE_KEY` stays required, every deployment imports its
+  signing key instead. It is one transaction, so two nodes that boot together import once. A
+  warning at every boot names each key variable that is still set and says it
+  is no longer read and should be removed. Tokens and the session cookie keep
+  using the variables until they move onto the signer, so for now remove
+  none.
+- `/.well-known/jwks.json` publishes the Ed25519 key with its thumbprint `kid`,
+  and the RS256 key with its thumbprint `kid` when `JWT_RS256_KID` is unset;
+  ID tokens signed with RS256 carry that `kid` ([#485]). The keys themselves
+  are unchanged, and tokens signed before the upgrade still verify.
+- **`auth-server:keys:create`** ([#485]): an operator command that creates one
+  key for a realm, purpose and algorithm on a host that holds the KEK, for
+  example an RS256 signing key for an OpenID Foundation run:
+  `pnpm nx run auth-server:keys:create --purpose=token_signing --algorithm=RS256`.
+  In the auth-server image it runs as `tsx src/keys-create.ts` with the same
+  arguments.
 
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
@@ -256,6 +289,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serves development). A trailing slash or a path keeps working, with a boot
   warning: the realm stores the issuer without the slash, while tokens carry
   `JWT_ISSUER` as written.
+
+- **BREAKING**: the auth-server needs a key-encryption key (KEK) ([#485]).
+  `NODE_ENV=production` refuses to start without `KEK` or `KEK_PATH` (or a
+  `KEK_PROVIDER` adapter), and in every environment the boot stops, naming the
+  variables, when a key variable must be imported and the KEK is the published
+  development KEK. The boot also stops when `JWT_PUBLIC_KEY` or
+  `JWT_RS256_PUBLIC_KEY` is not the public half of its private key, when
+  `JWT_RS256_PRIVATE_KEY` is shorter than 2048 bits, and when a key variable
+  holds another key than the one the store imported from it: a stored key
+  changes by rotation, not through the variable.
+
+  **Action for operators**: before upgrading, set `KEK` or `KEK_PATH` to the
+  base64 of 32 random bytes (`openssl rand -base64 32`) and keep a copy where
+  you keep backups: every stored key is wrapped with it, and without it the
+  keys cannot be read. Docker Compose passes `KEK`, `KEK_PATH` and their
+  `_PREVIOUS` forms through. Leave the key variables as they are.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
@@ -319,6 +368,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#470]: https://github.com/qauth-labs/qauth/issues/470
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#484]: https://github.com/qauth-labs/qauth/issues/484
+[#485]: https://github.com/qauth-labs/qauth/issues/485
 
 ## [0.1.3] - 2026-10-21
 
