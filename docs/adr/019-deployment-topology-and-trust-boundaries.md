@@ -77,6 +77,16 @@
 >   The replaced key is retired and leaves the JWKS at once, as a variable change took it out of
 >   the JWKS before the key store, and the server warns. Once they ship, the boot refuses such a
 >   variable again.
+>
+> **Amended 2026-10-24** with the maintainer's decision of that day on the OpenTelemetry export of
+> events (#541). Decision 8 sends every outbound call that configuration causes through the egress
+> client, but an operator's collector usually sits on a private network, often on plain `http`,
+> which the client refuses, and its allowlist names hosts per realm while the collector serves the
+> whole deployment.
+>
+> - Decision 8: the operator's telemetry export (OTLP) is outside the egress client. Its
+>   destination comes only from deployment configuration, never from a realm admin, a client or an
+>   end user. It follows no redirect, and caps the time and the size of each export's response.
 
 ## Context
 
@@ -710,7 +720,10 @@ How revocation reaches resource servers:
 SSRF-safe egress client. That covers webhooks, SSF push, back-channel logout, upstream discovery,
 JWKS, token and userinfo calls, federation statements, CIMD and client `jwks_uri` fetches,
 bot-challenge verification, breach-list lookups and logo fetches. Plugins use the same client
-(Decision 12). The client:
+(Decision 12). One call is outside it: the operator's OpenTelemetry export (OTLP). Its destination
+comes only from deployment configuration, never from a realm admin, a client or an end user. The
+collector it reaches usually sits on a private network, which the client refuses. It follows no
+redirect, and caps the time and the size of each response (amendment of 2026-10-24). The client:
 
 - serves every HTTP method, not only `GET`;
 - uses `https` only, with no credentials in the URL;
