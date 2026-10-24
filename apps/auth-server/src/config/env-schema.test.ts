@@ -34,3 +34,32 @@ describe('the auth server env schema and the configuration key registry', () => 
     expect(findRegistryDrift(own, AUTH_SERVER_KEYS)).toEqual({ unregistered: [], orphaned: [] });
   });
 });
+
+/**
+ * The OTLP exporter variables (#541) are process-wide, so they are checked
+ * only when the event export, which reads them, is on.
+ */
+describe('the OTLP exporter variables', () => {
+  const env = (extra: Record<string, string>) => ({
+    DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
+    JWT_ISSUER: 'https://auth.example.com',
+    EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
+    EMAIL_BASE_URL: 'https://auth.example.com',
+    OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=s3cr3t;meta',
+    ...extra,
+  });
+  const issuesOf = (extra: Record<string, string>) => {
+    const result = envSchema.safeParse(env(extra));
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+  };
+
+  it('leaves them to their owner when the export is off', () => {
+    expect(issuesOf({})).not.toContain('OTEL_EXPORTER_OTLP_HEADERS');
+  });
+
+  it('refuses a malformed one when the export is on, without its value', () => {
+    expect(issuesOf({ OTEL_EVENTS_ENABLED: 'true' })).toContain('OTEL_EXPORTER_OTLP_HEADERS');
+    const result = envSchema.safeParse(env({ OTEL_EVENTS_ENABLED: 'true' }));
+    expect(JSON.stringify(result.error?.issues)).not.toContain('s3cr3t');
+  });
+});

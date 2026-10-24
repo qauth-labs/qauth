@@ -88,13 +88,13 @@ describe('eventTelemetrySettings', () => {
       exporterTimeoutMillis: OTLP_DEFAULT_TIMEOUT_MILLIS,
     });
     expect(
-      eventTelemetrySettings({ ...base, OTEL_EXPORTER_OTLP_TIMEOUT: 2000 }).exporterTimeoutMillis
+      eventTelemetrySettings({ ...base, OTEL_EXPORTER_OTLP_TIMEOUT: '2000' }).exporterTimeoutMillis
     ).toBe(2000);
     expect(
       eventTelemetrySettings({
         ...base,
-        OTEL_EXPORTER_OTLP_TIMEOUT: 2000,
-        OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: 3000,
+        OTEL_EXPORTER_OTLP_TIMEOUT: '2000',
+        OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: '3000',
       }).exporterTimeoutMillis
     ).toBe(3000);
   });

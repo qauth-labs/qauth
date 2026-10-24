@@ -11,7 +11,15 @@ export { type BaseEnv, baseEnvSchema } from './base';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
 export { type EmailEnv, emailEnvSchema } from './email';
-export { type EventTelemetryEnv, eventTelemetryEnvSchema } from './event-telemetry';
+export {
+  type EventTelemetryEnv,
+  eventTelemetryEnvSchema,
+  OTLP_TIMEOUT_MAX_MILLIS,
+  type OtlpExporterEnv,
+  type OtlpExporterProblem,
+  otlpExporterProblems,
+  otlpLogsTimeoutMillis,
+} from './event-telemetry';
 export {
   type FederationEnv,
   federationEnvSchema,

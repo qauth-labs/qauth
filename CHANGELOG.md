@@ -265,7 +265,8 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   `qauth.client.id`; the severity is the type's; an active span gives the
   trace and span id, else the record carries `qauth.request.id`. The export
   reads `OTEL_SERVICE_NAME` and the standard `OTEL_EXPORTER_OTLP_*` variables
-  of the logs signal, all advanced keys, and the boot refuses a malformed one.
+  of the logs signal, all advanced keys; with the export on, the boot refuses
+  a malformed one.
   It is telemetry with no delivery guarantee: records wait in a bounded queue
   that drops the oldest when full, export never fails or slows a request, and
   `qauth_events_telemetry_dropped_total` on `/metrics` counts what was not

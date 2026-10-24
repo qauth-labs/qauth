@@ -24,7 +24,7 @@ export const EVENT_TELEMETRY_KEYS = defineKeys([
     owner: 'observability',
     default: 'false',
     since: '0.2.0',
-    docs: 'Send every event as an OpenTelemetry log record to the collector the `OTEL_EXPORTER_OTLP_*` keys name, as telemetry without a delivery guarantee.',
+    docs: 'Send every event as an OpenTelemetry log record to the collector the `OTEL_EXPORTER_OTLP_*` keys name, as telemetry without a delivery guarantee; only then are those keys checked at boot.',
   },
   {
     name: 'OTEL_SERVICE_NAME',
@@ -80,7 +80,7 @@ export const EVENT_TELEMETRY_KEYS = defineKeys([
     owner: 'observability',
     default: OTEL_DEFAULT('`10000`'),
     since: '0.2.0',
-    docs: 'How long one export may take, its retries included, in milliseconds.',
+    docs: 'How long one export may take, its retries included, in milliseconds, at most an hour.',
   },
   {
     name: 'OTEL_EXPORTER_OTLP_LOGS_TIMEOUT',

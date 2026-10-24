@@ -8,10 +8,15 @@ import { z } from 'zod';
  * The OpenTelemetry exporter reads the `OTEL_EXPORTER_OTLP_*` variables from
  * the environment itself, with their standard meaning: a `LOGS_` variable
  * wins over the general one, `/v1/logs` is appended to the general endpoint
- * and not to the logs one, and the two header lists are merged. This schema
- * checks them so that a malformed value refuses the boot. The exporter would
- * otherwise ignore it without a word and fall back to its default. Blank
- * counts as unset, as it does for the exporter.
+ * and not to the logs one, and the two header lists are merged. Blank counts
+ * as unset, as it does for the exporter.
+ *
+ * Those variables are process-wide, and another OpenTelemetry component the
+ * operator runs in the same process may set them in a form the SDK accepts
+ * and QAuth's check would not. So this schema takes them as text, and
+ * {@link otlpExporterProblems} checks them; the auth server runs that check
+ * only when `OTEL_EVENTS_ENABLED` is on, and then a malformed value refuses
+ * the boot, which the exporter would otherwise ignore without a word.
  *
  * A plain `z.object` with per-field rules, so the auth server can spread its
  * `.shape`.
@@ -25,9 +30,82 @@ function unsetWhenBlank<T extends z.ZodType>(schema: T) {
   );
 }
 
-/** An OTLP/HTTP endpoint: an `http` or `https` URL. */
-const otlpEndpoint = (name: string) =>
-  unsetWhenBlank(z.url({ protocol: /^https?$/, error: `${name} must be an http or https URL` }));
+/** An OTLP exporter variable, as text; {@link otlpExporterProblems} checks it. */
+const otlpSetting = () => unsetWhenBlank(z.string());
+
+export const eventTelemetryEnvSchema = z.object({
+  /**
+   * Export every event as an OpenTelemetry log record. Off by default: no
+   * exporter is created and nothing is sent.
+   */
+  OTEL_EVENTS_ENABLED: z
+    .enum(['true', 'false', '1', '0'])
+    .default('false')
+    .transform((val) => val === 'true' || val === '1'),
+
+  /** The `service.name` resource attribute of every exported record. */
+  OTEL_SERVICE_NAME: z.string().trim().min(1).max(255).default('qauth-auth-server'),
+
+  /** The collector's base URL; `/v1/logs` is appended. */
+  OTEL_EXPORTER_OTLP_ENDPOINT: otlpSetting(),
+  /** The full URL logs are sent to, used as it is. Wins over the base URL. */
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: otlpSetting(),
+
+  /** Headers sent with every export, such as the collector's API key. */
+  OTEL_EXPORTER_OTLP_HEADERS: otlpSetting(),
+  /** Headers sent with every log export; merged over the general list. */
+  OTEL_EXPORTER_OTLP_LOGS_HEADERS: otlpSetting(),
+
+  /** How long one export may take, retries included, in milliseconds. */
+  OTEL_EXPORTER_OTLP_TIMEOUT: otlpSetting(),
+  /** The same for log exports; wins over the general timeout. */
+  OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: otlpSetting(),
+
+  /** `gzip` or `none`. */
+  OTEL_EXPORTER_OTLP_COMPRESSION: otlpSetting(),
+  /** The same for log exports; wins over the general setting. */
+  OTEL_EXPORTER_OTLP_LOGS_COMPRESSION: otlpSetting(),
+
+  /** A PEM file of the CA certificates that verify the collector's TLS certificate. */
+  OTEL_EXPORTER_OTLP_CERTIFICATE: otlpSetting(),
+  /** The same for log exports; wins over the general file. */
+  OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: otlpSetting(),
+  /** A PEM file of the client certificate chain, for a collector that asks for mutual TLS. */
+  OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: otlpSetting(),
+  /** The same for log exports; wins over the general file. */
+  OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE: otlpSetting(),
+  /** A PEM file of the client certificate's private key. */
+  OTEL_EXPORTER_OTLP_CLIENT_KEY: otlpSetting(),
+  /** The same for log exports; wins over the general file. */
+  OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY: otlpSetting(),
+});
+
+/** Event telemetry environment configuration type. */
+export type EventTelemetryEnv = z.infer<typeof eventTelemetryEnvSchema>;
+
+/** The OTLP exporter variables {@link otlpExporterProblems} checks. */
+export type OtlpExporterEnv = Partial<
+  Pick<
+    EventTelemetryEnv,
+    | 'OTEL_EXPORTER_OTLP_ENDPOINT'
+    | 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT'
+    | 'OTEL_EXPORTER_OTLP_HEADERS'
+    | 'OTEL_EXPORTER_OTLP_LOGS_HEADERS'
+    | 'OTEL_EXPORTER_OTLP_TIMEOUT'
+    | 'OTEL_EXPORTER_OTLP_LOGS_TIMEOUT'
+    | 'OTEL_EXPORTER_OTLP_COMPRESSION'
+    | 'OTEL_EXPORTER_OTLP_LOGS_COMPRESSION'
+  >
+>;
+
+/** The longest export timeout QAuth accepts: an hour, in milliseconds. */
+export const OTLP_TIMEOUT_MAX_MILLIS = 3_600_000;
+
+/** One malformed OTLP exporter variable, for the boot error. */
+export interface OtlpExporterProblem {
+  readonly variable: keyof OtlpExporterEnv;
+  readonly message: string;
+}
 
 /** An HTTP header name: an RFC 9110 token. */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -54,78 +132,71 @@ function isHeaderList(value: string): boolean {
     });
 }
 
+const httpUrl = z.url({ protocol: /^https?$/ });
+
+/** A timeout in whole milliseconds, above 0 and at most an hour, or `undefined`. */
+function timeoutMillis(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d+$/.test(value.trim())) return undefined;
+  const millis = Number(value.trim());
+  return millis > 0 && millis <= OTLP_TIMEOUT_MAX_MILLIS ? millis : undefined;
+}
+
 /**
- * An OTLP header list. The values often hold a collector's API key, so the
- * error names the rule and never the value.
+ * The malformed OTLP exporter variables, one problem each; empty when every
+ * one that is set is well formed. A header list often holds the collector's
+ * API key, so a problem names the rule and never the value.
  */
-const otlpHeaders = (name: string) =>
-  unsetWhenBlank(
-    z
-      .string()
-      .refine(isHeaderList, `${name} must be name=value pairs, comma-separated and URL-encoded`)
+export function otlpExporterProblems(env: OtlpExporterEnv): OtlpExporterProblem[] {
+  const problems: OtlpExporterProblem[] = [];
+  const check = (
+    variable: keyof OtlpExporterEnv,
+    wellFormed: (value: string) => boolean,
+    rule: string
+  ) => {
+    const value = env[variable];
+    if (value !== undefined && !wellFormed(value)) {
+      problems.push({ variable, message: `${variable} must be ${rule}` });
+    }
+  };
+  for (const variable of [
+    'OTEL_EXPORTER_OTLP_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT',
+  ] as const) {
+    check(variable, (value) => httpUrl.safeParse(value).success, 'an http or https URL');
+  }
+  for (const variable of [
+    'OTEL_EXPORTER_OTLP_HEADERS',
+    'OTEL_EXPORTER_OTLP_LOGS_HEADERS',
+  ] as const) {
+    check(variable, isHeaderList, 'name=value pairs, comma-separated and URL-encoded');
+  }
+  for (const variable of [
+    'OTEL_EXPORTER_OTLP_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_LOGS_TIMEOUT',
+  ] as const) {
+    check(
+      variable,
+      (value) => timeoutMillis(value) !== undefined,
+      `a whole number of milliseconds from 1 to ${OTLP_TIMEOUT_MAX_MILLIS}`
+    );
+  }
+  for (const variable of [
+    'OTEL_EXPORTER_OTLP_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_LOGS_COMPRESSION',
+  ] as const) {
+    check(variable, (value) => value === 'gzip' || value === 'none', 'gzip or none');
+  }
+  return problems;
+}
+
+/**
+ * The log export's timeout as the exporter takes it: the logs variable when
+ * it is well formed, else the general one, else `undefined` (the
+ * OpenTelemetry default applies).
+ */
+export function otlpLogsTimeoutMillis(env: OtlpExporterEnv): number | undefined {
+  return (
+    timeoutMillis(env.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT) ??
+    timeoutMillis(env.OTEL_EXPORTER_OTLP_TIMEOUT)
   );
-
-/** An export timeout in milliseconds, a positive integer. */
-const otlpTimeout = (name: string) =>
-  unsetWhenBlank(
-    z.coerce
-      .number()
-      .int(`${name} must be a whole number of milliseconds`)
-      .positive(`${name} must be greater than 0`)
-  );
-
-/** `gzip` or `none`, the two the OTLP/HTTP exporter supports. */
-const otlpCompression = () => unsetWhenBlank(z.enum(['gzip', 'none']));
-
-/** A path to a PEM file the exporter reads at boot. */
-const otlpPemPath = () => unsetWhenBlank(z.string());
-
-export const eventTelemetryEnvSchema = z.object({
-  /**
-   * Export every event as an OpenTelemetry log record. Off by default: no
-   * exporter is created and nothing is sent.
-   */
-  OTEL_EVENTS_ENABLED: z
-    .enum(['true', 'false', '1', '0'])
-    .default('false')
-    .transform((val) => val === 'true' || val === '1'),
-
-  /** The `service.name` resource attribute of every exported record. */
-  OTEL_SERVICE_NAME: z.string().trim().min(1).max(255).default('qauth-auth-server'),
-
-  /** The collector's base URL; `/v1/logs` is appended. */
-  OTEL_EXPORTER_OTLP_ENDPOINT: otlpEndpoint('OTEL_EXPORTER_OTLP_ENDPOINT'),
-  /** The full URL logs are sent to, used as it is. Wins over the base URL. */
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: otlpEndpoint('OTEL_EXPORTER_OTLP_LOGS_ENDPOINT'),
-
-  /** Headers sent with every export, such as the collector's API key. */
-  OTEL_EXPORTER_OTLP_HEADERS: otlpHeaders('OTEL_EXPORTER_OTLP_HEADERS'),
-  /** Headers sent with every log export; merged over the general list. */
-  OTEL_EXPORTER_OTLP_LOGS_HEADERS: otlpHeaders('OTEL_EXPORTER_OTLP_LOGS_HEADERS'),
-
-  /** How long one export may take, retries included, in milliseconds. */
-  OTEL_EXPORTER_OTLP_TIMEOUT: otlpTimeout('OTEL_EXPORTER_OTLP_TIMEOUT'),
-  /** The same for log exports; wins over the general timeout. */
-  OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: otlpTimeout('OTEL_EXPORTER_OTLP_LOGS_TIMEOUT'),
-
-  /** `gzip` or `none`. */
-  OTEL_EXPORTER_OTLP_COMPRESSION: otlpCompression(),
-  /** The same for log exports; wins over the general setting. */
-  OTEL_EXPORTER_OTLP_LOGS_COMPRESSION: otlpCompression(),
-
-  /** A PEM file of the CA certificates that verify the collector's TLS certificate. */
-  OTEL_EXPORTER_OTLP_CERTIFICATE: otlpPemPath(),
-  /** The same for log exports; wins over the general file. */
-  OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: otlpPemPath(),
-  /** A PEM file of the client certificate chain, for a collector that asks for mutual TLS. */
-  OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: otlpPemPath(),
-  /** The same for log exports; wins over the general file. */
-  OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE: otlpPemPath(),
-  /** A PEM file of the client certificate's private key. */
-  OTEL_EXPORTER_OTLP_CLIENT_KEY: otlpPemPath(),
-  /** The same for log exports; wins over the general file. */
-  OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY: otlpPemPath(),
-});
-
-/** Event telemetry environment configuration type. */
-export type EventTelemetryEnv = z.infer<typeof eventTelemetryEnvSchema>;
+}

@@ -3,7 +3,7 @@ import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { defaultResource, resourceFromAttributes } from '@opentelemetry/resources';
 import { LoggerProvider, type LogRecordExporter } from '@opentelemetry/sdk-logs';
 import type { EventTelemetrySink } from '@qauth-labs/fastify-plugin-db';
-import type { EventTelemetryEnv } from '@qauth-labs/server-config';
+import { type EventTelemetryEnv, otlpLogsTimeoutMillis } from '@qauth-labs/server-config';
 import { EventValidationError } from '@qauth-labs/shared-events';
 import type { FastifyBaseLogger } from 'fastify';
 import { Counter } from 'prom-client';
@@ -23,17 +23,18 @@ import { eventLogRecord } from './event-log-record';
  * It is telemetry, not delivery. A record waits in a bounded queue that drops
  * its oldest record when full, a failed export is not retried past the
  * exporter's own retries, and a crash between the commit and the export
- * loses the record. Each drop is counted in
- * `qauth_events_telemetry_dropped_total`. Export never fails or slows a
- * request. The event API and webhooks read the event store and carry the
- * delivery guarantee.
+ * loses the record. Each record the queue gives up is counted in
+ * `qauth_events_telemetry_dropped_total`. Export never fails a request, and a
+ * request never waits for the collector: it builds its records and queues
+ * them, and the queue serializes and sends them later. The event API and
+ * webhooks read the event store and carry the delivery guarantee.
  *
  * The collector is the operator's own, often on a private network, so the
  * export goes through the OpenTelemetry SDK's HTTP exporter, not the egress
  * client that guards destinations a client or a user names. The exporter
  * reads the standard `OTEL_EXPORTER_OTLP_*` variables from the environment
  * itself, with their standard meaning; the env schema has already checked
- * them.
+ * them, as it does whenever the export is on.
  */
 
 /** The settings the export reads, from the parsed environment. */
@@ -72,10 +73,7 @@ export function eventTelemetrySettings(
   return {
     enabled: env.OTEL_EVENTS_ENABLED,
     serviceName: env.OTEL_SERVICE_NAME,
-    exporterTimeoutMillis:
-      env.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT ??
-      env.OTEL_EXPORTER_OTLP_TIMEOUT ??
-      OTLP_DEFAULT_TIMEOUT_MILLIS,
+    exporterTimeoutMillis: otlpLogsTimeoutMillis(env) ?? OTLP_DEFAULT_TIMEOUT_MILLIS,
   };
 }
 
