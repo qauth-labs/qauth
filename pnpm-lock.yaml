@@ -610,6 +610,9 @@ importers:
         specifier: 'catalog:'
         version: 1.0.5
     devDependencies:
+      '@nx/vite':
+        specifier: 'catalog:'
+        version: 24.0.1(50456b8f14ac87b6ccd064c8474a7a53)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.3(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
