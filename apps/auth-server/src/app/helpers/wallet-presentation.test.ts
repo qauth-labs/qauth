@@ -848,6 +848,52 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
       linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1' })
     ).rejects.toBe(boom);
   });
+
+  it('runs onLinked in the link transaction, with the linked result, before returning it', async () => {
+    const store = createCredentialStore([PASSWORD_ROW]);
+    const { fastify } = makeFastify(store);
+    const tx = { name: 'link-transaction' };
+    (fastify.db.transaction as unknown as Mock).mockImplementationOnce(
+      async (run: (tx: unknown) => unknown) => run(tx)
+    );
+    const onLinked = vi.fn(async () => {
+      // The credential row is written by the time the hook runs.
+      expect(store.rows).toHaveLength(2);
+    });
+
+    const result = await linkWalletPresentation(fastify, {
+      ...REQUEST,
+      authenticatedUserId: 'user-1',
+      onLinked,
+    });
+
+    expect(result).toMatchObject({ status: 'linked', rebound: false });
+    expect(onLinked).toHaveBeenCalledExactlyOnceWith(tx, result);
+  });
+
+  it('does not run onLinked for a conflict, and a throwing onLinked fails the link', async () => {
+    const onLinked = vi.fn(async () => {
+      throw new Error('event refused');
+    });
+
+    (prepareWalletLink as unknown as Mock).mockResolvedValueOnce({ kind: 'conflict' });
+    const conflict = makeFastify(createCredentialStore([PASSWORD_ROW]));
+    await expect(
+      linkWalletPresentation(conflict.fastify, {
+        ...REQUEST,
+        authenticatedUserId: 'user-1',
+        onLinked,
+      })
+    ).resolves.toEqual({ status: 'conflict' });
+    expect(onLinked).not.toHaveBeenCalled();
+
+    // Thrown inside the transaction, so the real one rolls the row back.
+    const { fastify } = makeFastify(createCredentialStore([PASSWORD_ROW]));
+    await expect(
+      linkWalletPresentation(fastify, { ...REQUEST, authenticatedUserId: 'user-1', onLinked })
+    ).rejects.toThrow('event refused');
+    expect(onLinked).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('#238 AC3 — after linking, both credentials name the same users.id', () => {

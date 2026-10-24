@@ -1,6 +1,6 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 // `index.ts` (which registers these routes) transitively imports `config/env`,
 // which validates required env at module load. Stub it (matches clients.test.ts).
@@ -23,7 +23,20 @@ vi.mock('../../helpers/management-token', () => ({
   createRequireManagementJwt: () => managementGuard,
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+import { emitUserEvent } from '../../helpers/user-events';
 import { registerApiKeyRoutes } from './api-keys';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 interface RouteOptions {
@@ -114,7 +127,6 @@ function makeFastify(
         findById: vi.fn(),
         revoke: vi.fn(),
       },
-      auditLogs: { create: vi.fn(async () => undefined) },
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -159,7 +171,8 @@ describe('POST create — development client (allowed)', () => {
     await registerApiKeyRoutes(fastify);
     const { reply, state } = createReply();
 
-    await route(ctx, 'POST /:clientId/api-keys').handler(authedRequest(), reply);
+    const request = authedRequest();
+    await route(ctx, 'POST /:clientId/api-keys').handler(request, reply);
 
     expect(state.statusCode).toBe(201);
     const body = state.body as Record<string, unknown>;
@@ -179,10 +192,21 @@ describe('POST create — development client (allowed)', () => {
     // One-time secret must not be cached.
     expect(state.headers['cache-control']).toBe('no-store');
 
-    // Audit logged.
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'api_key.created', success: true })
+    // Recorded: the developer created the key, of the client by its public
+    // client_id. Never the key or its prefix.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:api_key.created:v1-rc.0',
+      {},
+      {
+        realmId: 'realm-1',
+        userId: DEV_A,
+        subject: { type: 'api_key', id: 'key-1' },
+        clientId: 'app-123',
+        actor: 'user',
+      }
     );
+    expect(fastify.log.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -316,7 +340,7 @@ describe('DELETE revoke', () => {
     revokedAt: null,
   };
 
-  it('revokes a key the developer owns and audits it', async () => {
+  it('revokes a key the developer owns and records it', async () => {
     const { fastify, ctx } = makeFastify();
     (fastify.repositories.apiKeys.findById as unknown as Mock).mockResolvedValue(keyRow);
     (fastify.repositories.apiKeys.revoke as unknown as Mock).mockResolvedValue({
@@ -326,15 +350,46 @@ describe('DELETE revoke', () => {
     await registerApiKeyRoutes(fastify);
     const { reply, state } = createReply();
 
+    const request = authedRequest({ params: { clientId: CLIENT_ID, keyId: 'key-1' } });
+    await route(ctx, 'DELETE /:clientId/api-keys/:keyId').handler(request, reply);
+
+    expect(fastify.repositories.apiKeys.revoke).toHaveBeenCalledWith('key-1');
+    expect((state.body as Record<string, unknown>).revokedAt).toBe(1900);
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:api_key.revoked:v1-rc.0',
+      {},
+      {
+        realmId: 'realm-1',
+        userId: DEV_A,
+        subject: { type: 'api_key', id: 'key-1' },
+        clientId: 'app-123',
+        actor: 'user',
+      }
+    );
+    expect(fastify.log.warn).not.toHaveBeenCalled();
+  });
+
+  it('still returns the revoked key when the event write throws', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.apiKeys.findById as unknown as Mock).mockResolvedValue(keyRow);
+    (fastify.repositories.apiKeys.revoke as unknown as Mock).mockResolvedValue({
+      ...keyRow,
+      revokedAt: 1900,
+    });
+    emitUserEventMock.mockRejectedValueOnce(new Error('event store down'));
+    await registerApiKeyRoutes(fastify);
+    const { reply, state } = createReply();
+
     await route(ctx, 'DELETE /:clientId/api-keys/:keyId').handler(
       authedRequest({ params: { clientId: CLIENT_ID, keyId: 'key-1' } }),
       reply
     );
 
-    expect(fastify.repositories.apiKeys.revoke).toHaveBeenCalledWith('key-1');
     expect((state.body as Record<string, unknown>).revokedAt).toBe(1900);
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'api_key.revoked', success: true })
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'key-1' }),
+      'Failed to record the api_key.revoked event'
     );
   });
 

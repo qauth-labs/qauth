@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
 import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
-import type { FastifyInstance } from 'fastify';
+import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
@@ -12,6 +13,7 @@ import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { createRequireManagementJwt } from '../../helpers/management-token';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
 import {
   clientSchema,
   type CreateClientRequest,
@@ -281,27 +283,38 @@ async function generateClientSecret(
 }
 
 /**
- * Audit log shape for a client-management event (subset of the audit_logs
- * repository's create payload).
- */
-type ClientAuditEntry = Parameters<FastifyInstance['repositories']['auditLogs']['create']>[0];
-
-/**
- * Write an audit entry best-effort: a logging failure MUST NOT propagate.
+ * Record a client-management event best-effort: a failed write MUST NOT
+ * propagate.
  *
  * This matters most on the secret-bearing paths (create / regenerate): the
  * client row (or rotated secret hash) is already committed, so throwing here
  * would 500 *after* the only copy of the plaintext secret was generated,
  * leaving the developer with a client they can never authenticate. We log the
  * failure and continue so the one-time secret still reaches the response.
+ *
+ * The developer acts, as the user of the management token; the client is the
+ * event's subject and its `client`, by its public `client_id`.
  */
-async function auditBestEffort(fastify: FastifyInstance, entry: ClientAuditEntry): Promise<void> {
+async function emitClientEventBestEffort<Type extends RegisteredEventType>(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  type: Type,
+  data: EventDataOf<Type>,
+  event: { developerId: string; client: Pick<OAuthClientRow, 'clientId' | 'realmId'> }
+): Promise<void> {
+  const options: UserEventOptions = {
+    realmId: event.client.realmId,
+    userId: event.developerId,
+    subject: { type: 'client', id: event.client.clientId },
+    clientId: event.client.clientId,
+    actor: 'user',
+  };
   try {
-    await fastify.repositories.auditLogs.create(entry);
+    await emitUserEvent(request, type, data, options);
   } catch (err) {
     fastify.log.warn(
-      { err, event: entry.event, oauthClientId: entry.oauthClientId },
-      'Failed to write client-management audit log (non-fatal)'
+      { err, event: type, clientId: event.client.clientId },
+      'Failed to record a client-management event (non-fatal)'
     );
   }
 }
@@ -506,22 +519,20 @@ export default async function (fastify: FastifyInstance) {
       });
 
       // Best-effort: the client (and its secret hash) is already committed, so
-      // a failing audit write must not 500 and lose the one-time plaintext.
-      await auditBestEffort(fastify, {
-        userId: developerId,
-        oauthClientId: created.id,
-        event: 'oauth.client.created',
-        eventType: 'client',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          clientId,
+      // a failing event write must not 500 and lose the one-time plaintext.
+      await emitClientEventBestEffort(
+        fastify,
+        request,
+        'urn:qauth:event:client.created:v1-rc.0',
+        {
+          registration: 'developer_api',
           isPublic,
           grantTypes,
-          tokenEndpointAuthMethod,
+          scopes,
+          authMethod: tokenEndpointAuthMethod,
         },
-      });
+        { developerId, client: { clientId, realmId: realm.id } }
+      );
 
       // Reuse the realm already loaded above so the response's effective
       // environment respects the realm ceiling without a second lookup.
@@ -628,7 +639,7 @@ export default async function (fastify: FastifyInstance) {
         body.redirectUris !== undefined &&
         JSON.stringify(body.redirectUris) !== JSON.stringify(existing.redirectUris);
 
-      const updated = await fastify.repositories.oauthClients.update(id, {
+      const changes = {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.redirectUris !== undefined ? { redirectUris: body.redirectUris } : {}),
@@ -643,18 +654,17 @@ export default async function (fastify: FastifyInstance) {
         // a client off suspends it (`oauth_clients.suspended`), which no route
         // writes and this one never reads from the body (ANT-2026-DR5XI3LV).
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-      });
+      };
+      const updated = await fastify.repositories.oauthClients.update(id, changes);
 
-      await auditBestEffort(fastify, {
-        userId: developerId,
-        oauthClientId: updated.id,
-        event: 'oauth.client.updated',
-        eventType: 'client',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { clientId: updated.clientId, fields: Object.keys(body) },
-      });
+      // The names of the settings written, never their values.
+      await emitClientEventBestEffort(
+        fastify,
+        request,
+        'urn:qauth:event:client.updated:v1-rc.0',
+        { fields: Object.keys(changes) },
+        { developerId, client: updated }
+      );
 
       const policy = await resolveClientPolicy(fastify, updated);
       return reply.send(toClientResponse(updated, policy));
@@ -686,16 +696,13 @@ export default async function (fastify: FastifyInstance) {
 
       await fastify.repositories.oauthClients.delete(id);
 
-      await auditBestEffort(fastify, {
-        userId: developerId,
-        oauthClientId: existing.id,
-        event: 'oauth.client.deleted',
-        eventType: 'client',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { clientId: existing.clientId },
-      });
+      await emitClientEventBestEffort(
+        fastify,
+        request,
+        'urn:qauth:event:client.deleted:v1-rc.0',
+        {},
+        { developerId, client: existing }
+      );
 
       reply.code(204);
       return reply.send(null);
@@ -749,18 +756,15 @@ export default async function (fastify: FastifyInstance) {
       });
 
       // Best-effort: the new secret hash is already committed and the old one
-      // invalidated, so a failing audit write must not 500 and lose the
+      // invalidated, so a failing event write must not 500 and lose the
       // one-time plaintext (the client would be locked out of its own secret).
-      await auditBestEffort(fastify, {
-        userId: developerId,
-        oauthClientId: updated.id,
-        event: 'oauth.client.secret_regenerated',
-        eventType: 'client',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { clientId: updated.clientId },
-      });
+      await emitClientEventBestEffort(
+        fastify,
+        request,
+        'urn:qauth:event:client.secret_rotated:v1-rc.0',
+        {},
+        { developerId, client: updated }
+      );
 
       const policy = await resolveClientPolicy(fastify, updated);
 

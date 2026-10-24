@@ -15,12 +15,13 @@ import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent } from '../../helpers/user-events';
 import { type LoginRequest, loginResponseSchema, loginSchema } from '../../schemas/auth';
 
 /**
  * Login route
  * Handles user authentication with password verification, JWT generation,
- * refresh token storage, session management, and audit logging
+ * refresh token storage, session management, and its sign-in events
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
@@ -58,6 +59,8 @@ export default async function (fastify: FastifyInstance) {
       const emailHash = hashEmail(normalizedEmail);
       const emailIdentifier = `email:${emailHash}`;
       const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
+      // The realm once resolved, for the event of a failure after that point.
+      let realmId: string | undefined;
 
       try {
         // Reject early if this identifier is currently locked out; otherwise
@@ -79,6 +82,7 @@ export default async function (fastify: FastifyInstance) {
 
         // Get default realm
         const realm = await getOrCreateDefaultRealm(fastify);
+        realmId = realm.id;
 
         // Password check via the user_credentials read path (#228): lookup on
         // (realm_id, 'password', external_sub), argon2 against
@@ -102,11 +106,11 @@ export default async function (fastify: FastifyInstance) {
         // any address with a password of their choice, and logging in with it
         // then told a free address (the new, unverified account: 403) from a
         // registered one (the owner's password: 401). ANT-2026-SPEMY9GU.
-        // Only the server-side log line and audit row keep the reason.
+        // Only the server-side log line and event keep the reason.
         const unverified =
           check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
 
-        // The users row supplies the stable subject id plus session/audit/log
+        // The users row supplies the stable subject id plus session/event/log
         // fields. The row must exist for any live credential (FK), so a miss
         // is treated as invalid below.
         const user =
@@ -140,20 +144,21 @@ export default async function (fastify: FastifyInstance) {
           // Ensure minimum response time to prevent timing attacks
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
 
-          // Log failed login attempt (DB audit trail)
-          await fastify.repositories.auditLogs.create({
-            userId: unverified ? check.credential.userId : null,
-            oauthClientId: null,
-            event: 'user.login.failure',
-            eventType: 'auth',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              email: normalizedEmail,
-              error: unverified ? 'Email address not verified' : 'Invalid credentials',
+          // Record the refused sign-in. Never the address: the person is the
+          // subject only when the password checked out (an unverified account).
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+            {
+              method: 'password',
+              reason: unverified ? 'email_not_verified' : 'invalid_credentials',
             },
-          });
+            {
+              realmId: realm.id,
+              userId: unverified ? check.credential.userId : null,
+              actor: 'user',
+            }
+          );
 
           throw new InvalidCredentialsError('Invalid email or password');
         }
@@ -212,19 +217,18 @@ export default async function (fastify: FastifyInstance) {
           accessTokenExpiresIn
         );
 
-        // Log audit event (success)
-        await fastify.repositories.auditLogs.create({
-          userId: user.id,
-          oauthClientId: systemClient.id,
-          event: 'user.login.success',
-          eventType: 'auth',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            sessionId,
-          },
-        });
+        // Record the sign-in
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.signed_in:v1-rc.0',
+          { method: 'password' },
+          {
+            realmId: realm.id,
+            userId: user.id,
+            clientId: systemClient.clientId,
+            actor: 'user',
+          }
+        );
 
         // Update user lastLoginAt timestamp
         await fastify.repositories.users.updateLastLogin(user.id);
@@ -262,26 +266,19 @@ export default async function (fastify: FastifyInstance) {
           throw error;
         }
 
-        // Log other errors as failed login attempts (structured + DB audit).
+        // Log other errors as failed login attempts (structured log + event).
         fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'error' });
         logAuthEvent(request, 'user.login.failure', false, {
           emailHash,
           reason: 'error',
         });
 
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'user.login.failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            email: normalizedEmail,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+          { method: 'password', reason: 'internal_error' },
+          { realmId, userId: null, actor: 'user' }
+        );
 
         // Ensure minimum response time even on errors
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);

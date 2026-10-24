@@ -5,7 +5,7 @@ import {
   NotFoundError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 // The create route transitively imports `helpers/realm` → `config/env`, which
 // validates required env at module load. Stub it so the unit run needs no real
@@ -31,8 +31,21 @@ vi.mock('../../helpers/management-token', () => ({
   createRequireManagementJwt: () => managementGuard,
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import { env } from '../../../config/env';
+import { emitUserEvent } from '../../helpers/user-events';
 import clientsRoute, { autoPrefix } from './index';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 interface RouteOptions {
@@ -136,9 +149,6 @@ function makeFastify() {
         })),
         update: vi.fn(),
         create: vi.fn(),
-      },
-      auditLogs: {
-        create: vi.fn(async () => undefined),
       },
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -1192,17 +1202,125 @@ describe('redirect_uris required for user-involving grants (#86/#88)', () => {
   });
 });
 
-describe('audit logging is best-effort (one-time secret must survive #86/#90)', () => {
-  it('still returns the created client + secret when the audit write throws', async () => {
+describe('client-management events', () => {
+  const CLIENT_ROW_ID = '0190a000-0000-7000-8000-000000000001';
+
+  /** The options every client-management event carries: the developer acts on the client. */
+  function clientEventOptions(clientId: string) {
+    return {
+      realmId: 'realm-1',
+      userId: DEV_A,
+      subject: { type: 'client', id: clientId },
+      clientId,
+      actor: 'user',
+    };
+  }
+
+  it('records client.created with the registration facts, never the secret', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Evented',
+        redirectUris: ['https://app.example.com/cb'],
+        scopes: ['openid', 'email'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const body = (await route(ctx, 'POST /').handler(request, createReply().reply)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:client.created:v1-rc.0',
+      {
+        registration: 'developer_api',
+        isPublic: false,
+        grantTypes: ['authorization_code', 'refresh_token'],
+        scopes: ['openid', 'email'],
+        authMethod: 'client_secret_post',
+      },
+      clientEventOptions(body.clientId as string)
+    );
+    // The checked emitter accepted it: nothing was swallowed by the best-effort wrapper.
+    expect(fastify.log.warn).not.toHaveBeenCalled();
+  });
+
+  it('records client.updated with the names of the settings written, never their values', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...data })
+    );
+
+    const request = authedRequest({
+      params: { id: CLIENT_ROW_ID },
+      body: { name: 'Renamed', enabled: false },
+    });
+    await route(ctx, 'PATCH /:id').handler(request, createReply().reply);
+
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:client.updated:v1-rc.0',
+      { fields: ['name', 'enabled'] },
+      clientEventOptions('app-123')
+    );
+    expect(fastify.log.warn).not.toHaveBeenCalled();
+  });
+
+  it('records client.deleted and client.secret_rotated against the client', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, tokenEndpointAuthMethod: 'client_secret_post' })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...data })
+    );
+
+    const rotate = authedRequest({ params: { id: CLIENT_ROW_ID } });
+    await route(ctx, 'POST /:id/regenerate-secret').handler(rotate, createReply().reply);
+    const remove = authedRequest({ params: { id: CLIENT_ROW_ID } });
+    await route(ctx, 'DELETE /:id').handler(remove, createReply().reply);
+
+    expect(emitUserEventMock).toHaveBeenNthCalledWith(
+      1,
+      rotate,
+      'urn:qauth:event:client.secret_rotated:v1-rc.0',
+      {},
+      clientEventOptions('app-123')
+    );
+    expect(emitUserEventMock).toHaveBeenNthCalledWith(
+      2,
+      remove,
+      'urn:qauth:event:client.deleted:v1-rc.0',
+      {},
+      clientEventOptions('app-123')
+    );
+    expect(fastify.log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('client-management events are best-effort (one-time secret must survive #86/#90)', () => {
+  it('still returns the created client + secret when the event write throws', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
 
     (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
       async (data: Record<string, unknown>) => makeClientRow({ ...data })
     );
-    (fastify.repositories.auditLogs.create as unknown as Mock).mockRejectedValue(
-      new Error('audit sink down')
-    );
+    emitUserEventMock.mockRejectedValueOnce(new Error('event store down'));
 
     const request = authedRequest({
       body: {
@@ -1221,7 +1339,7 @@ describe('audit logging is best-effort (one-time secret must survive #86/#90)', 
     expect(fastify.log.warn).toHaveBeenCalled();
   });
 
-  it('still returns the rotated secret when the audit write throws', async () => {
+  it('still returns the rotated secret when the event write throws', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
 
@@ -1232,9 +1350,7 @@ describe('audit logging is best-effort (one-time secret must survive #86/#90)', 
       async (_id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
-    (fastify.repositories.auditLogs.create as unknown as Mock).mockRejectedValue(
-      new Error('audit sink down')
-    );
+    emitUserEventMock.mockRejectedValueOnce(new Error('event store down'));
 
     const request = authedRequest({ params: { id: '0190a000-0000-7000-8000-000000000001' } });
     const { reply } = createReply();

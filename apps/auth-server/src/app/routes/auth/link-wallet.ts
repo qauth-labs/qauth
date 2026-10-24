@@ -8,6 +8,7 @@ import { WALLET_LOGIN_STATUS_RATE_LIMIT, WALLET_LOGIN_STATUS_RATE_WINDOW_S } fro
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { csrfTokensEqual } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import {
   advanceWalletLinkFlow,
   startWalletLinkFlow,
@@ -162,16 +163,12 @@ export default async function (fastify: FastifyInstance) {
 
       const provided = request.headers[CSRF_HEADER] as string | undefined;
       if (!csrfTokensEqual(provided, session.apiCsrfToken)) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: null,
-          event: 'auth.wallet_link.csrf_failure',
-          eventType: 'security',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { reason: 'missing_or_mismatched_csrf_token' },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+          { form: 'wallet_link' },
+          { userId: session.userId, actor: 'user' }
+        );
         throw new BadRequestError('invalid_csrf_token');
       }
 

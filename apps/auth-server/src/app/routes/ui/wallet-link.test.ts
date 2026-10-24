@@ -46,6 +46,12 @@ vi.mock('../../helpers/wallet-presentation', () => ({
   resolveWalletPresentation: vi.fn().mockResolvedValue({ status: 'rejected' }),
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import {
   generateOid4vpResponseCode,
   hashOid4vpResponseCode,
@@ -53,11 +59,15 @@ import {
 
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
 import { signSessionId } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import { WALLET_LINK_CONFLICT, WALLET_LINK_REFUSAL } from '../../helpers/wallet-link-flow';
 import { WALLET_LOGIN_RETURN_PATH } from '../../helpers/wallet-login-request';
 import {
   linkWalletPresentation,
   resolveWalletPresentation,
+  type WalletLinked,
+  type WalletLinkInput,
+  type WalletLinkTransaction,
 } from '../../helpers/wallet-presentation';
 import {
   WALLET_LINK_CONFLICT_TITLE,
@@ -71,6 +81,13 @@ import walletLinkRoute from './wallet-link';
 import walletLoginRoute from './wallet-login';
 
 type Handler = (request: any, reply: any) => Promise<unknown>;
+
+// Cleared by the `vi.clearAllMocks()` of the file's `beforeEach`.
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+const WALLET_LINKED_EVENT = 'urn:qauth:event:wallet.linked:v1-rc.0';
+const WALLET_LINK_FAILED_EVENT = 'urn:qauth:event:wallet.link_failed:v1-rc.0';
+const SIGNED_IN_EVENT = 'urn:qauth:event:user.signed_in:v1-rc.0';
 
 function createReply() {
   const state: {
@@ -176,7 +193,6 @@ function makeFastify() {
         create: vi.fn(async (row: unknown) => row),
         redeemResponseCode: responseCodes.redeemResponseCode,
       },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     sessionUtils,
     redis: createRedis(),
@@ -330,13 +346,30 @@ const REFUSAL_PAGE = walletReturnRefusalPage({
   returnPath: WALLET_LOGIN_RETURN_PATH,
 });
 
-const LINKED = {
+const LINKED: WalletLinked = {
   status: 'linked',
   credentialId: 'cred-1',
   externalSub: 'alice@example.com',
   subjectSource: 'asserted-lookup',
   rebound: false,
 };
+
+/** The transaction the stubbed link runs its `onLinked` hook in. */
+const LINK_TX = { name: 'link-transaction' } as unknown as WalletLinkTransaction;
+
+/**
+ * Stub the link as `linkWalletPresentation` completes one: the caller's
+ * `onLinked` hook (the `wallet.linked` event) runs in the link's transaction,
+ * then the result returns.
+ */
+function linkAs(resolution: WalletLinked): void {
+  (linkWalletPresentation as unknown as Mock).mockImplementation(
+    async (_fastify: FastifyInstance, input: WalletLinkInput) => {
+      await input.onLinked?.(LINK_TX, resolution);
+      return resolution;
+    }
+  );
+}
 
 /** Session-store writes that are browser SESSIONS, not flow/marker records. */
 function sessionMints(fastify: FastifyInstance): string[] {
@@ -345,10 +378,9 @@ function sessionMints(fastify: FastifyInstance): string[] {
     .filter((key) => !key.startsWith('wallet-'));
 }
 
-function auditEvents(fastify: FastifyInstance): string[] {
-  return (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-    (c) => (c[0] as { event: string }).event
-  );
+/** The event types emitted so far in this test, in order. */
+function emittedTypes(): string[] {
+  return emitUserEventMock.mock.calls.map((c) => c[1]);
 }
 
 beforeEach(() => {
@@ -428,8 +460,11 @@ describe('wallet-link UI — signed in, or nothing (ADR-009 §5)', () => {
 
     expect(state.statusCode).toBe(403);
     expect(fastify.repositories.oid4vpRequestStates.create).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'auth.wallet_link.csrf_failure' })
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+      { form: 'wallet_link' },
+      { userId: expect.any(String), actor: 'user' }
     );
   });
 });
@@ -604,7 +639,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     } = await startLink({ userId: 'user-9', device: 'this' });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     const code = issueResponseCode(responseCodes, flow['stateHash']);
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;
 
     const landed = await followReturn(routes, code, cookie);
@@ -615,7 +650,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       hashOid4vpResponseCode(code)
     );
 
-    // Linked for the SESSION's user, audited, and rendered as the link page
+    // Linked for the SESSION's user, recorded, and rendered as the link page
     // renders it — plus the address-bar scrub every page under this URL has.
     expect(landed.statusCode).toBe(200);
     expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
@@ -623,7 +658,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect.anything(),
       expect.objectContaining({ authenticatedUserId: 'user-9', stateHash: flow['stateHash'] })
     );
-    expect(auditEvents(fastify)).toContain('auth.wallet_link.success');
+    expect(emittedTypes()).toContain(WALLET_LINKED_EVENT);
     expect(landed.body).toBe(
       walletLinkedPage({
         cspNonce: 'test-style-nonce',
@@ -681,8 +716,8 @@ describe('wallet-link UI — the return leg (#405)', () => {
         at: Date.now(),
       });
       const code = issueResponseCode(responseCodes, flow['stateHash']);
-      (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
-      const auditRowsAtStart = auditEvents(fastify).length;
+      linkAs(LINKED);
+      const eventsAtStart = emittedTypes().length;
 
       const landed = await followReturn(routes, code, `__Host-qauth_wallet_flow=${binderCookie}`);
 
@@ -693,7 +728,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         'same-device return for a wallet LINK flow arrived without a session'
       );
       expect(linkWalletPresentation).not.toHaveBeenCalled();
-      expect(auditEvents(fastify)).toHaveLength(auditRowsAtStart);
+      expect(emittedTypes()).toHaveLength(eventsAtStart);
       expect(sessionMints(fastify)).toEqual([]);
 
       // Spent, and discarded: the parked bytes are gone and the signal says
@@ -737,9 +772,9 @@ describe('wallet-link UI — the return leg (#405)', () => {
       at: Date.now(),
     });
     const code = issueResponseCode(responseCodes, flow['stateHash']);
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const other = signIn(sessionUtils, 'user-2');
-    const auditRowsAtStart = auditEvents(fastify).length;
+    const eventsAtStart = emittedTypes().length;
 
     const landed = await followReturn(
       routes,
@@ -754,7 +789,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       'same-device return for a wallet LINK flow arrived in a different user session'
     );
     expect(linkWalletPresentation).not.toHaveBeenCalled();
-    expect(auditEvents(fastify)).toHaveLength(auditRowsAtStart);
+    expect(emittedTypes()).toHaveLength(eventsAtStart);
     expect(sessionMints(fastify)).toEqual([]);
     expect(landed.setCookies).toEqual([]);
 
@@ -799,7 +834,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       await startLink({ device: 'this' });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     const code = issueResponseCode(responseCodes, flow['stateHash']);
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;
 
     await followReturn(routes, code, cookie);
@@ -885,7 +920,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         await startBoth();
       publishSignal(sessionUtils, link.flow['stateHash'], 'received');
       publishSignal(sessionUtils, login.flow['stateHash'], 'received');
-      (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+      linkAs(LINKED);
       (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
         status: 'authenticated',
         userId: 'user-1',
@@ -903,7 +938,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect(resolveWalletPresentation).not.toHaveBeenCalled();
       expect(sessionMints(fastify)).toEqual([]);
       expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
-      expect(auditEvents(fastify)).not.toContain('ui.wallet_login.success');
+      expect(emittedTypes()).not.toContain(SIGNED_IN_EVENT);
       // The login flow is untouched: same-device, so still pending by poll.
       const loginPoll = createReply();
       await routes.get('GET /wallet-login/:handle/status')!(
@@ -916,14 +951,16 @@ describe('wallet-link UI — the return leg (#405)', () => {
     // (2) A code minted for the LOGIN row: the login machine runs, the link
     // machine does not, and the link flow is still waiting.
     {
-      const { fastify, routes, sessionUtils, responseCodes, login, link, cookie } =
-        await startBoth();
+      const { routes, sessionUtils, responseCodes, login, link, cookie } = await startBoth();
       publishSignal(sessionUtils, link.flow['stateHash'], 'received');
       publishSignal(sessionUtils, login.flow['stateHash'], 'received');
-      (linkWalletPresentation as unknown as Mock).mockClear().mockResolvedValue(LINKED);
+      (linkWalletPresentation as unknown as Mock).mockClear();
+      linkAs(LINKED);
       (resolveWalletPresentation as unknown as Mock)
         .mockClear()
         .mockResolvedValue({ status: 'rejected' });
+      // The emitter is shared by both servers: forget block (1)'s events.
+      emitUserEventMock.mockClear();
 
       const landed = await followReturn(
         routes,
@@ -937,8 +974,8 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect(landed.body as string).toContain('Sign-in was not completed');
       expect(resolveWalletPresentation).toHaveBeenCalledTimes(1);
       expect(linkWalletPresentation).not.toHaveBeenCalled();
-      expect(auditEvents(fastify)).not.toContain('auth.wallet_link.success');
-      expect(auditEvents(fastify)).not.toContain('auth.wallet_link.failure');
+      expect(emittedTypes()).not.toContain(WALLET_LINKED_EVENT);
+      expect(emittedTypes()).not.toContain(WALLET_LINK_FAILED_EVENT);
       // The link flow is untouched: same-device, so still pending by poll.
       expect(sessionUtils.store.has(`wallet-login:${link.handle}`)).toBe(true);
       const rendered = await renderLinkPage(routes, link.handle, cookie);
@@ -1059,7 +1096,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     } = await startLink({ device: 'this' });
     publishSignal(sessionUtils, flow['stateHash'], 'received');
     const code = issueResponseCode(responseCodes, flow['stateHash']);
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
 
     // The wallet opened a browser with an EMPTY cookie jar.
     const landed = await followReturn(routes, code);
@@ -1097,7 +1134,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     const { fastify, routes, responseCodes, handle, flow, sessionCookie, binderCookie } =
       await startLink({ device: 'this' });
     const code = issueResponseCode(responseCodes, flow['stateHash']);
-    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    linkAs(LINKED);
     const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;
 
     const landed = await followReturn(routes, code, cookie);
@@ -1106,7 +1143,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     expect(landed.statusCode).toBe(200);
     expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
     expect(linkWalletPresentation).not.toHaveBeenCalled();
-    expect(auditEvents(fastify)).toEqual([]);
+    expect(emittedTypes()).toEqual([]);
     expect(landed.setCookies).toEqual([]);
     // The flow is still there for the original tab, which is still pending.
     expect(String((await renderLinkPage(routes, handle, cookie)).body)).toContain(

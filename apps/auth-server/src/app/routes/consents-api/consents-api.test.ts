@@ -1,6 +1,18 @@
 import { JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+// The event emitter's module imports `helpers/realm` → `config/env`, which
+// validates required env at module load. Stub it so the unit run needs no real
+// environment (matches `routes/clients/clients.test.ts`).
+vi.mock('../../../config/env', () => ({
+  env: {
+    DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+    EMAIL_FROM_ADDRESS: 'noreply@example.com',
+    EMAIL_BASE_URL: 'http://localhost:3000',
+    DEFAULT_REALM_NAME: 'master',
+  },
+}));
 
 // The management-token guard has its own tests (helpers/management-token.test.ts).
 // Here it is a seam: every route must be registered behind exactly this guard.
@@ -9,7 +21,20 @@ vi.mock('../../helpers/management-token', () => ({
   createRequireManagementJwt: () => managementGuard,
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+import { emitUserEvent } from '../../helpers/user-events';
 import consentsApiRoute, { autoPrefix } from './index';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 /**
  * `/api/consents` — the Bearer-authenticated consent surface the developer
@@ -57,6 +82,7 @@ const CONSENT_ROW = {
   scopes: ['openid', 'profile'],
   grantedAt: 1_700_000_000_000,
   oauthClientId: 'client-row-1',
+  realmId: 'realm-1',
 };
 
 function makeFastify() {
@@ -80,12 +106,10 @@ function makeFastify() {
     repositories: {
       oauthConsents: {
         listActiveForUserWithClient: vi.fn().mockResolvedValue([CONSENT_ROW]),
-        listActiveForUser: vi.fn().mockResolvedValue([CONSENT_ROW]),
         revoke: vi.fn().mockResolvedValue(undefined),
       },
       authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(2) },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
   };
@@ -141,7 +165,7 @@ describe('/api/consents', () => {
     ]);
   });
 
-  it('revokes a consent the caller owns, 204 with an audit entry', async () => {
+  it('revokes a consent the caller owns, 204 with a consent.revoked event', async () => {
     const { fastify, ctx } = makeFastify();
     await consentsApiRoute(fastify);
     const { reply, state } = createReply();
@@ -150,13 +174,12 @@ describe('/api/consents', () => {
 
     expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(CONSENT_ROW.id, 'tx');
     expect(state.statusCode).toBe(204);
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'user-1',
-        event: 'oauth.consent.revoked',
-        success: true,
-        metadata: expect.objectContaining({ refreshTokensRevoked: 2 }),
-      })
+    // In the revocation's transaction; the client by its public client_id.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:consent.revoked:v1-rc.0',
+      { consentId: CONSENT_ROW.id, revokedRefreshCount: 2 },
+      { tx: 'tx', realmId: 'realm-1', userId: 'user-1', clientId: 'app-client-id', actor: 'user' }
     );
   });
 
@@ -219,7 +242,9 @@ describe('/api/consents', () => {
     const { fastify, ctx } = makeFastify();
     // The row exists, but not for THIS user — exactly what the ownership check
     // must not leak.
-    (fastify.repositories.oauthConsents.listActiveForUser as unknown as Mock).mockResolvedValue([]);
+    (
+      fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
+    ).mockResolvedValue([]);
     await consentsApiRoute(fastify);
     const { reply } = createReply();
 
@@ -227,6 +252,7 @@ describe('/api/consents', () => {
       NotFoundError
     );
     expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
   });
 
   it('refuses a token with no subject rather than acting on undefined', async () => {

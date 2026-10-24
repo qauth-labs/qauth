@@ -47,8 +47,15 @@ vi.mock('../../helpers/wallet-presentation', () => ({
   resolveWalletPresentation: vi.fn().mockResolvedValue({ status: 'rejected' }),
 }));
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
 import { signSessionId } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import {
   WALLET_LINK_CONFLICT,
   WALLET_LINK_EXPIRED,
@@ -56,6 +63,8 @@ import {
 } from '../../helpers/wallet-link-flow';
 import { linkWalletPresentation } from '../../helpers/wallet-presentation';
 import linkWalletRoute from './link-wallet';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
 
 type Handler = (request: any, reply: any) => Promise<unknown>;
 
@@ -132,7 +141,6 @@ function makeFastify() {
       oid4vpRequestStates: { create: vi.fn(async (row: unknown) => row) },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
       users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     sessionUtils,
     redis: createRedis(),
@@ -293,8 +301,11 @@ describe('wallet linking API — a session is the whole authority (ADR-009 §5)'
     ).rejects.toThrow();
 
     expect(fastify.repositories.oid4vpRequestStates.create).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'auth.wallet_link.csrf_failure' })
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+      { form: 'wallet_link' },
+      { userId: 'user-1', actor: 'user' }
     );
   });
 
@@ -496,9 +507,8 @@ describe('wallet linking API — completion gates (#238)', () => {
     expect(state.body).toMatchObject({ status: 'expired' });
   });
 
-  it('audits both the success and the refusal against the acting user', async () => {
-    const { fastify, routes, sessionUtils, session, handle, flow, binderCookie } =
-      await startLink('user-9');
+  it('records the refusal against the acting user', async () => {
+    const { routes, sessionUtils, session, handle, flow, binderCookie } = await startLink('user-9');
     publishSignal(sessionUtils, flow['stateHash']);
 
     await routes.get('GET /link/wallet/:handle')!(
@@ -510,12 +520,11 @@ describe('wallet linking API — completion gates (#238)', () => {
       createReply().reply
     );
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'auth.wallet_link.failure',
-        userId: 'user-9',
-        success: false,
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:wallet.link_failed:v1-rc.0',
+      { reason: 'rejected', verifierProfile: 'oid4vp-1.0-base' },
+      expect.objectContaining({ userId: 'user-9', actor: 'user' })
     );
   });
 });
