@@ -564,6 +564,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format with Prettier's defaults, since the repository no longer has a
   Prettier config.
 
+- Type-checking runs on TypeScript 7. Every `typecheck` target but the docs
+  site's runs `tsgo`, TypeScript 7's native compiler from
+  `@typescript/native-preview`, in place of `tsc`, and so do the ui and
+  mcp-guard builds, which emit the same JavaScript as before. Nx's plugins,
+  `astro check` and the auth server's esbuild build, which type-checks before
+  it bundles, keep the `typescript` 6.0 package. `tsconfig.base.json` resolves
+  modules with `"bundler"`, because TypeScript 7 removed `"node"`, and no
+  longer sets `ignoreDeprecations`.
+
+  **Action for contributors**: run `pnpm install`. Typecheck targets now run
+  tsgo, while an editor checks with the TypeScript it is set to. Point it at
+  the workspace's TypeScript 6.0 or at TypeScript 7: TypeScript 5 rejects
+  `"bundler"` with the libraries' `module: commonjs` (TS5095).
+
 [#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#448]: https://github.com/qauth-labs/qauth/issues/448

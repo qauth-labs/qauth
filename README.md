@@ -389,7 +389,7 @@ qauth/
 **Backend:**
 
 - **Runtime**: Node.js 26 (LTS from 2026-10-28)
-- **Language**: TypeScript 6.0
+- **Language**: TypeScript 6.0, type-checked with TypeScript 7 (`tsgo`)
 - **Framework**: Fastify
 - **API**: REST (OAuth 2.1 / OIDC)
 - **ORM**: Drizzle ORM

@@ -445,6 +445,16 @@ catalog:
   tslib: '^2.8.1'
   tsx: '^4.23.15'
   typescript: '~6.0.3'
+  # TypeScript 7 (the native port) as the `tsgo` command, which the `typecheck`
+  # targets and the ui and mcp-guard builds run (`"compiler": "tsgo"` in
+  # nx.json). Nx's option runs this package's binary. The `typescript` 7.x
+  # package ships the same compiler as `tsc` and would replace the 6.0 package
+  # above, which Nx's plugins, the @nx/esbuild type-check, astro check and the
+  # ESLint config still load as a library. This is the package's final build
+  # (its `latest` tag, 7 Jul 2026, the day before typescript 7.0.2); later TS 7
+  # builds are published only as `typescript`. No advisory names it. EXACT pin:
+  # a dev-tagged build, so a move is a reviewed change.
+  '@typescript/native-preview': '7.0.0-dev.20260707.2'
   vitest: '^5.0.5'
   '@fastify/autoload': '^6.5.1'
   '@fastify/cors': '^11.3.1'

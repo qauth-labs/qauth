@@ -32,13 +32,13 @@
     "typecheck": {
       "executor": "nx:run-commands",
       "cache": true,
-      "inputs": ["default", "^default", { "externalDependencies": ["typescript"] }],
+      "inputs": ["default", "^default", { "externalDependencies": ["@typescript/native-preview"] }],
       "options": {
-        "command": "tsc -p tsconfig.app.json --noEmit",
+        "command": "tsgo -p tsconfig.app.json --noEmit",
         "cwd": "apps/auth-server"
       },
       "metadata": {
-        "description": "Declared here because @nx/js/typescript (Nx 24) infers no `typecheck` target for a project whose build already type-checks it, and it counts this @nx/esbuild build as one (no `skipTypeCheck`). Nx 23 inferred one, and CI's `nx affected -t lint typecheck test build` and `nx typecheck auth-server` keep running it. Same command shape and inputs as the targets the plugin infers for the libraries and wire-suite: tsconfig.app.json (the only project tsconfig.json references) checked without emitting."
+        "description": "Declared here because @nx/js/typescript (Nx 24) infers no `typecheck` target for a project whose build already type-checks it, and it counts this @nx/esbuild build as one (no `skipTypeCheck`). Nx 23 inferred one, and CI's `nx affected -t lint typecheck test build` and `nx typecheck auth-server` keep running it. Same command shape and inputs as the targets the plugin infers for the libraries and wire-suite, including their compiler (`\"compiler\": \"tsgo\"` in nx.json, TypeScript 7 from @typescript/native-preview): tsconfig.app.json (the only project tsconfig.json references) checked without emitting. The @nx/esbuild build still type-checks with the typescript 6.0 package."
       }
     },
     "build": {
