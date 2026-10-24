@@ -459,6 +459,17 @@ describe('assembled app — realm resolution by host (#486)', () => {
     expect(res.headers['set-cookie']).toBeUndefined();
   });
 
+  it('echoes the request id on a 421, so an operator can find its reason in the log', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/.well-known/openid-configuration',
+      headers: { host: 'unknown.example' },
+    });
+
+    expect(res.statusCode).toBe(421);
+    expect(res.headers['x-request-id']).toEqual(expect.stringMatching(/\S/));
+  });
+
   it('refuses a browser route on an unknown host with no cookie', async () => {
     const res = await server.inject({
       method: 'GET',
@@ -605,7 +616,7 @@ describe('assembled app — an over-long email is refused before any handler sto
  *
  * ## Why a source assertion, here and nowhere else
  *
- * Four of `app.ts`'s registrations are position-sensitive, and the thing that
+ * Five of `app.ts`'s registrations are position-sensitive, and the thing that
  * makes them dangerous is precisely that breaking them produces NO runtime
  * signal — no throw, no warning, no failed boot. The tests above cover the one
  * invariant that does have a runtime signal (an autoloaded route's error shape)
@@ -621,11 +632,17 @@ describe('assembled app — an over-long email is refused before any handler sto
  *    `fastify.redis` and this suite runs with an unreachable Redis, so it is
  *    disabled here.
  *
- *  - **`realmResolverPlugin` before the rate limiter and the routes (#486).**
- *    It checks every route's `config.surface` in an `onRoute` hook, so behind
- *    the routes it would check none of them and the boot refusal for an
- *    unclassified route would quietly stop. Ahead of the rate limiter, a
- *    per-realm limit can read the realm it resolved.
+ *  - **`realmResolverPlugin` before the routes (#486).** It checks every
+ *    route's `config.surface` in an `onRoute` hook, so behind the routes it
+ *    would check none of them and the boot refusal for an unclassified route
+ *    would quietly stop. It is pinned ahead of the rate limiter too, the order
+ *    the issue asked for; its `onRequest` hook runs before the limiter's either
+ *    way, since the limiter's hooks belong to each route.
+ *
+ *  - **`requestIdPlugin` before `realmResolverPlugin` (#486).** Both are
+ *    `onRequest` hooks of one scope, run in registration order, so behind the
+ *    resolver a 421 would leave without its `X-Request-Id`. The test below
+ *    that asserts the header on a 421 is the runtime guard.
  *
  *  - **`errorHandler` before `cors`.** @fastify/cors registers a route of its
  *    own (`options('*')`), so a handler installed after it leaves that one
@@ -644,6 +661,7 @@ describe('assembled app — an over-long email is refused before any handler sto
 describe('app.ts registration order — the invariants with no runtime signal (#365)', () => {
   /** The registration sites, in the order `app.ts` must perform them. */
   const REQUIRED_ORDER = [
+    'fastify.register(requestIdPlugin)',
     'fastify.register(realmResolverPlugin,',
     'fastify.register(rateLimitPlugin)',
     'fastify.register(errorHandler)',

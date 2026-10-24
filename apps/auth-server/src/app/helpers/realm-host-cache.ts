@@ -41,7 +41,7 @@ export interface RealmHostCache {
    * A lookup that fails is not cached and rejects.
    */
   resolve(host: string): Promise<RealmHostMatch | undefined>;
-  /** Forget every entry. */
+  /** Forget every entry. A lookup still running when this is called is not stored. */
   clear(): void;
 }
 
@@ -64,6 +64,12 @@ function setBounded<V>(map: Map<string, V>, key: string, value: V, maxEntries: n
  * host that names no realm is kept for at most {@link REALM_HOST_MISS_TTL_MS},
  * and never longer than a hit, so a new host answers within 5 s of being
  * added. Concurrent requests for a host that is not cached share one lookup.
+ *
+ * A host the cache has not seen costs one primary-key query on `realm_hosts`,
+ * and the resolver asks before the rate limiter runs, so a caller that sends a
+ * new made-up host on every request costs one query per request. A reverse
+ * proxy that forwards only the deployment's own host names keeps that off the
+ * database.
  */
 export function createRealmHostCache(options: RealmHostCacheOptions): RealmHostCache {
   const ttlMs = options.ttlMs ?? REALM_HOST_CACHE_TTL_MS;
@@ -74,9 +80,16 @@ export function createRealmHostCache(options: RealmHostCacheOptions): RealmHostC
   const hits = new Map<string, { readonly match: RealmHostMatch; readonly expiresAt: number }>();
   const misses = new Map<string, number>();
   const pending = new Map<string, Promise<RealmHostMatch | undefined>>();
+  /** Bumped by `clear()`, so a lookup that started before it stores nothing. */
+  let generation = 0;
 
-  /** Remember what the lookup found. */
-  function store(host: string, match: RealmHostMatch | undefined): RealmHostMatch | undefined {
+  /** Remember what the lookup found, unless the cache was cleared meanwhile. */
+  function store(
+    host: string,
+    match: RealmHostMatch | undefined,
+    startedIn: number
+  ): RealmHostMatch | undefined {
+    if (startedIn !== generation) return match;
     if (match === undefined) {
       hits.delete(host);
       setBounded(misses, host, now() + missTtlMs, maxEntries);
@@ -103,20 +116,26 @@ export function createRealmHostCache(options: RealmHostCacheOptions): RealmHostC
 
       let lookup = pending.get(host);
       if (lookup === undefined) {
+        const startedIn = generation;
         // Started on a later tick, so `finally` always runs after `set` and a
         // lookup that throws at once does not stay pending for ever.
-        lookup = Promise.resolve()
+        const started: Promise<RealmHostMatch | undefined> = Promise.resolve()
           .then(() => options.lookup(host))
-          .then((match) => store(host, match))
-          .finally(() => pending.delete(host));
+          .then((match) => store(host, match, startedIn))
+          .finally(() => {
+            if (pending.get(host) === started) pending.delete(host);
+          });
+        lookup = started;
         pending.set(host, lookup);
       }
       return lookup;
     },
 
     clear(): void {
+      generation += 1;
       hits.clear();
       misses.clear();
+      pending.clear();
     },
   };
 }

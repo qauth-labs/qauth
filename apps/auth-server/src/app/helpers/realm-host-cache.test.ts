@@ -143,6 +143,31 @@ describe('realm host cache (#486)', () => {
     expect(lookup).toHaveBeenCalledWith('unknown-0.example');
   });
 
+  it('does not store, or share, a lookup that was running when clear() was called', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { rows, lookup } = hostTable({ 'auth.example.com': matchFor('auth.example.com') });
+    // The first lookup answers with the row as it was, after clear() ran.
+    lookup.mockImplementationOnce(async (host) => {
+      await gate;
+      return matchFor(host);
+    });
+    const cache = createRealmHostCache({ lookup });
+
+    const before = cache.resolve('auth.example.com');
+    cache.clear();
+    rows.delete('auth.example.com');
+    const after = cache.resolve('auth.example.com');
+    release?.();
+
+    expect(await before).toEqual(matchFor('auth.example.com'));
+    expect(await after).toBeUndefined();
+    expect(await cache.resolve('auth.example.com')).toBeUndefined();
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
   it('forgets everything on clear()', async () => {
     const { lookup } = hostTable({ 'auth.example.com': matchFor('auth.example.com') });
     const cache = createRealmHostCache({ lookup });

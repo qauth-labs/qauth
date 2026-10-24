@@ -45,9 +45,10 @@ import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
 /** A running QAuth server plus everything needed to reset and stop it. */
 export interface BootedAuthServer {
   /**
-   * The Fastify instance, ready for `.inject()`. A request that names no host
-   * is sent to the realm host, the host of `JWT_ISSUER` (#486); a test that
-   * sets `headers.host` sends that one instead.
+   * The Fastify instance, ready for `.inject(options)`. A request that names
+   * no host is sent to the realm host, the host of `JWT_ISSUER` (#486); a test
+   * that sets `headers.host` sends that one instead. The chain form,
+   * `.inject().get(…)`, is not covered and goes to `localhost`.
    */
   readonly app: FastifyInstance;
   /** Close the server (and its pools). Containers survive. */
@@ -188,10 +189,10 @@ export interface BootAuthServerOptions {
  */
 function injectToRealmHost(server: FastifyInstance, host: string): void {
   const inject = server.inject.bind(server) as (...args: unknown[]) => unknown;
-  const withHost = (options: InjectOptions | string): InjectOptions => ({
-    authority: host,
-    ...(typeof options === 'string' ? { url: options } : options),
-  });
+  const withHost = (options: InjectOptions | string): InjectOptions => {
+    const given = typeof options === 'string' ? { url: options } : options;
+    return { ...given, authority: given.authority ?? host };
+  };
   server.inject = ((options?: InjectOptions | string, callback?: unknown) => {
     if (options === undefined) return inject();
     return callback === undefined ? inject(withHost(options)) : inject(withHost(options), callback);

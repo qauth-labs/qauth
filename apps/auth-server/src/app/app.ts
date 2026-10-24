@@ -158,13 +158,21 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     });
   }
 
+  // Request-id propagation (#128), ahead of the realm resolver below: both
+  // are `onRequest` hooks of this scope and run in registration order, so a
+  // 421 the resolver throws still echoes the request id an operator needs to
+  // find its reason in the log.
+  await fastify.register(requestIdPlugin);
+
   // Realm resolution by host (ADR-019 Decision 1, #486). Every request but a
   // `none` route's finds its realm through the host it names, or gets 421.
   // This position IS load-bearing, for the rate limiter's reason below: the
   // plugin checks each route's `config.surface` in an `onRoute` hook, which is
   // not retroactive, so it must load before any route, @fastify/cors's
-  // `OPTIONS *` included. It also stays ahead of the rate limiter, so a
-  // per-realm limit can read `request.realm`.
+  // `OPTIONS *` included. Its `onRequest` hook belongs to this scope, so it
+  // runs before every route's own hooks, the rate limiter's among them,
+  // wherever the limiter is registered: a refused host is never counted, and
+  // a per-realm limit can read `request.realm`.
   await fastify.register(realmResolverPlugin, {
     ...(realmLookup === undefined ? {} : { lookup: realmLookup }),
   });
@@ -485,13 +493,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // type, not per plugin.
   await fastify.register(securityHeadersPlugin);
 
-  // Observability (T3): request-id propagation (#128) and the metrics registry
-  // (#123/#126). Neither position is load-bearing either (#365): request-id is
-  // another hook (`onRequest`), propagated into existing child scopes by the
-  // same recursion described above, and metrics only `decorate()`s the
-  // instance — its sole consumer, GET /metrics, dereferences `fastify.metrics`
-  // inside the handler at request time, not while the route plugin is loading.
-  await fastify.register(requestIdPlugin);
+  // Observability (T3): the metrics registry (#123/#126). Its position is not
+  // load-bearing either (#365): it only `decorate()`s the instance — its sole
+  // consumer, GET /metrics, dereferences `fastify.metrics` inside the handler
+  // at request time, not while the route plugin is loading. Request-id
+  // propagation (#128) is registered above, ahead of the realm resolver.
   await fastify.register(metricsPlugin);
 
   // Background jobs (ADR-019 Decision 8): purge-expired today. The runner
