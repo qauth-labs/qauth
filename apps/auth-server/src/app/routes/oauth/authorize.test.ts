@@ -1,5 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+import { emitUserEvent } from '../../helpers/user-events';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
 
@@ -114,9 +128,6 @@ function makeFastify() {
       // still enabled.
       users: {
         findById: vi.fn(async (id: string) => ({ id, enabled: true })),
-      },
-      auditLogs: {
-        create: vi.fn().mockResolvedValue(undefined),
       },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
@@ -274,6 +285,20 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       CLIENT.id,
       tx
     );
+    // The issued code's event commits in the same transaction.
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.completed:v1-rc.0',
+      {},
+      {
+        realmId: 'realm-1',
+        userId: 'user-1',
+        clientId: CLIENT.clientId,
+        actor: 'user',
+        tx,
+      }
+    );
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
@@ -367,10 +392,18 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledOnce();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(state.redirected).toContain('error=consent_required');
-    const failure = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
-      .map((c) => c[0] as { event: string; metadata: Record<string, unknown> })
-      .find((e) => e.metadata?.reason === 'consent_withdrawn_during_authorization');
-    expect(failure).toBeDefined();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'consent_required', reason: 'consent_withdrawn_during_authorization' },
+      expect.objectContaining({ clientId: CLIENT.clientId, actor: 'user' })
+    );
+    expect(emitUserEventMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.completed:v1-rc.0',
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('persists RFC 8707 resource indicator(s) onto the authorization code', async () => {
@@ -780,7 +813,6 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
         },
         oauthConsents: { findActive: vi.fn() },
         authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
-        auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
       },
       jwtUtils: {
         extractFromHeader: vi.fn(),
@@ -866,13 +898,13 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
       expect(state.redirected).toBeUndefined();
       // Fail closed: nothing is materialised from the refused document.
       expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'oauth.authorize.failure',
-          metadata: expect.objectContaining({
-            error: expect.stringMatching(/^CIMD document refused: invalid_redirect_uri: /),
-          }),
-        })
+      // The refusal's prose stays in the log; the event carries its code,
+      // and names no client: none resolved.
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_client', reason: 'cimd_client_refused' },
+        { realmId: expect.any(String), actor: 'client' }
       );
     }
   );
@@ -985,11 +1017,11 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
           )
         ).rejects.toThrow('redirect_uri not permitted for this environment');
         expect(state.redirected).toBeUndefined();
-        expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            event: 'oauth.authorize.failure',
-            metadata: expect.objectContaining({ reason: 'redirect_uri_scheme_not_allowed' }),
-          })
+        expect(emitUserEventMock).toHaveBeenCalledWith(
+          expect.anything(),
+          'urn:qauth:event:authorization.failed:v1-rc.0',
+          { error: 'invalid_request', reason: 'redirect_uri_scheme_not_allowed' },
+          expect.objectContaining({ clientId: CLIENT.clientId, actor: 'client' })
         );
       }
     }
@@ -1053,10 +1085,11 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
       const { fastify, run, state } = await authorizeWith(cursorCallback, 'production');
       await expect(run()).rejects.toThrow('redirect_uri not permitted for this environment');
       expect(state.redirected).toBeUndefined();
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          metadata: expect.objectContaining({ reason: 'redirect_uri_scheme_not_allowed' }),
-        })
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_request', reason: 'redirect_uri_scheme_not_allowed' },
+        expect.anything()
       );
     });
 
@@ -1102,11 +1135,11 @@ describe('GET /oauth/authorize — plain-http redirect gate', () => {
         )
       ).rejects.toThrow('redirect_uri not permitted for this environment');
       expect(state.redirected).toBeUndefined();
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'oauth.authorize.failure',
-          metadata: expect.objectContaining({ reason: 'http_redirect_requires_loopback' }),
-        })
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_request', reason: 'http_redirect_requires_loopback' },
+        expect.objectContaining({ clientId: CLIENT.clientId, actor: 'client' })
       );
     }
   });
@@ -1161,6 +1194,12 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
     expect(state.redirected).toContain('error=invalid_scope');
     expect(state.redirected).toContain('state=xyz');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_scope', reason: 'agent_scope_mode_exceeded' },
+      expect.objectContaining({ clientId: READONLY_AGENT.clientId, actor: 'user' })
+    );
   });
 
   it('allows an in-cap scope and issues a code', async () => {
@@ -1260,10 +1299,16 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     });
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
-      (c) => (c[0] as { event: string }).event
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:step_up.required:v1-rc.0',
+      {
+        reason: 'fresh_authentication_required',
+        elevatedScopes: ['write:foo'],
+        dangerousScopes: ['write:foo'],
+      },
+      expect.objectContaining({ actor: 'user' })
     );
-    expect(events).toContain('oauth.stepup.required');
   });
 
   it('sends a non-dangerous elevation to the consent screen (incremental consent), not silently widened', async () => {
@@ -1529,6 +1574,16 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     const { fastify, state } = await runBearer('write:foo');
     expect(state.redirected).toContain('error=access_denied');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:step_up.required:v1-rc.0',
+      {
+        reason: 'bearer_path_dangerous_scope_requires_interactive_stepup',
+        error: 'access_denied',
+        dangerousScopes: ['write:foo'],
+      },
+      expect.objectContaining({ userId: BEARER_USER, clientId: 'app-bearer', actor: 'user' })
+    );
   });
 
   it('still mints a code for a non-dangerous scope on the Bearer path when a stored consent covers it', async () => {
@@ -1561,13 +1616,12 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(state.redirected).toContain('state=xyz');
     expect(state.redirected).not.toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    const failure = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
-      .map((c) => c[0] as { event: string; metadata: Record<string, unknown> })
-      .find((e) => e.event === 'oauth.authorize.failure');
-    expect(failure?.metadata).toMatchObject({
-      error: 'access_denied',
-      reason: 'bearer_path_no_covering_consent',
-    });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'access_denied', reason: 'bearer_path_no_covering_consent' },
+      expect.objectContaining({ userId: BEARER_USER, actor: 'user' })
+    );
   });
 
   it('refuses the Bearer path for a dynamic client still in its badge window, even over a covering consent', async () => {
@@ -2299,6 +2353,13 @@ describe('GET /oauth/authorize — error responses for clients no operator provi
     expect(state.statusCode).toBe(302);
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('error=login_required');
+    // No user is signed in: the requesting client is the actor.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:step_up.required:v1-rc.0',
+      { reason: 'prompt_none_no_session', error: 'login_required' },
+      { realmId: 'realm-1', clientId: CLIENT.clientId, actor: 'client' }
+    );
   });
 
   it('prompt=none with a session but no consent: consent_required is shown, not redirected', async () => {

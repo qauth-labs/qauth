@@ -1,6 +1,20 @@
 import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+import { emitUserEvent } from '../../helpers/user-events';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
@@ -49,9 +63,6 @@ function createFastifyStub() {
       refreshTokens: {
         findByTokenHashIncludingRevoked: vi.fn(),
         revokeFamily: vi.fn().mockResolvedValue(1),
-      },
-      auditLogs: {
-        create: vi.fn(),
       },
     },
     passwordHasher: {
@@ -128,6 +139,13 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
       'fam-1',
       'client_revocation'
     );
+    // No hint was sent, so the event carries none.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.revoked:v1-rc.0',
+      {},
+      expect.objectContaining({ realmId: 'realm-1', clientId: client.clientId, actor: 'client' })
+    );
   });
 
   it('revokes an owned refresh token even when the hint says access_token (§2.1)', async () => {
@@ -166,6 +184,12 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
     expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
       'fam-1',
       'client_revocation'
+    );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.revoked:v1-rc.0',
+      { typeHint: 'access_token' },
+      expect.objectContaining({ clientId: client.clientId, actor: 'client' })
     );
   });
 
@@ -316,5 +340,12 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
         reply
       )
     ).rejects.toBeInstanceOf(InvalidClientError);
+    // The caller did not authenticate: the event names no client.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.revocation_failed:v1-rc.0',
+      { error: 'invalid_client', reason: 'client_authentication_failed' },
+      { realmId: 'realm-1', actor: 'client' }
+    );
   });
 });

@@ -9,6 +9,7 @@ import { authenticateClient, extractClientCredentials } from '../../helpers/clie
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { revokeJti } from '../../helpers/token-revocation';
+import { emitUserEvent, failureData } from '../../helpers/user-events';
 import { type RevokeRequest, revokeRequestSchema } from '../../schemas/oauth';
 
 /**
@@ -74,16 +75,14 @@ export default async function (fastify: FastifyInstance) {
         const creds = extractClientCredentials(request, body.client_id, body.client_secret);
         client = await authenticateClient(fastify, realm.id, creds);
       } catch (err) {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'oauth.revoke.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { error: 'Client authentication failed' },
-        });
+        // The caller did not authenticate: its claimed `client_id` is not
+        // recorded as the event's client.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:token.revocation_failed:v1-rc.0',
+          failureData(err, 'client_authentication_failed'),
+          { realmId: realm.id, actor: 'client' }
+        );
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
         throw err;
       }
@@ -103,17 +102,13 @@ export default async function (fastify: FastifyInstance) {
         }
       }
 
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.revoke.success',
-        eventType: 'token',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        // No token material is logged; only the (advisory) hint.
-        metadata: { tokenTypeHint: token_type_hint ?? null },
-      });
+      // No token material is recorded; only the (advisory) hint.
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:token.revoked:v1-rc.0',
+        token_type_hint === undefined ? {} : { typeHint: token_type_hint },
+        { realmId: realm.id, clientId: client.clientId, actor: 'client' }
+      );
 
       await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 

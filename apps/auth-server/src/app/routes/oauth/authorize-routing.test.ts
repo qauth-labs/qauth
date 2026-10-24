@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { emitUserEvent } from '../../helpers/user-events';
 
 /**
  * Routing-level regressions for `/oauth/authorize` (issue #316 follow-up).
@@ -39,6 +41,18 @@ vi.mock('../../../config/env', () => ({
     CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
 }));
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 import authorizeRoute from './authorize';
 
@@ -94,7 +108,6 @@ async function buildServer(): Promise<FastifyInstance> {
       upsertGrant: vi.fn(),
     },
     authorizationCodes: { create: vi.fn() },
-    auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     // The Bearer path accepts only a user who is still enabled.
     users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
   } as never);

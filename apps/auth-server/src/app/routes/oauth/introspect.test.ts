@@ -2,7 +2,21 @@ import { InvalidClientError, JWTExpiredError, JWTInvalidError } from '@qauth-lab
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+import { emitUserEvent } from '../../helpers/user-events';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
@@ -58,9 +72,6 @@ function createFastifyStub() {
       // A user subject is reported active only while its account is enabled.
       users: {
         findById: vi.fn(async (id: string) => ({ id, enabled: true })),
-      },
-      auditLogs: {
-        create: vi.fn(),
       },
     },
     passwordHasher: {
@@ -158,18 +169,18 @@ describe('POST /oauth/introspect route', () => {
       token_type: 'Bearer',
     });
 
-    // User tokens: sub is a UUID → writes through to audit_logs.user_id.
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
-    expect(auditLogMock).toHaveBeenCalledWith(
+    // A user token: its confirmed user is the event's subject.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspected:v1-rc.0',
+      { tokenClientId: client.clientId },
       expect.objectContaining({
+        realmId: 'realm-1',
         userId: userUuid,
-        event: 'oauth.introspect.success',
-        metadata: expect.objectContaining({ tokenClientId: client.clientId }),
+        clientId: client.clientId,
+        actor: 'client',
       })
     );
-    // `tokenSub` is only added when `sub` is not UUID-shaped.
-    const auditCall = auditLogMock.mock.calls[0][0];
-    expect(auditCall.metadata).not.toHaveProperty('tokenSub');
   });
 
   describe('disabled users', () => {
@@ -215,12 +226,11 @@ describe('POST /oauth/introspect route', () => {
 
       await expect(introspect(fastify, ctx, userUuid)).resolves.toEqual({ active: false });
       expect(fastify.repositories.users.findById).toHaveBeenCalledWith(userUuid);
-      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: userUuid,
-          event: 'oauth.introspect.failure',
-          metadata: { error: 'Token subject is disabled' },
-        })
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:token.introspection_failed:v1-rc.0',
+        { error: 'invalid_token', reason: 'user_disabled' },
+        expect.objectContaining({ userId: userUuid, clientId: client.clientId })
       );
     });
 
@@ -229,6 +239,13 @@ describe('POST /oauth/introspect route', () => {
       (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(undefined);
 
       await expect(introspect(fastify, ctx, userUuid)).resolves.toEqual({ active: false });
+      // An unknown subject names no user: the event has no subject.
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:token.introspection_failed:v1-rc.0',
+        { error: 'invalid_token', reason: 'subject_unknown' },
+        expect.objectContaining({ userId: null, clientId: client.clientId })
+      );
     });
 
     it('never looks up a client_credentials subject (sub = client_id) as a user', async () => {
@@ -286,13 +303,19 @@ describe('POST /oauth/introspect route', () => {
 
     expect(fastify.redis.exists).toHaveBeenCalledWith('revoked-access-token:revoked-jti');
     expect(result).toEqual({ active: false });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.introspection_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'token_revoked' },
+      // Inactive before the user check: the event has no subject.
+      { realmId: 'realm-1', clientId: client.clientId, actor: 'client' }
+    );
   });
 
-  it('nulls out user_id on the audit row when sub is not UUID-shaped (client_credentials)', async () => {
-    // audit_logs.user_id is strictly a uuid column. client_credentials
-    // tokens have sub === clientId (a slug), which would fail the uuid
-    // cast. The success path must gate on sub shape, null out `userId`
-    // when sub is not UUID-shaped, and preserve sub in `metadata.tokenSub`.
+  it('records no user subject when sub is not UUID-shaped (client_credentials)', async () => {
+    // client_credentials tokens have sub === clientId (a slug): the token
+    // has no user, so the success event has no user subject. The token's
+    // client is the event's `tokenClientId`.
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);
 
@@ -311,7 +334,6 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -338,21 +360,15 @@ describe('POST /oauth/introspect route', () => {
     expect(result.active).toBe(true);
     expect(result.sub).toBe(callerClientId);
 
-    expect(auditLogMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.introspect.success',
-        success: true,
-        metadata: expect.objectContaining({
-          tokenClientId: callerClientId,
-          tokenSub: callerClientId,
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspected:v1-rc.0',
+      { tokenClientId: callerClientId },
+      expect.objectContaining({ userId: null, clientId: client.clientId, actor: 'client' })
     );
   });
 
-  it('nulls out user_id when sub is non-UUID but differs from clientId (forward-compat: service-account / prefixed subs)', async () => {
+  it('records no user subject when sub is non-UUID but differs from clientId (forward-compat: service-account / prefixed subs)', async () => {
     // Guards against a future grant type that emits sub !== clientId but
     // still non-UUID (service accounts, prefixed identifiers). The fix
     // must be shape-gated, not coupled to sub-equals-clientId.
@@ -373,7 +389,6 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -399,14 +414,11 @@ describe('POST /oauth/introspect route', () => {
     const result = (await handler(request, reply)) as { active: boolean };
     expect(result.active).toBe(true);
 
-    expect(auditLogMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: null,
-        metadata: expect.objectContaining({
-          tokenClientId: 'caller-machine',
-          tokenSub: 'svc:billing-reporter',
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspected:v1-rc.0',
+      { tokenClientId: 'caller-machine' },
+      expect.objectContaining({ userId: null, clientId: client.clientId })
     );
   });
 
@@ -427,7 +439,6 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -461,18 +472,12 @@ describe('POST /oauth/introspect route', () => {
 
     expect(result).toEqual({ active: false });
 
-    expect(auditLogMock).toHaveBeenCalledWith({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.introspect.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: {
-        error: 'JWT token has expired',
-      },
-    });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspection_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'token_expired' },
+      { realmId: 'realm-1', clientId: client.clientId, actor: 'client' }
+    );
   });
 
   it('returns active: false for token issued to a different client', async () => {
@@ -532,6 +537,12 @@ describe('POST /oauth/introspect route', () => {
     const result = await handler(request, reply);
 
     expect(result).toEqual({ active: false });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspection_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'client_not_authorized' },
+      { realmId: 'realm-1', clientId: client.clientId, actor: 'client' }
+    );
   });
 
   it('returns active: true when the introspecting client is authoritative for the token audience (string aud)', async () => {
@@ -781,6 +792,15 @@ describe('POST /oauth/introspect route', () => {
     }
 
     await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
+    // The caller did not authenticate: the event names no client, and the
+    // catch-all records no second failure.
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspection_failed:v1-rc.0',
+      { error: 'invalid_client', reason: 'client_authentication_failed' },
+      { realmId: 'realm-1', actor: 'client' }
+    );
   });
 
   it('returns active: false for invalid token format', async () => {
@@ -800,7 +820,6 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -834,18 +853,12 @@ describe('POST /oauth/introspect route', () => {
 
     expect(result).toEqual({ active: false });
 
-    expect(auditLogMock).toHaveBeenCalledWith({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.introspect.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: {
-        error: 'Invalid JWT token',
-      },
-    });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspection_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'token_invalid' },
+      { realmId: 'realm-1', clientId: client.clientId, actor: 'client' }
+    );
   });
 
   it('returns active: false for invalid signature', async () => {
@@ -865,7 +878,6 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -897,18 +909,12 @@ describe('POST /oauth/introspect route', () => {
 
     expect(result).toEqual({ active: false });
 
-    expect(auditLogMock).toHaveBeenCalledWith({
-      userId: null,
-      oauthClientId: client.id,
-      event: 'oauth.introspect.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: {
-        error: 'Invalid JWT token: signature verification failed',
-      },
-    });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:token.introspection_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'token_invalid' },
+      { realmId: 'realm-1', clientId: client.clientId, actor: 'client' }
+    );
   });
 
   it('returns 400 for missing or empty token', async () => {
@@ -919,7 +925,6 @@ describe('POST /oauth/introspect route', () => {
     app.decorate('repositories', {
       realms: { findByName: vi.fn(), create: vi.fn() },
       oauthClients: { findByClientId: vi.fn() },
-      auditLogs: { create: vi.fn() },
     } as any);
     app.decorate('passwordHasher', { verifyPassword: vi.fn() } as any);
     app.decorate('jwtUtils', { verifyAccessToken: vi.fn() } as any);

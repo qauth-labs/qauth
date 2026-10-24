@@ -10,6 +10,7 @@ import { getPqcSignature } from '../../helpers/hybrid-token';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { emitUserEvent, failureData } from '../../helpers/user-events';
 import {
   type IntrospectRequest,
   introspectRequestSchema,
@@ -38,10 +39,10 @@ import {
  */
 
 /**
- * Canonical hex UUID shape (8-4-4-4-12). Used to gate writes to
- * `audit_logs.user_id`, which is strictly a uuid column: non-UUID subjects
+ * Canonical hex UUID shape (8-4-4-4-12). Used to gate the user lookup:
+ * `users.id` is strictly a uuid column, so non-UUID subjects
  * (client_credentials client slugs, future service-account identifiers)
- * must not be cast into that column.
+ * are never looked up as users.
  */
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -93,9 +94,14 @@ export default async function (fastify: FastifyInstance) {
       const startTime = Date.now();
       const body = request.body as IntrospectRequest;
       const { token } = body;
+      // The realm and the authenticated caller, once known, for the
+      // catch-all failure event below.
+      let realmId: string | undefined;
+      let callerClientId: string | undefined;
 
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
+        realmId = realm.id;
 
         // Accept both `client_secret_post` (body) and `client_secret_basic`
         // (Authorization header) per RFC 6749 §2.3.
@@ -104,18 +110,19 @@ export default async function (fastify: FastifyInstance) {
           const creds = extractClientCredentials(request, body.client_id, body.client_secret);
           client = await authenticateClient(fastify, realm.id, creds);
         } catch (err) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: null,
-            event: 'oauth.introspect.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: { error: 'Client authentication failed' },
-          });
+          // The caller did not authenticate: its claimed `client_id` is not
+          // recorded as the event's client.
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:token.introspection_failed:v1-rc.0',
+            failureData(err, 'client_authentication_failed'),
+            { realmId: realm.id, actor: 'client' }
+          );
           throw err;
         }
+        callerClientId = client.clientId;
+        // The caller is the authenticated resource server or client.
+        const caller = { realmId: realm.id, clientId: client.clientId, actor: 'client' } as const;
 
         let payload;
         try {
@@ -127,18 +134,15 @@ export default async function (fastify: FastifyInstance) {
           });
         } catch (error) {
           if (error instanceof JWTExpiredError || error instanceof JWTInvalidError) {
-            await fastify.repositories.auditLogs.create({
-              userId: null,
-              oauthClientId: client.id,
-              event: 'oauth.introspect.failure',
-              eventType: 'token',
-              success: false,
-              ipAddress: request.ip,
-              userAgent: request.headers['user-agent'] || null,
-              metadata: {
-                error: error.message || 'Invalid or expired token',
-              },
-            });
+            await emitUserEvent(
+              request,
+              'urn:qauth:event:token.introspection_failed:v1-rc.0',
+              failureData(
+                error,
+                error instanceof JWTExpiredError ? 'token_expired' : 'token_invalid'
+              ),
+              caller
+            );
 
             await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
@@ -154,16 +158,12 @@ export default async function (fastify: FastifyInstance) {
         // explicitly revoked MUST be reported inactive. Checked before the
         // authorization branch so a revoked token is never surfaced as active.
         if (await isJtiRevoked(fastify, payload.jti)) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: client.id,
-            event: 'oauth.introspect.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: { error: 'Token revoked' },
-          });
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:token.introspection_failed:v1-rc.0',
+            { error: 'invalid_token', reason: 'token_revoked' },
+            caller
+          );
 
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
@@ -176,18 +176,12 @@ export default async function (fastify: FastifyInstance) {
         const sameClient = payload.clientId === client.clientId;
         const audAuthoritative = isClientAuthoritativeForAudience(payload.aud, client.audience);
         if (!sameClient && !audAuthoritative) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: client.id,
-            event: 'oauth.introspect.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              error: 'Client not authorized for this token',
-            },
-          });
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:token.introspection_failed:v1-rc.0',
+            { error: 'invalid_token', reason: 'client_not_authorized' },
+            caller
+          );
 
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
@@ -196,14 +190,12 @@ export default async function (fastify: FastifyInstance) {
           });
         }
 
-        // `audit_logs.user_id` is strictly a uuid column. A token's `sub`
-        // is a user UUID for authorization_code flows but a client slug
-        // for client_credentials flows — and future grant types could
-        // introduce service-account or prefixed subjects. Rather than
-        // couple this audit write to qauth's current emission convention,
-        // gate on the schema invariant itself: only write `sub` into
-        // `user_id` when it parses as a UUID. Non-UUID subs are preserved
-        // in `metadata.tokenSub` so audit-trail parity holds.
+        // A token's `sub` is a user UUID for authorization_code flows but a
+        // client slug for client_credentials flows — and future grant types
+        // could introduce service-account or prefixed subjects. Rather than
+        // couple this to qauth's current emission convention, gate on the
+        // `users.id` schema invariant itself: only a UUID-shaped `sub` is
+        // looked up as a user.
         const subIsUuid = payload.sub !== undefined && UUID_REGEX.test(payload.sub);
 
         // A user's token is active only while the user exists and is enabled:
@@ -212,23 +204,18 @@ export default async function (fastify: FastifyInstance) {
         // refuse it. A `client_credentials` token carries `sub = client_id`,
         // and a dynamically registered client's id is a random UUID, so the
         // UUID shape alone does not mark a user subject.
-        if (subIsUuid && payload.sub !== payload.clientId) {
+        const hasUserSubject = subIsUuid && payload.sub !== payload.clientId;
+        if (hasUserSubject) {
           const user = await fastify.repositories.users.findById(payload.sub as string);
           if (!user || !user.enabled) {
-            await fastify.repositories.auditLogs.create({
-              // `audit_logs.user_id` references `users`: an unknown subject
-              // goes to metadata instead.
-              userId: user ? user.id : null,
-              oauthClientId: client.id,
-              event: 'oauth.introspect.failure',
-              eventType: 'token',
-              success: false,
-              ipAddress: request.ip,
-              userAgent: request.headers['user-agent'] || null,
-              metadata: user
-                ? { error: 'Token subject is disabled' }
-                : { error: 'Token subject is unknown', tokenSub: payload.sub },
-            });
+            // Only a subject the lookup confirmed is the event's subject: an
+            // unknown one names no user.
+            await emitUserEvent(
+              request,
+              'urn:qauth:event:token.introspection_failed:v1-rc.0',
+              { error: 'invalid_token', reason: user ? 'user_disabled' : 'subject_unknown' },
+              { ...caller, userId: user ? user.id : null }
+            );
 
             await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
@@ -238,19 +225,15 @@ export default async function (fastify: FastifyInstance) {
           }
         }
 
-        await fastify.repositories.auditLogs.create({
-          userId: subIsUuid ? payload.sub : null,
-          oauthClientId: client.id,
-          event: 'oauth.introspect.success',
-          eventType: 'token',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            tokenClientId: payload.clientId,
-            ...(subIsUuid ? {} : { tokenSub: payload.sub }),
-          },
-        });
+        // The token's user, confirmed above, is the subject. A token with no
+        // user subject (a client_credentials token, whose subject is its own
+        // client) has none.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:token.introspected:v1-rc.0',
+          payload.clientId ? { tokenClientId: payload.clientId } : {},
+          { ...caller, userId: hasUserSubject ? payload.sub : null }
+        );
 
         // ADR-005 / #275 reference delivery: hand the resource server the
         // detached ML-DSA-65 signature it cannot receive in the bearer token
@@ -280,20 +263,12 @@ export default async function (fastify: FastifyInstance) {
           throw error;
         }
 
-        const fallbackOauthClientId = body.client_id ?? null;
-
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: fallbackOauthClientId,
-          event: 'oauth.introspect.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:token.introspection_failed:v1-rc.0',
+          failureData(error),
+          { realmId, clientId: callerClientId, actor: 'client' }
+        );
 
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
