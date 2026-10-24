@@ -884,6 +884,7 @@ export default async function (fastify: FastifyInstance) {
           return_to: z.string().optional(),
         }),
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const q = request.query as { return_to?: string };
@@ -932,6 +933,7 @@ export default async function (fastify: FastifyInstance) {
         body: walletLoginFormSchema,
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
@@ -1126,6 +1128,7 @@ export default async function (fastify: FastifyInstance) {
         params: z.object({ handle: z.string() }),
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,
@@ -1209,6 +1212,7 @@ export default async function (fastify: FastifyInstance) {
         response: { 200: walletLoginStatusSchema },
       },
       config: {
+        surface: 'browser',
         // Sized for polling; see WALLET_LOGIN_STATUS_RATE_LIMIT for why the
         // global default is the wrong shape here.
         rateLimit: {
@@ -1351,6 +1355,7 @@ export default async function (fastify: FastifyInstance) {
         }),
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,

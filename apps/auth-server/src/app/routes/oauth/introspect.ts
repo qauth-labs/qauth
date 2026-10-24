@@ -81,6 +81,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         rateLimit: {
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,

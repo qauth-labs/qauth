@@ -115,6 +115,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         rateLimit: {
           // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
           // forces the strict cap; a development/staging ceiling permits the

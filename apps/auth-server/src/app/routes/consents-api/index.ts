@@ -79,6 +79,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         response: { 200: listResponseSchema },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       // Per-user data; keep it out of any shared or proxy cache, matching
@@ -101,6 +102,7 @@ export default async function (fastify: FastifyInstance) {
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null() },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };

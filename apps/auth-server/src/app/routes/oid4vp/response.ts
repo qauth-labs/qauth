@@ -204,6 +204,7 @@ export default async function (fastify: FastifyInstance) {
         response: { 200: oid4vpDirectPostResponseSchema },
       },
       config: {
+        surface: 'api',
         // IP-scoped rate limit, in the shape every other unauthenticated surface
         // in this app uses (/oauth/token, /oauth/register, /auth/login).
         // Mandatory here for the same reason the rejections are uniform: the

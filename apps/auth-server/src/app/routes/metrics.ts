@@ -29,7 +29,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
       },
       // High-frequency scrape target — exempt from rate limiting.
-      config: { rateLimit: false },
+      config: { surface: 'api', rateLimit: false },
     },
     async (_request, reply) => {
       const body = await fastify.metrics.registry.metrics();

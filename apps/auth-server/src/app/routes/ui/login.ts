@@ -235,6 +235,7 @@ export default async function (fastify: FastifyInstance) {
           return_to: z.string().optional(),
         }),
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const q = request.query as { return_to?: string };
@@ -272,6 +273,7 @@ export default async function (fastify: FastifyInstance) {
         body: loginFormSchema,
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,

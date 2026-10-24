@@ -46,6 +46,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         // IP-scoped rate limit, at least as strict as /oauth/token.
         // Registration is append-only and expensive (argon2id hash on
         // confidential clients), so a burst-proof cap is mandatory.

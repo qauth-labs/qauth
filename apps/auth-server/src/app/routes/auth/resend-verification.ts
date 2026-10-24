@@ -67,6 +67,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         rateLimit: {
           max: env.RESEND_VERIFICATION_RATE_LIMIT,
           timeWindow: env.RESEND_VERIFICATION_RATE_WINDOW * 1000,
