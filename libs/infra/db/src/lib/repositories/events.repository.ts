@@ -266,13 +266,16 @@ async function appendToChain(tx: DbTransaction, { row, envelope }: BuiltEvent): 
   await tx.execute(
     sql`select pg_advisory_xact_lock(hashtextextended(${EVENT_CHAIN_LOCK_PREFIX}::text || (${row.realmId})::uuid::text, 0))`
   );
+  // The xid the insert's default will store: the top-level transaction's,
+  // also inside the savepoint below.
   const {
     rows: [head],
-  } = await tx.execute<{ hash: Buffer | null }>(
-    sql`select "events_admin_chain_head"(${row.realmId}::uuid) as "hash"`
+  } = await tx.execute<{ hash: Buffer | null; xid: string }>(
+    sql`select "events_admin_chain_head"(${row.realmId}::uuid) as "hash", pg_current_xact_id()::text as "xid"`
   );
-  const prevHash = head?.hash ?? EVENT_CHAIN_GENESIS_HASH;
-  const hash = eventChainHash(prevHash, envelope);
+  if (!head) throw new Error('events: reading the chain head returned no row');
+  const prevHash = head.hash ?? EVENT_CHAIN_GENESIS_HASH;
+  const hash = eventChainHash(prevHash, BigInt(head.xid), envelope);
 
   // In a savepoint: when the row as Postgres stores it does not hash to its
   // hash, the chain would break at this row for good, so the insert is
@@ -300,7 +303,7 @@ function checkChainRow(row: ChainRow, expectedPrev: Buffer): EventChainBreakReas
   }
   let computed: Buffer;
   try {
-    computed = eventChainHash(row.prev_hash, envelopeOf(row));
+    computed = eventChainHash(row.prev_hash, BigInt(row.xid), envelopeOf(row));
   } catch {
     return 'unreadable_row';
   }

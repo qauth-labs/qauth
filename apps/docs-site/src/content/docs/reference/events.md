@@ -160,9 +160,10 @@ two-admin operation, each with the approver, the passkey credential it was given
 created the approver's account.
 
 **The hash chain.** The event store chains a realm's admin events: each stores the hash of the one
-before it, and its own hash is SHA-256 over that hash and the event's canonical JSON (RFC 8785). A
-changed event breaks the chain at that event, and a removed one at the event after it. The
-chain's hashes are stored beside the event and are not part of the envelope.
+before it, and its own hash is SHA-256 over that hash, the id of the transaction that wrote the
+event, and the event's canonical JSON (RFC 8785). A changed event breaks the chain at that event,
+and a removed one at the event after it. The chain's hashes are stored beside the event and are
+not part of the envelope.
 
 ## Versioning
 

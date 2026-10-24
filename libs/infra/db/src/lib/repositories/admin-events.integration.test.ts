@@ -75,8 +75,16 @@ async function sqlState(promise: Promise<unknown>): Promise<string | undefined> 
 interface ChainRowSql {
   id: string;
   seq: string;
+  xid: string;
   prev_hash: Buffer;
   hash: Buffer;
+}
+
+/** A row's xid as the chain hashes it: 8 bytes, unsigned, big-endian. */
+function xidBytes(xid: string): Buffer {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64BE(BigInt(xid));
+  return bytes;
 }
 
 describe('admin events integration (real Postgres)', () => {
@@ -121,11 +129,32 @@ describe('admin events integration (real Postgres)', () => {
   async function chainRows(realm: string): Promise<ChainRowSql[]> {
     const { rows } = await pool().query<ChainRowSql>(
       // Ordered by the column, not by the text alias of the same name.
-      `SELECT id, seq::text AS seq, prev_hash, hash FROM events
+      `SELECT id, seq::text AS seq, xid::text AS xid, prev_hash, hash FROM events
         WHERE realm_id = $1 AND hash IS NOT NULL ORDER BY events.seq`,
       [realm]
     );
     return rows;
+  }
+
+  /**
+   * Run statements as the table owner in one transaction, the way an owner
+   * who disables a trigger to edit rows by hand would.
+   */
+  async function asOwner(statements: (string | [string, unknown[]])[]): Promise<void> {
+    const client: PoolClient = await pool().connect();
+    try {
+      await client.query('BEGIN');
+      for (const statement of statements) {
+        if (typeof statement === 'string') await client.query(statement);
+        else await client.query(statement[0], statement[1]);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -199,7 +228,7 @@ describe('admin events integration (real Postgres)', () => {
       expect(await store.verifyChain(other)).toMatchObject({ ok: true, rowsChecked: 10 });
     });
 
-    it('hashes each row over prev_hash and the canonical JSON of the envelope a reader gets back', async () => {
+    it('hashes each row over prev_hash, its xid and the canonical JSON of the envelope a reader gets back', async () => {
       const realm = randomUUID();
       await emitInTx(change(realm));
       const [row] = await chainRows(realm);
@@ -207,6 +236,7 @@ describe('admin events integration (real Postgres)', () => {
 
       const expected = createHash('sha256')
         .update(row.prev_hash)
+        .update(xidBytes(row.xid))
         .update(canonicalizeJson(page.events[0].event), 'utf8')
         .digest();
       expect(row.hash.toString('hex')).toBe(expected.toString('hex'));
@@ -325,6 +355,7 @@ describe('admin events integration (real Postgres)', () => {
       if (!edited) throw new Error('edited row not read');
       const rehash = createHash('sha256')
         .update(rows[1].prev_hash)
+        .update(xidBytes(rows[1].xid))
         .update(canonicalizeJson(edited.event), 'utf8')
         .digest();
       await tamper([[`UPDATE events SET hash = $2 WHERE id = $1`, [rows[1].id, rehash]]]);
@@ -333,6 +364,33 @@ describe('admin events integration (real Postgres)', () => {
         ok: false,
         rowsChecked: 2,
         break: { id: rows[2].id, reason: 'prev_hash_mismatch' },
+      });
+    });
+
+    // The acceptance criterion of #827: an owner who disables the update
+    // trigger and moves a row's xid below a reader's position hides the row
+    // from that reader, and breaks the chain at that row.
+    it('fails at the row whose xid the owner moved, which hid it from a reader', async () => {
+      const realm = randomUUID();
+      const rows = await fiveRows(realm);
+      const page = await store.readAfter(realm, eventStreamStart(realm), 4);
+      expect(page.events.map((stored) => stored.event.id)).toEqual(
+        rows.slice(0, 4).map((row) => row.id)
+      );
+
+      await asOwner([
+        'ALTER TABLE events DISABLE TRIGGER events_no_update',
+        [`UPDATE events SET xid = $2::xid8 WHERE id = $1`, [rows[4].id, rows[0].xid]],
+        'ALTER TABLE events ENABLE TRIGGER events_no_update',
+      ]);
+
+      expect((await store.readAfter(realm, page.next, 10)).events).toEqual([]);
+      expect(await store.verifyChain(realm)).toEqual({
+        ok: false,
+        realmId: realm,
+        from: { seq: 0n, hash: GENESIS_HEX },
+        rowsChecked: 4,
+        break: { id: rows[4].id, seq: BigInt(rows[4].seq), reason: 'hash_mismatch' },
       });
     });
 
