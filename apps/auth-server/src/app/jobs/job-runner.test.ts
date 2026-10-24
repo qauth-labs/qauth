@@ -565,7 +565,7 @@ describe('JobRunner', () => {
       await clock.advanceTo(INTERVAL);
       const stopping = instance.stop();
 
-      expect((signal?.reason as JobStoppedError).stopReason).toBe('shutdown');
+      expect((signal?.reason as JobStoppedError | undefined)?.stopReason).toBe('shutdown');
       expect(await stateOf(stopping)).toBe('pending');
       expect(shared.holders.has('test-job')).toBe(true);
 

@@ -154,7 +154,8 @@ describe('POST /auth/verify', () => {
 
     expect(ctx.registered?.method).toBe('POST');
     expect(ctx.registered?.url).toBe('/verify');
-    const schema = (ctx.registered?.opts as { schema: Record<string, unknown> }).schema;
+    if (!ctx.registered) throw new Error('Route missing');
+    const schema = (ctx.registered.opts as { schema: Record<string, unknown> }).schema;
     expect(schema.body).toBeDefined();
     expect(schema.querystring).toBeUndefined();
   });
@@ -346,8 +347,9 @@ describe('POST /auth/verify', () => {
   it('requires a password in the request body schema', async () => {
     const { fastify, ctx } = createFastifyStub();
     await verifyRoute(fastify);
+    if (!ctx.registered) throw new Error('Route missing');
     const body = (
-      ctx.registered?.opts as {
+      ctx.registered.opts as {
         schema: { body: { safeParse: (v: unknown) => { success: boolean } } };
       }
     ).schema.body;
