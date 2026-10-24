@@ -167,6 +167,8 @@ export type DeliveryAttemptRecord =
  */
 export interface DeliveryStore {
   fanOut(request: {
+    /** The route kinds this node serves: only their positions are moved or forgotten. */
+    readonly kinds: readonly string[];
     readonly destinations: readonly DeliveryDestination[];
     readonly now: number;
     readonly pageSize?: number;

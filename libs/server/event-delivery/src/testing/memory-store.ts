@@ -9,10 +9,10 @@ import type {
 
 /**
  * TEST SUPPORT — a {@link DeliveryStore} in memory, with the queue's rules:
- * one row per destination and event, a new realm starting at the end of its
- * stream, leases that make a row due again, and outcomes written only by the
- * claim that holds the row. Every event is final at once: the horizon is the
- * container suites' to test.
+ * one row per destination and event, a position per realm and route kind
+ * that starts at the end of the stream, leases that make a row due again,
+ * and outcomes written only by the claim that holds the row. Every event is
+ * final at once: the horizon is the container suites' to test.
  */
 export interface MemoryRow {
   readonly id: string;
@@ -68,19 +68,30 @@ export function createMemoryStore(): MemoryStore {
       streams.set(event.realm, stream);
     },
 
-    async fanOut({ destinations }) {
+    async fanOut({ kinds, destinations }) {
       calls.fanOut += 1;
-      const realms = new Set(destinations.map((destination) => destination.realmId));
-      for (const realm of [...positions.keys()]) if (!realms.has(realm)) positions.delete(realm);
+      const pairs = new Map<string, { realm: string; kind: string }>();
+      for (const destination of destinations) {
+        if (!kinds.includes(destination.kind)) throw new TypeError('a destination of another kind');
+        pairs.set(`${destination.realmId}/${destination.kind}`, {
+          realm: destination.realmId,
+          kind: destination.kind,
+        });
+      }
+      for (const key of [...positions.keys()]) {
+        const kind = key.slice(key.indexOf('/') + 1);
+        if (kinds.includes(kind) && !pairs.has(key)) positions.delete(key);
+      }
       let deliveries = 0;
-      for (const realm of realms) {
+      for (const [key, { realm, kind }] of pairs) {
         const stream = streams.get(realm) ?? [];
-        const position = positions.get(realm);
-        positions.set(realm, stream.length);
+        const position = positions.get(key);
+        positions.set(key, stream.length);
         if (position === undefined) continue;
         for (const event of stream.slice(position)) {
           for (const destination of destinations) {
-            if (destination.realmId !== realm || !matches(destination, event)) continue;
+            if (destination.realmId !== realm || destination.kind !== kind) continue;
+            if (!matches(destination, event)) continue;
             const exists = rows.some(
               (row) =>
                 row.eventId === event.id &&

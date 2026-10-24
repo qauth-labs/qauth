@@ -16,6 +16,7 @@ import type {
   DeliveryOutcome,
   DeliveryRoute,
   DeliverySigner,
+  DeliveryStore,
   RouteDestination,
 } from './types';
 
@@ -112,7 +113,8 @@ interface Setup {
 async function setup(
   routes: (clock: ManualClock) => DeliveryRoute[],
   options: Partial<DeliveryRoleOptions> = {},
-  waitForFanOut = true
+  waitForFanOut = true,
+  wrap: (store: MemoryStore) => DeliveryStore = (store) => store
 ): Promise<Setup & { routes: DeliveryRoute[] }> {
   const clock = createManualClock(START);
   const store = createMemoryStore();
@@ -120,7 +122,7 @@ async function setup(
   const attempts: Array<{ kind: string; result: string }> = [];
   const list = routes(clock);
   const role = startDeliveryRole({
-    store,
+    store: wrap(store),
     routes: list,
     signer,
     log,
@@ -409,11 +411,28 @@ describe('startDeliveryRole', () => {
     expect(unread.calls).toHaveLength(0);
   });
 
-  it('with no route, clears the positions once and claims nothing', async () => {
-    const { clock, store } = await setup(() => []);
+  it('with no route, fans nothing out, touches no position and claims nothing', async () => {
+    const { clock, store } = await setup(() => [], {}, false);
     await clock.advanceBy(POLL * 5);
-    expect(store.calls.fanOut).toBe(1);
+    expect(store.calls.fanOut).toBe(0);
     expect(store.calls.claim).toBe(0);
+  });
+
+  it('passes the kinds it serves to the fan-out', async () => {
+    const fanOut = vi.fn();
+    await setup(
+      (clock) => [route(clock, [], undefined, 'webhook'), route(clock, [], undefined, 'ssf')],
+      {},
+      true,
+      (store) => ({
+        ...store,
+        fanOut: (request) => {
+          fanOut(request.kinds);
+          return store.fanOut(request);
+        },
+      })
+    );
+    expect(fanOut).toHaveBeenCalledWith(['webhook', 'ssf']);
   });
 
   describe('stop', () => {
@@ -478,6 +497,67 @@ describe('startDeliveryRole', () => {
         expect.objectContaining({ deliveries: 1 }),
         'event deliveries still running at the shutdown limit were released'
       );
+    });
+
+    it('keeps the lease of an attempt whose outcome is being recorded', async () => {
+      let recorded!: () => void;
+      const gate = new Promise<void>((resolve) => (recorded = resolve));
+      let fast!: ReturnType<typeof route>;
+      const { clock, store, role } = await setup(
+        (clock) => {
+          fast = route(clock, [{ id: 'a', realmId: REALM }]);
+          return [fast];
+        },
+        { settings: { shutdownTimeoutMs: 2_000 } },
+        true,
+        (store) => ({
+          ...store,
+          record: async (claim, outcome, now) => {
+            await gate;
+            return store.record(claim, outcome, now);
+          },
+        })
+      );
+      store.append(envelope());
+      await clock.advanceBy(POLL);
+      await vi.waitFor(() => expect(fast.calls).toHaveLength(1));
+
+      let done = false;
+      const stopped = role.stop().then(() => (done = true));
+      await clock.advanceBy(2_000);
+      expect(store.calls.release).toBe(0);
+      expect(done).toBe(false);
+      recorded();
+      await stopped;
+      expect(store.rows[0]).toMatchObject({ status: 'delivered', lockedUntil: null });
+      expect(store.calls.release).toBe(0);
+    });
+
+    it('does not wait for ever on a store that stopped answering', async () => {
+      const { clock, store, role } = await setup(
+        (clock) => [
+          route(
+            clock,
+            [{ id: 'a', realmId: REALM }],
+            () => new Promise<DeliveryOutcome>(() => undefined)
+          ),
+        ],
+        { settings: { shutdownTimeoutMs: 2_000, attemptTimeoutMs: 50_000 } },
+        true,
+        (store) => ({ ...store, release: () => new Promise<number>(() => undefined) })
+      );
+      store.append(envelope());
+      await clock.advanceBy(POLL);
+      await vi.waitFor(() => expect(store.rows[0]?.attempt).toBe(1));
+
+      let done = false;
+      const stopped = role.stop().then(() => (done = true));
+      await clock.advanceBy(2_000);
+      expect(done).toBe(false);
+      // The release hangs; its own limit passes, and the role stops.
+      await clock.advanceBy(2_000);
+      await stopped;
+      expect(done).toBe(true);
     });
 
     it('is safe to call twice', async () => {

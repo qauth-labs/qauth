@@ -62,9 +62,19 @@ import type {
  *
  * {@link DeliveryRole.stop} stops the cycle and claims nothing more, waits
  * for the attempts in flight up to `shutdownTimeoutMs`, then gives up on the
- * rest: it aborts their signals and releases their leases, so another node
- * takes them at once. A released attempt counts, since it may have reached
- * the destination.
+ * ones whose route still runs: it aborts their signals and releases their
+ * leases, so another node takes them at once. A released attempt counts,
+ * since it may have reached the destination. An attempt whose outcome is
+ * being recorded keeps its lease. Every wait of the shutdown has the same
+ * limit, so a database that stopped answering cannot hold it; a lease that
+ * was not given back runs out by itself.
+ *
+ * ## Route kinds
+ *
+ * The fan-out keeps one position per realm and route kind, and a node moves
+ * and forgets only the positions of the kinds it has routes for. Nodes with
+ * different routes, such as two releases during a rollout, or a node with no
+ * route at all, so leave each other's positions alone.
  *
  * ## No keys
  *
@@ -247,6 +257,12 @@ export function resolveDeliverySettings(input: DeliverySettingsInput = {}): Deli
 interface InFlight {
   readonly claim: ClaimedDelivery;
   readonly controller: AbortController;
+  /**
+   * `attempting` while the route runs, `recording` once the outcome is being
+   * written: shutdown gives up on and releases only an attempt whose route
+   * still runs, never one whose outcome is on its way to the store.
+   */
+  stage: 'attempting' | 'recording';
   done: Promise<void>;
 }
 
@@ -292,8 +308,7 @@ class Runner implements DeliveryRole {
   private cycle: Promise<void> | undefined;
   private filling: Promise<void> | undefined;
   private fillAgain = false;
-  /** Whether the positions of a node with no route have been cleared once. */
-  private clearedWithoutRoutes = false;
+  /** The attempts in flight, by delivery and attempt: a row claimed again is a new entry. */
   private readonly inFlight = new Map<string, InFlight>();
   private readonly perDestination = new Map<string, number>();
   /** Where the next claim round starts among the due destinations. */
@@ -358,14 +373,9 @@ class Runner implements DeliveryRole {
 
   /** Fan the new events out to every route's destinations. Returns whether a realm has more. */
   private async fanOut(): Promise<boolean> {
-    if (this.routes.size === 0) {
-      // Positions left by routes this node no longer has would replay old
-      // events if the routes came back: clear them once, then stay idle.
-      if (this.clearedWithoutRoutes) return false;
-      await this.store.fanOut({ destinations: [], now: this.clock.now() });
-      this.clearedWithoutRoutes = true;
-      return false;
-    }
+    // A node with no route fans nothing out and touches no position: the
+    // positions belong to the nodes that serve their kinds.
+    if (this.routes.size === 0) return false;
     const destinations: DeliveryDestination[] = [];
     for (const route of this.routes.values()) {
       let listed: readonly unknown[];
@@ -384,6 +394,7 @@ class Runner implements DeliveryRole {
       }
     }
     const result = await this.store.fanOut({
+      kinds: this.kinds,
       destinations,
       now: this.clock.now(),
       pageSize: this.settings.fanOutPageSize,
@@ -515,10 +526,16 @@ class Runner implements DeliveryRole {
   private begin(claim: ClaimedDelivery): void {
     const key = destinationKey(claim.destinationKind, claim.destinationId);
     this.perDestination.set(key, (this.perDestination.get(key) ?? 0) + 1);
-    const entry: InFlight = { claim, controller: new AbortController(), done: Promise.resolve() };
-    this.inFlight.set(claim.id, entry);
+    const entry: InFlight = {
+      claim,
+      controller: new AbortController(),
+      stage: 'attempting',
+      done: Promise.resolve(),
+    };
+    const id = `${claim.id}:${claim.attempt}`;
+    this.inFlight.set(id, entry);
     entry.done = this.run(entry).finally(() => {
-      this.inFlight.delete(claim.id);
+      this.inFlight.delete(id);
       const left = (this.perDestination.get(key) ?? 1) - 1;
       if (left > 0) this.perDestination.set(key, left);
       else this.perDestination.delete(key);
@@ -529,6 +546,7 @@ class Runner implements DeliveryRole {
   private async run(entry: InFlight): Promise<void> {
     const end = await this.attempt(entry);
     if (end === 'abandoned') return;
+    entry.stage = 'recording';
     await this.record(entry.claim, end);
   }
 
@@ -693,19 +711,25 @@ class Runner implements DeliveryRole {
       this.filling,
       ...[...this.inFlight.values()].map((entry) => entry.done),
     ];
-    const settled = await this.settledWithin(work(), this.settings.shutdownTimeoutMs);
-    const left = [...this.inFlight.values()];
+    const limit = this.settings.shutdownTimeoutMs;
+    const settled = await this.settledWithin(work(), limit);
+    // Give up on the attempts whose route still runs; one whose outcome is
+    // being recorded keeps its lease, since releasing it could undo that
+    // outcome.
+    const left = [...this.inFlight.values()].filter((entry) => entry.stage === 'attempting');
     if (!settled && left.length > 0) {
       for (const entry of left) entry.controller.abort(new DeliveryRoleStoppedError());
-      await this.release(left.map((entry) => entry.claim));
+      // Each wait has the same limit, so a store that no longer answers
+      // cannot hold the shutdown: an unreleased lease runs out by itself.
+      await this.settledWithin([this.release(left.map((entry) => entry.claim))], limit);
       this.log.warn(
-        { deliveries: left.length, shutdownTimeoutMs: this.settings.shutdownTimeoutMs },
+        { deliveries: left.length, shutdownTimeoutMs: limit },
         'event deliveries still running at the shutdown limit were released'
       );
-      await Promise.allSettled(left.map((entry) => entry.done));
     }
-    // A store call still running (a fan-out, a claim) gets the same limit.
-    await this.settledWithin([this.cycle, this.filling], this.settings.shutdownTimeoutMs);
+    // Recording outcomes and a store call still running (a fan-out, a claim)
+    // get the same limit.
+    await this.settledWithin(work(), limit);
     this.state = 'stopped';
     this.log.info({ kinds: this.kinds }, 'delivery role stopped');
   }
