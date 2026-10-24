@@ -171,6 +171,12 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   await fastify.register(databasePlugin, {
     eventTelemetry,
+    // Realm policies the environment seeds into a new realm (ADR-019
+    // Decision 10): the realm row owns them once it exists (#536).
+    realmPolicySeeds: {
+      userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
+      adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
+    },
     config: {
       connectionString: env.DATABASE_URL,
       pool: {

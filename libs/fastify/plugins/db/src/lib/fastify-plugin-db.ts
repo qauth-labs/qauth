@@ -116,7 +116,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
     fastify.decorate('dbPool', database.pool);
     fastify.decorate('repositories', {
       users: createUsersRepository(database.db),
-      realms: createRealmsRepository(database.db),
+      realms: createRealmsRepository(database.db, { seeds: options.realmPolicySeeds }),
       emailVerificationTokens: createEmailVerificationTokensRepository(database.db),
       oauthClients: createOAuthClientsRepository(database.db),
       oauthConsents: createOAuthConsentsRepository(database.db),
