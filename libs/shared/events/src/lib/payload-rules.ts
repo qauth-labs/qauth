@@ -183,14 +183,22 @@ function hasCompactJose(value: string): boolean {
 /** A PEM block: a key, a certificate or anything else armoured. */
 const PEM = /-----BEGIN [A-Z0-9 ]+-----/;
 
-/** Split a field name into lower-case words: `apiKeyID` → `api`, `key`, `id`. */
+/**
+ * Split a field name into lower-case words: `apiKeyID` → `api`, `key`, `id`.
+ * Linear in the name's length: the admin diff's masking splits URL path
+ * segments and query member names of any length (#827).
+ */
 export function fieldNameWords(name: string): string[] {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .split(/[^A-Za-z0-9]+/)
-    .filter((word) => word.length > 0)
-    .map((word) => word.toLowerCase());
+  return (
+    name
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      // `HTTPServer` → `HTTP Server`. A lookahead, not `([A-Z]+)([A-Z][a-z])`,
+      // which backtracks quadratically on a long run of capitals.
+      .replace(/([A-Z])(?=[A-Z][a-z])/g, '$1 ')
+      .split(/[^A-Za-z0-9]+/)
+      .filter((word) => word.length > 0)
+      .map((word) => word.toLowerCase())
+  );
 }
 
 /**

@@ -481,7 +481,8 @@ describe('oldestUnreadEventAge', () => {
     const repo = createEventsRepository(db, { now: () => NOW });
 
     await expect(repo.oldestUnreadEventAge()).resolves.toBe(42.5);
-    expect(queries[0].text).toContain('>= pg_snapshot_xmin(pg_current_snapshot())');
+    // Through the function, so a role with only the writer's grants reads it.
+    expect(queries[0].text).toContain('"events_oldest_unread_time"()');
   });
 });
 
@@ -500,19 +501,24 @@ function insertedColumns(insert: CapturedQuery): Record<string, unknown> {
   );
 }
 
+/** The writing transaction's xid, as the chain's reads return it. */
+const TX_XID = '900';
+
 /**
- * Answer the admin chain's reads: no head (the realm's first admin event),
- * and the read-back of the row as Postgres would store what was inserted.
- * `tamper` changes the stored row before it is returned.
+ * Answer the admin chain's reads: no head (the realm's first admin event)
+ * and the transaction's xid, and the read-back of the row as Postgres would
+ * store what was inserted. `tamper` changes the stored row before it is
+ * returned.
  */
 function chainResponder(tamper: (row: Record<string, unknown>) => void = () => undefined) {
   return (query: CapturedQuery, queries: CapturedQuery[]) => {
+    if (query.text.includes('"events_admin_chain_head"')) return [{ hash: null, xid: TX_XID }];
     if (!query.text.includes('"prev_hash"')) return [];
     const inserted = insertedColumns(insertOf(queries));
     const json = (value: unknown) => (typeof value === 'string' ? JSON.parse(value) : null);
     const row: Record<string, unknown> = {
       seq: '7',
-      xid: '900',
+      xid: TX_XID,
       id: inserted['id'],
       realm_id: inserted['realm_id'],
       category: inserted['category'],
@@ -564,7 +570,7 @@ describe('emitAdminEvent', () => {
     expect(queries.map((q) => q.text.trim().split(/\s+/).slice(0, 2).join(' '))).toEqual([
       'begin',
       'select pg_advisory_xact_lock(hashtextextended($1::text',
-      'select "hash"',
+      'select "events_admin_chain_head"($1::uuid)',
       // The insert and its read-back run in a savepoint, undone on a mismatch.
       'savepoint sp1',
       'insert into',
@@ -613,6 +619,27 @@ describe('emitAdminEvent', () => {
       );
     });
     expect(queries.slice(-2).map((q) => q.text)).toEqual(['rollback to savepoint sp1', 'commit']);
+  });
+
+  // #827: the hash covers the row's xid, which the insert leaves to the
+  // column default, so a row stored under another xid is refused.
+  it("hashes the transaction's xid, which the insert leaves to the database", async () => {
+    const { db, queries } = createRecordingDb([], chainResponder());
+    const repo = createEventsRepository(db, { now: () => NOW });
+    await db.transaction((tx) => repo.emitAdminEvent(tx, ADMIN_CHANGE));
+    expect(queries[2].text).toContain('pg_current_xact_id()::text as "xid"');
+    expect(insertedColumns(insertOf(queries))).not.toHaveProperty('xid');
+
+    const moved = createRecordingDb(
+      [],
+      chainResponder((row) => {
+        row['xid'] = '899';
+      })
+    );
+    const other = createEventsRepository(moved.db, { now: () => NOW });
+    await expect(
+      moved.db.transaction((tx) => other.emitAdminEvent(tx, ADMIN_CHANGE))
+    ).rejects.toThrow(/does not hash as it was written/);
   });
 
   it('leaves an empty request out, so the stored row hashes as it was written', async () => {
@@ -734,8 +761,8 @@ describe('verifyChain', () => {
     };
     const { data, category, ...rest } = envelope;
     const reordered = { data, category, ...rest };
-    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, reordered)).toEqual(
-      eventChainHash(EVENT_CHAIN_GENESIS_HASH, envelope)
+    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, 900n, reordered)).toEqual(
+      eventChainHash(EVENT_CHAIN_GENESIS_HASH, 900n, envelope)
     );
   });
 });

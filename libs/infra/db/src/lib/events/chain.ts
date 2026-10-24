@@ -10,11 +10,23 @@ import { canonicalizeJson } from '../admin-audit/canonical-json';
  *
  * Each admin row of `events` stores the `hash` of the realm's admin row
  * before it as `prev_hash`, and {@link EVENT_CHAIN_GENESIS_HASH} for the
- * first. Its own `hash` is {@link eventChainHash}: SHA-256 over the 32 bytes
- * of `prev_hash` followed by the UTF-8 bytes of the RFC 8785 canonical JSON of
- * the envelope the row holds, exactly as a reader gets it back. A changed row
- * no longer hashes to its `hash`; a removed row leaves the next row's
- * `prev_hash` pointing at nothing.
+ * first. Its own `hash` is {@link eventChainHash}: SHA-256 over the chain
+ * format's id ({@link EVENT_CHAIN_FORMAT}) and a NUL byte, the 32 bytes of
+ * `prev_hash`, the row's `xid` as 8 bytes, unsigned and big-endian, and the
+ * UTF-8 bytes of the RFC 8785 canonical JSON of the envelope the row holds,
+ * exactly as a reader gets it back. A changed row no longer hashes to its
+ * `hash`; a removed row leaves the next row's `prev_hash` pointing at nothing.
+ *
+ * `xid` is not part of the envelope, but it decides where a reader of the
+ * stream finds the row (`readAfter` reads in `(xid, seq)` order), so it is
+ * hashed too (#827): a row whose `xid` was moved below a reader's position,
+ * which would hide it from that reader, breaks the chain at that row, and the
+ * trigger `events_xid_from_transaction` refuses a row inserted with an `xid`
+ * that is not its transaction's. The writer knows it before the insert
+ * (`pg_current_xact_id()`). `seq` is
+ * assigned by the insert, so it cannot be hashed: the chain's order catches a
+ * row moved past another admin row of its realm, not one moved within the gap
+ * to its neighbours.
  *
  * The hash is unkeyed: whoever can rewrite a row and every row after it, or
  * cut the newest rows, leaves a chain that verifies. Only a copy of the head
@@ -26,17 +38,44 @@ import { canonicalizeJson } from '../admin-audit/canonical-json';
 export const EVENT_CHAIN_GENESIS_HASH: Buffer = Buffer.alloc(32);
 
 /**
- * An admin row's `hash`: SHA-256 over `prevHash` and the canonical JSON of the
- * envelope. Changing what it covers changes every hash, so this is version 1
- * of the chain format.
- *
- * @throws TypeError when the envelope holds a value outside the I-JSON model
+ * The chain format's id, hashed first, so a hash says which format made it.
+ * A QAuth-defined version, so a release candidate until QAuth 1.0.0
+ * (ADR-018 §5): a change to what the hash covers raises `<M>`, and the
+ * release that ships 1.0.0 drops the suffix.
  */
-export function eventChainHash(prevHash: Buffer, envelope: EventEnvelope): Buffer {
+export const EVENT_CHAIN_FORMAT = 'qauth-event-chain/1-rc.0';
+
+/** The largest `xid8`: 2^64 - 1. */
+const MAX_XID8 = (1n << 64n) - 1n;
+
+/**
+ * An admin row's `hash`: SHA-256 over {@link EVENT_CHAIN_FORMAT} and a NUL
+ * byte, `prevHash`, `xid` as 8 bytes (unsigned, big-endian) and the canonical
+ * JSON of the envelope. Changing what it covers changes every hash and raises
+ * the format's release candidate. `1-rc.0` is the first format with an id; it
+ * has the `xid` (#827). No deployment held a row chained before it.
+ *
+ * @param prevHash - the `hash` of the realm's admin row before this one
+ * @param xid - the row's `xid`, the writing transaction's `xid8`
+ * @param envelope - the envelope the row holds, as a reader gets it back
+ * @throws TypeError when `prevHash` is not 32 bytes, `xid` is not an `xid8`,
+ *   or the envelope holds a value outside the I-JSON model
+ */
+export function eventChainHash(prevHash: Buffer, xid: bigint, envelope: EventEnvelope): Buffer {
   if (prevHash.length !== 32) {
     throw new TypeError('eventChainHash: prev_hash is not a SHA-256 digest');
   }
-  return createHash('sha256').update(prevHash).update(canonicalizeJson(envelope), 'utf8').digest();
+  if (typeof xid !== 'bigint' || xid < 0n || xid > MAX_XID8) {
+    throw new TypeError('eventChainHash: xid is not an xid8');
+  }
+  const xidBytes = Buffer.alloc(8);
+  xidBytes.writeBigUInt64BE(xid);
+  return createHash('sha256')
+    .update(`${EVENT_CHAIN_FORMAT}\0`, 'utf8')
+    .update(prevHash)
+    .update(xidBytes)
+    .update(canonicalizeJson(envelope), 'utf8')
+    .digest();
 }
 
 /**

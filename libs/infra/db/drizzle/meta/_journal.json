@@ -232,6 +232,13 @@
       "when": 1792827094349,
       "tag": "0032_admin_event_chain",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792836276503,
+      "tag": "0033_events_writer_reads",
+      "breakpoints": true
     }
   ]
 }

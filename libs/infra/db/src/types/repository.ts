@@ -1308,8 +1308,10 @@ export interface EventsRepository {
    * the realm's chain lock (`pg_advisory_xact_lock`) until the transaction
    * ends, reads the chain head, and stores `prev_hash` and `hash` with the
    * row, then reads the row back and throws if it does not hash as written,
-   * so a row the chain would reject never commits. That needs `SELECT` as
-   * well as `INSERT`. Because the lock lasts to the end of the transaction,
+   * so a row the chain would reject never commits. It reads the head and the
+   * row through the functions `events_admin_chain_head` and `events_own_row`
+   * (migration 0033), so a writer needs `EXECUTE` on them besides `INSERT`,
+   * and no `SELECT` on `events`. Because the lock lasts to the end of the transaction,
    * emit an admin event last; a transaction that writes admin events to
    * several realms writes them in a fixed order (by realm id), or two such
    * transactions can deadlock. Under REPEATABLE READ or SERIALIZABLE, an
@@ -1368,7 +1370,8 @@ export interface EventsRepository {
    * point is read: a run from a kept head shows a chain cut back or rewritten
    * up to it, but a single row changed before it shows only in a run from the
    * start. Reads run in one REPEATABLE READ transaction, so a concurrent write
-   * cannot produce a false break.
+   * cannot produce a false break. They read the table, so run it as a role
+   * that may: a writing role holds no `SELECT` on `events` (#827).
    *
    * The retention job (#536) removes the oldest rows, a point it starts from
    * included; it will keep that point as an anchor of its own and check it

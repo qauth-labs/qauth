@@ -7,7 +7,7 @@ import {
   getEventType,
   parseEvent,
 } from '@qauth-labs/shared-events';
-import { and, desc, eq, gte, inArray, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, type SQL, sql } from 'drizzle-orm';
 
 import type {
   AdminEventInput,
@@ -255,6 +255,10 @@ function toStoredEvent(row: EnvelopeRow): StoredEvent {
  * Write an admin event as the next link of its realm's chain, in the
  * caller's transaction. See {@link EventsRepository.emit}.
  *
+ * It reads the table only through the two functions of migration 0033, so a
+ * writer needs no `SELECT` on `events`: `events_admin_chain_head` for the
+ * realm's head, and `events_own_row` for the row it inserted.
+ *
  * @throws {Error} when the stored row does not hash as written; nothing is
  *   then committed, since the error rolls back the caller's transaction
  */
@@ -262,23 +266,26 @@ async function appendToChain(tx: DbTransaction, { row, envelope }: BuiltEvent): 
   await tx.execute(
     sql`select pg_advisory_xact_lock(hashtextextended(${EVENT_CHAIN_LOCK_PREFIX}::text || (${row.realmId})::uuid::text, 0))`
   );
-  const [head] = await tx
-    .select({ hash: events.hash })
-    .from(events)
-    .where(and(eq(events.realmId, row.realmId), isNotNull(events.hash)))
-    .orderBy(desc(events.seq))
-    .limit(1);
-  const prevHash = head?.hash ?? EVENT_CHAIN_GENESIS_HASH;
-  const hash = eventChainHash(prevHash, envelope);
+  // The xid the insert's default will store: the top-level transaction's,
+  // also inside the savepoint below.
+  const {
+    rows: [head],
+  } = await tx.execute<{ hash: Buffer | null; xid: string }>(
+    sql`select "events_admin_chain_head"(${row.realmId}::uuid) as "hash", pg_current_xact_id()::text as "xid"`
+  );
+  if (!head) throw new Error('events: reading the chain head returned no row');
+  const prevHash = head.hash ?? EVENT_CHAIN_GENESIS_HASH;
+  const hash = eventChainHash(prevHash, BigInt(head.xid), envelope);
 
   // In a savepoint: when the row as Postgres stores it does not hash to its
   // hash, the chain would break at this row for good, so the insert is
   // undone even when the caller catches the error and commits.
   await tx.transaction(async (savepoint) => {
     await savepoint.insert(events).values({ ...row, prevHash, hash });
+    // The function's rows are named as the table, so the columns read as they do from it.
     const { rows } = await savepoint.execute<ChainRow>(sql`
       select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
-      from ${events} where ${events.id} = ${row.id}
+      from "events_own_row"(${row.id}::uuid) as ${events}
     `);
     if (rows.length !== 1 || checkChainRow(rows[0], prevHash) !== undefined) {
       throw new Error(
@@ -296,7 +303,7 @@ function checkChainRow(row: ChainRow, expectedPrev: Buffer): EventChainBreakReas
   }
   let computed: Buffer;
   try {
-    computed = eventChainHash(row.prev_hash, envelopeOf(row));
+    computed = eventChainHash(row.prev_hash, BigInt(row.xid), envelopeOf(row));
   } catch {
     return 'unreadable_row';
   }
@@ -561,13 +568,11 @@ export function createEventsRepository(
     },
 
     async oldestUnreadEventAge() {
-      // Postgres 18 answers this from idx_events_realm_position with a skip
-      // scan: one descent per realm, to the rows at or above the horizon.
-      const { rows } = await defaultDb.execute<{ oldest: string | null }>(sql`
-        select min(${events.time})::text as "oldest"
-        from ${events}
-        where ${events.xid} >= pg_snapshot_xmin(pg_current_snapshot())
-      `);
+      // Through a function (migration 0033), so a role that holds only the
+      // writer's grants, as the auth server may, reads the lag without SELECT.
+      const { rows } = await defaultDb.execute<{ oldest: string | null }>(
+        sql`select "events_oldest_unread_time"()::text as "oldest"`
+      );
       const oldest = rows[0]?.oldest;
       if (oldest === null || oldest === undefined) return 0;
       return Math.max(0, now() - Number(oldest)) / 1000;

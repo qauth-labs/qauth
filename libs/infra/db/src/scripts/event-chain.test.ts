@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { EventChainReport } from '../types';
-import { chainReportJson, describeChainReport, parseVerifyChainArgs } from './event-chain';
+import {
+  chainReportJson,
+  describeChainReport,
+  parseVerifyChainArgs,
+  VERIFY_CHAIN_EXIT,
+  VERIFY_CHAIN_USAGE,
+} from './event-chain';
 
 /**
  * The `events:verify-chain` command's arguments and output (issue #459). The
@@ -29,11 +35,23 @@ describe('parseVerifyChainArgs', () => {
     ['two realms', ['--realm=a', `--realm-id=${REALM_ID}`]],
     ['half a starting point', ['--realm=a', '--from-seq=1']],
     ['a seq that is not a number', ['--realm=a', '--from-seq=-1', `--from-hash=${HASH}`]],
+    ['a seq past a bigint', ['--realm=a', '--from-seq=9223372036854775808', `--from-hash=${HASH}`]],
     ['a hash that is not 64 hex digits', ['--realm=a', '--from-seq=1', '--from-hash=abc']],
     ['a realm id that is not a UUID', ['--realm-id=default']],
     ['an unknown flag', ['--realm=a', '--fix']],
   ])('refuses %s', (_label, args) => {
     expect(parseVerifyChainArgs(argv(...args))).toBeNull();
+  });
+});
+
+// #827: a monitor tells a broken chain from a check that could not run. The
+// container suite runs the command and reads these codes.
+describe('VERIFY_CHAIN_EXIT', () => {
+  it('gives a break, a usage error and a check that could not run codes of their own', () => {
+    expect(VERIFY_CHAIN_EXIT).toEqual({ verified: 0, broken: 1, usage: 2, cannotRun: 3 });
+    expect(VERIFY_CHAIN_USAGE).toContain(
+      'Exits 0 when the chain verifies, 1 when it\n       breaks, 2 on a usage error, and 3 when the check could not run'
+    );
   });
 });
 

@@ -270,7 +270,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createAdminAuditLogRepository(db, options?)`**: The append-only admin audit log (ADR-019 Decision 7, #448). It takes the root database, not a `DbClient`, because verification opens its own transaction.
   - `appendAdminAudit(tx, entry)` needs the caller's transaction (a `DbTransaction`, not the root database), so the row commits or rolls back with the change it records. It takes the target realm's chain lock (`pg_advisory_xact_lock`), masks the diff with `maskSecrets(change, annotations)` and appends the next row of the realm's chain. `options.afterAppend(tx, record)` runs right after the insert, in the same transaction; it is the hook for the event outbox writer.
   - `verifyAdminAuditChain(realmId)` checks the chain from the oldest retained row, anchored on the newest checkpoint after a prune, and returns the first row that breaks it (`sequence_mismatch`, `prev_hash_mismatch` or `row_hash_mismatch`).
-  - `row_hash` is SHA-256 over `prev_hash` and the RFC 8785 canonical JSON (`canonicalizeJson`) of the row's other columns, under their column names (`computeAdminAuditRowHash`). The first row's `prev_hash` is 32 zero bytes.
+  - `row_hash` is SHA-256 over the chain format's id, `qauth-admin-audit-chain/1-rc.0` (a release candidate until 1.0.0, ADR-018 §5), and a NUL byte, `prev_hash`, and the RFC 8785 canonical JSON (`canonicalizeJson`) of the row's other columns, under their column names (`computeAdminAuditRowHash`). The first row's `prev_hash` is 32 zero bytes.
   - A secret field is stored as `ADMIN_AUDIT_SECRET_MARKER`, never as a value. Annotate every secret a diff can carry, a set-up or reset link, code or token included.
   - Triggers in migration 0026 hold for every role whose statements fire them (SQLSTATE 23514, the constraint named): an inserted row must follow the realm's chain head (`admin_audit_log_follows_head`); no row is updated and neither table is truncated (`admin_audit_log_append_only`, `admin_audit_log_checkpoints_append_only`); a row is deleted only when a checkpoint covers it; a checkpoint names a row still in the log with its hash (`admin_audit_log_checkpoints_match`), moves forward (`admin_audit_log_checkpoints_forward`), covers an unbroken, linked run of rows (`admin_audit_log_checkpoints_unbroken`) and none younger than 90 days (`admin_audit_log_retention_floor`). The retention job removes rows with `SELECT admin_audit_log_prune(realm_id, through_seq)`, which writes the checkpoint and deletes the realm's rows up to that `seq`; `EXECUTE` on it is revoked from `PUBLIC`. Run `verifyAdminAuditChain` before a prune: the database checks the links, not the row hashes. A table owner or a superuser can disable a trigger, so only the per-role grants (#498) protect the log from the application's own database user. The triggers are hand-written SQL, which `drizzle-kit push` does not create; use the migrations.
   - The hash is unkeyed: a party that can rewrite a row and every row after it, or cut the newest rows, leaves a chain that verifies. A copy of each head kept outside the database, such as the outbox event that mirrors the row with its `seq` and `row_hash`, is what shows that.
@@ -280,7 +280,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `emitInOwnTransaction(event)` is the same for a caller without a transaction: one `INSERT`, a transaction of its own.
   - `emitAdminEvent(tx, { realm, actor, operation, target, before, after, secretFields?, approvals?, client?, request? })` records one admin change as an `admin.change_applied` event in the caller's transaction (#459). It builds the diff from `before` and `after` with `buildAdminDiff` from `@qauth-labs/shared-events`: changed fields only, nested objects diffed, arrays whole, every secret field `***`. A command-line tool on the server host passes `operatorCliActor()`, which names the operating-system user.
   - An event of an `admin` type joins its realm's hash chain, whichever call writes it. See [Admin events and the hash chain](#admin-events-and-the-hash-chain).
-  - `verifyChain(realmId, from?)` checks the realm's admin chain after `from` (by default its start) and returns `{ ok: true, head }` or `{ ok: false, break: { id, seq, reason } }` for the first admin event that does not verify. `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` runs it from the command line.
+  - `verifyChain(realmId, from?)` checks the realm's admin chain after `from` (by default its start) and returns `{ ok: true, head }` or `{ ok: false, break: { id, seq, reason } }` for the first admin event that does not verify. `pnpm --dir libs/infra/db exec tsx src/scripts/verify-event-chain.ts --realm=<name>` runs it from the command line, and exits 0 when the chain verifies, 1 when it breaks, 2 on a usage error and 3 when the check could not run: the database unreachable or failing, or no realm and no event with the realm given (#827). The Nx target `infra-db:events:verify-chain` runs the same script, but Nx reports every failure as 1.
   - `readAfter(realmId, position, limit, filters?)` returns `{ events, next }`: the realm's events after `position`, oldest first in `(xid, seq)` order, at most `limit` (1 to 1000), each with its own `position`. `filters` narrows by `types`, `category`, `subjectId`, `clientId` and `fromTime`. Read on from `next`.
   - `oldestUnreadEventAge()` returns how long, in seconds, the oldest committed event has been held back from readers. It returns no event, so it takes no realm.
   - A position (`EventPosition`) is opaque text that names its realm, `xid` and `seq`. Start a realm's stream with `eventStreamStart(realmId)`. A position of another realm, or one that does not parse, throws `EventPositionError`.
@@ -432,13 +432,16 @@ transactions short, and never hold one open across a network call.
 
 Migration 0029 is expand-only: one `CREATE TABLE` and its `CREATE INDEX`
 statements. Migration 0032 adds the hash chain of admin events and the trigger
-that refuses updates (below).
+that refuses updates (below). Migration 0033 adds the two functions a writer
+reads through and the trigger that keeps each row's `xid` its transaction's.
 
 **No updates.** A trigger refuses every `UPDATE` on `events`, for every role
 whose statements fire it, the owner included, even one that matches no row.
-Only the retention job deletes (#536). A writing role is granted `INSERT` and
-`SELECT` only: `eventsWriterGrantStatements(role)` returns the statements, which
-the per-role grants of the topology area apply. QAuth creates no database users;
+Only the retention job deletes (#536). A writing role is granted `INSERT` on
+`events` and `EXECUTE` on `events_admin_chain_head` and `events_own_row`, and no
+`SELECT` (#827): with it, a writer could read every realm's events, request IPs,
+user agents and admin diffs included. `eventsWriterGrantStatements(role)`
+returns the statements, which the per-role grants of the topology area apply. QAuth creates no database users;
 until the roles are split, the one database user owns the table, and the hash
 chain shows an admin event it removed.
 
@@ -446,9 +449,11 @@ chain shows an admin event it removed.
 
 Every admin change becomes an admin event (ADR-020 §3, ADR-019 Decision 7,
 #459), written with `emitAdminEvent` in the transaction of the change. Admin
-events are always on: no environment key and no realm setting turns them off,
-and tests fail when a configuration key or a realm column reads like a switch
-for them. The event's `data.diff` lists the changed fields with every secret
+events are always on: no environment key and no realm setting turns them off.
+Tests refuse by default: a configuration key, a realm column or a member a realm
+`jsonb` column's type declares whose name holds an event word (`event`, `audit`,
+`log`, `sink`, …) fails them unless an allow list gives the reason it turns
+nothing off. The event's `data.diff` lists the changed fields with every secret
 masked as `***`, and `data.approvals` both approvals of a two-admin operation.
 
 ```typescript
@@ -471,10 +476,17 @@ await db.transaction(async (tx) => {
 
 A realm's admin events form one hash chain. Each admin row stores the `hash`
 of the realm's admin row before it as `prev_hash` (32 zero bytes for the
-first), and its own `hash` is SHA-256 over `prev_hash` and the RFC 8785
-canonical JSON of its envelope (`eventChainHash`). A changed row no longer
-hashes to its `hash`; a removed row leaves the next row's `prev_hash` pointing
-at nothing.
+first), and its own `hash` is SHA-256 over the chain format's id,
+`qauth-event-chain/1-rc.0`, and a NUL byte, `prev_hash`, the row's `xid` as 8
+bytes (unsigned, big-endian) and the RFC 8785 canonical JSON of its envelope
+(`eventChainHash`). The format id is a release candidate until 1.0.0
+(ADR-018 §5): a change to what the hash covers raises it. A changed row no longer hashes to its `hash`; a removed row
+leaves the next row's `prev_hash` pointing at nothing. `xid` is not in the
+envelope, but readers take rows in `(xid, seq)` order, so a row whose `xid` was
+moved below a reader's position would be hidden from that reader: hashing it
+makes that row break the chain (#827). The writer reads its transaction's id
+(`pg_current_xact_id()`) before the insert, which leaves the column to its
+default.
 
 - **One chain per realm.** The writer holds the realm's advisory transaction
   lock from reading the chain head to the end of its transaction, so the chain
@@ -487,6 +499,10 @@ at nothing.
   admin row whose `prev_hash` is not the realm's head, or whose `seq` was not
   the identity's, so a role that can insert cannot make a row the head of a
   realm forever.
+- **Its own transaction's `xid`.** The trigger `events_xid_from_transaction`
+  refuses any row, admin or user, whose `xid` is not the inserting
+  transaction's (#827), so a role that can insert cannot put a row behind a
+  reader's position.
 - **Emit last.** Because the lock lasts to the end of the transaction, write the
   admin event last. A transaction that writes admin events to several realms
   writes them in a fixed order, by realm id, or two such transactions can
@@ -494,7 +510,13 @@ at nothing.
 - **Checked on write.** The writer reads its row back, in a savepoint, and
   throws if the row does not hash as written; the savepoint undoes the insert,
   so a row the chain would reject never commits, even when the caller catches
-  the error. That read is why a writer needs `SELECT`.
+  the error. The writer reads through two `SECURITY DEFINER` functions, not
+  the table: `events_admin_chain_head(realm_id)` returns the realm's head
+  hash, and `events_own_row(id)` returns the row only to the transaction that
+  wrote it. A third, `events_oldest_unread_time()`, gives the auth server, a
+  writer, the store's lag for `/metrics`. `verifyChain` and
+  `events:verify-chain` read the table: run them as a role that may, such as
+  the table owner, not as a writer.
 - **What the chain shows.** The hash is unkeyed: whoever can rewrite a row and
   every row after it, or cut the newest rows, leaves a chain that verifies.
   Keep the head `verifyChain` returns outside the database, and verify from it
@@ -504,6 +526,16 @@ at nothing.
   the head: a single row changed there shows only in a run from the start, so
   run both. Rows after the kept head rewritten to the end, or cut, leave no
   break; keep each new head.
+- **The `xid` is in the hash.** A full `pg_dump` and restore keeps each row's
+  `xid` as data and loads the rows before it creates the triggers, so the
+  chain still verifies. A `pg_restore --data-only` into a migrated schema is
+  refused row by row by `events_xid_from_transaction`; it needs
+  `--disable-triggers`, as the table owner. Rows chained by a build of `main`
+  between #825 and #827 hashed without the `xid` and fail verification at the
+  first of them; that database is for development, so reset it.
+- **Grants.** Run `eventsWriterGrantStatements(role)` again for a role that
+  got the writer grants from an earlier build: the statements revoke what the
+  role held and grant `INSERT` and `EXECUTE` on the three functions.
 
 #### Base Repository Interface
 

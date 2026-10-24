@@ -16,8 +16,17 @@ describe('fieldNameWords', () => {
     ['apiKeyID', ['api', 'key', 'id']],
     ['HTTPStatus', ['http', 'status']],
     ['oauth2Token', ['oauth2', 'token']],
+    ['XMLHttpRequest', ['xml', 'http', 'request']],
+    ['getHTTPResponseCode', ['get', 'http', 'response', 'code']],
+    ['ABCDefGHIjk', ['abc', 'def', 'gh', 'ijk']],
   ])('splits %s', (name, words) => {
     expect(fieldNameWords(name)).toEqual(words);
+  });
+
+  it('splits a long run of capitals in linear time (#827)', () => {
+    const started = performance.now();
+    expect(fieldNameWords(`${'A'.repeat(200_000)}b`)).toHaveLength(2);
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 });
 

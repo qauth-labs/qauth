@@ -9,13 +9,20 @@ vi.mock('node:os', async (importOriginal) => ({
   userInfo,
 }));
 
-import { EVENT_CHAIN_GENESIS_HASH, eventChainHash, operatorCliActor } from './chain';
+import {
+  EVENT_CHAIN_FORMAT,
+  EVENT_CHAIN_GENESIS_HASH,
+  eventChainHash,
+  operatorCliActor,
+} from './chain';
 
 /**
- * The admin chain's hash (issue #459): SHA-256 over the previous hash and the
- * RFC 8785 canonical JSON of the envelope. The container suite proves it over
- * rows Postgres stored.
+ * The admin chain's hash (issues #459 and #827): SHA-256 over the previous
+ * hash, the row's xid as 8 bytes and the RFC 8785 canonical JSON of the
+ * envelope. The container suite proves it over rows Postgres stored.
  */
+
+const XID = 905n;
 
 const ENVELOPE: EventEnvelope = {
   id: '0192f1c4-9999-7000-8000-000000000009',
@@ -33,7 +40,12 @@ const ENVELOPE: EventEnvelope = {
 };
 
 describe('eventChainHash', () => {
-  it('is SHA-256 over the previous hash and the canonical JSON of the envelope', () => {
+  it('names its format as a release candidate until 1.0.0', () => {
+    // ADR-018 §5: every QAuth-defined version is `1-rc.<M>` until 1.0.0.
+    expect(EVENT_CHAIN_FORMAT).toBe('qauth-event-chain/1-rc.0');
+  });
+
+  it('is SHA-256 over the format id, the previous hash, the xid and the canonical JSON of the envelope', () => {
     // Members sorted by name, no whitespace: RFC 8785.
     const canonical =
       '{"actor":{"id":"root","type":"operator_cli"},"category":"admin",' +
@@ -42,24 +54,39 @@ describe('eventChainHash', () => {
       '"id":"0192f1c4-9999-7000-8000-000000000009","realm":"0192f1c4-1111-7000-8000-000000000001",' +
       '"time":"2026-10-24T12:00:00.000Z","type":"urn:qauth:event:admin.change_applied:v1-rc.0"}';
     const expected = createHash('sha256')
+      .update('qauth-event-chain/1-rc.0\0', 'utf8')
       .update(EVENT_CHAIN_GENESIS_HASH)
+      // 905 as an unsigned 64-bit big-endian integer.
+      .update(Buffer.from('0000000000000389', 'hex'))
       .update(canonical, 'utf8')
       .digest();
-    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, ENVELOPE)).toEqual(expected);
+    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, XID, ENVELOPE)).toEqual(expected);
   });
 
-  it('changes with the previous hash and with any member of the envelope', () => {
-    const base = eventChainHash(EVENT_CHAIN_GENESIS_HASH, ENVELOPE);
-    expect(eventChainHash(Buffer.alloc(32, 1), ENVELOPE)).not.toEqual(base);
+  it('changes with the previous hash, the xid and any member of the envelope', () => {
+    const base = eventChainHash(EVENT_CHAIN_GENESIS_HASH, XID, ENVELOPE);
+    expect(eventChainHash(Buffer.alloc(32, 1), XID, ENVELOPE)).not.toEqual(base);
+    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, XID - 1n, ENVELOPE)).not.toEqual(base);
     expect(
-      eventChainHash(EVENT_CHAIN_GENESIS_HASH, { ...ENVELOPE, time: '2026-10-24T12:00:00.001Z' })
+      eventChainHash(EVENT_CHAIN_GENESIS_HASH, XID, {
+        ...ENVELOPE,
+        time: '2026-10-24T12:00:00.001Z',
+      })
     ).not.toEqual(base);
     expect(
-      eventChainHash(EVENT_CHAIN_GENESIS_HASH, {
+      eventChainHash(EVENT_CHAIN_GENESIS_HASH, XID, {
         ...ENVELOPE,
         data: { ...ENVELOPE.data, approvals: [{ approverId: 'a' }] },
       })
     ).not.toEqual(base);
+  });
+
+  it('takes every xid8, from 0 to 2^64 - 1, and nothing else', () => {
+    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, 0n, ENVELOPE)).toHaveLength(32);
+    expect(eventChainHash(EVENT_CHAIN_GENESIS_HASH, (1n << 64n) - 1n, ENVELOPE)).toHaveLength(32);
+    for (const xid of [-1n, 1n << 64n, 905 as unknown as bigint]) {
+      expect(() => eventChainHash(EVENT_CHAIN_GENESIS_HASH, xid, ENVELOPE)).toThrow(/xid8/);
+    }
   });
 
   it('starts every chain at 32 zero bytes', () => {
@@ -67,7 +94,7 @@ describe('eventChainHash', () => {
   });
 
   it('refuses a previous hash that is not a SHA-256 digest', () => {
-    expect(() => eventChainHash(Buffer.alloc(31), ENVELOPE)).toThrow(TypeError);
+    expect(() => eventChainHash(Buffer.alloc(31), XID, ENVELOPE)).toThrow(TypeError);
   });
 });
 

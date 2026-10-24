@@ -77,7 +77,7 @@
         "cwd": "libs/infra/db",
         "forwardAllArgs": true
       },
-      "description": "Verify a realm's admin event chain and report the first broken event (#459): pass `-- (--realm=<name> | --realm-id=<uuid>) [--from-seq=<seq> --from-hash=<hex>] [--json]`. Exits 1 on a break."
+      "description": "Verify a realm's admin event chain and report the first broken event (#459): pass `-- (--realm=<name> | --realm-id=<uuid>) [--from-seq=<seq> --from-hash=<hex>] [--json]`. The script exits 0 when the chain verifies, 1 on a break, 2 on a usage error and 3 when the check could not run (#827), but Nx reports every failure as 1: a monitor runs `pnpm --dir libs/infra/db exec tsx src/scripts/verify-event-chain.ts` instead."
     },
     "db:suspend-oauth-client": {
       "executor": "nx:run-commands",

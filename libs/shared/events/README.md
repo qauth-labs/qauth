@@ -18,7 +18,7 @@ the JSON Schema files under `apps/docs-site/public/schemas/events/`.
 | `lib/registry.ts`             | `EVENT_TYPES`, `getEventType`, `parseEvent`, `validateRegistry`                                          |
 | `lib/payload-rules.ts`        | The payload rules and their scanner (`scanPayload`, `scanJsonSchema`)                                    |
 | `lib/admin-diff.ts`           | An admin event's diff: `buildAdminDiff` (changed fields, secrets masked as `***`) and `scanAdminDiff`    |
-| `lib/always-on.ts`            | `findEventSwitches`: the names of keys or fields that would read like a switch for events                |
+| `lib/always-on.ts`            | `findEventNames`: the names of keys or fields that name events and no allow list explains                |
 | `lib/admin-event-coverage.ts` | A test utility: every admin route that changes something emitted an admin event in its test              |
 | `lib/legacy.ts`               | Today's audit and log event names, mapped to registered types                                            |
 | `lib/json-schema.ts`          | The published JSON Schema of the envelope and of each type                                               |

@@ -66,8 +66,11 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  *
  * A realm's admin events form one hash chain. Each admin row stores the
  * `hash` of the realm's admin row before it as `prev_hash`, 32 zero bytes for
- * the first, and its own `hash` is SHA-256 over `prev_hash` and the RFC 8785
- * canonical JSON of the envelope the row holds (`eventChainHash`). Only admin
+ * the first, and its own `hash` is SHA-256 over the chain format's id
+ * (`EVENT_CHAIN_FORMAT`), `prev_hash`, the row's `xid` and the RFC 8785
+ * canonical JSON of the envelope the row holds
+ * (`eventChainHash`). `xid` is hashed because it decides where a reader finds
+ * the row (#827). Only admin
  * rows carry the two columns, and every admin row written since migration
  * 0032 does. The chain runs in `seq` order: `emitAdminEvent` holds a per-realm
  * advisory lock from reading the chain head to the end of its transaction,
@@ -82,14 +85,18 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  *
  * A trigger refuses every `UPDATE` on the table, for every role whose
  * statements fire it, the owner included. Deletes are the retention job's
- * (#536), by grant: a writer holds `INSERT` and `SELECT` only.
+ * (#536), by grant: a writer holds `INSERT` only, and reads the chain head
+ * and its own row through two functions (migration 0033, #827).
  */
 export const events = pgTable(
   'events',
   {
     /** Insertion order within a transaction; the tie-breaker of `(xid, seq)`. */
     seq: bigint('seq', { mode: 'bigint' }).primaryKey().generatedAlwaysAsIdentity(),
-    /** The writing transaction's id, set by the database, never by the writer. */
+    /**
+     * The writing transaction's id, set by the database, never by the writer:
+     * the trigger `events_xid_from_transaction` refuses any other value (#827).
+     */
     xid: xid8('xid')
       .notNull()
       .default(sql`pg_current_xact_id()`),
@@ -133,7 +140,7 @@ export const events = pgTable(
      * zero bytes for the first. Set on admin rows only.
      */
     prevHash: bytea('prev_hash'),
-    /** SHA-256 over `prev_hash` and the envelope's canonical JSON. Set on admin rows only. */
+    /** SHA-256 over the format id, `prev_hash`, `xid` and the envelope's canonical JSON. Admin rows only. */
     hash: bytea('hash'),
   },
   (t) => [

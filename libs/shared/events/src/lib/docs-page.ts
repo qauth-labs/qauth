@@ -282,15 +282,20 @@ the transaction of the change it records, so the change and its event commit tog
 
 **Masking.** A secret field holds \`***\` on both sides, whatever its value. A field is secret
 when the operation marks it, or when its name holds a secret, marked or not: a password, pass,
-PIN, secret, token, key, salt, cookie, signature, credential, \`auth\` or connection string, or a
-set-up, reset or other one-time link. A name whose last word only describes the secret is shown:
-\`accessTokenTtl\`, \`tokenEndpointAuthMethod\`, \`signingKeyId\`, \`jwksUri\`. A changed secret is
-still listed, so a rotation shows as \`***\` to \`***\`. A flag (\`true\` or \`false\`) is never
-masked.
+PIN, secret, token, key, salt, pepper, cookie, signature, credential, \`auth\` or connection string,
+a key-encryption or data-encryption key (\`kek\`, \`dek\`), a set-up, reset or other one-time link,
+or a one-time password's link (\`totpUri\`). A name whose last word only describes the secret is
+shown: \`accessTokenTtl\`, \`tokenEndpointAuthMethod\`, \`signingKeyId\`, \`jwksUri\`, \`keyUse\`,
+\`saltRounds\`, \`authServer\`. So is a code or a key that only names something: \`countryCode\`,
+\`attrKey\`. A changed secret is still listed, so a rotation shows as \`***\` to \`***\`. A flag
+(\`true\` or \`false\`) is never masked.
 
 A value shaped like a secret is masked wherever it sits: a token, a signed or encrypted object, a
-PEM block, a URL with a password, an \`Authorization\` header value, or a private or symmetric JWK.
-A public JWK is shown. A member name shaped like a secret refuses the event.
+PEM block, an \`Authorization\` header value, a private or symmetric JWK, or a URL that carries a
+credential: one with a password (or, over HTTP, a user name), a query or fragment member named like
+a secret (\`?access_token=\`, \`?sig=\`, \`?key=\`, \`?code=\`), an \`otpauth://\` URI, or a webhook URL
+that holds its secret in the path. A public JWK is shown, and a list of keys shows its public keys
+with each private one masked. A member name shaped like a secret refuses the event.
 
 The field names in a diff are the resource's own, so the payload scanner reads a diff's values,
 not its names, and checks instead that every field named like a secret holds \`***\`. A diff may
@@ -302,9 +307,11 @@ two-admin operation, each with the approver, the passkey credential it was given
 created the approver's account.
 
 **The hash chain.** The event store chains a realm's admin events: each stores the hash of the one
-before it, and its own hash is SHA-256 over that hash and the event's canonical JSON (RFC 8785). A
-changed event breaks the chain at that event, and a removed one at the event after it. The
-chain's hashes are stored beside the event and are not part of the envelope.`,
+before it, and its own hash is SHA-256 over the chain format's id (\`qauth-event-chain/1-rc.0\`,
+a release candidate until 1.0.0), that hash, the id of the transaction that wrote the event, and
+the event's canonical JSON (RFC 8785). A changed event breaks the chain at that event,
+and a removed one at the event after it. The chain's hashes are stored beside the event and are
+not part of the envelope.`,
     `## Versioning`,
     `An event type's identifier is \`urn:qauth:event:<name>:v<N>\`. The \`<name>\` is its short
 name: lower-case \`snake_case\` segments joined by full stops, the resource first. \`<N>\` is the
