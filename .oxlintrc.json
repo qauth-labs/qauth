@@ -287,6 +287,20 @@
               {
                 "sourceTag": "*",
                 "notDependOnLibsWithTags": ["type:kek-adapter"]
+              },
+              // Upgrade test (#475, ADR-018 §5): apps/upgrade-test drives a
+              // released server and the new build over HTTP and reads their
+              // database through `pg`. It imports NO workspace project, so it
+              // holds every release to the same outside view and never tests
+              // the new code with the new code. Like the wire suite, nothing
+              // imports it either.
+              {
+                "sourceTag": "scope:upgrade-test",
+                "onlyDependOnLibsWithTags": []
+              },
+              {
+                "sourceTag": "*",
+                "notDependOnLibsWithTags": ["scope:upgrade-test"]
               }
             ]
           }

@@ -20,10 +20,14 @@ enforced by `@nx/enforce-module-boundaries` in `.oxlintrc.json`, which Oxlint ru
 | `apps/docs-site`        | `docs-site`        | This site. Astro + Starlight, plus the drift-guard invariants.             |
 | `apps/migration-runner` | `migration-runner` | The migration runner: one bundled Node program and the image that runs it. |
 | `apps/wire-suite`       | `wire-suite`       | The black-box HTTP suite that tests a running server. Ships nothing.       |
+| `apps/upgrade-test`     | `upgrade-test`     | The checks of the upgrade test, run against released and new servers.      |
 
 The auth server, the portal and this site are tagged `scope:app` (e.g. `apps/auth-server/project.json:6`).
 `apps/wire-suite` is tagged `scope:wire-suite` and `type:testing` instead, because it must import
 **nothing** from the workspace — see [the wire suite](#the-wire-suite-imports-nothing) below.
+`apps/upgrade-test` is tagged `scope:upgrade-test` and `type:testing` for the same reason: it drives
+a released server and the new build from outside, over HTTP and `pg`, and imports no workspace
+project (`.oxlintrc.json:298`, and `.oxlintrc.json:302` stops anything importing it).
 Nothing in `apps/` may be imported by anything — the app layer is the top of the graph.
 
 `apps/migration-runner` is tagged `scope:migration-runner`, and may depend only on the database
@@ -88,6 +92,7 @@ import **from inside the workspace**; external npm packages are never restricted
 | `type:key-custody`       | `scope:core`, `scope:shared`                                                     | `.oxlintrc.json:274` |
 | `scope:migration-runner` | `type:db`, `type:testing`                                                        | `.oxlintrc.json:255` |
 | `scope:wire-suite`       | nothing — and nothing may import it                                              | `.oxlintrc.json:187` |
+| `scope:upgrade-test`     | nothing — and nothing may import it                                              | `.oxlintrc.json:298` |
 | `type:kek-adapter`       | `scope:core`, `scope:shared`, `type:key-custody` — and nothing may import it     | `.oxlintrc.json:284` |
 
 ### Key custody has a second, path-based rule
@@ -201,10 +206,11 @@ So do not infer a project's layer from its path. Read its `project.json`.
 broad allowance, so test helpers can reach whatever they need to build fixtures.
 
 It does not currently do that. Nx collects **every** `depConstraints` entry whose `sourceTag` the
-source project carries and requires **all** of them to pass. Two projects carry `type:testing`,
+source project carries and requires **all** of them to pass. Three projects carry `type:testing`,
 and each pairs it with a strict leaf: `libs/shared/testing` (`libs/shared/testing/project.json:6`)
-is also tagged `scope:shared`, and `apps/wire-suite` is also tagged `scope:wire-suite`. The
-constraints intersect to "nothing", so the broad allowance grants no import at all.
+is also tagged `scope:shared`, `apps/wire-suite` is also tagged `scope:wire-suite`, and
+`apps/upgrade-test` is also tagged `scope:upgrade-test`. The constraints intersect to "nothing", so
+the broad allowance grants no import at all.
 
 This is inert today because `libs/shared/testing` imports no workspace package. It stops being
 inert the moment someone adds a fixture there that imports, say, `@qauth-labs/infra-db` — which
