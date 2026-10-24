@@ -382,6 +382,51 @@ Table "events" {
 }
 
 // ============================================================================
+// EVENT DELIVERY (ADR-019 Decision 8, #460)
+// ============================================================================
+
+// One row per destination and event: the unit of at-least-once delivery. A
+// worker claims a row with FOR UPDATE SKIP LOCKED and leases it until
+// locked_until; the claim counts the attempt and moves next_attempt_at to the
+// lease's end. Times are the worker's clock (epoch ms). A row is deleted with
+// its event.
+Table "event_deliveries" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "destination_kind" varchar(32) [not null, note: "The route's kind: webhook, ssf, ..."]
+  "destination_id" varchar(255) [not null, note: "The destination within its route"]
+  "event_id" uuid [not null, ref: > events.id, note: "ON DELETE CASCADE"]
+  "realm_id" uuid [not null]
+  "event_xid" xid8 [not null, note: "The event's position, with event_seq"]
+  "event_seq" bigint [not null]
+  "event_time" bigint [not null, note: "The event's time (epoch ms), for the lag gauge"]
+  "status" varchar(16) [not null, default: 'pending', note: "pending | delivered | failed"]
+  "attempt_count" integer [not null, default: 0, note: "Counted at each claim"]
+  "next_attempt_at" bigint [not null, note: "A retry's time, or a lease's end"]
+  "locked_until" bigint [note: "The lease's end; NULL while no worker holds the row"]
+  "last_status_code" smallint [note: "100 to 599"]
+  "last_error_class" varchar(64) [note: "A short class such as timeout, never a message"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "finished_at" bigint [note: "Set exactly when status is not pending"]
+
+  Indexes {
+    (event_id, destination_kind, destination_id) [unique, name: "event_deliveries_event_destination_unique"]
+    (destination_kind, destination_id, next_attempt_at) [name: "idx_event_deliveries_due", note: "Partial index: WHERE status = 'pending'"]
+    (realm_id, event_xid, event_seq) [name: "idx_event_deliveries_pending_position", note: "Partial index: WHERE status = 'pending'"]
+    event_time [name: "idx_event_deliveries_pending_time", note: "Partial index: WHERE status = 'pending'"]
+  }
+}
+
+// How far the fan-out has read each realm's stream. A realm has a row only
+// while it has a destination.
+Table "event_delivery_positions" {
+  "realm_id" uuid [pk]
+  "xid" xid8 [not null, note: "The last event read, or a horizon"]
+  "seq" bigint [not null, note: "0 before the first event of xid"]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+}
+
+// ============================================================================
 // BROWSER SESSIONS (ADR-019 Decision 3, #468)
 // ============================================================================
 
