@@ -467,8 +467,8 @@ jobs:
           node-version: 26
           cache: 'pnpm'
 
-      # Only for the suite's own runner (Vitest, jose). The server runs from
-      # the image, never from this install.
+      # For the suite's own runner (Vitest, jose) and the client seed. The
+      # server and the migrations run from the images, never from this install.
       - run: pnpm install --frozen-lockfile
 
       # Same context and Dockerfiles as docker-compose.yml.
@@ -488,16 +488,16 @@ jobs:
       # apps/wire-suite/seed/clients.json, through the same operator command a
       # deployment uses. It prints each generated secret once; the secret is
       # masked before anything is logged and handed to the suite through the
-      # environment.
+      # environment. It runs the command's script from this checkout's install
+      # (the `db:seed-oauth-clients` target without Nx): the migration-runner
+      # image holds only the runner (#474).
       - name: Seed the realm and the wire-suite clients
         run: |
           set -euo pipefail
           docker exec "${{ job.services.postgres.id }}" psql -v ON_ERROR_STOP=1 -U qauth -d qauth \
             -c "INSERT INTO realms (name) VALUES ('master') ON CONFLICT (name) DO NOTHING"
-          seed_output="$(docker run --rm --network host -e DATABASE_URL="$DATABASE_URL" \
-            -v "$PWD/apps/wire-suite/seed/clients.json:/seed/clients.json:ro" \
-            --entrypoint pnpm "$MIGRATION_IMAGE" \
-            nx run infra-db:db:seed-oauth-clients -- --manifest=/seed/clients.json)"
+          seed_output="$(pnpm --dir libs/infra/db exec tsx src/scripts/seed-oauth-clients.ts \
+            --manifest="$PWD/apps/wire-suite/seed/clients.json")"
           secret="$(printf '%s\n' "$seed_output" \
             | awk '/^  wire-confidential$/ { found = 1; next } found && $1 == "secret:" { print $2; exit }')"
           if [ -z "$secret" ]; then
