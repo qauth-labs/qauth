@@ -12,11 +12,14 @@
  * The logic lives here, apart from the CLI in `suspend-oauth-client.ts`, so it
  * can be tested without running the script.
  */
+import { userInfo } from 'node:os';
+
 import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
-import { auditLogs } from '../lib/schema/audit';
+import { createEventsRepository } from '../lib/repositories/events.repository';
 import { oauthClients, realms } from '../lib/schema/core';
+import type { Database, DbTransaction } from '../types';
 
 export interface SuspensionArgs {
   realm: string;
@@ -66,9 +69,26 @@ export type SuspensionResult =
 type OperatorDb = NodePgDatabase<any>;
 
 /**
- * Suspend a client, or lift its suspension, and record it in `audit_logs`, in
+ * The operating-system user running the tool, the `actor.id` of its event.
+ * `undefined` when the process has no user entry (a container without one),
+ * so the event still names the tool as its actor.
+ */
+function operatorUser(): string | undefined {
+  try {
+    const name = userInfo().username;
+    return name.length > 0 && name.length <= 255 ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Suspend a client, or lift its suspension, and record it as an event
+ * (`client.suspended` or `client.suspension_lifted`, actor `operator_cli`), in
  * one transaction. Idempotent: a client already in the requested state is
  * reported `unchanged` and nothing is written. `enabled` is never touched.
+ *
+ * Since #458 nothing writes `audit_logs`; the event store holds the record.
  */
 export async function setClientSuspension(
   db: OperatorDb,
@@ -83,7 +103,7 @@ export async function setClientSuspension(
     if (!realm) return { status: 'realm_not_found' as const };
 
     // FOR UPDATE: a concurrent run for the same client waits for this one, so
-    // the state it reports and the audit row it writes cannot interleave.
+    // the state it reports and the event it writes cannot interleave.
     const [client] = await tx
       .select({
         id: oauthClients.id,
@@ -116,13 +136,19 @@ export async function setClientSuspension(
         enabled: oauthClients.enabled,
       });
 
-    await tx.insert(auditLogs).values({
-      userId: null,
-      oauthClientId: client.id,
-      event: args.suspend ? 'oauth.client.suspended' : 'oauth.client.suspension_lifted',
-      eventType: 'client',
-      success: true,
-      metadata: { clientId: client.clientId, by: 'operator', tool: 'db:suspend-oauth-client' },
+    // The event commits with the change. The tool's database handle has a
+    // schema generic of its own; at run time it is the same node-postgres
+    // database and transaction the repository takes.
+    const operator = operatorUser();
+    await createEventsRepository(db as unknown as Database).emit(tx as unknown as DbTransaction, {
+      type: args.suspend
+        ? 'urn:qauth:event:client.suspended:v1-rc.0'
+        : 'urn:qauth:event:client.suspension_lifted:v1-rc.0',
+      realm: realm.id,
+      actor: { type: 'operator_cli', ...(operator === undefined ? {} : { id: operator }) },
+      subject: { type: 'client', id: client.clientId },
+      client: { id: client.clientId },
+      data: {},
     });
 
     return { status: args.suspend ? ('suspended' as const) : ('lifted' as const), ...updated };
