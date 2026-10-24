@@ -217,7 +217,7 @@ describe('the passkey relying party on a real Postgres', () => {
     it('boots with any valid WEBAUTHN_RP_ID while the realm has no passkey', async () => {
       await bootNode();
       await expect(
-        bootNode({ passkeys: { rpId: 'example.com', allowParentDomain: true } })
+        bootNode({ passkeys: { rpId: 'example.com', allowParentDomainRpId: true } })
       ).resolves.toBeDefined();
       expect(await database().repositories.realms.findByName('master')).toMatchObject({
         webauthnRpId: null,
@@ -230,13 +230,13 @@ describe('the passkey relying party on a real Postgres', () => {
       await enrol(realmId, await newUser(realmId), 'bG9ja2Vk');
 
       await expect(
-        bootNode({ passkeys: { rpId: 'example.com', allowParentDomain: true } })
+        bootNode({ passkeys: { rpId: 'example.com', allowParentDomainRpId: true } })
       ).rejects.toThrow(
         'The default realm "master" has passkeys bound to the RP ID "auth.example.com", but WEBAUTHN_RP_ID gives "example.com". The RP ID is locked once a realm has a passkey: another one would orphan every passkey enrolled under "auth.example.com". Unset WEBAUTHN_RP_ID, or set it to "auth.example.com".'
       );
       await expect(bootNode()).resolves.toBeDefined();
       await expect(
-        bootNode({ passkeys: { rpId: REALM_HOST, allowParentDomain: false } })
+        bootNode({ passkeys: { rpId: REALM_HOST, allowParentDomainRpId: false } })
       ).resolves.toBeDefined();
     });
 

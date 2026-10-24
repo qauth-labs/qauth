@@ -8,7 +8,7 @@ import {
   servesAssociationFiles,
 } from './webauthn-relying-party';
 
-/** The default realm's passkey RP ID, worded for the operator (#467). */
+/** The default realm's passkey RP ID, worded for the operator (#467, #553). */
 describe('resolveRealmRelyingParty', () => {
   it('is the realm host by default, and then the association files are served', () => {
     const relyingParty = resolveRealmRelyingParty('auth.example.com', REALM_HOST_RELYING_PARTY);
@@ -26,7 +26,7 @@ describe('resolveRealmRelyingParty', () => {
       servesAssociationFiles(
         resolveRealmRelyingParty('auth.example.com', {
           rpId: 'auth.example.com',
-          allowParentDomain: false,
+          allowParentDomainRpId: false,
         })
       )
     ).toBe(true);
@@ -35,7 +35,7 @@ describe('resolveRealmRelyingParty', () => {
   it('takes an opted-in parent domain with a warning, and then serves no association file', () => {
     const relyingParty = resolveRealmRelyingParty('auth.example.com', {
       rpId: 'example.com',
-      allowParentDomain: true,
+      allowParentDomainRpId: true,
     });
     expect(relyingParty).toMatchObject({ rpId: 'example.com', scope: 'parent-domain' });
     expect(relyingParty.warning).toContain('QAuth serves no app association files in this mode');
@@ -49,9 +49,10 @@ describe('resolveRealmRelyingParty', () => {
       'Set WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN=true to opt in, or unset WEBAUTHN_RP_ID to use the realm host.',
     ],
     ['an unrelated host', 'login.example.com', 'Unset WEBAUTHN_RP_ID to use the realm host.'],
+    ['a public suffix', 'com', 'Unset WEBAUTHN_RP_ID to use the realm host.'],
   ])('refuses %s, naming the variable and the remedy', (_name, rpId, remedy) => {
     const resolve = () =>
-      resolveRealmRelyingParty('auth.example.com', { rpId, allowParentDomain: false });
+      resolveRealmRelyingParty('auth.example.com', { rpId, allowParentDomainRpId: false });
     expect(resolve).toThrow(PasskeyRelyingPartyError);
     expect(resolve).toThrow(/^WEBAUTHN_RP_ID: /);
     expect(resolve).toThrow(remedy);

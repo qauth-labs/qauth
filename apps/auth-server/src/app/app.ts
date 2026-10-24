@@ -96,7 +96,7 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
     // boot, whatever WEBAUTHN_ENABLED says.
     passkeys: {
       rpId: env.WEBAUTHN_RP_ID,
-      allowParentDomain: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
+      allowParentDomainRpId: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
     },
   };
 }

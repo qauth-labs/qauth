@@ -9,6 +9,7 @@
     "@qauth-labs/shared-validation": "workspace:*",
     "@simplewebauthn/server": "catalog:",
     "jose": "catalog:",
+    "tldts": "catalog:",
     "tslib": "catalog:",
     "zod": "catalog:"
   },

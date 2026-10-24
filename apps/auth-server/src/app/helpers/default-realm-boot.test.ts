@@ -226,7 +226,7 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
 
     await bootDefaultRealm(deps, {
       ...settings,
-      passkeys: { rpId: 'example.com', allowParentDomain: true },
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: true },
     });
 
     expect(warn).toHaveBeenCalledWith(
@@ -240,7 +240,7 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
 
     const boot = bootDefaultRealm(deps, {
       ...settings,
-      passkeys: { rpId: 'example.com', allowParentDomain: false },
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: false },
     });
 
     await expect(boot).rejects.toThrow(DefaultRealmBootError);
@@ -263,7 +263,7 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
 
     const boot = bootDefaultRealm(deps, {
       ...settings,
-      passkeys: { rpId: 'example.com', allowParentDomain: true },
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: true },
     });
 
     await expect(boot).rejects.toThrow(DefaultRealmBootError);

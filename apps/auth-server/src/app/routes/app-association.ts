@@ -34,7 +34,7 @@ import {
 export default async function (fastify: FastifyInstance) {
   const relyingParty = resolveRealmRelyingParty(defaultRealmIssuerFrom(env.JWT_ISSUER).host, {
     rpId: env.WEBAUTHN_RP_ID,
-    allowParentDomain: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
+    allowParentDomainRpId: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
   });
   if (!servesAssociationFiles(relyingParty)) return;
 

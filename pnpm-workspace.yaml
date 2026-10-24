@@ -315,6 +315,15 @@ catalog:
   # anchor; patched 13.3.2). EXACT pin, like the ML-DSA backend above: a
   # signature-verification dependency moves only by a reviewed bump.
   '@simplewebauthn/server': '14.0.3'
+  # The Public Suffix List, for the passkey RP ID rules (ADR-019 Decision 2,
+  # #553): a parent-domain RP ID must not be a public suffix (`co.uk`, or a
+  # private-section entry where unrelated parties own the names under it),
+  # which no hand-written rule can tell from a registrable domain. tldts ships
+  # the list compiled in, with no network access and no runtime dependency but
+  # its own tldts-core; it is already in the tree through tough-cookie. No
+  # advisory names tldts or tldts-core (GHSA advisory database, checked
+  # 2026-10-24). Caret, so a lockfile refresh picks up a newer list.
+  tldts: '^7.4.18'
   '@swc-node/register': '~1.12.1'
   '@swc/core': '~1.16.18'
   '@swc/helpers': '~0.5.23'

@@ -1,5 +1,4 @@
 import {
-  parentDomainRpIdWarning,
   RelyingPartyIdError,
   type ResolvedRelyingPartyId,
   resolveRelyingPartyId,
@@ -19,21 +18,19 @@ import {
 export interface PasskeyRelyingPartySettings {
   /** `WEBAUTHN_RP_ID`, normalised; `undefined` means the realm host. */
   readonly rpId: string | undefined;
-  /** `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`. */
-  readonly allowParentDomain: boolean;
+  /** `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`: the explicit parent-domain opt-in. */
+  readonly allowParentDomainRpId: boolean;
 }
 
 /** No `WEBAUTHN_RP_ID`: the realm's own host. */
 export const REALM_HOST_RELYING_PARTY: PasskeyRelyingPartySettings = Object.freeze({
   rpId: undefined,
-  allowParentDomain: false,
+  allowParentDomainRpId: false,
 });
 
 /** A realm's RP ID, with the boot warning a parent domain carries. */
 export interface RealmRelyingParty extends ResolvedRelyingPartyId {
   readonly realmHost: string;
-  /** Set for a parent-domain RP ID: logged at every boot. */
-  readonly warning: string | undefined;
 }
 
 /** The passkey settings cannot give the realm an RP ID. The message names the variables. */
@@ -49,7 +46,7 @@ export class PasskeyRelyingPartyError extends Error {
  *
  * @throws PasskeyRelyingPartyError when `WEBAUTHN_RP_ID` is unrelated to the
  * realm host, a parent domain without `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`, or
- * a top-level domain.
+ * a public suffix.
  */
 export function resolveRealmRelyingParty(
   realmHost: string,
@@ -60,7 +57,7 @@ export function resolveRealmRelyingParty(
     resolved = resolveRelyingPartyId({
       realmHost,
       configured: settings.rpId,
-      allowParentDomain: settings.allowParentDomain,
+      allowParentDomainRpId: settings.allowParentDomainRpId,
     });
   } catch (error) {
     if (!(error instanceof RelyingPartyIdError)) throw error;
@@ -72,7 +69,7 @@ export function resolveRealmRelyingParty(
       cause: error,
     });
   }
-  return { ...resolved, realmHost, warning: parentDomainRpIdWarning(resolved, realmHost) };
+  return { ...resolved, realmHost };
 }
 
 /**
