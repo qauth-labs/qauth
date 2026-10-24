@@ -23,10 +23,10 @@ is built is listed with **Built: no**.
   before you upgrade a deployment that turns one on.
 
 The boot warning is one `warn` line per item, with the item's id and a link to its section
-below:
+below; the link ends in the section's anchor, such as `#oid4vp-10-base` for `oid4vp-1.0-base`:
 
 ```text
-Experimental feature <id> is on. It may change in a minor release, without a deprecation window. See https://docs.qauth.dev/reference/experimental-features/#<id>
+Experimental feature <id> is on. It may change in a minor release, without a deprecation window. See https://docs.qauth.dev/reference/experimental-features/#<section>
 ```
 
 The configuration page marks the keys and values that switch an item on as experimental

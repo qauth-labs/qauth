@@ -1,6 +1,7 @@
-import { evidenceKind, evidencePath } from './evidence';
-import { type ExperimentalItem, PROMOTION_CONDITIONS } from './item';
-import { missingEvidence, validateExperimentalRegistry } from './validate';
+import { markdownHeadingAnchors } from './anchor';
+import { evidenceKind, evidencePath, evidenceSection } from './evidence';
+import { ADR_PATH_PATTERN, type ExperimentalItem, PROMOTION_CONDITIONS } from './item';
+import { missingEvidence, registryShapeProblems, validateExperimentalRegistry } from './validate';
 
 /**
  * The promotion status that `scripts/experimental-status.mjs` prints: per
@@ -8,15 +9,42 @@ import { missingEvidence, validateExperimentalRegistry } from './validate';
  * script passes in how to tell that a path exists.
  */
 
-/** Whether a path from the repository root exists. */
-export type PathExists = (path: string) => boolean;
+/**
+ * Whether a path from the repository root names a file, and, when a section
+ * is given, whether the file has that section.
+ */
+export type PathExists = (path: string, section?: string) => boolean;
 
-/** The `path` evidence of `item` that names no file, as `<condition>: <evidence>`. */
+/** The file access {@link repositoryPathCheck} needs, passed in so this library does no I/O. */
+export interface RepositoryFiles {
+  /** Whether a path from the repository root names a regular file; a directory does not. */
+  isFile(path: string): boolean;
+  /** The text of a file, by its path from the repository root. */
+  readText(path: string): string;
+}
+
+/**
+ * The check evidence paths get: the path names a file, and a `#section` is
+ * one of the heading anchors of a Markdown file. A section of any other kind
+ * of file cannot be checked, so it is refused.
+ */
+export function repositoryPathCheck(files: RepositoryFiles): PathExists {
+  return (path, section) => {
+    if (!files.isFile(path)) return false;
+    if (section === undefined) return true;
+    return path.endsWith('.md') && markdownHeadingAnchors(files.readText(path)).has(section);
+  };
+}
+
+/** The `path` evidence of `item` that names no file or no section, as `<condition>: <evidence>`. */
 export function missingEvidencePaths(item: ExperimentalItem, pathExists: PathExists): string[] {
   const missing: string[] = [];
   for (const condition of PROMOTION_CONDITIONS) {
     for (const evidence of item.conditions[condition.id]?.evidence ?? []) {
-      if (evidenceKind(evidence) === 'path' && !pathExists(evidencePath(evidence))) {
+      if (
+        evidenceKind(evidence) === 'path' &&
+        !pathExists(evidencePath(evidence), evidenceSection(evidence))
+      ) {
         missing.push(`${condition.id}: ${evidence}`);
       }
     }
@@ -39,14 +67,22 @@ export function mayBecomeStable(item: ExperimentalItem, pathExists: PathExists):
 
 /**
  * What `--check-stable` fails on: every problem of the registry, among them a
- * stable item with a condition that has no evidence, and evidence of a
- * stable item that names a path that does not exist. `[]` passes.
+ * stable item with a condition that has no evidence; an ADR link that names
+ * no file; and evidence of a stable item that names a path or a section that
+ * does not exist. `[]` passes.
  */
 export function stableCheckFailures(
   items: readonly ExperimentalItem[],
   pathExists: PathExists
 ): string[] {
+  const shape = registryShapeProblems(items);
+  if (shape.length > 0) return shape;
   const failures = validateExperimentalRegistry(items);
+  for (const item of items) {
+    if (ADR_PATH_PATTERN.test(item.adr ?? '') && !pathExists(item.adr)) {
+      failures.push(`${item.id}: the ADR link ${item.adr} names a file that does not exist`);
+    }
+  }
   for (const item of items.filter((candidate) => candidate.stable)) {
     for (const missing of missingEvidencePaths(item, pathExists)) {
       failures.push(`${item.id}: stable, but the evidence of ${missing} does not exist`);

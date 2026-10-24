@@ -1,4 +1,4 @@
-import { headingAnchor } from './enabled';
+import { headingAnchor, PAGE_HEADINGS } from './anchor';
 import { evidenceKind } from './evidence';
 import { type ExperimentalItem, PROMOTION_CONDITIONS } from './item';
 
@@ -116,19 +116,19 @@ lastVerified: '${EXPERIMENTAL_FEATURES_PAGE_LAST_VERIFIED}'
 experimental item, generated from the registry in \`libs/shared/stability\`. An item joins the
 registry in the pull request that adds its switch; an item that a decision record names before it
 is built is listed with **Built: no**.`,
-    `## What experimental means`,
+    `## ${PAGE_HEADINGS[0]}`,
     `- The item sits behind a switch, and the switch is off by default.
 - Discovery does not mention the item unless the switch is on.
 - The server logs a warning at boot for each item that is on.
 - The item may change in a minor release, without a deprecation window. Read the release notes
   before you upgrade a deployment that turns one on.`,
     `The boot warning is one \`warn\` line per item, with the item's id and a link to its section
-below:`,
-    `\`\`\`text\nExperimental feature <id> is on. It may change in a minor release, without a deprecation window. See https://docs.qauth.dev/reference/experimental-features/#<id>\n\`\`\``,
+below; the link ends in the section's anchor, such as \`#oid4vp-10-base\` for \`oid4vp-1.0-base\`:`,
+    `\`\`\`text\nExperimental feature <id> is on. It may change in a minor release, without a deprecation window. See https://docs.qauth.dev/reference/experimental-features/#<section>\n\`\`\``,
     `The configuration page marks the keys and values that switch an item on as experimental
 ([Configuration](/operate/configuration/)). For such a key, the warning of its item replaces the
 warning of the key, so a deployment sees one line, and only once the item is on.`,
-    `## Becoming stable`,
+    `## ${PAGE_HEADINGS[1]}`,
     `An item becomes stable in a minor release once four conditions hold (ADR-018 §5). Each
 condition needs evidence: an RFC number, an issue, a link, or a path in the repository that exists,
 such as a test file or a section of an audit report.`,
@@ -136,7 +136,7 @@ such as a test file or a section of an audit report.`,
     `\`node scripts/experimental-status.mjs\` prints the four conditions of every item and names the
 items that may become stable. With \`--check-stable\` it fails when an item marked stable lacks
 evidence for a condition.`,
-    `## Items`,
+    `## ${PAGE_HEADINGS[2]}`,
     summaryTable(items),
     ...items.map(itemSection),
   ];

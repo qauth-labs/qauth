@@ -1,11 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { evidenceKind, evidencePath } from './evidence';
-import { PROMOTION_CONDITIONS } from './item';
 import { EXPERIMENTAL_ITEMS } from './items';
+import { missingEvidencePaths, repositoryPathCheck } from './status';
 
 const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 
@@ -76,16 +75,18 @@ describe('the experimental-feature registry', () => {
     expect(section).toContain('The plugin API');
   });
 
-  // Evidence is a link or a path that must exist (#476).
-  it('names only paths that exist as evidence', () => {
-    const missing = EXPERIMENTAL_ITEMS.flatMap((item) =>
-      PROMOTION_CONDITIONS.flatMap((condition) =>
-        item.conditions[condition.id].evidence
-          .filter((evidence) => evidenceKind(evidence) === 'path')
-          .filter((evidence) => !existsSync(join(REPO_ROOT, evidencePath(evidence))))
-          .map((evidence) => `${item.id} ${condition.id}: ${evidence}`)
+  // Evidence is a link or a path that must exist (#476): a file, and a
+  // section of it when one is named. The same check the script runs.
+  it('names only files and sections that exist as evidence', () => {
+    const pathExists = repositoryPathCheck({
+      isFile: (path) =>
+        existsSync(join(REPO_ROOT, path)) && statSync(join(REPO_ROOT, path)).isFile(),
+      readText: (path) => readFileSync(join(REPO_ROOT, path), 'utf8'),
+    });
+    expect(
+      EXPERIMENTAL_ITEMS.flatMap((item) =>
+        missingEvidencePaths(item, pathExists).map((missing) => `${item.id} ${missing}`)
       )
-    );
-    expect(missing).toEqual([]);
+    ).toEqual([]);
   });
 });

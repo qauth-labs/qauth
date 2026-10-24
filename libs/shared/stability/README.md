@@ -13,8 +13,9 @@ library).
 | ------------------ | ------------------------------------------------------------------------------------------------------ |
 | `lib/item.ts`      | What an item is: `ExperimentalItem`, the spec statuses and the four `PROMOTION_CONDITIONS`             |
 | `lib/items.ts`     | `EXPERIMENTAL_ITEMS`, the registry: the six items of ADR-018 §4                                        |
-| `lib/validate.ts`  | `validateExperimentalRegistry` and `missingEvidence`                                                   |
+| `lib/validate.ts`  | `validateExperimentalRegistry`, `registryShapeProblems` and `missingEvidence`                          |
 | `lib/evidence.ts`  | The forms of evidence: an RFC number, an issue, an `https` link or a repository path                   |
+| `lib/anchor.ts`    | Heading anchors as the docs site renders them: an item's docs link, and a `path#section` evidence      |
 | `lib/enabled.ts`   | `enabledExperimentalItems`, the boot warning of an item that is on, and its docs link                  |
 | `lib/status.ts`    | The promotion status that `scripts/experimental-status.mjs` prints, and what `--check-stable` fails on |
 | `lib/docs-page.ts` | The docs page, rendered from the registry                                                              |
@@ -64,8 +65,8 @@ An item becomes stable in a minor release once the four conditions of ADR-018 §
 4. conformance tests exist for it.
 
 Each condition lists its evidence: an RFC number (`RFC 9449`), an issue (`#476`), an `https` link,
-or a path from the repository root that must exist, with an optional section
-(`docs/security/audit.md#wallet-sign-in`).
+or a path from the repository root that names a file, with an optional section that must be one
+of the heading anchors of a Markdown file (`docs/security/audit.md#wallet-sign-in`).
 
 ```bash
 node scripts/experimental-status.mjs                 # the four conditions of every item

@@ -1,20 +1,10 @@
+import { headingAnchor } from './anchor';
 import type { ExperimentalItem } from './item';
 import { type BuiltServerItemId, EXPERIMENTAL_ITEMS } from './items';
 
 /** The docs page that lists every experimental item, on the docs site. */
 export const EXPERIMENTAL_FEATURES_PAGE_URL =
   'https://docs.qauth.dev/reference/experimental-features/';
-
-/**
- * The heading anchor Starlight renders for an ASCII heading, as its slugger
- * computes it: `oid4vp-1.0-base` becomes `oid4vp-10-base`.
- */
-export function headingAnchor(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9 _-]/g, '')
-    .replace(/ /g, '-');
-}
 
 /** The link to an item's section of the docs page. */
 export function experimentalDocsUrl(item: Pick<ExperimentalItem, 'id'>): string {
@@ -45,17 +35,36 @@ export function enabledExperimentalItems<Config>(
   );
 }
 
+/** A configuration setting that has an experimental warning of its own. */
+export interface ExperimentalSetting {
+  /** The configuration key. */
+  readonly key: string;
+  /** Its value in the environment, `undefined` when unset. */
+  readonly value: string | undefined;
+  /** The key is experimental as a whole, not only some of its values. */
+  readonly experimentalKey: boolean;
+}
+
 /**
- * The configuration keys that switch a server item on. Such a key warns at
- * boot through its item, once the item is on, rather than on its own.
+ * Whether a setting is the switch of a built server item. Its own experimental
+ * warning is then left out, because the item warns instead, once it is on.
+ *
+ * A key that is experimental as a whole matches whatever its value; a key
+ * with experimental values matches only the item's own value, so another
+ * experimental value of the same key keeps its warning. An item that is not
+ * built has no switch the server reads, so its key keeps its warning too.
  */
-export function serverSwitchKeys(
+export function switchesExperimentalFeature(
+  setting: ExperimentalSetting,
   items: readonly ExperimentalItem[] = EXPERIMENTAL_ITEMS
-): ReadonlySet<string> {
-  return new Set(
-    items.flatMap((item) =>
-      item.surface === 'server' && item.switchKey !== null ? [item.switchKey] : []
-    )
+): boolean {
+  const value = setting.value?.trim();
+  return items.some(
+    (item) =>
+      item.built &&
+      item.surface === 'server' &&
+      item.switchKey === setting.key &&
+      (setting.experimentalKey || item.switchValue === value)
   );
 }
 

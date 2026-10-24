@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { none, PROVEN, sampleItem } from './fixtures';
+import type { ExperimentalItem } from './item';
 import { EXPERIMENTAL_ITEMS } from './items';
 import {
   describeSwitch,
   mayBecomeStable,
   missingEvidencePaths,
   renderPromotionStatus,
+  repositoryPathCheck,
   stableCheckFailures,
 } from './status';
 
@@ -36,18 +38,61 @@ describe('stableCheckFailures', () => {
   });
 
   it('fails a stable item whose evidence names a path that does not exist', () => {
-    expect(stableCheckFailures([sampleItem({ stable: true, ...PROVEN })], nothingExists)).toEqual([
-      'sample-feature: stable, but the evidence of external-audit: docs/adr/018-1-0-scope-and-stability.md#8-assurance does not exist',
+    // Only the evidence is missing: the ADR file exists.
+    const onlyTheAdr = (path: string) => path === 'docs/adr/018-1-0-scope-and-stability.md';
+    expect(
+      stableCheckFailures([sampleItem({ stable: true, ...PROVEN })], (path, section) =>
+        section === undefined ? onlyTheAdr(path) : false
+      )
+    ).toEqual([
+      'sample-feature: stable, but the evidence of external-audit: docs/adr/018-1-0-scope-and-stability.md#8-assurance-before-10 does not exist',
     ]);
   });
 
-  it('checks the file of a path, not its section', () => {
-    const seen: string[] = [];
-    missingEvidencePaths(sampleItem(PROVEN), (path) => {
-      seen.push(path);
+  it('checks the file of a path and its section apart', () => {
+    const seen: Array<[string, string | undefined]> = [];
+    missingEvidencePaths(sampleItem(PROVEN), (path, section) => {
+      seen.push([path, section]);
       return true;
     });
-    expect(seen).toEqual(['docs/adr/018-1-0-scope-and-stability.md']);
+    expect(seen).toEqual([['docs/adr/018-1-0-scope-and-stability.md', '8-assurance-before-10']]);
+  });
+
+  it('fails an ADR link that names a file that does not exist', () => {
+    const item = sampleItem({ adr: 'docs/adr/099-nothing-here.md' });
+    expect(stableCheckFailures([item], (path) => path !== item.adr)).toEqual([
+      'sample-feature: the ADR link docs/adr/099-nothing-here.md names a file that does not exist',
+    ]);
+  });
+
+  it('reports a malformed registry and goes no further', () => {
+    expect(
+      stableCheckFailures([{ id: 'x' } as unknown as ExperimentalItem], everythingExists)
+    ).toContain('x: requires must be an array of strings');
+  });
+});
+
+describe('repositoryPathCheck', () => {
+  const FILES: Record<string, string> = {
+    'docs/audit.md': '# Audit\n\n## Wallet sign-in\n\nText.\n',
+    'apps/x/sample.test.ts': 'test',
+  };
+  const check = repositoryPathCheck({
+    isFile: (path) => path in FILES,
+    readText: (path) => FILES[path] ?? '',
+  });
+
+  it('accepts a file, and a section of a Markdown file that has it', () => {
+    expect(check('apps/x/sample.test.ts')).toBe(true);
+    expect(check('docs/audit.md', 'wallet-sign-in')).toBe(true);
+  });
+
+  it.each([
+    ['a path that is not a file, such as a directory', 'docs', undefined],
+    ['a section the file does not have', 'docs/audit.md', 'wallet-login'],
+    ['a section of a file that is not Markdown', 'apps/x/sample.test.ts', 'case-1'],
+  ])('refuses %s', (_label, path, section) => {
+    expect(check(path, section)).toBe(false);
   });
 });
 
@@ -115,7 +160,7 @@ describe('renderPromotionStatus', () => {
 
   it('marks evidence that names a missing path', () => {
     expect(renderPromotionStatus([sampleItem(PROVEN)], nothingExists)).toContain(
-      'docs/adr/018-1-0-scope-and-stability.md#8-assurance (does not exist)'
+      'docs/adr/018-1-0-scope-and-stability.md#8-assurance-before-10 (does not exist)'
     );
   });
 });

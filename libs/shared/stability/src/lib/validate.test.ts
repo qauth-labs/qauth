@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { none, PROVEN, sampleItem } from './fixtures';
 import type { ExperimentalItem } from './item';
 import { EXPERIMENTAL_ITEMS } from './items';
-import { missingEvidence, validateExperimentalRegistry } from './validate';
+import { missingEvidence, registryShapeProblems, validateExperimentalRegistry } from './validate';
 
 describe('validateExperimentalRegistry', () => {
   it('passes the registry', () => {
@@ -71,6 +71,11 @@ describe('validateExperimentalRegistry', () => {
     ],
     ['a required setting with no value', { requires: ['OTHER_ENABLED'] }, 'KEY=value'],
     [
+      'an unknown surface on an item with no switch',
+      { built: false, surface: 'cli', switchKey: null, switchValue: null },
+      'the surface must be server or sdk',
+    ],
+    [
       'a spec URL over http',
       { spec: { name: 'x', url: 'http://example.com', status: 'draft' } },
       'an https link',
@@ -137,6 +142,78 @@ describe('validateExperimentalRegistry', () => {
 
   it('passes a stable item with evidence for all four conditions', () => {
     expect(validateExperimentalRegistry([sampleItem({ stable: true, ...PROVEN })])).toEqual([]);
+  });
+});
+
+describe('the docs anchor of an item', () => {
+  it('fails on two ids that give the same anchor', () => {
+    expect(
+      validateExperimentalRegistry([
+        sampleItem({ id: 'oid4vp-1.0-base' }),
+        sampleItem({ id: 'oid4vp-10-base' }),
+      ])
+    ).toEqual([
+      'oid4vp-10-base: its docs anchor #oid4vp-10-base is the anchor of oid4vp-1.0-base too',
+    ]);
+  });
+
+  it.each(['items', 'becoming-stable', 'what-experimental-means'])(
+    'fails on the id %s, which a heading of the page already takes',
+    (id) => {
+      expect(validateExperimentalRegistry([sampleItem({ id })])).toEqual([
+        `${id}: its docs anchor #${id} is taken by a heading of the docs page`,
+      ]);
+    }
+  );
+});
+
+describe('registryShapeProblems', () => {
+  it('passes the registry', () => {
+    expect(registryShapeProblems(EXPERIMENTAL_ITEMS)).toEqual([]);
+  });
+
+  it('fails on something that is not an array', () => {
+    expect(registryShapeProblems({ items: [] })).toEqual([
+      'the registry must be an array of items',
+    ]);
+  });
+
+  it('names every field of the wrong type', () => {
+    expect(registryShapeProblems([{}])).toEqual([
+      'item 1: id must be a string',
+      'item 1: title must be a string',
+      'item 1: description must be a string',
+      'item 1: surface must be a string',
+      'item 1: switchKey must be a string or null',
+      'item 1: switchValue must be a string or null',
+      'item 1: requires must be an array of strings',
+      'item 1: built must be true or false',
+      'item 1: stable must be true or false',
+      'item 1: spec must have a name, a url and a status, each a string',
+      'item 1: conditions must be an object',
+    ]);
+  });
+
+  // In JSON, "false" is a string, and a string is truthy.
+  it('fails on stable written as a string', () => {
+    const item = { ...sampleItem(), stable: 'false' };
+    expect(registryShapeProblems([item])).toEqual(['sample-feature: stable must be true or false']);
+  });
+
+  it('fails on a condition with no evidence array', () => {
+    const item = {
+      ...sampleItem(),
+      conditions: { ...sampleItem().conditions, 'external-beta': {} },
+    };
+    expect(registryShapeProblems([item])).toEqual([
+      'sample-feature: condition external-beta must hold an evidence array of strings and an optional note',
+    ]);
+  });
+
+  it('runs first in validateExperimentalRegistry, so a malformed item never reaches the rules', () => {
+    expect(validateExperimentalRegistry([{ id: 'x' } as unknown as ExperimentalItem])).toEqual(
+      registryShapeProblems([{ id: 'x' }])
+    );
   });
 });
 

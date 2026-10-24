@@ -68,7 +68,9 @@ const stableItem = (conditions: Record<string, { evidence: string[] }> = {}) => 
   conditions: {
     'spec-final': { evidence: ['RFC 9449'] },
     'external-beta': { evidence: ['#900'] },
-    'external-audit': { evidence: ['docs/adr/018-1-0-scope-and-stability.md#8-assurance'] },
+    'external-audit': {
+      evidence: ['docs/adr/018-1-0-scope-and-stability.md#8-assurance-before-10'],
+    },
     'conformance-tests': { evidence: ['scripts/experimental-status.test.ts'] },
     ...conditions,
   },
@@ -144,6 +146,29 @@ describe('experimental-status --check-stable', () => {
     );
   });
 
+  it.each([
+    ['a section the file does not have', 'docs/adr/018-1-0-scope-and-stability.md#8-assurance'],
+    ['a directory', 'docs/adr'],
+  ])('fails a stable item whose evidence names %s', (_label, evidence) => {
+    const item = stableItem({ 'external-audit': { evidence: [evidence] } });
+
+    const result = run(['--registry', fixture([item]), '--check-stable']);
+
+    expect(result.status).toBe(EXIT_FAILED);
+    expect(result.stderr).toContain(`the evidence of external-audit: ${evidence} does not exist`);
+  });
+
+  it('fails an item whose ADR link names a file that does not exist', () => {
+    const item = { ...stableItem(), adr: 'docs/adr/099-nothing-here.md' };
+
+    const result = run(['--registry', fixture([item]), '--check-stable']);
+
+    expect(result.status).toBe(EXIT_FAILED);
+    expect(result.stderr).toContain(
+      'sample-feature: the ADR link docs/adr/099-nothing-here.md names a file that does not exist'
+    );
+  });
+
   it('only prints, and exits 0, without --check-stable', () => {
     const result = run(['--registry', fixture([stableItem({ 'external-beta': none })])]);
 
@@ -163,5 +188,23 @@ describe('experimental-status input errors', () => {
 
   it('exits 2 on a registry that is not an array', () => {
     expect(run(['--registry', fixture({ items: [] })]).status).toBe(EXIT_INPUT);
+  });
+
+  // A proposed registry is JSON: a missing field, or `"stable": "false"`,
+  // which JSON reads as a truthy string, is a registry of the wrong shape.
+  it.each([
+    ['an empty item', [{}], 'item 1: requires must be an array of strings'],
+    [
+      'stable written as a string',
+      [{ ...stableItem(), stable: 'false' }],
+      'sample-feature: stable must be true or false',
+    ],
+  ])('exits 2 on %s, naming the problem, with or without --check-stable', (_label, items, line) => {
+    for (const args of [[], ['--check-stable']]) {
+      const result = run(['--registry', fixture(items), ...args]);
+      expect(result.status).toBe(EXIT_INPUT);
+      expect(result.stderr).toContain(line);
+      expect(result.stdout).toBe('');
+    }
   });
 });

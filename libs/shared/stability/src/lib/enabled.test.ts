@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { headingAnchor } from './anchor';
 import {
   enabledExperimentalItems,
   experimentalBootWarning,
   experimentalDocsUrl,
   type ExperimentalSwitches,
-  headingAnchor,
-  serverSwitchKeys,
+  switchesExperimentalFeature,
 } from './enabled';
 import { sampleItem } from './fixtures';
 import { EXPERIMENTAL_ITEMS } from './items';
@@ -89,12 +89,57 @@ describe('the docs link', () => {
   });
 });
 
-describe('serverSwitchKeys', () => {
-  it('lists the switch key of every server item, built or not, and no SDK import path', () => {
-    expect([...serverSwitchKeys()].sort()).toEqual([
-      'FIRST_PARTY_LOGIN_ENABLED',
-      'OID4VP_VERIFIER_PROFILE',
-      'PASS_THROUGH_LEG_ENABLED',
-    ]);
+describe('switchesExperimentalFeature', () => {
+  const profile = (value: string | undefined) => ({
+    key: 'OID4VP_VERIFIER_PROFILE',
+    value,
+    experimentalKey: false,
+  });
+
+  it("matches a built item's switch key and value", () => {
+    expect(switchesExperimentalFeature(profile('oid4vp-1.0-base'))).toBe(true);
+    expect(switchesExperimentalFeature(profile(' oid4vp-1.0-base '))).toBe(true);
+  });
+
+  // A second experimental value of the same key is not the item's switch, so
+  // it keeps its own warning.
+  it('does not match another value of the same key', () => {
+    expect(switchesExperimentalFeature(profile('oid4vp-1.1-draft'))).toBe(false);
+    expect(switchesExperimentalFeature(profile(undefined))).toBe(false);
+  });
+
+  it('matches a key that is experimental as a whole, whatever its value', () => {
+    const items = [sampleItem()];
+    for (const value of ['true', '1', 'false']) {
+      expect(
+        switchesExperimentalFeature(
+          { key: 'SAMPLE_FEATURE_ENABLED', value, experimentalKey: true },
+          items
+        )
+      ).toBe(true);
+    }
+  });
+
+  // An item that is not built has no switch the server reads, so a key it
+  // names keeps its own warning: nothing else would warn for it.
+  it('never matches the switch of an item that is not built, or of an SDK item', () => {
+    expect(
+      switchesExperimentalFeature({
+        key: 'FIRST_PARTY_LOGIN_ENABLED',
+        value: 'true',
+        experimentalKey: true,
+      })
+    ).toBe(false);
+    const sdk = sampleItem({
+      surface: 'sdk',
+      switchKey: '@qauth-labs/node/sample',
+      switchValue: null,
+    });
+    expect(
+      switchesExperimentalFeature(
+        { key: '@qauth-labs/node/sample', value: undefined, experimentalKey: true },
+        [sdk]
+      )
+    ).toBe(false);
   });
 });

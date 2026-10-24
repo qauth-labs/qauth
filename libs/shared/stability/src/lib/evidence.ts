@@ -37,3 +37,9 @@ export function evidencePath(evidence: string): string {
   const at = evidence.indexOf('#');
   return at === -1 ? evidence : evidence.slice(0, at);
 }
+
+/** The section of a `path` evidence, after its `#`, or `undefined` when it names none. */
+export function evidenceSection(evidence: string): string | undefined {
+  const at = evidence.indexOf('#');
+  return at === -1 ? undefined : evidence.slice(at + 1);
+}

@@ -34,7 +34,9 @@ export const PROVEN: Pick<ExperimentalItem, 'spec' | 'conditions'> = {
   conditions: {
     'spec-final': { evidence: ['https://example.com/final'] },
     'external-beta': { evidence: ['#900'] },
-    'external-audit': { evidence: ['docs/adr/018-1-0-scope-and-stability.md#8-assurance'] },
+    'external-audit': {
+      evidence: ['docs/adr/018-1-0-scope-and-stability.md#8-assurance-before-10'],
+    },
     'conformance-tests': { evidence: ['RFC 9449'] },
   },
 };

@@ -80,6 +80,10 @@ const BUILT_SERVER_ITEMS: readonly ExperimentalItem[] = EXPERIMENTAL_ITEMS.filte
   (item) => item.built && item.surface === 'server'
 );
 
+const UNBUILT_SERVER_SWITCHES: readonly ExperimentalItem[] = EXPERIMENTAL_ITEMS.filter(
+  (item) => !item.built && item.surface === 'server' && item.switchKey !== null
+);
+
 describe('logExperimentalFeatures', () => {
   // The acceptance criterion of #476: enabling an experimental switch logs one
   // warning for that item at boot; a disabled item logs none.
@@ -197,6 +201,17 @@ describe('the experimental-feature registry and the configuration key registry',
         key?.tier === 'experimental' || key?.experimentalValues.includes(item.switchValue ?? ''),
         `${item.switchKey}=${item.switchValue} is not marked experimental`
       ).toBe(true);
+    }
+  );
+
+  // An item is added to the registry in the pull request that adds its switch
+  // (#476), and that pull request marks it built. Until then the key must not
+  // exist: the server would read it, but listEnabledExperimental() and the
+  // boot warning skip an item that is not built.
+  it.each(UNBUILT_SERVER_SWITCHES.map((item) => [item.id, item.switchKey] as const))(
+    '%s is not built, so its switch %s is not a key the server reads yet',
+    (_id, switchKey) => {
+      expect(CONFIG_KEY_REGISTRY.map((key) => key.name)).not.toContain(switchKey);
     }
   );
 

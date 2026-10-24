@@ -10,8 +10,10 @@
  * yet, and every condition has evidence.
  *
  * With `--check-stable` it fails when an item marked `stable: true` has a
- * condition with no evidence, or evidence that names a path that does not
- * exist, or when the registry breaks any other of its rules.
+ * condition with no evidence, or evidence that names a file or a section that
+ * does not exist, or when the registry breaks any other of its rules, such as
+ * an ADR link to a missing file. A path must name a file, not a directory,
+ * and a `#section` must be a heading anchor of a Markdown file.
  *
  * The registry is TypeScript. Node strips its types itself; the two hooks
  * below only tell it that the library's `.ts` files are ES modules and add
@@ -23,6 +25,7 @@
  *   0  printed; with --check-stable, nothing failed
  *   1  --check-stable failed
  *   2  input error: an unknown argument, or a registry that cannot be read
+ *      or does not have the registry's shape
  *
  * Usage:
  *   node scripts/experimental-status.mjs
@@ -34,7 +37,7 @@
  * paths are still read from this repository.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -106,16 +109,34 @@ async function main(argv) {
     return EXIT_OK;
   }
 
-  const stability = await import(pathToFileURL(join(LIBRARY_SOURCE, 'index.ts')).href);
+  let stability;
   let items;
   try {
+    stability = await import(pathToFileURL(join(LIBRARY_SOURCE, 'index.ts')).href);
     items = readItems(options.registry, stability.EXPERIMENTAL_ITEMS);
   } catch (error) {
     process.stderr.write(`experimental-status: cannot read the registry: ${error.message}\n`);
     return EXIT_INPUT;
   }
 
-  const pathExists = (path) => existsSync(join(REPO_ROOT, path));
+  // A proposed registry is JSON, so check its shape before reading it as items.
+  const shape = stability.registryShapeProblems(items);
+  if (shape.length > 0) {
+    for (const problem of shape) process.stderr.write(`experimental-status: ${problem}\n`);
+    process.stderr.write('experimental-status: the registry does not have the shape of one\n');
+    return EXIT_INPUT;
+  }
+
+  const pathExists = stability.repositoryPathCheck({
+    isFile(path) {
+      try {
+        return statSync(join(REPO_ROOT, path)).isFile();
+      } catch {
+        return false;
+      }
+    },
+    readText: (path) => readFileSync(join(REPO_ROOT, path), 'utf8'),
+  });
   process.stdout.write(stability.renderPromotionStatus(items, pathExists));
 
   if (!options.checkStable) return EXIT_OK;

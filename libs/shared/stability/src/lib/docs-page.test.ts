@@ -3,12 +3,13 @@ import { join, resolve } from 'node:path';
 import { format, resolveConfig } from 'prettier';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { headingAnchor, markdownHeadingAnchors } from './anchor';
 import {
   evidenceLink,
   EXPERIMENTAL_FEATURES_PAGE_PATH,
   renderExperimentalFeaturesPage,
 } from './docs-page';
-import { experimentalDocsUrl, headingAnchor } from './enabled';
+import { experimentalDocsUrl } from './enabled';
 import { PROMOTION_CONDITIONS } from './item';
 import { EXPERIMENTAL_ITEMS } from './items';
 
@@ -70,12 +71,15 @@ describe('the experimental features page', () => {
     }
   );
 
-  it('has a section for the link of every boot warning', () => {
+  // The boot warning links an item's section by its anchor; the page's own
+  // headings, read back from the rendered Markdown, must carry that anchor.
+  it('has a heading for the link of every boot warning', () => {
+    const anchors = markdownHeadingAnchors(page);
     for (const item of EXPERIMENTAL_ITEMS) {
       const fragment = experimentalDocsUrl(item).split('#')[1];
-      expect(headingAnchor(item.id)).toBe(fragment);
-      expect(page).toContain(`\n### ${item.id}\n`);
+      expect(anchors.has(fragment), `${item.id} links #${fragment}`).toBe(true);
     }
+    expect(anchors.has('oid4vp-10-base')).toBe(true);
   });
 
   it('lists the four conditions of ADR-018 §5', () => {
