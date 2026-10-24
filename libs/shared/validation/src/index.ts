@@ -4,6 +4,8 @@ export type * from './lib/password';
 export * from './lib/password';
 export type * from './lib/realm-host';
 export * from './lib/realm-host';
+export type * from './lib/realm-relying-party';
+export * from './lib/realm-relying-party';
 export type * from './lib/url';
 export * from './lib/url';
 export type * from './lib/webauthn-origin';

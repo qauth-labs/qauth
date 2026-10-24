@@ -419,6 +419,16 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   `default realm ready` line names the passkey RP ID. A realm has a lock only
   after its first passkey enrolment, which no release can make yet, so no
   existing deployment is affected.
+- The passkey RP ID is now a setting on each realm, with a lock of its own
+  ([#553], ADR-019 Decision 2). `realms.webauthn_rp_id` holds the RP ID, NULL
+  for the realm host; the boot step stores `WEBAUTHN_RP_ID` there while the
+  realm has no passkey. Migration 0034 adds `realms.webauthn_rp_id_locked_at`,
+  which the first passkey enrolment sets in the transaction that stores the
+  passkey; from then on a trigger refuses any change of the RP ID or of the
+  lock. A realm that migration 0028 had locked stays locked under the same
+  RP ID. A parent-domain RP ID that is a public suffix (`co.uk`, or a
+  private-section entry of the Public Suffix List) is now refused even with
+  `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN=true`; before, only a single label was.
 - **BREAKING**: the auth-server refuses to start when the default realm's
   stored issuer differs from `JWT_ISSUER` ([#484]). A realm's issuer and its
   host are permanent, and the error names both values. It also refuses a
@@ -535,6 +545,7 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#553]: https://github.com/qauth-labs/qauth/issues/553
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21

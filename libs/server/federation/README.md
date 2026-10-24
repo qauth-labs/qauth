@@ -228,7 +228,13 @@ before the library does the CBOR, COSE, attestation and signature work.
 `webauthn/relying-party-id.ts` holds the RP ID rules of
 [ADR-019](../../../docs/adr/019-deployment-topology-and-trust-boundaries.md)
 Decision 2: the realm's exact host by default, a parent domain only with the
-operator's opt-in and a warning, and a lock once the realm has a passkey.
+operator's opt-in (`allowParentDomainRpId`), returned with a warning, and a lock
+once the realm has a passkey. A parent domain must cover the realm host on a
+label boundary and must not be a public suffix. The Public Suffix List comes
+from `tldts`, private section included as browsers read it, because no
+hand-written rule tells `co.uk` from `example.com`. The realm row stores the RP
+ID and its lock; `resolveRpId(realm)` and `expectedOrigin(realm)` in
+`@qauth-labs/shared-validation` read them (#553).
 
 The unit tests run the WebAuthn Level 3 §16 test vectors
 (`testing/webauthn-w3c-vectors.fixture.ts`, copied from the specification).

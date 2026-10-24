@@ -1,9 +1,9 @@
 import {
-  parentDomainRpIdWarning,
   RelyingPartyIdError,
   type ResolvedRelyingPartyId,
   resolveRelyingPartyId,
 } from '@qauth-labs/fastify-plugin-federation';
+import { expectedOrigin, type RealmRelyingPartyFields } from '@qauth-labs/shared-validation';
 
 /**
  * The default realm's passkey relying party (ADR-019 Decision 2, issue #467).
@@ -19,21 +19,19 @@ import {
 export interface PasskeyRelyingPartySettings {
   /** `WEBAUTHN_RP_ID`, normalised; `undefined` means the realm host. */
   readonly rpId: string | undefined;
-  /** `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`. */
-  readonly allowParentDomain: boolean;
+  /** `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`: the explicit parent-domain opt-in. */
+  readonly allowParentDomainRpId: boolean;
 }
 
 /** No `WEBAUTHN_RP_ID`: the realm's own host. */
 export const REALM_HOST_RELYING_PARTY: PasskeyRelyingPartySettings = Object.freeze({
   rpId: undefined,
-  allowParentDomain: false,
+  allowParentDomainRpId: false,
 });
 
 /** A realm's RP ID, with the boot warning a parent domain carries. */
 export interface RealmRelyingParty extends ResolvedRelyingPartyId {
   readonly realmHost: string;
-  /** Set for a parent-domain RP ID: logged at every boot. */
-  readonly warning: string | undefined;
 }
 
 /** The passkey settings cannot give the realm an RP ID. The message names the variables. */
@@ -49,7 +47,7 @@ export class PasskeyRelyingPartyError extends Error {
  *
  * @throws PasskeyRelyingPartyError when `WEBAUTHN_RP_ID` is unrelated to the
  * realm host, a parent domain without `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN`, or
- * a top-level domain.
+ * a public suffix.
  */
 export function resolveRealmRelyingParty(
   realmHost: string,
@@ -60,7 +58,7 @@ export function resolveRealmRelyingParty(
     resolved = resolveRelyingPartyId({
       realmHost,
       configured: settings.rpId,
-      allowParentDomain: settings.allowParentDomain,
+      allowParentDomainRpId: settings.allowParentDomainRpId,
     });
   } catch (error) {
     if (!(error instanceof RelyingPartyIdError)) throw error;
@@ -72,7 +70,7 @@ export function resolveRealmRelyingParty(
       cause: error,
     });
   }
-  return { ...resolved, realmHost, warning: parentDomainRpIdWarning(resolved, realmHost) };
+  return { ...resolved, realmHost };
 }
 
 /**
@@ -87,16 +85,19 @@ export function servesAssociationFiles(relyingParty: RealmRelyingParty): boolean
 
 /**
  * The origins a passkey ceremony started for a client accepts (ADR-017
- * Decision 14, issue #467): the realm's own origin, where the hosted pages
- * run, then the client's operator-set `webauthn_allowed_origins` (a native
- * app's `android:apk-key-hash:` origin, or a first-party web front-end under a
+ * Decision 14, issues #467 and #553): the realm's own origin,
+ * `expectedOrigin(realm)`, where the hosted pages run, then the client's
+ * operator-set `webauthn_allowed_origins` (a native app's
+ * `android:apk-key-hash:` origin, or a first-party web front-end under a
  * parent-domain RP ID). The realm origin comes from the realm's issuer, never
  * from the request (ADR-019 Decision 1). Each is checked against the RP ID
  * when the ceremony starts.
+ *
+ * @throws RealmWithoutIssuerError when the realm has no issuer yet
  */
 export function passkeyCeremonyOrigins(
-  realmIssuer: string,
+  realm: Pick<RealmRelyingPartyFields, 'issuer'>,
   clientOrigins: readonly string[]
 ): string[] {
-  return [...new Set([new URL(realmIssuer).origin, ...clientOrigins])];
+  return [...new Set([expectedOrigin(realm), ...clientOrigins])];
 }

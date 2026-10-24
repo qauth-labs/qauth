@@ -3,7 +3,11 @@ import {
   RelyingPartyIdLockedError,
 } from '@qauth-labs/fastify-plugin-federation';
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
-import { InvalidRealmHostError, normaliseRealmHost } from '@qauth-labs/shared-validation';
+import {
+  InvalidRealmHostError,
+  normaliseRealmHost,
+  resolveRpId,
+} from '@qauth-labs/shared-validation';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
 import { resolveIssuerIdentifier } from './discovery';
@@ -33,7 +37,9 @@ import {
  *    endpoint host, and remove none;
  * 5. resolve the passkey RP ID from the realm host and `WEBAUTHN_RP_ID`
  *    (ADR-019 Decision 2, #467), warn when it is a parent domain, and refuse to
- *    boot when the realm's passkeys are bound to another one;
+ *    boot when the realm's passkeys are bound to another one. While no passkey
+ *    has locked it, store it on the realm row (NULL for the realm host, #553),
+ *    where `resolveRpId(realm)` reads it for every ceremony;
  * 6. log one line naming the realm, its issuer and host, the operator flag and
  *    the passkey RP ID.
  *
@@ -182,7 +188,7 @@ export async function bootDefaultRealm(
     }
 
     const endpointHostsAdded = await addEndpointHosts(deps.realms, tx, realm, settings);
-    assertPasskeyRpIdLock(realm, relyingParty);
+    realm = await storePasskeyRpId(deps.realms, tx, realm, relyingParty);
     return { realm, host: identity.host, endpointHostsAdded, relyingParty };
   });
 
@@ -194,7 +200,7 @@ export async function bootDefaultRealm(
       operator: result.realm.isOperator,
       endpointHostsAdded: result.endpointHostsAdded,
       passkeyRpId: result.relyingParty.rpId,
-      passkeyRpIdLocked: (result.realm.webauthnRpId ?? null) !== null,
+      passkeyRpIdLocked: result.realm.webauthnRpIdLockedAt !== null,
     },
     'default realm ready'
   );
@@ -288,13 +294,46 @@ function defaultRealmRelyingParty(
 }
 
 /**
+ * Step 5: the realm row holds the RP ID (#553). While no passkey has locked
+ * it, the configured one is written there: `null` for the realm host, the
+ * parent domain otherwise. A locked realm keeps its RP ID, and the configured
+ * one must be it.
+ */
+async function storePasskeyRpId(
+  realms: DefaultRealmBootDependencies['realms'],
+  tx: ProvisioningTransaction,
+  realm: RealmRow,
+  relyingParty: RealmRelyingParty
+): Promise<RealmRow> {
+  if (realm.webauthnRpIdLockedAt !== null) {
+    assertPasskeyRpIdLock(realm, relyingParty);
+    return realm;
+  }
+  const stored = relyingParty.scope === 'parent-domain' ? relyingParty.rpId : null;
+  if (realm.webauthnRpId === stored) return realm;
+  try {
+    return await realms.setWebAuthnRpId(realm.id, stored, tx);
+  } catch (error) {
+    // A first enrolment on another node locked the realm since it was read:
+    // explain the lock as at any other boot.
+    if (!(error instanceof BadRequestError)) throw error;
+    const current = await realms.findById(realm.id, tx);
+    if (current) assertPasskeyRpIdLock(current, relyingParty);
+    throw error;
+  }
+}
+
+/**
  * Step 5: a realm whose first passkey is enrolled is locked to the RP ID it was
  * enrolled under. Another RP ID would orphan every passkey, so the boot stops
  * and says which value keeps them working.
  */
 function assertPasskeyRpIdLock(realm: RealmRow, relyingParty: RealmRelyingParty): void {
   try {
-    assertRelyingPartyIdUnlockedOrSame(realm.webauthnRpId ?? null, relyingParty);
+    assertRelyingPartyIdUnlockedOrSame(
+      realm.webauthnRpIdLockedAt === null ? null : resolveRpId(realm),
+      relyingParty
+    );
   } catch (error) {
     if (!(error instanceof RelyingPartyIdLockedError)) throw error;
     const remedy =

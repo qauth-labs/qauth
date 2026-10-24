@@ -1,3 +1,4 @@
+import { BadRequestError } from '@qauth-labs/shared-errors';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -75,6 +76,8 @@ function realmRow(overrides: Partial<RealmRow> = {}): RealmRow {
     enabled: true,
     issuer: null,
     isOperator: false,
+    webauthnRpId: null,
+    webauthnRpIdLockedAt: null,
     ...overrides,
   } as RealmRow;
 }
@@ -99,6 +102,10 @@ function emptyDatabase(): {
       host: { host: 'auth.example.com', realmId: created.id, kind: 'primary', createdAt: 0 },
     })),
     update: vi.fn(async (_id: string, data: Partial<RealmRow>) => ({ ...created, ...data })),
+    setWebAuthnRpId: vi.fn(async (_id: string, webauthnRpId: string | null) => ({
+      ...created,
+      webauthnRpId,
+    })),
     addEndpointHost: vi.fn(async (realmId: string, host: string) => ({
       host,
       realmId,
@@ -183,17 +190,26 @@ describe('bootDefaultRealm logging', () => {
   });
 });
 
-describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
+describe('bootDefaultRealm and the passkey RP ID (#467, #553)', () => {
   const settings = {
     realmName: 'master',
     jwtIssuer: 'https://auth.example.com',
     endpointHosts: [],
   };
+  const LOCKED_AT = 1_790_000_000_000;
 
-  /** The dependencies over a database whose default realm already exists. */
-  function existingRealm(webauthnRpId: string | null) {
+  /**
+   * The dependencies over a database whose default realm already exists, with
+   * the RP ID its row stores and, once a passkey is enrolled, its lock time.
+   */
+  function existingRealm(webauthnRpId: string | null, webauthnRpIdLockedAt: number | null) {
     const { deps, warn, info } = emptyDatabase();
-    const realm = realmRow({ issuer: 'https://auth.example.com', isOperator: true, webauthnRpId });
+    const realm = realmRow({
+      issuer: 'https://auth.example.com',
+      isOperator: true,
+      webauthnRpId,
+      webauthnRpIdLockedAt,
+    });
     Object.assign(deps.realms, {
       findByName: vi.fn(async () => realm),
       findByHost: vi.fn(async () => ({
@@ -226,7 +242,7 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
 
     await bootDefaultRealm(deps, {
       ...settings,
-      passkeys: { rpId: 'example.com', allowParentDomain: true },
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: true },
     });
 
     expect(warn).toHaveBeenCalledWith(
@@ -240,7 +256,7 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
 
     const boot = bootDefaultRealm(deps, {
       ...settings,
-      passkeys: { rpId: 'example.com', allowParentDomain: false },
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: false },
     });
 
     await expect(boot).rejects.toThrow(DefaultRealmBootError);
@@ -248,22 +264,70 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
     expect(deps.realms.lockProvisioning).not.toHaveBeenCalled();
   });
 
-  it('boots when the configured RP ID is the one the realm is locked to', async () => {
-    const { deps, info } = existingRealm('auth.example.com');
+  it('stores an opted-in parent domain on the realm row while no passkey has locked it', async () => {
+    const { deps } = existingRealm(null, null);
+
+    const result = await bootDefaultRealm(deps, {
+      ...settings,
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: true },
+    });
+
+    expect(deps.realms.setWebAuthnRpId).toHaveBeenCalledWith(
+      '019a0000-0000-7000-8000-000000000001',
+      'example.com',
+      {}
+    );
+    expect(result.realm.webauthnRpId).toBe('example.com');
+  });
+
+  it('stores NULL when WEBAUTHN_RP_ID goes back to the realm host before any passkey', async () => {
+    const { deps } = existingRealm('example.com', null);
+
+    const result = await bootDefaultRealm(deps, settings);
+
+    expect(deps.realms.setWebAuthnRpId).toHaveBeenCalledWith(
+      '019a0000-0000-7000-8000-000000000001',
+      null,
+      {}
+    );
+    expect(result.realm.webauthnRpId).toBeNull();
+  });
+
+  it('writes nothing when the row already holds the configured RP ID', async () => {
+    const { deps } = existingRealm(null, null);
+
+    await bootDefaultRealm(deps, {
+      ...settings,
+      passkeys: { rpId: 'auth.example.com', allowParentDomainRpId: false },
+    });
+
+    expect(deps.realms.setWebAuthnRpId).not.toHaveBeenCalled();
+  });
+
+  it('boots when the configured RP ID is the one the realm is locked to, and writes nothing', async () => {
+    const { deps, info } = existingRealm(null, LOCKED_AT);
 
     await expect(bootDefaultRealm(deps, settings)).resolves.toBeDefined();
+    expect(deps.realms.setWebAuthnRpId).not.toHaveBeenCalled();
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ passkeyRpId: 'auth.example.com', passkeyRpIdLocked: true }),
       'default realm ready'
     );
   });
 
+  it('reads a locked row that spells out the realm host as the realm host', async () => {
+    const { deps } = existingRealm('auth.example.com', LOCKED_AT);
+
+    await expect(bootDefaultRealm(deps, settings)).resolves.toBeDefined();
+    expect(deps.realms.setWebAuthnRpId).not.toHaveBeenCalled();
+  });
+
   it('refuses to boot when WEBAUTHN_RP_ID differs from the locked RP ID, explaining why and what to set', async () => {
-    const { deps } = existingRealm('auth.example.com');
+    const { deps } = existingRealm(null, LOCKED_AT);
 
     const boot = bootDefaultRealm(deps, {
       ...settings,
-      passkeys: { rpId: 'example.com', allowParentDomain: true },
+      passkeys: { rpId: 'example.com', allowParentDomainRpId: true },
     });
 
     await expect(boot).rejects.toThrow(DefaultRealmBootError);
@@ -275,10 +339,34 @@ describe('bootDefaultRealm and the passkey RP ID (#467)', () => {
   });
 
   it('names the parent domain to keep when the lock is a parent domain', async () => {
-    const { deps } = existingRealm('example.com');
+    const { deps } = existingRealm('example.com', LOCKED_AT);
 
     await expect(bootDefaultRealm(deps, settings)).rejects.toThrow(
       'Set WEBAUTHN_RP_ID to "example.com" and keep WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN=true.'
+    );
+  });
+
+  it('explains the lock when a first enrolment on another node took it during the boot', async () => {
+    const { deps } = existingRealm(null, null);
+    const lockedMeanwhile = realmRow({
+      issuer: 'https://auth.example.com',
+      isOperator: true,
+      webauthnRpIdLockedAt: LOCKED_AT,
+    });
+    Object.assign(deps.realms, {
+      setWebAuthnRpId: vi.fn(async () => {
+        throw new BadRequestError("Realm's passkey RP ID is locked by its first passkey enrolment");
+      }),
+      findById: vi.fn(async () => lockedMeanwhile),
+    });
+
+    await expect(
+      bootDefaultRealm(deps, {
+        ...settings,
+        passkeys: { rpId: 'example.com', allowParentDomainRpId: true },
+      })
+    ).rejects.toThrow(
+      'The default realm "master" has passkeys bound to the RP ID "auth.example.com", but WEBAUTHN_RP_ID gives "example.com".'
     );
   });
 });
