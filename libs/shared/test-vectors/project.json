@@ -3,7 +3,7 @@
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/shared/test-vectors/src",
   "projectType": "library",
-  "tags": ["scope:shared", "type:testing"],
+  "tags": ["scope:shared"],
   "implicitDependencies": ["test-vectors"],
   "targets": {
     "test": {
