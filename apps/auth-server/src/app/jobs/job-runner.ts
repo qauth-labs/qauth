@@ -179,7 +179,7 @@ export class JobStoppedError extends Error {
 
 /**
  * Time and timers, injectable so a test can move time by hand
- * (`src/testing/manual-clock.ts`).
+ * (`createManualClock` of `@qauth-labs/shared-testing`).
  */
 export interface JobClock {
   /** Epoch milliseconds. */

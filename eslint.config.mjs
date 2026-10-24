@@ -232,6 +232,16 @@ export default [
                 'scope:ui',
               ],
             },
+            // The delivery role (ADR-019 Decisions 8 and 9, #460) holds no
+            // private key and must not be able to load one. It is also
+            // `scope:server`, and this narrows it: it reaches only the
+            // shared layer (the event contract), never core-crypto, the
+            // config library, server-jwt or server-keys. It signs through
+            // the handle the signer role gives it.
+            {
+              sourceTag: 'type:event-delivery',
+              onlyDependOnLibsWithTags: ['scope:shared'],
+            },
             // Key custody (ADR-019 Decision 9)
             // `@qauth-labs/server-keys` is also `scope:server`, and Nx applies
             // every constraint whose tag a project carries, so this one narrows

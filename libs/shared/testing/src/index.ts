@@ -4,6 +4,8 @@ export * from './lib/fastify-test-helpers';
 export * from './lib/supertest-helpers';
 // Test fixtures
 export * from './lib/fixtures';
+// A clock that moves only when a test moves it (job runner, delivery role)
+export * from './lib/manual-clock';
 // Generated-migration runner shared by every container-backed suite (#167/#240)
 export * from './lib/drizzle-migrations';
 // Postgres testcontainer harness (repository integration tests)

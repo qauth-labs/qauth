@@ -1,0 +1,36 @@
+{
+  "name": "server-event-delivery",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/event-delivery/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:event-delivery"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "eslint", "typescript"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/eslint.config.mjs",
+        "{workspaceRoot}/libs/**/package.json",
+        "{workspaceRoot}/apps/*/package.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `key-isolation.test.ts` lints sample imports with the workspace ESLint configuration and resolves workspace packages through their package.json files, so a change to `eslint.config.mjs`, to ESLint or TypeScript, or to a package's entry points must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared."
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project server-event-delivery --web"
+}
