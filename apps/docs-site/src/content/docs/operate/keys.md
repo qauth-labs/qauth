@@ -171,25 +171,18 @@ hard-fails an EdDSA-only OP on its `id_token` signature test. When configured,
 ID tokens switch to RS256 by default; access tokens are unaffected (always
 EdDSA).
 
-**Must be ≥2048-bit — and QAuth does not check this at boot.** Nothing in the
-RS256 setup at `libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:109-115`
-signs anything; it only imports the key and exports its public JWK, so an
-undersized key **boots cleanly**. The floor
-is enforced by jose itself, in `checkKeyLength` — called from `sign()`/
-`verify()`, which only run when a token is actually signed or verified. QAuth
-reaches that through jose's `SignJWT`/`jwtVerify`, used by
-`libs/core/crypto/src/lib/signing.ts:152-166`. Concretely: an undersized
-RS256 key fails on the **first live sign-in that issues an RS256 ID token**,
-in whatever environment that first happens — not at startup, and not in a
-smoke test that only hits `/health` or the JWKS endpoint.
+**Must be ≥2048-bit, and the boot checks it.** The key boot step (#485) refuses
+a `JWT_RS256_PRIVATE_KEY` shorter than 2048 bits (RFC 7518 §3.3): the server
+stops at startup with an `InvalidConfigurationError` that names the variable and
+gives the key's length in its details, and it stores nothing.
 
-Verify the size yourself before deploying, rather than trusting a clean boot:
+Generate a 2048-bit key:
 
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-rs256-private.pem
 openssl pkey -in jwt-rs256-private.pem -pubout -out jwt-rs256-public.pem
 
-# Confirm the size before you deploy — a clean boot does NOT confirm this:
+# The size, if you want to see it:
 openssl rsa -in jwt-rs256-private.pem -noout -text | head -1
 # → "Private-Key: (2048 bit, 2 primes)" (or larger)
 ```
