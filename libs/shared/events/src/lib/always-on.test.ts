@@ -17,6 +17,10 @@ describe('namesEvents', () => {
     'metadata.auditEnabled',
     'eventTypes',
     'LOG_LEVEL',
+    'AUDITING_ENABLED',
+    'ADMIN_LOGGING',
+    'EVENTSTORE_MODE',
+    'AUDITLOG_ENABLED',
   ])('reports %s', (name) => {
     expect(namesEvents(name)).toBe(true);
   });
@@ -28,6 +32,8 @@ describe('namesEvents', () => {
     'catalogUrl',
     'enabled',
     'passwordPolicy.preventReuse',
+    'LOGIN_HINT',
+    'logoUrl',
   ])('passes %s', (name) => {
     expect(namesEvents(name)).toBe(false);
   });

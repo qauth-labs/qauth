@@ -145,10 +145,10 @@ shown: `accessTokenTtl`, `tokenEndpointAuthMethod`, `signingKeyId`, `jwksUri`, `
 
 A value shaped like a secret is masked wherever it sits: a token, a signed or encrypted object, a
 PEM block, an `Authorization` header value, a private or symmetric JWK, or a URL that carries a
-credential: one with a password, a query or fragment member named like a secret
-(`?access_token=`, `?sig=`, `?key=`, `?code=`), an `otpauth://` URI, or a webhook URL that
-holds its secret in the path. A public JWK is shown. A member name shaped like a secret refuses the
-event.
+credential: one with a password (or, over HTTP, a user name), a query or fragment member named like
+a secret (`?access_token=`, `?sig=`, `?key=`, `?code=`), an `otpauth://` URI, or a webhook URL
+that holds its secret in the path. A public JWK is shown, and a list of keys shows its public keys
+with each private one masked. A member name shaped like a secret refuses the event.
 
 The field names in a diff are the resource's own, so the payload scanner reads a diff's values,
 not its names, and checks instead that every field named like a secret holds `***`. A diff may

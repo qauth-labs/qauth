@@ -26,6 +26,8 @@ export const EVENT_WORDS: ReadonlySet<string> = new Set([
   'audits',
   'log',
   'logs',
+  'logging',
+  'logger',
   'sink',
   'sinks',
   'outbox',
@@ -33,12 +35,23 @@ export const EVENT_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Beginnings of a word that name events or the audit log in any form,
+ * written with or without a separator: `AUDITING`, `AUDITLOG_ENABLED`,
+ * `EVENTSTORE_MODE`. Only at the start of a word, so `prevent` is no event
+ * word; `log` is matched as whole words only, as `login` and `logo` are not.
+ */
+const EVENT_WORD_STARTS: readonly string[] = ['event', 'audit'];
+
+/**
  * Whether a configuration key or a realm field names events, the audit log or
- * where events go: one of its words is an {@link EVENT_WORDS} word, as in
- * `ADMIN_EVENTS`, `AUDIT_LOG`, `EVENTS_SINK` or `metadata.auditEnabled`.
+ * where events go: one of its words is an {@link EVENT_WORDS} word or starts
+ * like one ({@link EVENT_WORD_STARTS}), as in `ADMIN_EVENTS`, `AUDIT_LOG`,
+ * `EVENTS_SINK`, `ADMIN_LOGGING` or `metadata.auditEnabled`.
  */
 export function namesEvents(name: string): boolean {
-  return fieldNameWords(name).some((word) => EVENT_WORDS.has(word));
+  return fieldNameWords(name).some(
+    (word) => EVENT_WORDS.has(word) || EVENT_WORD_STARTS.some((start) => word.startsWith(start))
+  );
 }
 
 /**

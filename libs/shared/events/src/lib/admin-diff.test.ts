@@ -339,6 +339,13 @@ describe('masking', () => {
     'recoveryCode',
     'inviteCode',
     'masterKey',
+    // Names a service gives a credential, though a word before the key or
+    // code could read as a classifier.
+    'queryKey',
+    'routingKey',
+    'mapKey',
+    'response_code',
+    'fieldKey',
   ])('masks %s, and the masking check reports it unmasked', (field) => {
     expect(buildAdminDiff({ [field]: 'old-value' }, { [field]: 'new-value' })).toEqual([
       { path: `/${field}`, before: MASK, after: MASK },
@@ -383,6 +390,17 @@ describe('masking', () => {
       'a URL in prose',
       'Posts to https://hooks.chat.example/services/T0/B0/x9Y8z7W6v5U4t3S2r1Q0 every day',
     ],
+    [
+      'an incoming webhook whose secret has no digit',
+      'https://hooks.chat.example/services/TABCDEFGH/BABCDEFGH/abcdefGHIJKLmnopQRSTuvwx',
+    ],
+    ['a second URL with no space before it', '["https://a.example","https://u:p@b.example"]'],
+    ['a second URL after a comma', 'https://a.example,https://api.example/?token=abc123'],
+    ['a token as the user name', 'https://ghp0123456789abcdef@git.example/org/repo.git'],
+    [
+      'more URLs than are read',
+      Array.from({ length: 65 }, (_, i) => `https://h${i}.example`).join(' '),
+    ],
   ])('masks %s under a harmless name', (_label, value) => {
     expect(buildAdminDiff({ note: 'plain' }, { note: value })).toEqual([
       { path: '/note', before: 'plain', after: MASK },
@@ -413,10 +431,38 @@ describe('masking', () => {
     ['a discovery URL', 'https://idp.example/.well-known/openid-configuration'],
     ['an empty secret member', 'https://app.example/cb?token='],
     ['a webhook URL with no secret in the path', 'https://app.example/webhooks/qauth-events'],
+    ['a guide about webhooks', 'https://docs.example/webhooks/getting-started-with-webhooks'],
+    ['several URLs', 'https://a.example/x, https://b.example/y,https://c.example/z'],
     ['a webhook host with a short path', 'https://hooks.example/a'],
   ])('shows %s, which carries no credential', (_label, value) => {
     expect(buildAdminDiff({}, { url: value })).toEqual([{ path: '/url', after: value }]);
     expect(scanAdminDiff([{ path: '/url', after: value }])).toEqual([]);
+  });
+
+  // #827's review: a list of JWKs keeps its public keys and masks each
+  // private one, and the masking check accepts what the builder leaves.
+  it('masks each private key in a list of JWKs, and the masking check accepts the list', () => {
+    const publicJwk = { kty: 'OKP', crv: 'Ed25519', x: 'cHVi' };
+    const privateJwk = { ...publicJwk, d: 'cHJpdg' };
+    const diff = buildAdminDiff(
+      { signingKeys: [publicJwk] },
+      { signingKeys: [publicJwk, privateJwk] }
+    );
+    expect(diff).toEqual([{ path: '/signingKeys', before: [publicJwk], after: [publicJwk, MASK] }]);
+    expect(scanAdminDiff(diff)).toEqual([]);
+    expect(scanAdminDiff([{ path: '/signingKeys', after: [publicJwk, privateJwk] }])).not.toEqual(
+      []
+    );
+    expect(scanAdminDiff([{ path: '/signingKeys', after: [MASK, 'hunter2'] }])).not.toEqual([]);
+  });
+
+  it('reads a long URL in linear time', () => {
+    const started = performance.now();
+    const value = `https://hooks.example/${'A'.repeat(200_000)}?${'B'.repeat(200_000)}=1`;
+    expect(buildAdminDiff({}, { note: value })).toEqual([{ path: '/note', after: value }]);
+    expect(scanAdminDiff([{ path: '/note', after: value }])).toEqual([]);
+    // Quadratic splitting of the segment took seconds at 32 000 characters.
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 
   it('keeps a flag under a secret name: it holds no secret', () => {

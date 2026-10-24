@@ -293,7 +293,10 @@ export const DIFF_SECRET_STEMS: readonly string[] = [
  * than a secret: a country, status or error code, or the key of an
  * attribute, a claim, a sort order or a cache entry (`countryCode`,
  * `statusCode`, `attrKey`, `sortKey`). `recoveryCode`, `inviteCode`, `apiKey`
- * and `masterKey` stay secret.
+ * and `masterKey` stay secret, and so do names that some service gives a
+ * credential: a search service's `queryKey`, an alerting service's
+ * `routingKey`, a maps `mapKey`, OID4VP's `response_code`. Only words that
+ * never name one are listed.
  */
 const NAMING_QUALIFIERS: ReadonlyMap<string, ReadonlySet<string>> = (() => {
   const code = new Set([
@@ -313,7 +316,6 @@ const NAMING_QUALIFIERS: ReadonlyMap<string, ReadonlySet<string>> = (() => {
     'status',
     'error',
     'http',
-    'response',
     'reason',
     'exit',
     'result',
@@ -328,28 +330,19 @@ const NAMING_QUALIFIERS: ReadonlyMap<string, ReadonlySet<string>> = (() => {
     'attributes',
     'claim',
     'claims',
-    'field',
-    'fields',
     'property',
     'properties',
     'prop',
     'props',
-    'column',
-    'columns',
     'sort',
     'partition',
     'cache',
-    'lookup',
-    'map',
     'label',
     'translation',
     'i18n',
-    'routing',
     'idempotency',
     'dedup',
     'dedupe',
-    'query',
-    'index',
   ]);
   return new Map([
     ['code', code],
@@ -514,21 +507,34 @@ const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{16,}$/;
 /** How deep a URL inside a query value of a URL is read. */
 const MAX_URL_DEPTH = 2;
 
+/**
+ * The most URLs one text is read for. A text with more is treated as one that
+ * carries a credential, so a long list cannot make the masking slow.
+ */
+const MAX_URLS_PER_TEXT = 64;
+
 const SCHEME_CHARACTER = /[A-Za-z0-9+.-]/;
 
 /**
- * The URLs in a text: from the scheme before the first `://` of each run of
- * non-space characters to the end of the run. Linear in the text's length.
+ * The URLs in a text: each `://` with the scheme before it, up to the next
+ * URL's scheme or the end of the run of non-space characters, so two URLs
+ * written without a space between them (`["https://a","https://b"]`) are read
+ * apart. Linear in the text's length; `null` past {@link MAX_URLS_PER_TEXT}.
  */
-function urlsIn(text: string): string[] {
+function urlsIn(text: string): string[] | null {
   const urls: string[] = [];
   for (const run of text.split(/\s+/)) {
-    const at = run.indexOf('://');
-    if (at < 1) continue;
-    let start = at;
-    while (start > 0 && SCHEME_CHARACTER.test(run[start - 1])) start -= 1;
-    while (start < at && !/[A-Za-z]/.test(run[start])) start += 1;
-    if (start < at) urls.push(run.slice(start));
+    const starts: number[] = [];
+    let floor = 0;
+    for (let at = run.indexOf('://'); at !== -1; at = run.indexOf('://', at + 3)) {
+      let start = at;
+      while (start > floor && SCHEME_CHARACTER.test(run[start - 1])) start -= 1;
+      while (start < at && !/[A-Za-z]/.test(run[start])) start += 1;
+      if (start < at) starts.push(start);
+      floor = at + 3;
+    }
+    starts.forEach((start, index) => urls.push(run.slice(start, starts[index + 1])));
+    if (urls.length > MAX_URLS_PER_TEXT) return null;
   }
   return urls;
 }
@@ -537,12 +543,15 @@ function urlsIn(text: string): string[] {
 const namesAQuerySecret = (name: string) =>
   namesASecret(name) || fieldNameWords(name).some((word) => QUERY_SECRET_WORDS.has(word));
 
-/** Whether a path segment is shaped like a generated secret: long, with letters and digits. */
+/**
+ * Whether a path segment is shaped like a generated secret: long, and with a
+ * digit or with both cases, as a random string almost always is. A run of
+ * lower-case words such as `getting-started-guide` is not.
+ */
 function isTokenSegment(segment: string): boolean {
   return (
     TOKEN_SEGMENT.test(segment) &&
-    (segment.match(/[0-9]/g)?.length ?? 0) >= 2 &&
-    (segment.match(/[A-Za-z]/g)?.length ?? 0) >= 2
+    (/[0-9]/.test(segment) || (/[a-z]/.test(segment) && /[A-Z]/.test(segment)))
   );
 }
 
@@ -587,6 +596,10 @@ function isCredentialUrl(text: string, depth: number): boolean {
   }
   if (OTP_SCHEMES.has(url.protocol)) return true;
   if (url.password !== '') return true;
+  // A token written as the user name: `https://<token>@git.example/repo.git`.
+  if ((url.protocol === 'https:' || url.protocol === 'http:') && url.username !== '') {
+    return true;
+  }
   if (membersHoldACredential(url.searchParams, depth)) return true;
   const fragment = url.hash.slice(1);
   if (fragment.includes('=') && membersHoldACredential(new URLSearchParams(fragment), depth)) {
@@ -598,7 +611,8 @@ function isCredentialUrl(text: string, depth: number): boolean {
 /**
  * Whether a text holds a URL that carries a credential, anywhere in it:
  *
- * - a password (`scheme://user:password@host`);
+ * - a password (`scheme://user:password@host`), or for `http` and `https` a
+ *   user name, which such a URL carries only as a token;
  * - a query or fragment member with a value and a name that holds a secret
  *   (`?access_token=`, `?token=`, `?secret=`, `?sig=`, `?key=`, `?code=`,
  *   `#access_token=`), or a URL that carries one;
@@ -613,7 +627,9 @@ export function hasCredentialUrl(text: string): boolean {
 }
 
 function holdsCredentialUrl(text: string, depth: number): boolean {
-  return text.includes('://') && urlsIn(text).some((url) => isCredentialUrl(url, depth));
+  if (!text.includes('://')) return false;
+  const urls = urlsIn(text);
+  return urls === null || urls.some((url) => isCredentialUrl(url, depth));
 }
 
 /**
@@ -846,13 +862,26 @@ function secretShaped(path: string): PayloadFinding {
 const escapePointer = escapeSegment;
 
 /**
+ * Whether a list holds JWKs and markers only, at least one JWK: what
+ * {@link buildAdminDiff} leaves of a list of JWKs with private ones in it.
+ */
+function isMaskedJwkList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((item) => isJwkValue(item)) &&
+    value.every((item) => item === ADMIN_DIFF_SECRET_MARKER || isJwkValue(item))
+  );
+}
+
+/**
  * Whether a field named like a secret holds what {@link buildAdminDiff}
- * leaves there: the marker, a flag, or JWKs with no private member.
+ * leaves there: the marker, a flag, or JWKs with no private member, each
+ * private one replaced by the marker.
  */
 const holdsMask = (value: unknown) =>
   value === ADMIN_DIFF_SECRET_MARKER ||
   typeof value === 'boolean' ||
-  (isJwkValue(value) && unmaskedWithin(value, '').length === 0);
+  ((isJwkValue(value) || isMaskedJwkList(value)) && unmaskedWithin(value, '').length === 0);
 
 /** Every unmasked secret under `value`: by member name, by value shape, or in a member name. */
 function unmaskedWithin(value: unknown, at: string): PayloadFinding[] {
