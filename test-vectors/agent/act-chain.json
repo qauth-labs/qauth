@@ -1,0 +1,112 @@
+{
+  "schema": "qauth-vectors/1",
+  "id": "agent/act-chain",
+  "description": "Reading the RFC 8693 act (actor) claim of a delegated QAuth access token, and QAuth's delegation depth cap of 4 (ADR-007 §2). input.act is the token's act claim; input has no act member when the token is not delegated. expected.chain is the actors' sub values, outermost (the most recent actor) first, walking the nested act members: only sub is read, a link whose sub is not a non-empty string is skipped, and the walk stops once the chain holds 4 entries. expected.depth is the number of nested act objects, counting every link (0 without act, 1 for a single actor). expected.within_cap is whether depth is at most 4; QAuth refuses to mint a token-exchange token whose act chain would be deeper, so a verified QAuth token always has within_cap true.",
+  "source": "RFC 8693 §4.1 (the act claim); QAuth ADR-007 §2 and its maximum delegation depth of 4",
+  "cases": [
+    {
+      "id": "no-delegation",
+      "input": {},
+      "expected": { "chain": [], "depth": 0, "within_cap": true },
+      "notes": "A token without act was not delegated."
+    },
+    {
+      "id": "single-actor",
+      "input": { "act": { "sub": "agent-a" } },
+      "expected": { "chain": ["agent-a"], "depth": 1, "within_cap": true }
+    },
+    {
+      "id": "outermost-actor-first",
+      "input": { "act": { "sub": "agent-b", "act": { "sub": "agent-a" } } },
+      "expected": { "chain": ["agent-b", "agent-a"], "depth": 2, "within_cap": true },
+      "notes": "agent-a delegated to agent-b, so agent-b, the actor of this request, comes first."
+    },
+    {
+      "id": "four-actors-at-the-cap",
+      "input": {
+        "act": {
+          "sub": "agent-d",
+          "act": { "sub": "agent-c", "act": { "sub": "agent-b", "act": { "sub": "agent-a" } } }
+        }
+      },
+      "expected": {
+        "chain": ["agent-d", "agent-c", "agent-b", "agent-a"],
+        "depth": 4,
+        "within_cap": true
+      },
+      "notes": "The deepest chain QAuth mints."
+    },
+    {
+      "id": "five-actors-over-the-cap",
+      "input": {
+        "act": {
+          "sub": "agent-e",
+          "act": {
+            "sub": "agent-d",
+            "act": { "sub": "agent-c", "act": { "sub": "agent-b", "act": { "sub": "agent-a" } } }
+          }
+        }
+      },
+      "expected": {
+        "chain": ["agent-e", "agent-d", "agent-c", "agent-b"],
+        "depth": 5,
+        "within_cap": false
+      },
+      "notes": "One actor too many: the chain keeps the four outermost actors, and QAuth refuses to mint such a token."
+    },
+    {
+      "id": "deep-chain-is-cut-at-four",
+      "input": {
+        "act": {
+          "sub": "agent-8",
+          "act": {
+            "sub": "agent-7",
+            "act": {
+              "sub": "agent-6",
+              "act": {
+                "sub": "agent-5",
+                "act": {
+                  "sub": "agent-4",
+                  "act": {
+                    "sub": "agent-3",
+                    "act": { "sub": "agent-2", "act": { "sub": "agent-1" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "expected": {
+        "chain": ["agent-8", "agent-7", "agent-6", "agent-5"],
+        "depth": 8,
+        "within_cap": false
+      },
+      "notes": "A hostile or malformed chain costs no more than four entries to read."
+    },
+    {
+      "id": "only-sub-is-read",
+      "input": {
+        "act": {
+          "sub": "agent-b",
+          "iss": "https://as.example.com",
+          "client_id": "agent-b",
+          "act": { "sub": "agent-a", "scope": "notes:read" }
+        }
+      },
+      "expected": { "chain": ["agent-b", "agent-a"], "depth": 2, "within_cap": true },
+      "notes": "RFC 8693 §4.1 lets an act object carry other claims; the chain takes sub alone."
+    },
+    {
+      "id": "link-without-sub-is-skipped",
+      "input": {
+        "act": {
+          "sub": "",
+          "act": { "iss": "https://as.example.com", "act": { "sub": "agent-a" } }
+        }
+      },
+      "expected": { "chain": ["agent-a"], "depth": 3, "within_cap": true },
+      "notes": "An empty sub and a missing sub add nothing to the chain, but each link still counts toward depth."
+    }
+  ]
+}
