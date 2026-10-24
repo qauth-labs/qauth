@@ -278,6 +278,9 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createEventsRepository(db, options?)`**: The event store (ADR-019 Decision 8, #457): the transactional outbox and the event log in one append-only table, `events`. It takes the root database, which reads and `emitInOwnTransaction` use. See [Event store](#event-store) for the write rule, the read rule and the lag.
   - `emit(tx, event)` writes one event in the caller's transaction (a `DbTransaction`, not the root database) and returns its id. It checks the event with `parseEvent` from `@qauth-labs/shared-events` first and throws `EventValidationError` on an unknown type, a payload that fails its schema or the payload rules, or a NUL character; nothing is written then. The repository makes the id (a UUIDv7) and the time, and takes the category from the registry. The insert reads nothing back, so a role granted only `INSERT` on `events` can write.
   - `emitInOwnTransaction(event)` is the same for a caller without a transaction: one `INSERT`, a transaction of its own.
+  - `emitAdminEvent(tx, { realm, actor, operation, target, before, after, secretFields?, approvals?, client?, request? })` records one admin change as an `admin.change_applied` event in the caller's transaction (#459). It builds the diff from `before` and `after` with `buildAdminDiff` from `@qauth-labs/shared-events`: changed fields only, nested objects diffed, arrays whole, every secret field `***`. A command-line tool on the server host passes `operatorCliActor()`, which names the operating-system user.
+  - An event of an `admin` type joins its realm's hash chain, whichever call writes it. See [Admin events and the hash chain](#admin-events-and-the-hash-chain).
+  - `verifyChain(realmId, from?)` checks the realm's admin chain after `from` (by default its start) and returns `{ ok: true, head }` or `{ ok: false, break: { id, seq, reason } }` for the first admin event that does not verify. `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` runs it from the command line.
   - `readAfter(realmId, position, limit, filters?)` returns `{ events, next }`: the realm's events after `position`, oldest first in `(xid, seq)` order, at most `limit` (1 to 1000), each with its own `position`. `filters` narrows by `types`, `category`, `subjectId`, `clientId` and `fromTime`. Read on from `next`.
   - `oldestUnreadEventAge()` returns how long, in seconds, the oldest committed event has been held back from readers. It returns no event, so it takes no realm.
   - A position (`EventPosition`) is opaque text that names its realm, `xid` and `seq`. Start a realm's stream with `eventStreamStart(realmId)`. A position of another realm, or one that does not parse, throws `EventPositionError`.
@@ -427,10 +430,68 @@ server. `oldestUnreadEventAge()` measures the wait, and the auth server
 publishes it on `/metrics` as `qauth_events_oldest_unread_age_seconds`. Keep
 transactions short, and never hold one open across a network call.
 
-The migration is expand-only: one `CREATE TABLE` and its `CREATE INDEX`
-statements. Insert-only grants for writing roles come with the per-role
-database users; the hash-chain columns of admin events and the trigger that
-refuses updates come with #459.
+Migration 0029 is expand-only: one `CREATE TABLE` and its `CREATE INDEX`
+statements. Migration 0032 adds the hash chain of admin events and the trigger
+that refuses updates (below).
+
+**No updates.** A trigger refuses every `UPDATE` on `events`, for every role
+whose statements fire it, the owner included, even one that matches no row.
+Only the retention job deletes (#536). A writing role is granted `INSERT` and
+`SELECT` only: `eventsWriterGrantStatements(role)` returns the statements, which
+the per-role grants of the topology area apply. QAuth creates no database users;
+until the roles are split, the one database user owns the table, and the hash
+chain shows an admin event it removed.
+
+#### Admin events and the hash chain
+
+Every admin change becomes an admin event (ADR-020 §3, ADR-019 Decision 7,
+#459), written with `emitAdminEvent` in the transaction of the change. Admin
+events are always on: no environment key and no realm setting turns them off,
+and tests fail when a configuration key or a realm column reads like a switch
+for them. The event's `data.diff` lists the changed fields with every secret
+masked as `***`, and `data.approvals` both approvals of a two-admin operation.
+
+```typescript
+await db.transaction(async (tx) => {
+  const before = await realmsRepo.findByIdOrThrow(realmId, tx);
+  const after = await realmsRepo.update(realmId, change, tx);
+  await events.emitAdminEvent(tx, {
+    realm: realmId,
+    actor: { type: 'user', id: adminId },
+    operation: 'realms.policies.write',
+    target: { type: 'realm', id: realmId },
+    before: toJson(before),
+    after: toJson(after),
+    approvals,
+  });
+});
+```
+
+`before` and `after` must be plain JSON: convert a `Date` or a `Buffer` first.
+
+A realm's admin events form one hash chain. Each admin row stores the `hash`
+of the realm's admin row before it as `prev_hash` (32 zero bytes for the
+first), and its own `hash` is SHA-256 over `prev_hash` and the RFC 8785
+canonical JSON of its envelope (`eventChainHash`). A changed row no longer
+hashes to its `hash`; a removed row leaves the next row's `prev_hash` pointing
+at nothing.
+
+- **One chain per realm.** The writer holds the realm's advisory transaction
+  lock from reading the chain head to the end of its transaction, so the chain
+  runs in `seq` order. A unique index on `(realm_id, prev_hash)` lets no two
+  rows follow one hash: a REPEATABLE READ writer that read a stale head gets a
+  unique violation (23505) instead of forking the chain; retry it.
+- **Emit last.** Because the lock lasts to the end of the transaction, write the
+  admin event last. A transaction that writes admin events to several realms
+  writes them in a fixed order, by realm id, or two such transactions can
+  deadlock.
+- **Checked on write.** The writer reads its row back and throws if the row
+  does not hash as written, so a row the chain would reject never commits.
+  That read is why a writer needs `SELECT`.
+- **What the chain shows.** The hash is unkeyed: whoever can rewrite a row and
+  every row after it, or cut the newest rows, leaves a chain that verifies.
+  Keep the head `verifyChain` returns outside the database, and verify from it
+  later: `verifyChain(realmId, head)`.
 
 #### Base Repository Interface
 

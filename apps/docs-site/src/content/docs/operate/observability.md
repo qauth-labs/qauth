@@ -212,6 +212,37 @@ WHERE backend_xid IS NOT NULL
 ORDER BY xact_start;
 ```
 
+### Admin event chain
+
+An admin event records a change made by an administrator, a service account or
+an operator on the server host: what changed, as a diff with every secret value
+`***`, and the approvals the change ran on (see
+[Admin events](/reference/events/#admin-events)). Admin events are always on; no
+environment key and no realm setting turns them off. The admin API, which will
+write most of them, is not built yet.
+
+A realm's admin events form a hash chain: each stores the hash of the one
+before it. Check a realm's chain from a host that holds the database
+credentials:
+
+```bash
+DATABASE_URL=postgresql://qauth:pw@db:5432/qauth \
+  pnpm nx run infra-db:events:verify-chain -- --realm=<realm name>
+```
+
+The command only reads. It exits 0 and prints the chain's head when every
+admin event verifies, and exits 1 at the first event that was changed, or that
+follows one that was removed. `--realm-id=<uuid>` names a realm that no longer
+exists, and `--json` prints the report as JSON.
+
+The chain shows a changed or removed event, but not a chain rewritten from
+some event to the end, or the newest events cut, by someone who can write the
+database. Keep the head it prints somewhere outside the database, and run the
+next check from it with `--from-seq=<seq> --from-hash=<hex>`. That run checks
+the events after the kept head, and fails when the chain since that head no
+longer follows from it, however much of it was rewritten. Events cut from the
+end leave no break: the new head is then older than it should be.
+
 ### Example Prometheus scrape config
 
 ```yaml

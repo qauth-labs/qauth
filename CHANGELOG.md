@@ -162,6 +162,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate number, and 1.0.0 drops the suffix. The auth server emits them
   since [#458].
 
+- **Admin events, with a diff, masked secrets and a hash chain** ([#459],
+  ADR-020 §3, ADR-019 Decision 7). Every admin change becomes one
+  `admin.change_applied` event, written in the transaction of the change with
+  `emitAdminEvent(tx, { realm, actor, operation, target, before, after,
+approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
+  fields by JSON Pointer with their old and new values: unchanged fields are
+  left out, nested objects are diffed, arrays are shown whole. A secret field
+  holds `***`: one the operation marks, and one whose name looks like a secret
+  by the payload rules, marked or not; a token- or key-shaped string is masked
+  wherever it sits. `data.approvals` records both approvals of a two-admin
+  operation, each with the approver, the passkey credential id and who created
+  the approver's account. A command-line tool on the server host records itself
+  as an `operator_cli` actor with the operating-system user
+  (`operatorCliActor()`). Admin events are always on: no environment key and no
+  realm setting turns them off, and tests fail when a configuration key or a
+  realm column reads like a switch for them. Today only the client suspension
+  command writes admin events, which now join the chain; the admin API that
+  will write the rest is still to come.
+- **Schema**: migration 0032 chains admin events by hash ([#459]). Each admin
+  row of `events` stores the hash of the realm's admin row before it as
+  `prev_hash`, and its own `hash` is SHA-256 over `prev_hash` and the RFC 8785
+  canonical JSON of the envelope. Every event of an admin type joins the chain,
+  through `emit` as well: the writer takes the realm's advisory transaction
+  lock, and a unique index on `(realm_id, prev_hash)` keeps a writer that raced
+  it from forking the chain. `verifyChain(realmId, from?)` and the command
+  `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` report the first
+  admin event that was changed, or that follows one that was removed. A trigger
+  now refuses every `UPDATE` on `events`, the owner's included, and
+  `eventsWriterGrantStatements()` grants a writing role `INSERT` and `SELECT`
+  only. The migration adds two nullable columns, checks, two indexes and the
+  trigger; the check that admin rows are chained is added `NOT VALID`, so rows
+  written before it, such as the client suspensions migration 0031 copied from
+  `audit_logs`, are left as they are.
+
 - **Passkeys: the WebAuthn provider and the relying-party settings** ([#467],
   ADR-017 Decision 14, ADR-019 Decision 2). One WebAuthn `CredentialProvider`
   (`provider_type` `webauthn`, `external_sub` the credential id) that sign-in,
@@ -443,6 +477,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#456]: https://github.com/qauth-labs/qauth/issues/456
 [#457]: https://github.com/qauth-labs/qauth/issues/457
 [#458]: https://github.com/qauth-labs/qauth/issues/458
+[#459]: https://github.com/qauth-labs/qauth/issues/459
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#464]: https://github.com/qauth-labs/qauth/issues/464
