@@ -88,6 +88,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         response: { 200: listResponseSchema, 401: unauthorizedResponseSchema },
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const session = await resolveBrowserSession(fastify, request, reply);
@@ -113,6 +114,7 @@ export default async function (fastify: FastifyInstance) {
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null(), 401: z.null() },
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const session = await resolveBrowserSession(fastify, request, reply);

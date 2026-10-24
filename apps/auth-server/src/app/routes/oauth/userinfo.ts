@@ -281,6 +281,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         rateLimit,
       },
     },
@@ -307,6 +308,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         rateLimit,
       },
     },

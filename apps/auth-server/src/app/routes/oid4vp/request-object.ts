@@ -86,6 +86,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'experimental',
       },
       config: {
+        surface: 'api',
         // IP-scoped, in the shape every other unauthenticated surface in this
         // app uses. Its own budget rather than the response endpoint's: see
         // OID4VP_REQUEST_OBJECT_RATE_LIMIT for why the two halves of the

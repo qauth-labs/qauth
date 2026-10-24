@@ -303,6 +303,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['UI'],
         'x-qauth-stability': 'experimental',
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const session = await resolveBrowserSession(fastify, request, reply);
@@ -343,6 +344,7 @@ export default async function (fastify: FastifyInstance) {
         body: linkFormSchema,
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
@@ -448,6 +450,7 @@ export default async function (fastify: FastifyInstance) {
         params: z.object({ handle: z.string() }),
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,

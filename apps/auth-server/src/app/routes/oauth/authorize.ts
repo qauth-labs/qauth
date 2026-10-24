@@ -104,6 +104,8 @@ export default async function (fastify: FastifyInstance) {
   // validation, PKCE, redirect-uri checks, step-up, rate limiting, error shapes —
   // is byte-for-byte identical; only where the parameters are read differs.
   const config = {
+    // Reads and sets the browser session cookie: the realm host only (#486).
+    surface: 'browser' as const,
     rateLimit: {
       // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
       // forces the strict cap; a development/staging ceiling permits the

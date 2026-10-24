@@ -37,6 +37,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'api',
         rateLimit: {
           max: env.LOGOUT_RATE_LIMIT,
           timeWindow: env.LOGOUT_RATE_WINDOW * 1000,

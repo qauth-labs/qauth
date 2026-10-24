@@ -12,7 +12,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'tokens',
     default: { required: true },
     since: '0.1.0',
-    docs: "The issuer URL and the `iss` of every token, a single-realm setting with `DEFAULT_REALM_NAME`: at first boot it becomes the default realm's issuer, without a trailing slash, and its host the realm's permanent primary host.",
+    docs: "The issuer URL and the `iss` of every token, a single-realm setting with `DEFAULT_REALM_NAME`: at first boot it becomes the default realm's issuer, without a trailing slash, and its host the realm's permanent primary host; a request for a host that no realm has gets 421.",
   },
   {
     name: 'ACCESS_TOKEN_LIFESPAN',

@@ -31,8 +31,10 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
+import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
 import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
+import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import { defaultRealmPlugin } from './plugins/default-realm';
@@ -40,6 +42,7 @@ import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
+import { realmResolverPlugin } from './plugins/realm-resolver';
 import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
 
@@ -72,6 +75,25 @@ const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities
   verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
 });
 
+/**
+ * The settings the default realm's boot step (#484) reads, from the
+ * environment. Exported for the E2E harness, which runs the step again after
+ * it empties the database.
+ */
+export function defaultRealmBootSettings(): DefaultRealmBootSettings {
+  return {
+    realmName: env.DEFAULT_REALM_NAME,
+    jwtIssuer: env.JWT_ISSUER,
+    endpointHosts: env.DEFAULT_REALM_ENDPOINT_HOSTS,
+    // The passkey RP ID (#467): checked against the realm's lock at every
+    // boot, whatever WEBAUTHN_ENABLED says.
+    passkeys: {
+      rpId: env.WEBAUTHN_RP_ID,
+      allowParentDomain: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
+    },
+  };
+}
+
 /** Options for {@link app}. */
 export interface AppOptions {
   /**
@@ -81,10 +103,16 @@ export interface AppOptions {
    * error-handler wiring test.
    */
   defaultRealmBoot?: boolean;
+  /**
+   * How the realm resolver (#486) finds the realm of a request host. The
+   * database's `realm_hosts` unless set, which only a boot with no database
+   * does: the error-handler wiring test and the route class test.
+   */
+  realmLookup?: RealmHostLookup;
 }
 
 export async function app(fastify: FastifyInstance, opts: AppOptions) {
-  const { defaultRealmBoot = true, ...pluginOptions } = opts;
+  const { defaultRealmBoot = true, realmLookup, ...pluginOptions } = opts;
 
   await fastify.register(databasePlugin, {
     config: {
@@ -106,17 +134,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // JWT_ISSUER, or the realm's passkeys are bound to another RP ID. Registered right after the database so its hook runs before
   // the job runner starts.
   if (defaultRealmBoot) {
-    await fastify.register(defaultRealmPlugin, {
-      realmName: env.DEFAULT_REALM_NAME,
-      jwtIssuer: env.JWT_ISSUER,
-      endpointHosts: env.DEFAULT_REALM_ENDPOINT_HOSTS,
-      // The passkey RP ID (#467): checked against the realm's lock at every
-      // boot, whatever WEBAUTHN_ENABLED says.
-      passkeys: {
-        rpId: env.WEBAUTHN_RP_ID,
-        allowParentDomain: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
-      },
-    });
+    await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
 
     // The signer's wiring and the default realm's key boot step (ADR-019
     // Decision 9, #485). The plugin loads the KEK: NODE_ENV=production refuses
@@ -139,6 +157,25 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       },
     });
   }
+
+  // Request-id propagation (#128), ahead of the realm resolver below: both
+  // are `onRequest` hooks of this scope and run in registration order, so a
+  // 421 the resolver throws still echoes the request id an operator needs to
+  // find its reason in the log.
+  await fastify.register(requestIdPlugin);
+
+  // Realm resolution by host (ADR-019 Decision 1, #486). Every request but a
+  // `none` route's finds its realm through the host it names, or gets 421.
+  // This position IS load-bearing, for the rate limiter's reason below: the
+  // plugin checks each route's `config.surface` in an `onRoute` hook, which is
+  // not retroactive, so it must load before any route, @fastify/cors's
+  // `OPTIONS *` included. Its `onRequest` hook belongs to this scope, so it
+  // runs before every route's own hooks, the rate limiter's among them,
+  // wherever the limiter is registered: a refused host is never counted, and
+  // a per-realm limit can read `request.realm`.
+  await fastify.register(realmResolverPlugin, {
+    ...(realmLookup === undefined ? {} : { lookup: realmLookup }),
+  });
 
   await fastify.register(cachePlugin, {
     config: {
@@ -456,13 +493,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // type, not per plugin.
   await fastify.register(securityHeadersPlugin);
 
-  // Observability (T3): request-id propagation (#128) and the metrics registry
-  // (#123/#126). Neither position is load-bearing either (#365): request-id is
-  // another hook (`onRequest`), propagated into existing child scopes by the
-  // same recursion described above, and metrics only `decorate()`s the
-  // instance — its sole consumer, GET /metrics, dereferences `fastify.metrics`
-  // inside the handler at request time, not while the route plugin is loading.
-  await fastify.register(requestIdPlugin);
+  // Observability (T3): the metrics registry (#123/#126). Its position is not
+  // load-bearing either (#365): it only `decorate()`s the instance — its sole
+  // consumer, GET /metrics, dereferences `fastify.metrics` inside the handler
+  // at request time, not while the route plugin is loading. Request-id
+  // propagation (#128) is registered above, ahead of the realm resolver.
   await fastify.register(metricsPlugin);
 
   // Background jobs (ADR-019 Decision 8): purge-expired today. The runner
@@ -535,7 +570,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     dir: path.join(__dirname, 'plugins'),
     options: { ...pluginOptions },
     ignorePattern:
-      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs|default-realm)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
+      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs|default-realm|realm-resolver)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {

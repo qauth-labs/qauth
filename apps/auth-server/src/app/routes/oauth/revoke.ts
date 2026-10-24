@@ -50,6 +50,7 @@ export default async function (fastify: FastifyInstance) {
         body: revokeRequestSchema,
       },
       config: {
+        surface: 'api',
         rateLimit: {
           // Consistent with introspection — both are confidential-client,
           // token-bearing endpoints (#211 follow-up; reuses the introspect cap).

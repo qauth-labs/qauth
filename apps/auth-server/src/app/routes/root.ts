@@ -10,6 +10,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['System'],
         'x-qauth-stability': 'stable',
       },
+      config: { surface: 'meta' },
     },
     async function () {
       return { message: 'Hello API' };

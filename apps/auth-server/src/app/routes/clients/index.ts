@@ -321,6 +321,7 @@ export default async function (fastify: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         response: { 200: listClientsResponseSchema },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const payload = request.jwtPayload;
@@ -402,6 +403,7 @@ export default async function (fastify: FastifyInstance) {
         response: { 201: createClientResponseSchema },
       },
       config: {
+        surface: 'api',
         // Create runs an argon2id hash on every call (confidential clients hash
         // the real secret; public clients hash a sentinel), so an authenticated
         // caller could otherwise burn CPU at the global default rate. Cap it
@@ -548,6 +550,7 @@ export default async function (fastify: FastifyInstance) {
         params: clientIdParamsSchema,
         response: { 200: clientSchema },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);
@@ -575,6 +578,7 @@ export default async function (fastify: FastifyInstance) {
         body: updateClientRequestSchema,
         response: { 200: clientSchema },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);
@@ -671,6 +675,7 @@ export default async function (fastify: FastifyInstance) {
         params: clientIdParamsSchema,
         response: { 204: z.null() },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);
@@ -712,6 +717,7 @@ export default async function (fastify: FastifyInstance) {
         response: { 200: regenerateSecretResponseSchema },
       },
       config: {
+        surface: 'api',
         // Regeneration always runs an argon2id hash, so it carries the same
         // CPU-DoS profile as create — cap it per-IP at the same budget.
         rateLimit: {

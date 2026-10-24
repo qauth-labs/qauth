@@ -40,7 +40,7 @@ export const SERVER_KEYS = defineKeys([
     owner: 'server',
     default: 'false',
     since: '0.1.0',
-    docs: 'The reverse proxies whose `X-Forwarded-For` hops set the client address, as a comma-separated list of addresses, CIDR ranges or `loopback`, `linklocal` and `uniquelocal`; `true` and a hop count are refused.',
+    docs: 'The reverse proxies whose `X-Forwarded-For` hops set the client address and whose `X-Forwarded-Host` names the realm host, as a comma-separated list of addresses, CIDR ranges or `loopback`, `linklocal` and `uniquelocal`; `true` and a hop count are refused.',
   },
   {
     name: 'REQUEST_TIMEOUT_MS',
@@ -121,7 +121,7 @@ export const SERVER_KEYS = defineKeys([
     owner: 'realms',
     default: '',
     since: '0.2.0',
-    docs: "Host names, comma-separated, that server-side callers reach the default realm by, such as `auth-server` from the developer portal's `AUTH_SERVER_URL`; each missing one is added as an endpoint host at boot and none is ever removed.",
+    docs: "Host names, comma-separated, that server-side callers reach the default realm by, such as `auth-server` from the developer portal's `AUTH_SERVER_URL`; each missing one is added as an endpoint host at boot and none is ever removed; an endpoint host answers the API routes and refuses the browser-session routes with 421.",
   },
   {
     name: 'VITEST',

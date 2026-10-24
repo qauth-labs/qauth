@@ -7,6 +7,7 @@ import {
   InvalidRequestError,
   JWTExpiredError,
   JWTInvalidError,
+  MisdirectedRequestError,
   NotFoundError,
   UnauthorizedClientError,
   UniqueConstraintError,
@@ -82,6 +83,18 @@ async function buildTestApp(): Promise<FastifyInstance> {
   app.post('/test-forbidden', async () => {
     throw new ForbiddenError('Static API keys are disabled for production clients.');
   });
+
+  // The realm resolver (#486) throws this from an `onRequest` hook, before the
+  // route runs, so the route here does the same.
+  app.get(
+    '/test-misdirected',
+    {
+      onRequest: async () => {
+        throw new MisdirectedRequestError();
+      },
+    },
+    async () => ({ reached: true })
+  );
 
   app.post('/test-unique-constraint', async () => {
     // The DB layer surfaces the offending constraint name; the handler must NOT
@@ -159,6 +172,9 @@ async function buildProblemApp(): Promise<FastifyInstance> {
   app.get('/legacy', async () => {
     throw new ForbiddenError('No.');
   });
+  app.get('/admin/v1-rc.0/misdirected', async () => {
+    throw new MisdirectedRequestError();
+  });
 
   return app;
 }
@@ -200,6 +216,26 @@ describe('error-handler plugin', () => {
       error: 'Invalid JWT token',
       code: 'JWT_INVALID',
     });
+
+    await app.close();
+  });
+
+  it('maps MisdirectedRequestError to a 421 that names no host (#486)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/test-misdirected',
+      headers: { host: 'unknown.example' },
+    });
+
+    expect(response.statusCode).toBe(421);
+    expect(response.json()).toEqual({
+      statusCode: 421,
+      error: 'This server does not answer for the requested host',
+      code: 'MISDIRECTED_REQUEST',
+    });
+    expect(response.body).not.toContain('unknown.example');
 
     await app.close();
   });
@@ -369,6 +405,23 @@ describe('error-handler plugin', () => {
       // The legacy members are gone, so a client cannot branch on them.
       expect(response.json()).not.toHaveProperty('error');
       expect(response.json()).not.toHaveProperty('statusCode');
+
+      await app.close();
+    });
+
+    it('answers a 421 with the misdirected_request code (#486)', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/misdirected' });
+
+      expect(response.statusCode).toBe(421);
+      expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      expect(response.json()).toMatchObject({
+        title: 'Misdirected Request',
+        status: 421,
+        code: 'misdirected_request',
+      });
+      expect(PROBLEM_CODES.misdirected_request.status).toBe(421);
 
       await app.close();
     });

@@ -23,6 +23,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
       },
       config: {
+        surface: 'none',
         rateLimit: {
           max: env.HEALTH_RATE_LIMIT_MAX,
           timeWindow: env.HEALTH_RATE_LIMIT_WINDOW * 1000,

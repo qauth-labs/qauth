@@ -119,6 +119,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         response: { 201: createApiKeyResponseSchema },
       },
       config: {
+        surface: 'api',
         // Minting runs an argon2id hash on every call, so an authenticated
         // caller could otherwise burn CPU at the global default rate. Cap it
         // per-IP at the same budget as client create / regenerate-secret.
@@ -194,6 +195,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         params: clientIdParamsSchema,
         response: { 200: listApiKeysResponseSchema },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);
@@ -220,6 +222,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         params: keyParamsSchema,
         response: { 200: apiKeySchema },
       },
+      config: { surface: 'api' },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);

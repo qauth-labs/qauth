@@ -53,6 +53,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
+      config: { surface: 'meta' },
     },
     async (_request, reply) => {
       reply
@@ -71,6 +72,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
+      config: { surface: 'meta' },
     },
     async (_request, reply) => {
       reply
@@ -89,6 +91,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
+      config: { surface: 'meta' },
     },
     async (_request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.

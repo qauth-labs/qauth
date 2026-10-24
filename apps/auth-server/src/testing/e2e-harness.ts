@@ -8,7 +8,7 @@ import {
   startRedisContainer,
   truncateDomainTablesStatement,
 } from '@qauth-labs/shared-testing';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify';
 import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
@@ -44,7 +44,12 @@ import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
 
 /** A running QAuth server plus everything needed to reset and stop it. */
 export interface BootedAuthServer {
-  /** The Fastify instance, ready for `.inject()`. */
+  /**
+   * The Fastify instance, ready for `.inject(options)`. A request that names
+   * no host is sent to the realm host, the host of `JWT_ISSUER` (#486); a test
+   * that sets `headers.host` sends that one instead. The chain form,
+   * `.inject().get(…)`, is not covered and goes to `localhost`.
+   */
   readonly app: FastifyInstance;
   /** Close the server (and its pools). Containers survive. */
   close(): Promise<void>;
@@ -80,9 +85,12 @@ export async function startE2eInfrastructure(): Promise<E2eInfrastructure> {
   };
 }
 
+/** Per booted server: run its default realm boot step again. */
+const defaultRealmReboots = new WeakMap<FastifyInstance, () => Promise<unknown>>();
+
 /**
  * Truncate every domain table and flush Redis, through the SERVER's own
- * connections.
+ * connections, then put the default realm back as the boot step made it.
  *
  * Deliberately not a second pool: the app already holds the only clients this
  * needs, and opening another would mean a test could reset a database the
@@ -91,6 +99,11 @@ export async function startE2eInfrastructure(): Promise<E2eInfrastructure> {
 export async function resetE2eState(app: FastifyInstance): Promise<void> {
   await app.dbPool.query(truncateDomainTablesStatement());
   await app.redis.flushall();
+  // The truncation took the default realm and its hosts with it, and every
+  // request is routed by host (#486): put back what the boot step made, and
+  // forget the hosts the resolver cached.
+  await defaultRealmReboots.get(app)?.();
+  app.realmHostCache.clear();
 }
 
 /** An Ed25519 key pair, PEM-encoded, for `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`. */
@@ -161,6 +174,29 @@ export interface BootAuthServerOptions {
    * what registration accepts or refuses, turns it off.
    */
   readonly defaultRealmBoot?: boolean;
+  /**
+   * Routes to add beside the app's, for a suite that reads request state no
+   * route shows, such as the realm the resolver put on the request (#486).
+   * Each one needs a `config.surface`, as every route of the app does.
+   */
+  readonly routes?: (app: FastifyInstance) => void;
+}
+
+/**
+ * Make `inject()` send `host` when a request names none (#486). Without it a
+ * request goes to light-my-request's `localhost`, which names no realm, and
+ * every route but `/health` answers 421. A `host` header still wins.
+ */
+function injectToRealmHost(server: FastifyInstance, host: string): void {
+  const inject = server.inject.bind(server) as (...args: unknown[]) => unknown;
+  const withHost = (options: InjectOptions | string): InjectOptions => {
+    const given = typeof options === 'string' ? { url: options } : options;
+    return { ...given, authority: given.authority ?? host };
+  };
+  server.inject = ((options?: InjectOptions | string, callback?: unknown) => {
+    if (options === undefined) return inject();
+    return callback === undefined ? inject(withHost(options)) : inject(withHost(options), callback);
+  }) as FastifyInstance['inject'];
 }
 
 /**
@@ -183,7 +219,9 @@ export async function bootAuthServer(
       key.startsWith('ACR_') ||
       key.startsWith('WEBAUTHN_') ||
       key === 'KEK' ||
-      key.startsWith('KEK_')
+      key.startsWith('KEK_') ||
+      key.startsWith('DEFAULT_REALM_') ||
+      key === 'TRUST_PROXY'
     ) {
       delete process.env[key];
     }
@@ -194,7 +232,10 @@ export async function bootAuthServer(
   // first import's parsed `env` would be reused for every later boot.
   vitest.vi.resetModules();
 
-  const { app } = await import('../app/app');
+  const { app, defaultRealmBootSettings } = await import('../app/app');
+  const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
+  // The same module instance the app just loaded, since the registry was reset.
+  const { env } = await import('../config/env');
 
   // Silent by default: these suites drive dozens of requests and every refusal
   // logs its reason. `E2E_DEBUG_LOG=1` turns the server's own log back on, which
@@ -206,6 +247,9 @@ export async function bootAuthServer(
         ? { level: 'warn', stream: options.logStream }
         : process.env['E2E_DEBUG_LOG'] === '1',
     routerOptions: { ignoreTrailingSlash: true },
+    // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
+    // TRUST_PROXY hop, and `request.ip` reads `X-Forwarded-For` likewise.
+    trustProxy: env.TRUST_PROXY,
   });
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
@@ -214,8 +258,22 @@ export async function bootAuthServer(
   // instance instead of inside the app's own scope, which is what lets
   // `resetE2eState` truncate the database the server is actually looking at.
   // Nothing under test observes the difference.
-  await server.register(fp(app), { defaultRealmBoot: options.defaultRealmBoot ?? true });
+  const defaultRealmBoot = options.defaultRealmBoot ?? true;
+  await server.register(fp(app), { defaultRealmBoot });
+  const { routes } = options;
+  if (routes !== undefined) {
+    await server.register(async (scope) => routes(scope));
+  }
   await server.ready();
+  injectToRealmHost(server, new URL(env.JWT_ISSUER).host);
+  if (defaultRealmBoot) {
+    defaultRealmReboots.set(server, () =>
+      bootDefaultRealm(
+        { db: server.db, realms: server.repositories.realms, log: server.log },
+        defaultRealmBootSettings()
+      )
+    );
+  }
 
   return {
     app: server,

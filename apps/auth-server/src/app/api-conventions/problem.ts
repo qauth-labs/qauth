@@ -124,6 +124,11 @@ export const PROBLEM_CODES = {
     status: 415,
     description: 'The media type of the request body is not one the operation accepts.',
   },
+  misdirected_request: {
+    status: 421,
+    description:
+      'The server does not answer for the host the request names, or not for this operation on that host.',
+  },
   unprocessable_content: {
     status: 422,
     description:
@@ -164,6 +169,7 @@ const STATUS_FALLBACK_CODES: Readonly<Record<number, ProblemCode>> = {
   412: 'precondition_failed',
   413: 'content_too_large',
   415: 'unsupported_media_type',
+  421: 'misdirected_request',
   422: 'unprocessable_content',
   428: 'precondition_required',
   429: 'too_many_requests',

@@ -720,6 +720,19 @@ This Docker setup is designed for **local development**. For production:
    `172.30.80.20`. If `172.30.80.0/24` overlaps a network on your host, set
    `QAUTH_NETWORK_PREFIX` to the first three octets of a free `/24`; the
    portal is then `<prefix>.10`.
+   The proxy must also pass the host the client asked for. The auth-server
+   answers a request only on the realm host, the host of `JWT_ISSUER`, and on
+   the names in `DEFAULT_REALM_ENDPOINT_HOSTS`; any other host gets
+   `421 Misdirected Request`, and only `/health` answers on every host. Keep
+   the client's `Host` header (nginx: `proxy_set_header Host $host;`), or send
+   it as `X-Forwarded-Host` from an address listed in `TRUST_PROXY`; from any
+   other address that header is ignored. A proxy listed in `TRUST_PROXY` must
+   set `X-Forwarded-Host` itself or remove it (nginx:
+   `proxy_set_header X-Forwarded-Host $host;`), because the auth-server
+   believes the value it forwards, and one passed through from the client
+   would let the client pick the realm. An endpoint host answers the API
+   routes only: the sign-in pages, `/oauth/authorize` and `/consents` answer
+   421 there.
 5. **Configure resource limits** in Docker/Kubernetes. `docker-compose.yml`
    caps the auth-server at 1 GiB and the developer portal at 512 MiB and
    restarts both after a crash (`restart: unless-stopped`); size the limits to

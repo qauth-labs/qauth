@@ -90,6 +90,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and host, so existing clients and tokens keep working. `DEFAULT_REALM_NAME`
   and `JWT_ISSUER` are documented as the single-realm settings.
 
+- **Routing by host** ([#486], ADR-019 Decisions 1 and 8). A request belongs
+  to the realm whose primary host or endpoint host equals the request's host,
+  compared case-insensitively without the port or a trailing dot.
+  `X-Forwarded-Host` counts only from a `TRUST_PROXY` address. Hosts are cached
+  in-process: a known host for 30 seconds, an unknown one for at most 5. Every
+  route names the hosts it answers on in `config.surface`: `browser` routes,
+  which use the session cookie (`/oauth/authorize`, `/ui/*`, `/consents`,
+  `/auth/link/wallet`), answer only on the realm host; `api` and `meta` routes
+  also answer on its endpoint hosts; `/health` answers on any host. The server
+  refuses to start when a route has no class. Handlers still find the default
+  realm by name until [#487] moves them onto the resolved realm. Problem
+  documents gain the code `misdirected_request` (421).
+
 - **Schema**: migration 0026 adds the admin audit log ([#448], ADR-019
   Decision 7, ADR-020 §3). `admin_audit_log` keeps one hash chain per target
   realm: each row carries a `seq` without a gap, the previous row's hash and
@@ -308,6 +321,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys cannot be read. Docker Compose passes `KEK`, `KEK_PATH` and their
   `_PREVIOUS` forms through. Leave the key variables as they are.
 
+- **BREAKING**: the auth-server answers `421 Misdirected Request` for any host
+  that is not a realm's host or endpoint host ([#486]). In simple mode those are
+  the host of `JWT_ISSUER` and the names in `DEFAULT_REALM_ENDPOINT_HOSTS`. A
+  disabled realm gets 421 too, and an endpoint host answers 421 for the
+  browser-session routes. The 421 carries no cookie and no realm data, and
+  there is no fallback to the default realm. Only `/health` answers on every
+  host; a request for a route that does not exist still gets 404.
+
+  **Action for operators**: list in `DEFAULT_REALM_ENDPOINT_HOSTS` every other
+  name or address a server-side caller uses to reach the auth-server: the
+  developer portal's `AUTH_SERVER_URL` host (the Compose file sets
+  `auth-server`), resource servers that call introspection or the JWKS
+  through an internal name, and the Prometheus scrape target of `/metrics`.
+  A reverse proxy must keep the client's `Host`, or set `X-Forwarded-Host`
+  itself from an address listed in `TRUST_PROXY`. For local development, set
+  `JWT_ISSUER=http://localhost:3000`.
+
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
   so a pool of one would leave requests waiting until the job ends. The error
@@ -371,6 +401,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 [#485]: https://github.com/qauth-labs/qauth/issues/485
+[#486]: https://github.com/qauth-labs/qauth/issues/486
+[#487]: https://github.com/qauth-labs/qauth/issues/487
 
 ## [0.1.3] - 2026-10-21
 

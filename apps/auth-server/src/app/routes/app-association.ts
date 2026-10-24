@@ -49,6 +49,7 @@ export default async function (fastify: FastifyInstance) {
           tags: ['Discovery'],
           'x-qauth-stability': 'experimental',
         },
+        config: { surface: 'meta' },
       },
       async (_request, reply) => sendAssociationFile(reply, document)
     );
@@ -65,6 +66,7 @@ export default async function (fastify: FastifyInstance) {
           tags: ['Discovery'],
           'x-qauth-stability': 'experimental',
         },
+        config: { surface: 'meta' },
       },
       async (_request, reply) => sendAssociationFile(reply, statements)
     );

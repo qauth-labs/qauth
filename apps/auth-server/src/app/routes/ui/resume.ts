@@ -107,6 +107,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         params: z.object({ handle: z.string() }),
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const { handle } = request.params as { handle: string };

@@ -355,6 +355,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         querystring: authorizeQuerySchema,
       },
+      config: { surface: 'browser' },
     },
     async (request, reply) => {
       const query = request.query as z.infer<typeof authorizeQuerySchema>;
@@ -543,6 +544,7 @@ export default async function (fastify: FastifyInstance) {
         body: consentFormSchema,
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: env.AUTHORIZE_RATE_LIMIT,
           timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,

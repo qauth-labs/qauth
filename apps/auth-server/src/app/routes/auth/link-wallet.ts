@@ -145,6 +145,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
       config: {
+        surface: 'browser',
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
@@ -215,6 +216,7 @@ export default async function (fastify: FastifyInstance) {
         response: { 200: statusResponseSchema, 401: errorResponseSchema },
       },
       config: {
+        surface: 'browser',
         // Sized for polling, matching the wallet-login status endpoint.
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
