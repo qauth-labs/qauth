@@ -16,7 +16,10 @@ import { CONFIG_KEY_REGISTRY } from './keys';
  * A key that reads like a switch for events but turns nothing off, such as
  * one that only pauses a delivery route, goes in ALLOWED with the reason.
  */
-const ALLOWED: Readonly<Record<string, string>> = {};
+const ALLOWED: Readonly<Record<string, string>> = {
+  OTEL_EVENTS_ENABLED:
+    'Turns on the OpenTelemetry log export of stored events (#541). Every event, admin events included, is stored and chained whatever it says; it decides only whether a copy also leaves as a log record.',
+};
 
 function configurationNames(): string[] {
   const names = new Set<string>();
