@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-10-24'
+lastVerified: '2026-10-25'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -105,6 +105,33 @@ server logs a warning with the number of newer migrations and starts.
 
 Read the release's `CHANGELOG.md` entry before you upgrade. One migration in
 QAuth's history needs more: migration 0011, below.
+
+## Upgrading within 1.x
+
+:::caution[Back up first]
+Take the backup of [step 1](#1-back-up-the-database) before every upgrade.
+Downgrades are not supported, within 1.x or otherwise: restoring the backup is
+the only way back.
+:::
+
+This section is a stub until 1.0 ships. From 1.0 on, ADR-018 §5 promises:
+
+- An upgrade within 1.x is the three steps above and nothing else: back up, run
+  the new version's migration runner, start the new version.
+- No 1.x migration is destructive. None drops or renames a table or column,
+  narrows a column's type or deletes rows. A change of shape adds the new form
+  beside the old one, so the previous version keeps working on the new schema
+  while a rolling upgrade replaces its nodes.
+- CI tests an upgrade from every earlier 1.x minor release.
+
+That test runs today, before 1.0, from each release listed in
+`upgrade-baselines.json` at the repository root. It starts the release, writes
+data through its HTTP API, runs this version's migration runner and nothing
+else, and starts this version. Then it checks that tokens issued before the
+upgrade still introspect, the refresh token rotates, consents and API keys are
+still there, and passwords still sign in. It then starts the old release again
+on the migrated database and runs the same smoke tests. Until the 1.0 release
+candidate, a failure of that last check is reported but does not fail CI.
 
 ## History: the migration 0011 runbook (ADR-002)
 

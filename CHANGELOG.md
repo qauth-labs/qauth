@@ -452,6 +452,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `loadVectors(id)`. Vectors are append-only: changing a case's expected result
   takes a new case id. See `test-vectors/README.md`.
 
+- **An upgrade test in CI** ([#475], ADR-018 §5). The new `upgrade-test` job
+  runs once per release tag in `upgrade-baselines.json` (today `v0.1.0-rc.2`).
+  It builds that release's images from its tag, writes data through its HTTP
+  API (verified users, clients, a code flow with PKCE and its tokens, a
+  consent, an API key), runs this commit's migration runner and nothing else,
+  and checks on the new server that the old access token still introspects,
+  the refresh token rotates, the consent and the API key are still there and
+  the passwords still sign in; the wire suite runs on the upgraded database
+  too. Then the released server runs again on the migrated database: the
+  rolling-upgrade leg, which reports a failure without failing the job until
+  the 1.0 release candidate. It runs on pull requests that touch the
+  migrations, the runner or the auth server, and on every push to `main`.
+  `scripts/upgrade-test/upgrade-test.sh all` runs it locally. See
+  `apps/upgrade-test/README.md`, and the new "Upgrading within 1.x" section of
+  the upgrade guide.
+
 ### Changed
 
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
@@ -664,6 +680,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#469]: https://github.com/qauth-labs/qauth/issues/469
 [#470]: https://github.com/qauth-labs/qauth/issues/470
 [#474]: https://github.com/qauth-labs/qauth/issues/474
+[#475]: https://github.com/qauth-labs/qauth/issues/475
 [#476]: https://github.com/qauth-labs/qauth/issues/476
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#484]: https://github.com/qauth-labs/qauth/issues/484
