@@ -499,6 +499,33 @@ describe('admin events integration (real Postgres)', () => {
       expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 2 });
     });
 
+    it('refuses an admin row that follows the head with a seq below it, so later writers are not locked out', async () => {
+      const realm = randomUUID();
+      await emitInTx(change(realm));
+      const [head] = await chainRows(realm);
+      const { rows } = await pool().query<{ seq: string }>(
+        `SELECT seq::text FROM events WHERE realm_id = $1 AND hash IS NOT NULL`,
+        [realm]
+      );
+      const below = BigInt(rows[0].seq) - 1n;
+
+      // An unused seq below the head's, with the head's hash as prev_hash:
+      // kept, it would leave the head where it was, and every later writer
+      // would follow that head into idx_events_chain_link.
+      for (const seq of [below, 0n]) {
+        await expect(
+          pool().query(
+            `INSERT INTO events (seq, id, realm_id, category, type, time, data, schema_version, prev_hash, hash)
+             OVERRIDING SYSTEM VALUE
+             VALUES ($4, uuidv7(), $1, 'admin', 'urn:qauth:event:admin.change_applied:v1-rc.0', 0, '{}', 1, $2, $3)`,
+            [realm, head.hash, Buffer.alloc(32, 7), seq.toString()]
+          )
+        ).rejects.toMatchObject({ code: '23514', constraint: 'events_seq_from_identity' });
+      }
+      await emitInTx(change(realm));
+      expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 2 });
+    });
+
     it('turns a REPEATABLE READ writer that read a stale head into a unique violation, not a fork', async () => {
       const realm = randomUUID();
       await emitInTx(change(realm));

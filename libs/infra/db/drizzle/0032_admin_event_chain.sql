@@ -39,10 +39,12 @@ CREATE TRIGGER "events_no_update"
 --> statement-breakpoint
 -- An admin row joins its realm's chain only at the head (#459): its prev_hash
 -- is the hash of the realm's newest admin row, or 32 zero bytes for the
--- first, and its seq comes from the identity. The writers do this already;
--- the trigger holds a role that can INSERT to it, so no inserted row can make
--- itself the head of a realm forever (a supplied seq past every other) or
--- join the chain at a hash that is not the head. A raced writer still meets
+-- first, and its seq comes from the identity, past the head's. The writers do
+-- this already; the trigger holds a role that can INSERT to it, so no inserted
+-- row can make itself the head of a realm forever (a supplied seq past every
+-- other), slip in behind the head (a supplied seq below it, which would leave
+-- the head as it was and make every later writer meet idx_events_chain_link),
+-- or join the chain at a hash that is not the head. A raced writer still meets
 -- idx_events_chain_link. SECURITY DEFINER, because a writer holds no grant on
 -- the identity's sequence. EXECUTE is revoked from PUBLIC below, so no role
 -- calls the function directly; the trigger still fires for every insert.
@@ -54,20 +56,22 @@ AS $$
 DECLARE
   v_last bigint;
   v_head bytea;
+  v_head_seq bigint;
 BEGIN
   SELECT s."last_value" INTO v_last FROM public."events_seq_seq" s;
-  IF NEW."seq" > v_last THEN
-    RAISE EXCEPTION 'admin event % sets seq % past the identity', NEW."id", NEW."seq"
-      USING ERRCODE = 'check_violation',
-            CONSTRAINT = 'events_seq_from_identity',
-            HINT = 'seq is the identity''s; insert without it.';
-  END IF;
-  SELECT e."hash" INTO v_head
+  SELECT e."hash", e."seq" INTO v_head, v_head_seq
     FROM public."events" e
     WHERE e."realm_id" = NEW."realm_id" AND e."hash" IS NOT NULL
     ORDER BY e."seq" DESC LIMIT 1;
   IF NOT FOUND THEN
     v_head := decode(repeat('00', 32), 'hex');
+    v_head_seq := 0;
+  END IF;
+  IF NEW."seq" < 1 OR NEW."seq" > v_last OR NEW."seq" <= v_head_seq THEN
+    RAISE EXCEPTION 'admin event % sets seq % outside the identity, or not past the chain head', NEW."id", NEW."seq"
+      USING ERRCODE = 'check_violation',
+            CONSTRAINT = 'events_seq_from_identity',
+            HINT = 'seq is the identity''s; insert without it.';
   END IF;
   IF NEW."prev_hash" IS DISTINCT FROM v_head THEN
     RAISE EXCEPTION 'admin event % of realm % does not follow the chain head', NEW."id", NEW."realm_id"

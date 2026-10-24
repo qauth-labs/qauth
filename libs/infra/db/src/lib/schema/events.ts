@@ -75,7 +75,8 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  * run. `idx_events_chain_link` lets no two rows of a realm follow the same
  * hash, so even a writer that skipped the lock cannot fork the chain, and the
  * trigger `events_admin_follows_head` refuses an admin row whose `prev_hash`
- * is not the head's or whose `seq` was not the identity's.
+ * is not the head's, or whose `seq` was not the identity's or is not past the
+ * head's.
  *
  * ## No updates
  *
