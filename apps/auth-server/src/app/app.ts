@@ -21,6 +21,7 @@ import {
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
+import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import { signerPlugin } from '@qauth-labs/fastify-plugin-signer';
 import {
   resolveStatusListTrustAnchorPems,
@@ -585,6 +586,22 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       },
     });
   }
+
+  // The browser session service (ADR-019 Decision 3, #469): Postgres as the
+  // source of truth, Redis as a cache. It needs the database, cache and
+  // metrics plugins above it and only decorates the instance; no route uses
+  // it yet (#488 moves the sign-in and the session lookup onto it).
+  await fastify.register(sessionServicePlugin, {
+    settings: {
+      defaultMaxLifespanSeconds: env.SESSION_COOKIE_TTL,
+      lastSeenIntervalSeconds: env.SESSION_LAST_SEEN_INTERVAL,
+    },
+    metrics: {
+      cacheLookups: fastify.metrics.sessionCacheLookups,
+      storeReads: fastify.metrics.sessionPostgresReads,
+      lastSeenWrites: fastify.metrics.sessionLastSeenWrites,
+    },
+  });
 
   // Global error handler (#365). This MUST precede every route registration
   // below — it used to sit after both AutoLoads, under a comment claiming the
