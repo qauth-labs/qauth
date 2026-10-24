@@ -47,7 +47,8 @@ pnpm format:check
 
 `lint` runs Oxlint (`.oxlintrc.json`); `dependency-checks` runs the one rule still on ESLint,
 `@nx/dependency-checks`, on package.json files (`eslint.config.mjs`); Oxfmt formats with
-`.oxfmtrc.json`.
+`.oxfmtrc.json`. `typecheck` runs TypeScript 7's `tsgo` (`"compiler": "tsgo"` in `nx.json`),
+except on the docs site, where it runs `astro check`.
 
 ## Architecture principles
 

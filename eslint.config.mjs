@@ -51,8 +51,9 @@ const NON_SHIPPED_FILES = [
  * `importHelpers`, so tsc's output imports its helpers from tslib and tslib is
  * a real dependency. `@nx/dependency-checks` finds that setting only in a
  * `tsc --build <config>` command, the typecheck shape Nx 23 inferred; Nx 24
- * infers `tsc -p <config> --noEmit`, the rule falls back to
- * tsconfig.base.json, and it would call tslib unused in every one of them.
+ * infers `tsgo -p <config> --noEmit` here (`tsc` by default), the rule falls
+ * back to tsconfig.base.json, and it would call tslib unused in every one of
+ * them.
  * Naming tslib as a runtime helper for exactly these projects restores the
  * Nx 23 verdicts: still required here, still obsolete everywhere else.
  */
