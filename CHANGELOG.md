@@ -352,9 +352,10 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   `last_seen_at` is written at most once per `SESSION_LAST_SEEN_INTERVAL`
   (a new advanced key, 60 seconds by default) per session, by one conditional
   `UPDATE`, so several nodes do not all write. A revocation updates Postgres
-  and leaves a short Redis tombstone. With Redis down, reads go to Postgres;
-  with Postgres down, a session that needs it is absent and a cached one is
-  served no longer than the cache time. `/metrics` counts cache reads,
+  and leaves a short Redis tombstone. With Redis down, reads go to Postgres,
+  and a Redis call is given up after 250 ms; with Postgres down, a session
+  that needs it is absent and a cached one is served no longer than the cache
+  time. `/metrics` counts cache reads,
   Postgres reads and last-seen writes. No route uses the service yet: browser
   sessions stay in Redis until the sign-in and the session lookup move onto it
   ([#488]).
