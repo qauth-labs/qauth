@@ -1,0 +1,31 @@
+{
+  "name": "test-vectors",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": ["scope:shared"],
+  "targets": {
+    "validate": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/libs/shared/test-vectors/src/**/*.ts",
+        { "externalDependencies": ["tsx", "zod"] }
+      ],
+      "options": {
+        "command": "tsx src/scripts/validate-vectors.ts",
+        "cwd": "libs/shared/test-vectors"
+      },
+      "metadata": {
+        "description": "Validate every vector file under test-vectors/ against the qauth-vectors/1 format: required members, the schema id, no unknown members, unique case ids, throwaway-marked JWKs, and an id that matches the file's path. This directory holds no code, so the validator lives in libs/shared/test-vectors; its sources are inputs here because this project does not depend on that one (the dependency runs the other way, so a vector edit reaches every test that loads vectors)."
+      }
+    },
+    "test": {
+      "executor": "nx:noop",
+      "dependsOn": ["validate"],
+      "metadata": {
+        "description": "Runs validate. CI's unit job runs `nx affected -t lint typecheck test build`, so this is how test-vectors:validate runs there."
+      }
+    }
+  }
+}

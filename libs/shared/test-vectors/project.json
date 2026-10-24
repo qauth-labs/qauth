@@ -1,0 +1,19 @@
+{
+  "name": "shared-test-vectors",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/shared/test-vectors/src",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:testing"],
+  "implicitDependencies": ["test-vectors"],
+  "targets": {
+    "schema-export": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/export-schema.ts",
+        "cwd": "libs/shared/test-vectors"
+      },
+      "description": "Write test-vectors/schema/vector-file.schema.json from the Zod schema in src/lib/format.ts. A test fails when the committed file differs."
+    }
+  },
+  "// targets": "to see all targets run: nx show project shared-test-vectors --web"
+}

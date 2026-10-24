@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qauth:schema:qauth-vectors/1",
+  "title": "qauth-vectors/1",
+  "description": "A QAuth shared test vector file. Two rules sit outside this schema and are checked by the validator: case ids are unique within a file, and every JWK (an object with a kty member) has a kid that starts with \"throwaway-test-\".",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "qauth-vectors/1",
+      "description": "The format version. A reader refuses a file whose version it does not know."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\/[a-z0-9]+(?:-[a-z0-9]+)*)+$",
+      "description": "The path of the file under test-vectors/, without .json, such as pkce/s256."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the cases test, and what input and expected mean in this file. A reader in another language implements the check from this text."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Where the cases come from: a specification section, or the tool and version that generated them."
+    },
+    "cases": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "Lower-case and hyphenated, unique within the file. A merged case id always means the same input and the same expected result."
+          },
+          "input": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "What the code under test receives. The file's description says what it means."
+          },
+          "expected": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "What the code under test must produce from the input."
+          },
+          "notes": {
+            "description": "Why the case exists, or where its values come from.",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "input",
+          "expected"
+        ],
+        "additionalProperties": false,
+        "description": "One case: an input and the result expected from it."
+      },
+      "description": "At least one case. Case ids are unique within the file."
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "description",
+    "source",
+    "cases"
+  ],
+  "additionalProperties": false
+}

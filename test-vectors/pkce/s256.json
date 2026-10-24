@@ -1,0 +1,140 @@
+{
+  "schema": "qauth-vectors/1",
+  "id": "pkce/s256",
+  "description": "PKCE with the S256 method, as the token endpoint checks it (RFC 7636 §4.6). input.code_verifier is the code_verifier the client sends; input.code_challenge is the code_challenge stored from its authorization request. expected.computed_challenge is BASE64URL(SHA256(ASCII(code_verifier))), base64url without padding, when code_verifier is a valid verifier (43 to 128 characters from A-Z, a-z, 0-9, \"-\", \".\", \"_\" and \"~\"), and null when it is not. expected.accepted is true only when the verifier is valid and computed_challenge equals code_challenge exactly.",
+  "source": "RFC 7636 §4.1, §4.2, §4.6 and Appendix B",
+  "cases": [
+    {
+      "id": "rfc7636-appendix-b",
+      "input": {
+        "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+      },
+      "expected": {
+        "computed_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "accepted": true
+      },
+      "notes": "The verifier and challenge of RFC 7636 Appendix B."
+    },
+    {
+      "id": "wrong-verifier",
+      "input": {
+        "code_verifier": "a-code-verifier-that-is-not-the-rfc-7636-one",
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+      },
+      "expected": {
+        "computed_challenge": "GJSRjd4GBRgS_WKSnkEWq4Hp-pPyiFakn3QVQSeV-7c",
+        "accepted": false
+      },
+      "notes": "A valid verifier that is not the one the challenge was made from."
+    },
+    {
+      "id": "min-length-43",
+      "input": {
+        "code_verifier": "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG",
+        "code_challenge": "g0tuZ6q412zO9IRkeAUs8HN6MQeXPsGce37J3Rsc8wQ"
+      },
+      "expected": {
+        "computed_challenge": "g0tuZ6q412zO9IRkeAUs8HN6MQeXPsGce37J3Rsc8wQ",
+        "accepted": true
+      },
+      "notes": "The shortest valid verifier (RFC 7636 §4.1)."
+    },
+    {
+      "id": "max-length-128",
+      "input": {
+        "code_verifier": "0123456789-._~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv",
+        "code_challenge": "c6oXrdqiWbOlwmm5L5YXyAawt0_neGXXnTePABatxGw"
+      },
+      "expected": {
+        "computed_challenge": "c6oXrdqiWbOlwmm5L5YXyAawt0_neGXXnTePABatxGw",
+        "accepted": true
+      },
+      "notes": "The longest valid verifier; it holds every unreserved character, including - . _ ~."
+    },
+    {
+      "id": "too-short-42",
+      "input": {
+        "code_verifier": "0123456789abcdefghijklmnopqrstuvwxyzABCDEF",
+        "code_challenge": "MX_-mGB1t-AJmAdbA9uoEP6xiZZkjRQYw57xKdMmd44"
+      },
+      "expected": {
+        "computed_challenge": null,
+        "accepted": false
+      },
+      "notes": "One character short. The challenge matches the verifier, and the pair is still refused."
+    },
+    {
+      "id": "too-long-129",
+      "input": {
+        "code_verifier": "0123456789-._~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvA",
+        "code_challenge": "R0c9tYvJbC3DRA4MCZZl7fm_DwaaIAhqbYDrQ3FzkmY"
+      },
+      "expected": {
+        "computed_challenge": null,
+        "accepted": false
+      },
+      "notes": "One character long. The challenge matches the verifier, and the pair is still refused."
+    },
+    {
+      "id": "invalid-character",
+      "input": {
+        "code_verifier": "0123456789abcdefghijklmnopqrstuvwxyzABCDEF+",
+        "code_challenge": "_5J4RRDaL4tnYFLksVVF41ecDh5tFD-o_YpE5WqnELQ"
+      },
+      "expected": {
+        "computed_challenge": null,
+        "accepted": false
+      },
+      "notes": "The + of standard base64 is not an unreserved character. The challenge matches, and the pair is still refused."
+    },
+    {
+      "id": "empty-verifier",
+      "input": {
+        "code_verifier": "",
+        "code_challenge": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+      },
+      "expected": {
+        "computed_challenge": null,
+        "accepted": false
+      },
+      "notes": "An empty verifier, with the challenge of the empty string."
+    },
+    {
+      "id": "challenge-wrong-case",
+      "input": {
+        "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        "code_challenge": "e9mELHOA2oWVfRemtjGUchAOEk1T8urwBUgjsSTW-Cm"
+      },
+      "expected": {
+        "computed_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "accepted": false
+      },
+      "notes": "The Appendix B challenge with its letter case swapped: the comparison is exact."
+    },
+    {
+      "id": "challenge-with-padding",
+      "input": {
+        "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM="
+      },
+      "expected": {
+        "computed_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "accepted": false
+      },
+      "notes": "The Appendix B challenge with a base64 padding character: the challenge is unpadded base64url."
+    },
+    {
+      "id": "plain-method-challenge",
+      "input": {
+        "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        "code_challenge": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+      },
+      "expected": {
+        "computed_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "accepted": false
+      },
+      "notes": "The challenge the plain method would store (the verifier itself). QAuth accepts S256 only."
+    }
+  ]
+}
