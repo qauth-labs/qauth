@@ -249,10 +249,11 @@
               // The migration runner (#474) is an application of its own: one
               // bundled file the runner image runs with Node alone. It reaches
               // only the database library, through its `./migrations` entry
-              // point, never the server, fastify or config layers.
+              // point, and in its container suite the testing library; never
+              // the server, fastify or config layers.
               {
                 "sourceTag": "scope:migration-runner",
-                "onlyDependOnLibsWithTags": ["type:db"]
+                "onlyDependOnLibsWithTags": ["type:db", "type:testing"]
               },
               // The delivery role (ADR-019 Decisions 8 and 9, #460) holds no
               // private key and must not be able to load one. It is also

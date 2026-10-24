@@ -1,3 +1,5 @@
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -50,6 +52,52 @@ export async function applyQauthMigrations(
   } finally {
     await pool.end();
   }
+}
+
+/** One entry of drizzle-kit's journal, `meta/_journal.json`. */
+interface JournalEntry {
+  readonly idx: number;
+  readonly tag: string;
+  readonly when: number;
+}
+
+function readJournal(migrationsFolder: string): { entries: JournalEntry[] } {
+  return JSON.parse(readFileSync(path.join(migrationsFolder, 'meta', '_journal.json'), 'utf8'));
+}
+
+/**
+ * The tags of the generated migrations, oldest first, as the journal lists
+ * them (`0035_event_deliveries`).
+ */
+export function qauthMigrationTags(migrationsFolder: string = QAUTH_MIGRATIONS_FOLDER): string[] {
+  return readJournal(migrationsFolder).entries.map((entry) => entry.tag);
+}
+
+/**
+ * A temporary copy of the migrations folder holding only its first `count`
+ * migrations (issue #474). Applied with {@link applyQauthMigrations}, it
+ * leaves a database behind the code by the rest, as the deployment of an
+ * older release did. The caller removes the folder.
+ */
+export function qauthMigrationsFolderWithFirst(
+  count: number,
+  migrationsFolder: string = QAUTH_MIGRATIONS_FOLDER
+): string {
+  const journal = readJournal(migrationsFolder);
+  const entries = journal.entries.slice(0, count);
+  const folder = mkdtempSync(path.join(tmpdir(), 'qauth-migrations-'));
+  mkdirSync(path.join(folder, 'meta'));
+  writeFileSync(
+    path.join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal, entries }, null, 2)
+  );
+  for (const entry of entries) {
+    copyFileSync(
+      path.join(migrationsFolder, `${entry.tag}.sql`),
+      path.join(folder, `${entry.tag}.sql`)
+    );
+  }
+  return folder;
 }
 
 /**

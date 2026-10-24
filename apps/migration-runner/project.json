@@ -18,7 +18,6 @@
         "tsConfig": "apps/migration-runner/tsconfig.app.json",
         "external": ["pg-native"],
         "assets": [{ "input": "libs/infra/db/drizzle", "glob": "**/*", "output": "drizzle" }],
-        "skipTypeCheck": true,
         "esbuildOptions": {
           "sourcemap": false,
           "outExtension": {
@@ -27,7 +26,7 @@
         }
       },
       "metadata": {
-        "description": "Bundle the migration runner (#474) into dist/apps/migration-runner: one main.js holding the program, pg and drizzle-orm, beside a copy of the generated migrations in drizzle/. The image runs it with Node alone, so it needs no pnpm, nx, tsx or drizzle-kit. `pg-native` stays out: pg loads it only when asked to. Type errors are the `typecheck` target's to find."
+        "description": "Bundle the migration runner (#474) into dist/apps/migration-runner: one main.js holding the program, pg and drizzle-orm, beside a copy of the generated migrations in drizzle/. The image runs it with Node alone, so it needs no pnpm, nx, tsx or drizzle-kit. `pg-native` stays out: pg loads it only when asked to."
       }
     },
     "migrate": {
