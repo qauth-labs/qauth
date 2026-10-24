@@ -6,6 +6,31 @@
   "tags": ["scope:shared", "type:testing"],
   "implicitDependencies": ["test-vectors"],
   "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/apps/**/*.test.ts",
+        "{workspaceRoot}/libs/**/*.test.ts"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. vector-tree.test.ts checks that every vector file is loaded by some test, so it reads every *.test.ts under apps/ and libs/; without them, deleting the last test that loads a file would replay a cached pass. The vector files themselves arrive through ^default: this project depends on test-vectors (implicitDependencies)."
+      }
+    },
     "schema-export": {
       "executor": "nx:run-commands",
       "options": {
