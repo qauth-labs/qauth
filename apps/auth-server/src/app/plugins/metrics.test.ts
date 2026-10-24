@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import Fastify, { LogController } from 'fastify';
+import { Counter } from 'prom-client';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config/env', () => ({
@@ -106,6 +107,41 @@ describe('event store lag gauge (#457)', () => {
 
     expect(res.body).not.toContain('qauth_events_oldest_unread_age_seconds');
 
+    await app.close();
+  });
+});
+
+describe('event telemetry drop counter (#541)', () => {
+  it('serves the counter of the OpenTelemetry export when it is on', async () => {
+    const droppedRecords = new Counter({
+      name: 'qauth_events_telemetry_dropped_total',
+      help: 'Event log records not exported.',
+      labelNames: ['reason'] as const,
+      registers: [],
+    });
+    droppedRecords.inc({ reason: 'queue_full' }, 3);
+    const app = Fastify({ logger: false });
+    app.decorate('eventTelemetry', {
+      droppedRecords,
+    } as unknown as FastifyInstance['eventTelemetry']);
+    await app.register(metricsPlugin);
+    await app.register(metricsRoute);
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.body).toContain('# TYPE qauth_events_telemetry_dropped_total counter');
+    expect(res.body).toMatch(
+      /^qauth_events_telemetry_dropped_total\{reason="queue_full",app="auth-server"\} 3$/m
+    );
+    await app.close();
+  });
+
+  it('is absent when the export is off', async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.body).not.toContain('qauth_events_telemetry_dropped_total');
     await app.close();
   });
 });

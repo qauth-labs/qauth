@@ -46,7 +46,8 @@ export const METRICS_PLUGIN_NAME = '@qauth-labs/metrics';
  * Creates an isolated prom-client {@link Registry} (so tests and multiple
  * instances do not clash on the global default registry), registers default
  * process/Node metrics, and defines the QAuth auth counters and, when the
- * database plugin is registered, the event store lag gauge. Decorates the
+ * database plugin is registered, the event store lag gauge. With the event
+ * telemetry on, it also serves that export's drop counter. Decorates the
  * Fastify instance with {@link AppMetrics}.
  */
 export const metricsPlugin = fp<FastifyPluginOptions>(
@@ -97,6 +98,13 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
           }
         },
       });
+    }
+
+    // Event log records the OpenTelemetry export dropped (#541). The export
+    // owns the counter, since it exists before this plugin; it is here only
+    // when OTEL_EVENTS_ENABLED is on.
+    if (fastify.eventTelemetry !== undefined) {
+      registry.registerMetric(fastify.eventTelemetry.droppedRecords);
     }
 
     const metrics: AppMetrics = { registry, loginAttempts, tokensIssued, jobRuns };

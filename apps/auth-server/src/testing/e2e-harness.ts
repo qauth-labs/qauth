@@ -13,6 +13,7 @@ import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
+import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
 import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
 
 /**
@@ -180,6 +181,11 @@ export interface BootAuthServerOptions {
    * Each one needs a `config.surface`, as every route of the app does.
    */
   readonly routes?: (app: FastifyInstance) => void;
+  /**
+   * The event telemetry queue's sizes and times (#541), for a suite that
+   * fills the queue or waits for a batch.
+   */
+  readonly eventTelemetryLimits?: Partial<EventLogQueueLimits>;
 }
 
 /**
@@ -221,6 +227,7 @@ export async function bootAuthServer(
       key === 'KEK' ||
       key.startsWith('KEK_') ||
       key.startsWith('DEFAULT_REALM_') ||
+      key.startsWith('OTEL_') ||
       key === 'TRUST_PROXY'
     ) {
       delete process.env[key];
@@ -259,7 +266,12 @@ export async function bootAuthServer(
   // `resetE2eState` truncate the database the server is actually looking at.
   // Nothing under test observes the difference.
   const defaultRealmBoot = options.defaultRealmBoot ?? true;
-  await server.register(fp(app), { defaultRealmBoot });
+  await server.register(fp(app), {
+    defaultRealmBoot,
+    ...(options.eventTelemetryLimits === undefined
+      ? {}
+      : { eventTelemetryLimits: options.eventTelemetryLimits }),
+  });
   const { routes } = options;
   if (routes !== undefined) {
     await server.register(async (scope) => routes(scope));
