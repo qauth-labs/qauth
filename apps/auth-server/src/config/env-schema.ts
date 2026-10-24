@@ -6,6 +6,7 @@ import {
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
   eventDeliveryEnvSchema,
+  eventRetentionEnvSchema,
   eventTelemetryEnvSchema,
   federationEnvSchema,
   issuerKeysEnvSchema,
@@ -65,6 +66,9 @@ export const envSchema = z
     // The delivery role's retry schedule (#460): the attempts an event
     // delivery gets and the waits between them.
     ...eventDeliveryEnvSchema.shape,
+    // Event retention (#536): the days a new realm keeps its user and admin
+    // events. They seed the realm row; the realm row owns them afterwards.
+    ...eventRetentionEnvSchema.shape,
     // Wallet federation (ADR-004): WALLET_FEDERATION_ENABLED (#232, default
     // off) and OID4VP_VERIFIER_PROFILE (#299, deliberately no default). Both
     // arrive through this spread, which is why federationEnvSchema must stay a
