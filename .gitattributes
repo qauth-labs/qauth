@@ -43,3 +43,18 @@
 
 # Generated lockfile — keep it out of diffs and reviews.
 pnpm-lock.yaml -diff linguist-generated
+
+# Generated files: a pull request's diff view collapses them (Linguist's
+# `linguist-generated`), so a review starts with the sources they come from.
+# Each is written by a command, and a test compares each with its generator's
+# output in CI, except the drizzle snapshots and the route tree. Unlike the
+# lockfile, they keep their local diff.
+libs/infra/db/drizzle/meta/*.json linguist-generated
+apps/docs-site/public/openapi.json linguist-generated
+apps/docs-site/public/schemas/events/** linguist-generated
+test-vectors/schema/** linguist-generated
+apps/docs-site/src/content/docs/operate/configuration.md linguist-generated
+apps/docs-site/src/content/docs/reference/events.md linguist-generated
+apps/docs-site/src/content/docs/reference/experimental-features.md linguist-generated
+apps/developer-portal/src/routeTree.gen.ts linguist-generated
+libs/core/crypto-native/Cargo.lock linguist-generated
