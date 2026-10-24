@@ -43,8 +43,8 @@ job also runs the [wire suite](../wire-suite/README.md) against the new build on
 database.
 
 The checks use only what every baseline answers. Where releases differ, the helper accepts each
-answer: registration answers `201` with a user before 0.1.0 and `202` with no body since, so the
-user id comes from the login token.
+answer: registration answers `201` with a user in the 0.1.0 release candidates and `202` with no
+user from 0.1.0 on, so the user id comes from the login token.
 
 ## The rolling leg
 

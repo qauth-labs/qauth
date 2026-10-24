@@ -11,8 +11,9 @@ import type { PkcePair } from './pkce';
  * the request that broke.
  *
  * Where releases differ, the helper accepts each release's answer: registration
- * answers 201 with the new user in 0.1 and 202 with no body later, so the user
- * id comes from the login token's `sub`, never from the registration.
+ * answers 201 with the new user in the 0.1.0 release candidates and 202 with
+ * no user from 0.1.0 on, so the user id comes from the login token's `sub`,
+ * never from the registration.
  */
 
 /** A client the developer created through `POST /api/clients`. */
@@ -107,8 +108,8 @@ export async function register(baseUrl: string, email: string, password: string)
 
 /**
  * `POST /auth/verify`: confirm an address with the token from the
- * verification mail. The body carries the password too: required since 0.1.0,
- * and ignored by the releases before.
+ * verification mail and the account's password, which every release since the
+ * first baseline requires.
  */
 export async function verifyEmail(baseUrl: string, token: string, password: string): Promise<void> {
   const response = await fetch(serverPath(baseUrl, '/auth/verify'), {
@@ -166,7 +167,7 @@ export async function createClient(
   };
 }
 
-/** The `code` and `state` the authorization endpoint sent back to the client. */
+/** The code the authorization endpoint sent back to the client. */
 export interface AuthorizationResult {
   readonly code: string;
   /** Whether the consent page was shown and allowed on the way. */
@@ -205,6 +206,7 @@ export async function authorizeInBrowser(options: {
   let method = 'GET';
   let body: URLSearchParams | undefined;
   let consented = false;
+  let signedIn = false;
   const trail: string[] = [];
 
   for (let step = 0; step < 15; step++) {
@@ -253,6 +255,12 @@ export async function authorizeInBrowser(options: {
       form.buttons.some((button) => button.name === 'decision' && button.value === 'allow')
     );
     if (login) {
+      // A second sign-in page means the first password was refused. Submitting
+      // it again would only count towards the account's lockout.
+      expect(signedIn, `the sign-in was refused after ${trail.join(' → ')}: ${excerpt(text)}`).toBe(
+        false
+      );
+      signedIn = true;
       body = formBody(login, { email: options.email, password: options.password });
       url = new URL(login.action || url, url).href;
     } else if (consent) {
