@@ -68,6 +68,73 @@ async function buildAppWithEventStore(oldestUnreadEventAge: () => Promise<number
   return app;
 }
 
+/** The metrics plugin and route over a stand-in retention repository (#536). */
+async function buildAppWithRetention(
+  oldestEventTimes: () => Promise<{ user: number | null; admin: number | null }>
+) {
+  const app = Fastify({ logger: false });
+  app.decorate('repositories', {
+    events: { oldestUnreadEventAge: async () => 0 },
+    eventRetention: { oldestEventTimes },
+  } as unknown as FastifyInstance['repositories']);
+  await app.register(metricsPlugin);
+  await app.register(metricsRoute);
+  return app;
+}
+
+describe('event retention metrics (#536)', () => {
+  it("reads the age of each category's oldest event at each scrape", async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000, toFake: ['Date'] });
+    try {
+      const app = await buildAppWithRetention(async () => ({
+        user: 1_800_000_000_000 - 90 * 86_400_000,
+        admin: null,
+      }));
+
+      const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+      expect(res.body).toContain('# TYPE qauth_events_oldest_age_seconds gauge');
+      expect(res.body).toContain(
+        'qauth_events_oldest_age_seconds{category="user",app="auth-server"} 7776000'
+      );
+      expect(res.body).toContain(
+        'qauth_events_oldest_age_seconds{category="admin",app="auth-server"} 0'
+      );
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows NaN when the read fails, and still serves the rest', async () => {
+    const app = await buildAppWithRetention(async () => {
+      throw new Error('permission denied for table events');
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatch(
+      /^qauth_events_oldest_age_seconds\{category="user",app="auth-server"\} nan$/im
+    );
+    expect(res.body).toContain('qauth_events_oldest_unread_age_seconds{app="auth-server"} 0');
+    await app.close();
+  });
+
+  it('counts deleted events by category', async () => {
+    const app = await buildApp();
+    app.metrics.eventsRetentionDeleted.inc({ category: 'user' }, 3);
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.body).toContain(
+      'qauth_events_retention_deleted_total{category="user",app="auth-server"} 3'
+    );
+    expect(res.body).not.toContain('qauth_events_oldest_age_seconds');
+    await app.close();
+  });
+});
+
 describe('event store lag gauge (#457)', () => {
   it('reads the event store lag at each scrape', async () => {
     let age = 12.5;

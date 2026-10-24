@@ -562,11 +562,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // propagation (#128) is registered above, ahead of the realm resolver.
   await fastify.register(metricsPlugin);
 
-  // Background jobs (ADR-019 Decision 8): purge-expired today. The runner
+  // Background jobs (ADR-019 Decision 8): purge-expired, and event retention
+  // (#536), which reads the delivery routes' enabled destinations and falls
+  // back to the retention seeds for a realm whose row is gone. The runner
   // starts on `onReady` and stops on `onClose`, so it needs the database and
   // metrics plugins above it; it registers no route, so nothing below depends
   // on its position.
-  await fastify.register(jobsPlugin);
+  await fastify.register(jobsPlugin, {
+    deliveryRoutes: eventDeliveryRoutes ?? [],
+    eventRetentionFallback: {
+      userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
+      adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
+    },
+  });
 
   // The delivery role (ADR-019 Decision 8, #460), in-process like the signer:
   // it fans every new event out to the destinations of the delivery routes

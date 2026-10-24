@@ -31,6 +31,11 @@ export interface AppMetrics {
    */
   jobRuns: Counter<'job' | 'result'>;
   /**
+   * Events the retention job deleted (#536), by `category` = `user` |
+   * `admin`.
+   */
+  eventsRetentionDeleted: Counter<'category'>;
+  /**
    * Browser session cache reads (ADR-019 Decision 3, #469). Labelled by
    * `result` = `hit` | `miss` | `revoked` | `error`; hits over all reads is the
    * cache hit rate.
@@ -92,6 +97,13 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registers: [registry],
     });
 
+    const eventsRetentionDeleted = new Counter({
+      name: 'qauth_events_retention_deleted_total',
+      help: 'Events the retention job deleted, by category.',
+      labelNames: ['category'] as const,
+      registers: [registry],
+    });
+
     const sessionCacheLookups = new Counter({
       name: 'qauth_session_cache_lookups_total',
       help: 'Browser session cache reads by outcome; hit over all is the cache hit rate.',
@@ -134,6 +146,35 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       });
     }
 
+    // The age of each category's oldest event (#536): about the realm's
+    // retention while the retention job keeps up, and growing past it when
+    // the job stops or a destination holds events back. Read at each scrape,
+    // through the retention repository, so it needs a database user that may
+    // read events; a failed read reports NaN.
+    if (fastify.hasDecorator('repositories')) {
+      new Gauge({
+        name: 'qauth_events_oldest_age_seconds',
+        help: "Seconds since each category's oldest stored event was written; 0 when it has none.",
+        labelNames: ['category'] as const,
+        registers: [registry],
+        async collect() {
+          try {
+            const oldest = await fastify.repositories.eventRetention.oldestEventTimes();
+            const now = Date.now();
+            for (const category of ['user', 'admin'] as const) {
+              const time = oldest[category];
+              this.set({ category }, time === null ? 0 : Math.max(0, now - time) / 1000);
+            }
+          } catch (error) {
+            fastify.log.warn({ err: error }, 'Could not read the oldest event ages for /metrics');
+            for (const category of ['user', 'admin'] as const) {
+              this.set({ category }, Number.NaN);
+            }
+          }
+        },
+      });
+    }
+
     // Event log records the OpenTelemetry export dropped (#541). The export
     // owns the counter, since it exists before this plugin; it is here only
     // when OTEL_EVENTS_ENABLED is on.
@@ -146,6 +187,7 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       loginAttempts,
       tokensIssued,
       jobRuns,
+      eventsRetentionDeleted,
       sessionCacheLookups,
       sessionPostgresReads,
       sessionLastSeenWrites,

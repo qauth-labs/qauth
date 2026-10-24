@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { createManualClock, type ManualClock } from '../../testing/manual-clock';
 import { jobsPlugin } from '../plugins/jobs';
 import { metricsPlugin } from '../plugins/metrics';
+import { createEventRetentionJob } from './event-retention';
 import { defineJob, jitterWindowMs, type JobSpec } from './job-runner';
 import { createPurgeExpiredJob } from './purge-expired';
 
@@ -36,6 +37,7 @@ const INTERVAL = 60_000;
 const WINDOW = jitterWindowMs(INTERVAL);
 const SKIPPED = 'job run skipped: another node holds its lock';
 const WAIT = { timeout: 10_000, interval: 25 };
+const DAY = 24 * 60 * 60_000;
 
 interface LogLine {
   readonly msg: string;
@@ -408,14 +410,152 @@ describe('job runner on a real Postgres', () => {
       nodes.push({ app, lines });
 
       await clock.advanceTo(60 * 60_000);
+      // Event retention runs in the same slot; wait for this job's own line.
       await vi.waitFor(
-        () => expect(lines.some((line) => line.msg === 'job run finished')).toBe(true),
+        () => expect(lines.some((line) => line.msg === 'expired rows purged')).toBe(true),
         WAIT
       );
 
       expect(lines.find((line) => line.msg === 'expired rows purged')?.job).toBe('purge-expired');
       const { rows } = await dbPool.query('SELECT id FROM authorization_codes');
       expect(rows).toEqual([]);
+    });
+  });
+
+  describe('event-retention (#536)', () => {
+    const FALLBACK = { userEventRetentionDays: 90, adminEventRetentionDays: 365 };
+
+    /** A node's database and metrics plugins, with a pool of its own. */
+    async function retentionNode(): Promise<FastifyInstance> {
+      if (!postgres) throw new Error('database not started');
+      const app = Fastify({ logger: false });
+      await app.register(databasePlugin, {
+        config: { connectionString: postgres.connectionString, pool: { max: 2, min: 0 } },
+      });
+      await app.register(metricsPlugin);
+      await app.ready();
+      nodes.push({ app, lines: [] });
+      return app;
+    }
+
+    function run(
+      app: FastifyInstance,
+      at: number,
+      log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    ) {
+      return createEventRetentionJob({
+        retention: app.repositories.eventRetention,
+        routes: [],
+        fallback: FALLBACK,
+        deleted: app.metrics.eventsRetentionDeleted,
+        batchSize: 2,
+      }).run({
+        signal: new AbortController().signal,
+        now: () => at,
+        log: log as unknown as FastifyInstance['log'],
+      });
+    }
+
+    async function seed(app: FastifyInstance, userEvents: number, adminEvents: number) {
+      const realm = await app.repositories.realms.create({ name: `realm-${randomUUID()}` });
+      for (let i = 0; i < userEvents; i += 1) {
+        const userId = randomUUID();
+        await app.repositories.events.emitInOwnTransaction({
+          type: 'urn:qauth:event:user.signed_in:v1-rc.0',
+          realm: realm.id,
+          actor: { type: 'user', id: userId },
+          subject: { type: 'user', id: userId },
+          data: { method: 'password' },
+        });
+      }
+      for (let i = 0; i < adminEvents; i += 1) {
+        await app.db.transaction((tx) =>
+          app.repositories.events.emitAdminEvent(tx, {
+            realm: realm.id,
+            actor: { type: 'user', id: randomUUID() },
+            operation: 'realms.mail.write',
+            target: { type: 'realm', id: realm.id },
+            before: { fromName: 'QAuth' },
+            after: { fromName: `Ops ${i}` },
+          })
+        );
+      }
+      return realm.id;
+    }
+
+    async function counts(realmId: string) {
+      const { rows } = await database().dbPool.query<{ category: string; count: string }>(
+        'SELECT category, count(*)::text AS count FROM events WHERE realm_id = $1 GROUP BY category',
+        [realmId]
+      );
+      return Object.fromEntries(rows.map((row) => [row.category, Number(row.count)]));
+    }
+
+    it("deletes each realm's events past its retention, and the admin chain verifies from its anchor", async () => {
+      const app = await retentionNode();
+      const realm = await seed(app, 3, 3);
+      const written = Date.now();
+
+      await run(app, written + 89 * DAY);
+      expect(await counts(realm)).toEqual({ user: 3, admin: 3 });
+
+      await run(app, written + 91 * DAY);
+      expect(await counts(realm)).toEqual({ admin: 3 });
+
+      await run(app, written + 366 * DAY);
+      // The head stays: the next admin event follows it.
+      expect(await counts(realm)).toEqual({ admin: 1 });
+      expect(await app.repositories.events.verifyChain(realm)).toMatchObject({
+        ok: true,
+        rowsChecked: 1,
+      });
+
+      const metrics = await app.metrics.registry.metrics();
+      expect(metrics).toMatch(
+        /^qauth_events_retention_deleted_total\{category="user",app="auth-server"\} 3$/m
+      );
+      expect(metrics).toMatch(
+        /^qauth_events_retention_deleted_total\{category="admin",app="auth-server"\} 2$/m
+      );
+      expect(metrics).toMatch(
+        /^qauth_events_oldest_age_seconds\{category="user",app="auth-server"\} 0$/m
+      );
+      expect(metrics).toMatch(
+        /^qauth_events_oldest_age_seconds\{category="admin",app="auth-server"\} \d+(\.\d+)?$/m
+      );
+    });
+
+    it('two job instances at once delete each row once and raise no error', async () => {
+      const nodesAtOnce = [await retentionNode(), await retentionNode()];
+      const realms: string[] = [];
+      for (let i = 0; i < 4; i += 1) realms.push(await seed(nodesAtOnce[0], 6, 4));
+      const later = Date.now() + 400 * DAY;
+      const logs = nodesAtOnce.map(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+
+      await Promise.all(nodesAtOnce.map((app, i) => run(app, later, logs[i])));
+      // A realm one instance held was left to it: the next run finishes it.
+      await run(nodesAtOnce[0], later, logs[0]);
+
+      for (const realm of realms) {
+        expect(await counts(realm)).toEqual({ admin: 1 });
+        expect(await nodesAtOnce[1].repositories.events.verifyChain(realm)).toMatchObject({
+          ok: true,
+        });
+      }
+      const deleted = logs.flatMap((log) =>
+        log.info.mock.calls.map(
+          ([fields]) => fields as { deleted: { user: number; admin: number } }
+        )
+      );
+      const total = deleted.reduce(
+        (sum, fields) => sum + fields.deleted.user + fields.deleted.admin,
+        0
+      );
+      expect(total).toBe(realms.length * (6 + 3));
+      for (const log of logs) {
+        expect(log.error).not.toHaveBeenCalled();
+        expect(log.warn).not.toHaveBeenCalled();
+      }
     });
   });
 });
