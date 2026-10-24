@@ -2,7 +2,7 @@
  * Write `test-vectors/schema/vector-file.schema.json` from the Zod schema.
  * Run through `pnpm exec nx run shared-test-vectors:schema-export`; a test
  * fails when the committed file differs. The output is plain
- * `JSON.stringify`, which `.prettierignore` leaves alone. Nothing imports
+ * `JSON.stringify`, which `.oxfmtrc.json` leaves alone. Nothing imports
  * this script.
  */
 import { writeFileSync } from 'node:fs';

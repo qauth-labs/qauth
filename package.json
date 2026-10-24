@@ -29,8 +29,8 @@
     "dev": "nx serve",
     "build": "nx build",
     "lint": "nx lint",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "spec-matrix": "node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --vitest-report dist/wire-report.json --out-dir dist/conformance",
     "stable-surface": "node scripts/stable-surface/check.mjs",
     "experimental-status": "node scripts/experimental-status.mjs",
@@ -43,19 +43,19 @@
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx}": [
-      "eslint --fix"
+      "oxlint --fix --no-error-on-unmatched-pattern"
     ],
-    "**/*.{js,jsx,json,yml,yaml,css,less,scss,ts,tsx,md,graphql}": "prettier --write"
+    "**/*.{js,jsx,json,yml,yaml,css,less,scss,ts,tsx,md,graphql}": "oxfmt --no-error-on-unmatched-pattern"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",
     "@commitlint/config-conventional": "catalog:",
-    "@eslint/js": "catalog:",
     "@nx/esbuild": "catalog:",
     "@nx/eslint": "catalog:",
     "@nx/eslint-plugin": "catalog:",
     "@nx/js": "catalog:",
     "@nx/node": "catalog:",
+    "@nx/oxlint": "catalog:",
     "@nx/react": "catalog:",
     "@nx/vite": "catalog:",
     "@nx/vitest": "catalog:",
@@ -69,12 +69,6 @@
     "@vitest/ui": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",
-    "eslint-config-prettier": "catalog:",
-    "eslint-plugin-import": "catalog:",
-    "eslint-plugin-jsx-a11y": "catalog:",
-    "eslint-plugin-prettier": "catalog:",
-    "eslint-plugin-react": "catalog:",
-    "eslint-plugin-react-hooks": "catalog:",
     "eslint-plugin-simple-import-sort": "catalog:",
     "husky": "catalog:",
     "jiti": "catalog:",
@@ -82,11 +76,10 @@
     "jsonc-eslint-parser": "catalog:",
     "lint-staged": "catalog:",
     "nx": "catalog:",
-    "prettier": "catalog:",
-    "prettier-plugin-tailwindcss": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "tslib": "catalog:",
     "typescript": "catalog:",
-    "typescript-eslint": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"
   },

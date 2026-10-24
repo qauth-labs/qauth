@@ -14,7 +14,7 @@
           "fields": ["compilerOptions"]
         },
         {
-          "externalDependencies": ["vitest", "eslint"]
+          "externalDependencies": ["vitest", "oxlint", "typescript"]
         },
         {
           "env": "CI"
@@ -23,10 +23,11 @@
           "dependentTasksOutputFiles": "**/*.js",
           "transitive": true
         },
-        "{workspaceRoot}/eslint.config.mjs"
+        "{workspaceRoot}/.oxlintrc.json",
+        "{workspaceRoot}/tools/oxlint/qauth-plugin.mjs"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `custody-import-rule.test.ts` lints sample imports with the workspace ESLint configuration, so a change to `eslint.config.mjs` or to ESLint itself must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared, with `eslint` added to the external dependencies."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `custody-import-rule.test.ts` lints sample imports with the key custody block of the workspace Oxlint configuration and the local plugin it uses, so a change to `.oxlintrc.json`, to `tools/oxlint/qauth-plugin.mjs` or to Oxlint itself must re-run it (TypeScript reads the configuration's comments). Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared, with `oxlint` and `typescript` added to the external dependencies."
       }
     },
     "test-integration": {

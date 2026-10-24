@@ -1,7 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
 
-import { format, resolveConfig } from 'prettier';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -21,29 +22,37 @@ const read = (path: string) => readFileSync(join(REPO_ROOT, path), 'utf8');
 
 const REGENERATE = 'run `pnpm exec nx run shared-events:schema-export` and commit the result';
 
+/** Oxfmt's command line, which formats with the repository's `.oxfmtrc.json`. */
+const OXFMT = join(
+  dirname(createRequire(__filename).resolve('oxfmt/package.json')),
+  'bin',
+  'oxfmt'
+);
+
 /**
  * The files as they are committed: the export script runs the page through
- * Prettier, so the test does too, with the repository's configuration.
+ * Oxfmt, so the test does too, with the repository's configuration.
  */
-async function generatedFiles(): Promise<Artifact[]> {
+function generatedFiles(): Artifact[] {
   const pagePath = join(REPO_ROOT, EVENTS_PAGE_PATH);
-  const options = await resolveConfig(pagePath);
-  return Promise.all(
-    eventArtifacts().map(async (artifact) =>
-      artifact.path === EVENTS_PAGE_PATH
-        ? {
-            ...artifact,
-            content: await format(artifact.content, { ...options, filepath: pagePath }),
-          }
-        : artifact
-    )
+  return eventArtifacts().map((artifact) =>
+    artifact.path === EVENTS_PAGE_PATH
+      ? {
+          ...artifact,
+          content: execFileSync(process.execPath, [OXFMT, `--stdin-filepath=${pagePath}`], {
+            cwd: REPO_ROOT,
+            input: artifact.content,
+            encoding: 'utf8',
+          }),
+        }
+      : artifact
   );
 }
 
 describe('the generated event contract files', () => {
   let generated: Artifact[] = [];
-  beforeAll(async () => {
-    generated = await generatedFiles();
+  beforeAll(() => {
+    generated = generatedFiles();
   });
 
   // The acceptance criterion of #456: the generated JSON Schema equals the

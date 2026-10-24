@@ -1,0 +1,368 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // The rule set the ESLint configuration enforced, rule for rule: Nx's
+  // flat/base, flat/typescript and flat/javascript configs (@eslint/js and
+  // typescript-eslint `recommended`, with Nx's changes), the Nx module
+  // boundaries, the key custody guard, simple-import-sort and the
+  // stability library's type-only imports. Oxlint's own default category is
+  // turned off below so nothing runs that ESLint did not. Formatting, which
+  // ESLint checked through eslint-plugin-prettier, is Oxfmt's job
+  // (.oxfmtrc.json). `@nx/dependency-checks` reads package.json files, which
+  // Oxlint does not lint, so it stays on ESLint (eslint.config.mjs).
+  //
+  // `nx lint` runs this through @nx/oxlint's inferred `lint` target. Comments
+  // such as `eslint-disable-next-line` keep working: Oxlint reads them, and
+  // maps `@typescript-eslint/<rule>` to its own `typescript/<rule>`.
+  "plugins": ["eslint", "typescript"],
+  // ESLint plugins and rules Oxlint does not implement natively, run through
+  // its JS-plugin API. That API is outside Oxlint's semver, so `oxlint` is
+  // pinned exactly in the catalog.
+  // - @nx/oxlint/boundaries-plugin: Nx's own `@nx/enforce-module-boundaries`
+  //   rule, unmodified (experimental in @nx/oxlint 24).
+  // - eslint-plugin-simple-import-sort: the ESLint plugin itself.
+  // - tools/oxlint/qauth-plugin.mjs: a port of ESLint's `no-restricted-syntax`
+  //   for the key custody guard, as `qauth/no-restricted-syntax`.
+  "jsPlugins": [
+    "@nx/oxlint/boundaries-plugin",
+    "eslint-plugin-simple-import-sort",
+    "./tools/oxlint/qauth-plugin.mjs"
+  ],
+  "categories": {
+    "correctness": "off"
+  },
+  "ignorePatterns": [
+    "**/.astro/**",
+    "**/.expo/**",
+    "**/.nitro/**",
+    "**/.nx/**",
+    "**/.cache/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/out-tsc/**",
+    "**/web-build/**",
+    "**/vitest.config.ts",
+    "**/vitest.workspace.ts",
+    "**/vite.config.*.timestamp*",
+    "**/vitest.config.*.timestamp*",
+    "**/routeTree.gen.ts",
+    // Oxlint lints the frontmatter of .astro pages; ESLint never read them.
+    // Left out so the switch lints the same files.
+    "**/*.astro"
+  ],
+  "rules": {
+    // @eslint/js `recommended`, less the rules typescript-eslint's
+    // eslint-recommended turns off because TypeScript checks the same thing.
+    // ESLint's `no-octal` has no Oxlint rule: Oxlint's parser rejects a legacy
+    // octal literal in strict-mode code, which every ES module is.
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": "error",
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": ["error", { "checkLoops": "allExceptWhileTrue" }],
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-else-if": "error",
+    "no-duplicate-case": "error",
+    "no-empty": "error",
+    "no-empty-character-class": "error",
+    "no-empty-pattern": "error",
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": "error",
+    "no-global-assign": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": "error",
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-prototype-builtins": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": "error",
+    "no-shadow-restricted-names": ["error", { "reportGlobalThis": true }],
+    "no-sparse-arrays": "error",
+    "no-unassigned-vars": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-useless-assignment": "error",
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "no-var": "error",
+    "prefer-const": "error",
+    "prefer-rest-params": "error",
+    "prefer-spread": "error",
+    "preserve-caught-error": "error",
+    "require-yield": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error",
+
+    // typescript-eslint `recommended`, as Nx's configs set it: no-explicit-any,
+    // no-non-null-assertion and no-unused-vars warn, no-empty-function and
+    // no-empty-interface added. Oxlint names the extension rules that replace
+    // a core rule (no-array-constructor, no-empty-function,
+    // no-unused-expressions, no-unused-vars) without the prefix; they cover
+    // TypeScript syntax as typescript-eslint's do.
+    "no-array-constructor": "error",
+    "no-empty-function": "error",
+    "no-unused-expressions": "error",
+    // typescript-eslint's defaults. Given no options, Oxlint would also skip
+    // names that start with `_`, which typescript-eslint reports.
+    "no-unused-vars": [
+      "warn",
+      { "vars": "all", "args": "after-used", "caughtErrors": "all", "ignoreRestSiblings": false }
+    ],
+    "typescript/adjacent-overload-signatures": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-empty-interface": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "warn",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-inferrable-types": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-non-null-assertion": "warn",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-namespace-keyword": "error",
+    "typescript/triple-slash-reference": "error",
+
+    "simple-import-sort/imports": "error",
+    "simple-import-sort/exports": "error"
+  },
+  "overrides": [
+    {
+      // Only these four extensions, as in the ESLint configuration.
+      "files": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
+      "rules": {
+        "@nx/enforce-module-boundaries": [
+          "error",
+          {
+            "enforceBuildableLibDependency": true,
+            "allow": [],
+            "depConstraints": [
+              // Shared layer (bottom layer - no internal dependencies)
+              // Shared libraries contain pure utilities, errors, and common types
+              // They can only depend on external npm packages, not other workspace libs
+              {
+                "sourceTag": "scope:shared",
+                "onlyDependOnLibsWithTags": []
+              },
+              // Core layer (foundational primitives - the true bottom layer)
+              // Core libraries provide low-level, framework-agnostic primitives
+              // (crypto, encoding). Like the shared layer, they depend on nothing
+              // internal (leaf) and are consumable by every layer above (infra,
+              // server, fastify, app). Kept a strict leaf on purpose: a crypto
+              // primitive must not reach up into domain/error libs.
+              {
+                "sourceTag": "scope:core",
+                "onlyDependOnLibsWithTags": []
+              },
+              // UI layer
+              // UI libraries contain React components and utilities
+              // They can only depend on external npm packages, not other workspace libs
+              {
+                "sourceTag": "scope:ui",
+                "onlyDependOnLibsWithTags": []
+              },
+              // Wire suite (#450, ADR-018 §5): the black-box HTTP suite in
+              // apps/wire-suite. It may use `fetch`, `jose` and its own helpers,
+              // and NO workspace project: a helper shared with the server could
+              // carry the same encoding bug on both sides and hide it. Its
+              // `type:testing` tag does not widen this, because Nx requires
+              // every matching constraint to pass.
+              {
+                "sourceTag": "scope:wire-suite",
+                "onlyDependOnLibsWithTags": []
+              },
+              // ...and nothing imports the wire suite.
+              {
+                "sourceTag": "*",
+                "notDependOnLibsWithTags": ["scope:wire-suite"]
+              },
+              {
+                "sourceTag": "type:testing",
+                "onlyDependOnLibsWithTags": [
+                  "scope:core",
+                  "scope:shared",
+                  "scope:ui",
+                  "scope:infra",
+                  "scope:server",
+                  "scope:fastify"
+                ]
+              },
+              // Infrastructure layer
+              // Infrastructure libraries handle external services (DB, Cache, etc.)
+              // Can depend on: other infra libs, shared libs
+              // Cannot depend on: server, fastify, app layers
+              {
+                "sourceTag": "scope:infra",
+                "onlyDependOnLibsWithTags": ["scope:core", "scope:infra", "scope:shared"]
+              },
+              // Server utilities layer
+              // Server libraries contain business logic utilities (password, config, etc.)
+              // Can depend on: other server libs, shared libs
+              // Cannot depend on: infra, fastify, app layers
+              {
+                "sourceTag": "scope:server",
+                "onlyDependOnLibsWithTags": ["scope:core", "scope:server", "scope:shared"]
+              },
+              // Fastify plugins layer
+              // Fastify plugins wrap infrastructure and server utilities for Fastify
+              // Can depend on: other fastify plugins, server libs, infra libs, shared libs
+              // Cannot depend on: app layer
+              {
+                "sourceTag": "scope:fastify",
+                "onlyDependOnLibsWithTags": [
+                  "scope:core",
+                  "scope:fastify",
+                  "scope:server",
+                  "scope:infra",
+                  "scope:shared"
+                ]
+              },
+              // Application layer (top layer)
+              // Applications are the entry points and can use all layers
+              // Can depend on: fastify plugins, shared libs, ui
+              {
+                "sourceTag": "scope:app",
+                "onlyDependOnLibsWithTags": [
+                  "scope:core",
+                  "scope:fastify",
+                  "scope:shared",
+                  "scope:server-config",
+                  "scope:ui"
+                ]
+              },
+              // The delivery role (ADR-019 Decisions 8 and 9, #460) holds no
+              // private key and must not be able to load one. It is also
+              // `scope:server`, and this narrows it: it reaches only the
+              // shared layer (the event contract), never core-crypto, the
+              // config library, server-jwt or server-keys. It signs through
+              // the handle the signer role gives it.
+              {
+                "sourceTag": "type:event-delivery",
+                "onlyDependOnLibsWithTags": ["scope:shared"]
+              },
+              // Key custody (ADR-019 Decision 9)
+              // `@qauth-labs/server-keys` is also `scope:server`, and Nx applies
+              // every constraint whose tag a project carries, so this one narrows
+              // it: the library that opens stored keys reaches only the core and
+              // shared layers, never another server library such as config.
+              {
+                "sourceTag": "type:key-custody",
+                "onlyDependOnLibsWithTags": ["scope:core", "scope:shared"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    // The experimental-feature registry (#476). `scripts/experimental-status.mjs`
+    // loads libs/shared/stability through Node's own type stripping, which keeps
+    // an import of a type that is not marked `type` and then finds no such
+    // export at run time. So an import used only as a type says so. The
+    // library's tsconfig sets `erasableSyntaxOnly` for the other half: no enum,
+    // namespace or parameter property, which type stripping cannot remove.
+    {
+      "files": ["libs/shared/stability/src/**/*.ts"],
+      "rules": {
+        "typescript/consistent-type-imports": ["error", { "fixStyle": "inline-type-imports" }]
+      }
+    },
+
+    // Key custody guard (#464, ADR-019 Decision 9).
+    //
+    // ADR-019 provisions the KEK to the signer role alone. `@qauth-labs/server-keys`
+    // therefore has two entry points: the package itself, with the `Signer`
+    // interface and public facts that any project may import, and `/custody`, with
+    // the KEK provider, the envelope API, the key factory and the in-process
+    // signer. Only the signer's wiring may import `/custody`; every other project
+    // signs, encrypts and reads keys through `Signer` (`fastify.signer`).
+    //
+    // `@nx/enforce-module-boundaries` works per project and cannot tell one entry
+    // point of a package from another, so this is a path rule. It also refuses a
+    // deep import such as `@qauth-labs/server-keys/src/lib/envelope`, which would
+    // otherwise reach the same code past the entry point, and any string that
+    // names either path, which covers `require()`, a type-level `import('...')`
+    // and the other forms `no-restricted-imports` does not see. A path assembled
+    // at run time still passes: this keeps honest code honest, the signer role's
+    // own process and database user are what hold the line (ADR-019 Decision 9).
+    //
+    // `excludeFiles` is the wiring that may import `/custody`: the library itself
+    // and the signer plugin. A KEK adapter package (#577-#579) joins it when it
+    // lands. libs/server/keys/src/lib/custody-import-rule.test.ts lints sample
+    // imports with this block. The pattern, `^@qauth-labs.server-keys.`, is any
+    // import below `@qauth-labs/server-keys/`; it is written without `/` so it
+    // reads the same as an esquery regex inside a selector.
+    {
+      "files": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.cts",
+        "**/*.mts",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.cjs",
+        "**/*.mjs"
+      ],
+      "excludeFiles": ["libs/server/keys/**", "libs/fastify/plugins/signer/**"],
+      "rules": {
+        // Import and export declarations, `import x = require()` and a dynamic
+        // `import()` of a plain string. Oxlint prints the message as the help
+        // line under its own "import is restricted" one.
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^@qauth-labs.server-keys.",
+                "message": "Only the signer's wiring imports the KEK provider and envelope API (ADR-019 Decision 9). Sign, encrypt and read keys through the Signer interface of '@qauth-labs/server-keys'."
+              }
+            ]
+          }
+        ],
+        // Any other string naming the path: require(), createRequire(...)(...),
+        // a type-level import('...'), or a template literal. The forms the rule
+        // above reports are left out, so each import is reported once. Oxlint's
+        // `no-restricted-imports` also sees a dynamic `import()` of a plain
+        // string, which ESLint's does not, so `ImportExpression` is one of them.
+        "qauth/no-restricted-syntax": [
+          "error",
+          {
+            "selector": ":not(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, TSExternalModuleReference, ImportExpression) > Literal[value=/^@qauth-labs.server-keys./]",
+            "message": "Only the signer's wiring imports the KEK provider and envelope API (ADR-019 Decision 9). Sign, encrypt and read keys through the Signer interface of '@qauth-labs/server-keys'."
+          },
+          {
+            "selector": "TemplateElement[value.raw=/^@qauth-labs.server-keys./]",
+            "message": "Only the signer's wiring imports the KEK provider and envelope API (ADR-019 Decision 9). Sign, encrypt and read keys through the Signer interface of '@qauth-labs/server-keys'."
+          }
+        ]
+      }
+    },
+
+    // Oxlint 1.88's `no-unused-private-class-members` does not count a
+    // `#field in value` brand check as a use, so it reports `#validated`,
+    // which `ValidatedIssuer.isValidated` reads exactly that way. ESLint
+    // counted it. Off for this one file until Oxlint does.
+    {
+      "files": ["libs/server/federation/src/trust/issuer-identity.ts"],
+      "rules": {
+        "no-unused-private-class-members": "off"
+      }
+    }
+  ]
+}

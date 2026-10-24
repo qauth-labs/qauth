@@ -1,6 +1,7 @@
-import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
 
-import { format, resolveConfig } from 'prettier';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { headingAnchor, markdownHeadingAnchors } from './anchor';
@@ -19,20 +20,32 @@ import { EXPERIMENTAL_ITEMS } from './items';
  * `pnpm nx test shared-stability -- -u` rewrites the page, and without `-u`
  * the test fails until the committed page matches.
  *
- * The rendered page goes through Prettier first, so the committed file is
+ * The rendered page goes through Oxfmt first, so the committed file is
  * already formatted and the pre-commit hook never rewrites it.
  */
 
 const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 const PAGE_PATH = join(REPO_ROOT, EXPERIMENTAL_FEATURES_PAGE_PATH);
 
-let page = '';
-beforeAll(async () => {
-  const options = await resolveConfig(PAGE_PATH);
-  page = await format(renderExperimentalFeaturesPage(EXPERIMENTAL_ITEMS), {
-    ...options,
-    filepath: PAGE_PATH,
+/** Oxfmt's command line, which formats with the repository's `.oxfmtrc.json`. */
+const OXFMT = join(
+  dirname(createRequire(__filename).resolve('oxfmt/package.json')),
+  'bin',
+  'oxfmt'
+);
+
+/** `text` as Oxfmt formats the file at `path`. */
+function formatAs(path: string, text: string): string {
+  return execFileSync(process.execPath, [OXFMT, `--stdin-filepath=${path}`], {
+    cwd: REPO_ROOT,
+    input: text,
+    encoding: 'utf8',
   });
+}
+
+let page = '';
+beforeAll(() => {
+  page = formatAs(PAGE_PATH, renderExperimentalFeaturesPage(EXPERIMENTAL_ITEMS));
 });
 
 /** `text` as a regular expression that matches it literally. */
