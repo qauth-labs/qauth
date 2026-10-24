@@ -60,7 +60,7 @@ are part of the trust base. Four controls back that:
    `cargo audit` plus `cargo deny check advisories bans licenses sources` over
    the crate _and its build-time surface_ (`cc`, `cmake`, `pkg-config` execute
    arbitrary code on the builder). `deny.toml` bans re-introducing `bindgen`
-   (aws-lc-sys 0.43.0 ships pregenerated bindings) and any second C crypto stack.
+   (aws-lc-sys 0.46.0 ships pregenerated bindings) and any second C crypto stack.
 
 ### Bumping `aws-lc-rs`
 

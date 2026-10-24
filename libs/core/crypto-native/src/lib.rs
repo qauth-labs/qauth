@@ -10,8 +10,9 @@
 //! all higher-level shaping (MlDsaKey, base64url, error normalization) stays in
 //! TypeScript so both backends present an identical interface.
 
-use aws_lc_rs::signature::{KeyPair, UnparsedPublicKey};
-use aws_lc_rs::unstable::signature::{PqdsaKeyPair, ML_DSA_65, ML_DSA_65_SIGNING};
+use aws_lc_rs::signature::{
+    KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_65, ML_DSA_65_SIGNING,
+};
 use napi::bindgen_prelude::{Error, Result, Uint8Array};
 use napi_derive::napi;
 
