@@ -55,13 +55,14 @@ async function startNode(settings: NodeSettings): Promise<FastifyInstance> {
     },
   });
   await app.register(cachePlugin, {
-    // Fail a command fast once the server is gone, as the deployment's
-    // REDIS_MAX_RETRIES and REDIS_COMMAND_TIMEOUT would.
+    // The deployment's defaults: REDIS_MAX_RETRIES, REDIS_CONNECTION_TIMEOUT
+    // and REDIS_COMMAND_TIMEOUT. With Redis gone, the client keeps a command
+    // waiting far longer than a session read may.
     config: {
       url: settings.redisUrl,
-      maxRetriesPerRequest: 1,
-      connectTimeout: 1_000,
-      commandTimeout: 1_000,
+      maxRetriesPerRequest: 3,
+      connectTimeout: 10_000,
+      commandTimeout: 5_000,
       lazyConnect: true,
     },
   });
@@ -366,13 +367,14 @@ describe('the session service with Redis stopped', () => {
     await postgres?.stop();
   });
 
-  it('still signs in, reads sessions from Postgres and ends them', async (ctx) => {
+  it('still signs in, reads sessions from Postgres and ends them, without waiting on Redis', async (ctx) => {
     if (!dockerUp || !node || !redis) return ctx.skip();
     const realmId = await seedRealm(node);
     const userId = await seedUser(node, realmId);
     const before = await node.sessionService.create({ realmId, userId, authTime: Date.now() });
 
     await redis.stop();
+    const started = Date.now();
 
     // Sign-in: the row is written, the cache write fails quietly.
     const after = await node.sessionService.create({ realmId, userId, authTime: Date.now() });
@@ -396,6 +398,9 @@ describe('the session service with Redis stopped', () => {
       await node.sessionService.revoke({ realmId, sid: after.sid, reason: 'sign_out' })
     ).toMatchObject({ id: after.sid });
     expect(await node.sessionService.get({ realmId, sid: after.sid })).toBeNull();
+
+    // Eight service calls, each giving up on Redis after 250 ms at most.
+    expect(Date.now() - started).toBeLessThan(8 * 250 + 2_000);
   });
 });
 

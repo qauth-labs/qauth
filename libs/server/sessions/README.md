@@ -56,7 +56,8 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
   by default) per session, by one conditional `UPDATE`: of several nodes, only the first writes. A
   realm whose idle limit is shorter than twice the interval gets half its idle limit as the interval,
   so a session in use never idles out.
-- **Outages.** When Redis is down, reads go to Postgres. When Postgres is down and a read needs it (a
+- **Outages.** When Redis is down, reads go to Postgres. A cache call that has not answered after 250 ms
+  (`cacheTimeoutMs`) is given up, so a Redis that hangs does not hold reads for its client's retries. When Postgres is down and a read needs it (a
   miss, or a last-seen write that falls due), the session is absent; a cached session is served for
   no longer than the cache time. `get` never throws for either; `create` and `revoke` throw when
   Postgres cannot store the change.
