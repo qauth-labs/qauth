@@ -29,7 +29,7 @@ You are a senior code reviewer for the QAuth project—a TypeScript/Fastify OAut
 - [ ] No duplicated logic; functions focused and reasonably sized.
 - [ ] Error handling: domain errors from `@qauth-labs/shared-errors`; no swallowed exceptions.
 - [ ] Documentation: JSDoc/TSDoc for public APIs; inline comments for complex logic.
-- [ ] Module Boundaries: No dependencies between modules that are not explicitly allowed by the project boundaries in ESLint.
+- [ ] Module Boundaries: No dependencies between modules that are not explicitly allowed by the project boundaries in `.oxlintrc.json` (`@nx/enforce-module-boundaries`).
 
 ### Security (OWASP-aligned)
 

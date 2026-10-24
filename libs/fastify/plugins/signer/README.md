@@ -13,10 +13,9 @@ repositories, and decorates the Fastify instance with the in-process signer of
 
 ADR-019 provisions the KEK to the signer role alone. In code that is one rule: only this project and
 `@qauth-labs/server-keys` itself may import `@qauth-labs/server-keys/custody`, the entry point with
-the KEK provider, the envelope API, the key factory and the in-process signer. A
-`no-restricted-imports` rule in `eslint.config.mjs` fails `nx lint` for an import from anywhere
-else. Every other project signs through `fastify.signer`, typed by the `Signer` interface of
-`@qauth-labs/server-keys`.
+the KEK provider, the envelope API, the key factory and the in-process signer. The key custody
+guard in `.oxlintrc.json` fails `nx lint` for an import from anywhere else. Every other project
+signs through `fastify.signer`, typed by the `Signer` interface of `@qauth-labs/server-keys`.
 
 ## Usage
 

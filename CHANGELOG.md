@@ -168,7 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-020 §3, ADR-019 Decision 7). Every admin change becomes one
   `admin.change_applied` event, written in the transaction of the change with
   `emitAdminEvent(tx, { realm, actor, operation, target, before, after,
-approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
+  approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   fields by JSON Pointer with their old and new values: unchanged fields are
   left out, nested objects are diffed, arrays are shown whole. A secret field
   holds `***`: one the operation marks, and one whose name looks like a secret
@@ -547,6 +547,22 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
 
   **Action for contributors**: install Node.js 26 (`nvm use` reads `.nvmrc`)
   and `npm install --global pnpm@12.14.0`.
+
+- Lint and formatting run on Oxc. Oxlint checks the rules ESLint checked,
+  through the same `lint` target, and Oxfmt formats what Prettier formatted,
+  with the same options and Tailwind class order. ESLint keeps one rule,
+  `@nx/dependency-checks` on package.json files, as the new `dependency-checks`
+  target. CI now checks the formatting of every file, Markdown and YAML
+  included, in a new `format` job; before, it checked only the files ESLint
+  linted. `.prettierrc` and `.prettierignore` are gone: the settings are in
+  `.oxlintrc.json` and `.oxfmtrc.json`, and `pnpm format` and the pre-commit
+  hook run Oxfmt. The switch reformats 28 files once; `.git-blame-ignore-revs`
+  lists that commit.
+
+  **Action for contributors**: run `pnpm install`, then point your editor's
+  linter and formatter at Oxlint and Oxfmt. A Prettier extension left on would
+  format with Prettier's defaults, since the repository no longer has a
+  Prettier config.
 
 [#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435
@@ -1136,7 +1152,7 @@ token carries; see Changed.
   writes and a CIMD re-resolution never touches; a suspended client is refused
   wherever a disabled one is, with the same error. New operator tooling:
   `pnpm nx run infra-db:db:suspend-oauth-client -- --realm=<name>
---client-id=<client_id> [--lift]`. The management API returns a read-only
+  --client-id=<client_id> [--lift]`. The management API returns a read-only
   `suspended` field. **Upgrade note**: migration 0023 suspends every client that
   is disabled when it runs; one its owner had disabled stays off until an
   operator lifts the suspension, after which the owner re-enables it.

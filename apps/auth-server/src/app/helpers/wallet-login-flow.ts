@@ -493,7 +493,9 @@ export const SAME_DEVICE_NOT_FOLLOWED_WARNING =
  * - `proceed` — the presentation may be resolved on this surface.
  */
 export type WalletSignalGateDecision =
-  { verdict: 'pending' } | { verdict: 'rejected'; warn?: string } | { verdict: 'proceed' };
+  | { verdict: 'pending' }
+  | { verdict: 'rejected'; warn?: string }
+  | { verdict: 'proceed' };
 
 /**
  * The same-device gate (#405, ADR-013 D7) — ONE decision for both state

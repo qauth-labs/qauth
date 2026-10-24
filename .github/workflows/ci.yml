@@ -19,6 +19,12 @@ jobs:
   # leg, as test-vectors' `validate` runs in the test leg before its `test`.
   # `fail-fast: false` keeps what the single command did, which ran every task
   # and reported every failure: a red leg does not cancel the others.
+  #
+  # The lint leg runs two targets: `lint` (Oxlint, .oxlintrc.json) and
+  # `dependency-checks`, the one rule still on ESLint (@nx/dependency-checks on
+  # package.json files, eslint.config.mjs), which Oxlint cannot run because it
+  # does not lint JSON. Together they are what `lint` checked under ESLint,
+  # less formatting, which the `format` job checks.
   affected:
     runs-on: ubuntu-latest
     strategy:
@@ -54,11 +60,39 @@ jobs:
 
       # Prepend any command with "nx-cloud record --" to record its logs to Nx Cloud
       # - run: pnpm exec nx-cloud record -- echo Hello World
-      # The target reaches the script through the environment, not by
-      # interpolation into it.
-      - run: pnpm exec nx affected -t "$TARGET"
+      # The targets reach the script through the environment, not by
+      # interpolation into it. Nx takes a comma-separated list.
+      - run: pnpm exec nx affected -t "$TARGETS"
         env:
-          TARGET: ${{ matrix.target }}
+          TARGETS: ${{ matrix.target == 'lint' && 'lint,dependency-checks' || matrix.target }}
+
+  # Formatting: Oxfmt (.oxfmtrc.json) over the whole repository, every file type
+  # it formats. Under ESLint this was the `prettier/prettier` rule inside `lint`,
+  # which saw only the files ESLint linted (JS, TS and package.json); Markdown,
+  # YAML, CSS and other JSON were left to the pre-commit hook. Not
+  # affected-scoped: checking every file takes about two seconds, and docs/,
+  # CHANGELOG.md and the ADRs belong to no project.
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          version: 12.14.0
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec oxfmt --check
 
   # Coverage gate: a single repo-wide vitest run enforces the global
   # thresholds in vitest.config.ts and fails CI on a regression. Run

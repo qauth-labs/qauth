@@ -35,6 +35,7 @@ minimumReleaseAgeExclude:
   - '@nx/jest@24.0.1'
   - '@nx/js@24.0.1'
   - '@nx/node@24.0.1'
+  - '@nx/oxlint@24.0.1'
   - '@nx/react@24.0.1'
   - '@nx/vite@24.0.1'
   - '@nx/vitest@24.0.1'
@@ -300,12 +301,13 @@ overrides:
   'undici@7': '>=7.30.1 <8'
   'undici@8': '>=8.12.2 <9'
   # Dedupe commitlint's loose TS resolution onto the workspace TS; cap <6.1 to
-  # stay within typescript-eslint@8's `typescript <6.1.0` peer range.
+  # stay within the `typescript <6.1.0` peer range of the typescript-eslint 8
+  # packages @nx/eslint-plugin depends on (its rules, and the parser it
+  # declares as an optional peer).
   typescript: '~6.0.3'
 catalog:
   '@commitlint/cli': '^21.2.3'
   '@commitlint/config-conventional': '^21.2.3'
-  '@eslint/js': '^10.0.1'
   # Nx core and every @nx/* plugin move in lockstep (nx, @nx/vite, @nx/web and
   # @nx/react sit further down): the plugins pin nx and each other EXACTLY,
   # including the ones installed without a catalog entry (@nx/devkit,
@@ -329,6 +331,10 @@ catalog:
   '@nx/eslint-plugin': '24.0.1'
   '@nx/js': '24.0.1'
   '@nx/node': '24.0.1'
+  # Infers the `lint` target that runs Oxlint, and carries the JS-plugin bridge
+  # (`@nx/oxlint/boundaries-plugin`) that runs Nx's enforce-module-boundaries
+  # rule inside Oxlint. Both are marked experimental in 24.0.1.
+  '@nx/oxlint': '24.0.1'
   '@nx/vitest': '24.0.1'
   # Pure-TS FIPS 204 (ML-DSA) signing backend for the PQC roadmap (ADR-005,
   # #243). EXACT pin (pre-1.0 signing-path dependency): security fixes do NOT
@@ -401,13 +407,12 @@ catalog:
   '@vitest/ui': '^5.0.5'
   drizzle-kit: '^0.31.11'
   esbuild: '^0.28.2'
+  # Runs only `@nx/dependency-checks` on package.json files now (the
+  # `dependency-checks` target, eslint.config.mjs), because Oxlint does not lint
+  # JSON. Every other lint rule is Oxlint's.
   eslint: '^10.13.0'
-  eslint-config-prettier: '^10.1.8'
-  eslint-plugin-import: '^2.32.0'
-  eslint-plugin-jsx-a11y: '^6.10.2'
-  eslint-plugin-prettier: '^5.5.7'
-  eslint-plugin-react: '^7.37.5'
-  eslint-plugin-react-hooks: '^7.1.1'
+  # The ESLint plugin itself, loaded by Oxlint as a JS plugin (.oxlintrc.json)
+  # so import and export order is checked by the same code as before.
   eslint-plugin-simple-import-sort: '^14.0.0'
   husky: '^9.1.7'
   # JSON parser for ESLint, used by the `@nx/dependency-checks` config block in
@@ -421,8 +426,16 @@ catalog:
   'jsonc-eslint-parser': '^3.3.0'
   lint-staged: '^17.6.0'
   nx: '24.0.1'
-  prettier: '^3.9.10'
-  prettier-plugin-tailwindcss: '^0.8.1'
+  # Oxfmt formats what Prettier formatted (.oxfmtrc.json): JS and TS itself,
+  # JSON, YAML, Markdown and CSS through the Prettier printers it bundles, and
+  # Tailwind classes with prettier-plugin-tailwindcss's algorithm. EXACT pin:
+  # it is pre-1.0 and a release can change its output, which `format:check` and
+  # CI hold every file to, so a bump is a reviewed change with its reformat.
+  oxfmt: '0.73.0'
+  # Oxlint runs the lint rules (.oxlintrc.json), through @nx/oxlint's `lint`
+  # target. EXACT pin: the JS-plugin API that runs Nx's boundaries rule,
+  # simple-import-sort and tools/oxlint/qauth-plugin.mjs is outside its semver.
+  oxlint: '1.88.0'
   supertest: '^7.3.1'
   # Docker-backed integration harness (@qauth-labs/shared-testing and the
   # auth-server E2E suite); never in the auth-server image. 12.2.0 is the first
@@ -432,7 +445,6 @@ catalog:
   tslib: '^2.8.1'
   tsx: '^4.23.15'
   typescript: '~6.0.3'
-  typescript-eslint: '^8.71.2'
   vitest: '^5.0.5'
   '@fastify/autoload': '^6.5.1'
   '@fastify/cors': '^11.3.1'
@@ -518,8 +530,7 @@ catalog:
   # code units. 4.6.6 fixes GHSA-mrhx-c7xc-m3w5: an array schema without a
   # length bound collects one issue per failing element with no cap, so a large
   # array in a request can exhaust memory. Shipped: request and config schemas.
-  # eslint-plugin-react-hooks' copy, which used to stay on a locked 4.4.3, and
-  # the docs-site and TanStack build copies now resolve to the same version.
+  # The docs-site and TanStack build copies now resolve to the same version.
   zod: '^4.6.7'
   zxcvbn: '^4.4.2'
   vite: '8.3.4'

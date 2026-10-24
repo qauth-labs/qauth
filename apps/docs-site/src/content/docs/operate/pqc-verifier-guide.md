@@ -183,7 +183,7 @@ this is a checklist for building it yourself:
 - [ ] Obtain the detached ML-DSA-65 signature via **introspection** (the default
       delivery channel, and the only one QAuth's own server implements today).
 - [ ] Recompute the JWS signing-input — `base64url(header) + "." +
-base64url(payload)` — and verify the ML-DSA-65 signature over those exact
+  base64url(payload)` — and verify the ML-DSA-65 signature over those exact
       bytes with the `AKP` public key. (This is the same preimage the Ed25519
       signature covers, so tampering breaks both.)
 - [ ] Decide your **downgrade policy**. Verifying the Ed25519 signature is the

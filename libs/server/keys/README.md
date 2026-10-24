@@ -18,7 +18,7 @@ signer, the one component that uses them
 | `@qauth-labs/server-keys`         | The `Signer` interface, the caller roles and their policy, the `typ` table, the key purposes, and the typed errors.                                 | Any project.                                     |
 | `@qauth-labs/server-keys/custody` | The KEK provider, envelope encryption, key generation, the key factory, the in-process signer and the storage ports. Everything that touches a KEK. | This library and the signer's wiring, no others. |
 
-ADR-019 provisions the KEK to the signer role alone, so a rule in `eslint.config.mjs` fails
+ADR-019 provisions the KEK to the signer role alone, so a rule in `.oxlintrc.json` fails
 `nx lint` for an import of `@qauth-labs/server-keys/custody`, or of a deep path into the package,
 from any other project. Every other component signs, encrypts and reads keys through `Signer`. A
 KEK adapter package (#577–#579) is added to that rule's list when it lands.
@@ -50,7 +50,7 @@ keys; the material stays as it is.
   standard keys the realm lacks. See [Importing the key variables](#importing-the-key-variables).
 
 The library may import only `scope:core` and `scope:shared` libraries. Its `type:key-custody` tag
-carries that rule in `eslint.config.mjs`.
+carries that rule in `.oxlintrc.json`.
 
 - **`Signer`** and **`createInProcessSigner`**: see [The signer](#the-signer).
 

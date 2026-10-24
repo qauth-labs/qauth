@@ -80,7 +80,11 @@ import type { ValidatedCredential } from '../oid4vp/validated-credential';
  *   pseudonym). Gated on all three of ADR-009 §3's conditions, none cleared.
  */
 export type SubjectResolutionStrategyId =
-  'asserted-lookup' | 'issuer-scoped-claim' | 'session-binding' | 'key-thumbprint' | 'rp-pseudonym';
+  | 'asserted-lookup'
+  | 'issuer-scoped-claim'
+  | 'session-binding'
+  | 'key-thumbprint'
+  | 'rp-pseudonym';
 
 /**
  * One account a lookup turned up, with the wallet binding stored against it.

@@ -3,7 +3,6 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, relative, resolve, sep } from 'node:path';
 
-import { ESLint } from 'eslint';
 import * as ts from 'typescript';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -20,7 +19,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
  *    wiring, the config library (which reads the key variables), core-crypto
  *    (which imports keys), server-jwt and its plugin, the auth server — is
  *    named in the failure.
- * 2. The Nx constraint of `eslint.config.mjs`: a project tagged
+ * 2. The Nx constraint of `.oxlintrc.json`: a project tagged
  *    `type:event-delivery` depends only on `scope:shared` libraries.
  */
 
@@ -86,7 +85,8 @@ function resolveWorkspaceImport(specifier: string): string | undefined {
     return join(dir, main);
   }
   const typesVersions = manifest['typesVersions'] as
-    Record<string, Record<string, string[]>> | undefined;
+    | Record<string, Record<string, string[]>>
+    | undefined;
   const mapped = typesVersions?.['*']?.[subpath]?.[0];
   if (mapped) return join(dir, mapped);
   const exported = (manifest['exports'] as Record<string, unknown> | undefined)?.[`./${subpath}`];
@@ -257,16 +257,32 @@ describe('the delivery role has no import path to key-loading code', () => {
 });
 
 /**
- * Nx's readers of the two caches the rule loads, the project graph and the file
- * map, through `require` because this library's TypeScript settings (CommonJS,
- * `node` resolution) cannot see the `exports` subpaths Nx publishes them under.
- * Typed with only the members used here.
+ * What the second check loads, through `require` because this library's
+ * TypeScript settings (CommonJS, `node` resolution) cannot see the `exports`
+ * subpaths Oxlint and @nx/oxlint publish their entry points under. Typed with
+ * only the members used here.
  */
-const requireNx = createRequire(__filename);
-const { readCachedProjectGraph } = requireNx('nx/src/devkit-exports') as {
+const requireFromHere = createRequire(__filename);
+type TestFn = (text: string, fn: () => void) => void;
+const { RuleTester } = requireFromHere('oxlint/plugins-dev') as {
+  RuleTester: {
+    new (): {
+      run(name: string, rule: unknown, tests: { valid: object[]; invalid: object[] }): void;
+    };
+    describe: TestFn;
+    it: TestFn;
+    itOnly: TestFn;
+  };
+};
+const nxBoundaries = (
+  requireFromHere('@nx/oxlint/boundaries-plugin') as {
+    default: { rules: Record<string, unknown> };
+  }
+).default;
+const { readCachedProjectGraph } = requireFromHere('nx/src/devkit-exports') as {
   readCachedProjectGraph(): unknown;
 };
-const { readFileMapCache } = requireNx('nx/src/devkit-internals') as {
+const { readFileMapCache } = requireFromHere('nx/src/devkit-internals') as {
   readFileMapCache(): unknown;
 };
 
@@ -280,9 +296,28 @@ function nxCachesPresent(): boolean {
   return readFileMapCache() !== null;
 }
 
-describe('the Nx constraint of the delivery role', () => {
-  let eslint: ESLint;
+/**
+ * The `@nx/enforce-module-boundaries` options of `.oxlintrc.json`, which has
+ * comments, read the way TypeScript reads a tsconfig.
+ */
+function boundaryOptions(): unknown {
+  const path = join(WORKSPACE_ROOT, '.oxlintrc.json');
+  const { config, error } = ts.parseConfigFileTextToJson(path, readFileSync(path, 'utf8'));
+  if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
+  const overrides = (config as { overrides: Array<{ files: string[]; rules?: object }> }).overrides;
+  const [block] = overrides.filter(
+    (override) => override.rules && '@nx/enforce-module-boundaries' in override.rules
+  );
+  expect(block.files).toContain('**/*.ts');
+  return (block.rules as Record<string, [string, unknown]>)['@nx/enforce-module-boundaries'][1];
+}
 
+/** `text` as a regular expression that matches it literally. */
+function literally(text: string): RegExp {
+  return new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
+describe('the Nx constraint of the delivery role', () => {
   // The rule reads the project graph and the file map Nx caches. A run of Nx
   // leaves both; a plain `vitest run` (CI's coverage job) may not, and then the
   // rule skips every file, so build them first.
@@ -293,55 +328,62 @@ describe('the Nx constraint of the delivery role', () => {
         stdio: 'ignore',
       });
     }
-    eslint = new ESLint({ cwd: `${WORKSPACE_ROOT}/` });
   }, 120_000);
 
-  async function boundaryMessages(code: string): Promise<string[]> {
-    const [result] = await eslint.lintText(code, { filePath: DELIBERATE });
-    return result.messages
-      .filter((message) => message.ruleId === '@nx/enforce-module-boundaries')
-      .map((message) => message.message);
-  }
+  // Oxlint's RuleTester runs Nx's rule through the same JS-plugin API as
+  // `nx lint`, on the deliberate file, with the options of `.oxlintrc.json`.
+  RuleTester.describe = describe;
+  RuleTester.it = (text, fn) => it(text, fn, 30_000);
+  RuleTester.itOnly = it.only;
 
+  const options = [boundaryOptions()];
   const DELIVERY_RULE =
     'A project tagged with "type:event-delivery" can only depend on libs tagged with "scope:shared"';
   // infra-db is outside the server layer as well, and that rule speaks first.
   const SERVER_RULE = 'A project tagged with "scope:server" can only depend on libs tagged with';
 
-  it.each([
-    [
-      'server-keys',
-      "import type { Signer } from '@qauth-labs/server-keys';\nexport type S = Signer;\n",
-      DELIVERY_RULE,
-    ],
-    [
-      'server-config',
-      "import { env } from '@qauth-labs/server-config';\nexport { env };\n",
-      DELIVERY_RULE,
-    ],
-    [
-      'core-crypto',
-      "import * as crypto from '@qauth-labs/core-crypto';\nexport { crypto };\n",
-      DELIVERY_RULE,
-    ],
-    [
-      'infra-db',
-      "import { createDatabase } from '@qauth-labs/infra-db';\nexport { createDatabase };\n",
-      SERVER_RULE,
-    ],
-  ])(
-    'refuses a deliberate import of %s',
-    async (_label, code, rule) => {
-      expect(await boundaryMessages(code)).toEqual([expect.stringContaining(rule)]);
-    },
-    30_000
-  );
+  const refused = (name: string, code: string, rule: string) => ({
+    name: `refuses a deliberate import of ${name}`,
+    code,
+    filename: DELIBERATE,
+    options,
+    errors: [{ message: literally(rule) }],
+  });
 
-  it('allows the shared layer', async () => {
-    expect(
-      await boundaryMessages(
-        "import type { EventEnvelope } from '@qauth-labs/shared-events';\nexport type E = EventEnvelope;\n"
-      )
-    ).toEqual([]);
-  }, 30_000);
+  new RuleTester().run(
+    '@nx/enforce-module-boundaries',
+    nxBoundaries.rules['enforce-module-boundaries'],
+    {
+      valid: [
+        {
+          name: 'allows the shared layer',
+          code: "import type { EventEnvelope } from '@qauth-labs/shared-events';\nexport type E = EventEnvelope;\n",
+          filename: DELIBERATE,
+          options,
+        },
+      ],
+      invalid: [
+        refused(
+          'server-keys',
+          "import type { Signer } from '@qauth-labs/server-keys';\nexport type S = Signer;\n",
+          DELIVERY_RULE
+        ),
+        refused(
+          'server-config',
+          "import { env } from '@qauth-labs/server-config';\nexport { env };\n",
+          DELIVERY_RULE
+        ),
+        refused(
+          'core-crypto',
+          "import * as crypto from '@qauth-labs/core-crypto';\nexport { crypto };\n",
+          DELIVERY_RULE
+        ),
+        refused(
+          'infra-db',
+          "import { createDatabase } from '@qauth-labs/infra-db';\nexport { createDatabase };\n",
+          SERVER_RULE
+        ),
+      ],
+    }
+  );
 });

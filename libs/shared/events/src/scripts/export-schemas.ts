@@ -6,9 +6,9 @@
  *
  * A schema file whose type left the registry is deleted, so the directory
  * holds exactly what the registry publishes. The page then goes through
- * Prettier, like the configuration page, so the pre-commit hook never
+ * Oxfmt, like the configuration page, so the pre-commit hook never
  * rewrites it; the schema files stay plain `JSON.stringify` output, which
- * `.prettierignore` leaves alone, like `openapi.json`. This script is the
+ * `.oxfmtrc.json` leaves alone, like `openapi.json`. This script is the
  * library's only I/O, and nothing imports it.
  */
 import { execFileSync } from 'node:child_process';
@@ -31,7 +31,7 @@ for (const artifact of artifacts) {
   mkdirSync(dirname(join(repoRoot, artifact.path)), { recursive: true });
   writeFileSync(join(repoRoot, artifact.path), artifact.content);
 }
-execFileSync('pnpm', ['exec', 'prettier', '--write', '--log-level', 'warn', EVENTS_PAGE_PATH], {
+execFileSync('pnpm', ['exec', 'oxfmt', EVENTS_PAGE_PATH], {
   cwd: repoRoot,
   stdio: 'inherit',
 });

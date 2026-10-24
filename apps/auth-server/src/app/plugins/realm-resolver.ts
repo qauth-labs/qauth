@@ -59,7 +59,11 @@ export const REALM_RESOLVER_PLUGIN_NAME = '@qauth-labs/realm-resolver';
 
 /** Why a request was refused, for the log line. Never sent. */
 type RefusalReason =
-  'malformed_host' | 'unknown_host' | 'realm_disabled' | 'realm_without_issuer' | 'endpoint_host';
+  | 'malformed_host'
+  | 'unknown_host'
+  | 'realm_disabled'
+  | 'realm_without_issuer'
+  | 'endpoint_host';
 
 /**
  * The preflight route `@fastify/cors` adds, `OPTIONS *`. It takes no route

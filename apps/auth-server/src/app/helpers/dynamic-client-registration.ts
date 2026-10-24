@@ -13,7 +13,10 @@ import { isAllowedRedirectUriScheme } from './oauth-redirect';
  * an inline cast that quietly LIED once the schema widened.
  */
 export type DynRegGrantType =
-  'authorization_code' | 'refresh_token' | 'client_credentials' | typeof TOKEN_EXCHANGE_GRANT_TYPE;
+  | 'authorization_code'
+  | 'refresh_token'
+  | 'client_credentials'
+  | typeof TOKEN_EXCHANGE_GRANT_TYPE;
 
 /**
  * RFC 7591 error codes we return for client-metadata validation failures.

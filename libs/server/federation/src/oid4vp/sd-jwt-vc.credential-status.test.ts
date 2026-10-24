@@ -294,7 +294,7 @@ describe('#297 at the #234 seam — a bit is actually read (#378)', () => {
     );
 
     expect(fetches.mock.calls).toHaveLength(1);
-    expect((fetches.mock.calls[0]?.[0] as { uri: string }).uri).toBe(STATUS_LIST_URI);
+    expect((fetches.mock.calls[0]?.[0] as { uri: string } | undefined)?.uri).toBe(STATUS_LIST_URI);
   });
 
   it.each([
@@ -828,7 +828,7 @@ describe('#297 ordering — nothing is dialled on behalf of an unverified creden
     );
 
     expect(validated.assurance.statusChecked).toBe('checked');
-    expect((fetches.mock.calls[0]?.[0] as { uri: string }).uri).toBe(STATUS_LIST_URI);
+    expect((fetches.mock.calls[0]?.[0] as { uri: string } | undefined)?.uri).toBe(STATUS_LIST_URI);
     // `status` is not a claim a consumer receives; it is machinery this gate
     // consumed. It survives into `claims` only because it is not stripped —
     // asserted so a future change to the stripped set is a deliberate one.

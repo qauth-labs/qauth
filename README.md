@@ -415,7 +415,7 @@ qauth/
 
 - **Monorepo**: Nx 24
 - **Package Manager**: pnpm 12
-- **Linting**: ESLint 10
+- **Linting and formatting**: Oxlint and Oxfmt (ESLint 10 for `@nx/dependency-checks` only)
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes ready (manifests planned, Phase 3)
 - **Observability**: OpenTelemetry (planned, Phase 3)

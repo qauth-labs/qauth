@@ -62,7 +62,7 @@ curl -s -X POST http://localhost:3000/oauth/register \
 > ℹ️ **Ask for the delegation grant explicitly.** The registration above gets you
 > a client, but §2's on-behalf-of delegation additionally requires
 > `urn:ietf:params:oauth:grant-type:token-exchange` in `grant_types` — `POST
-/oauth/token` gates delegation on `client.grantTypes.includes(...)`, so a
+> /oauth/token` gates delegation on `client.grantTypes.includes(...)`, so a
 > client without it is refused with `unauthorized_client`:
 >
 > ```jsonc

@@ -29,7 +29,8 @@ export const EVENT_TYPE_PATTERN =
 
 /** An event type identifier, as the type system sees it. */
 export type EventTypeId =
-  `urn:qauth:event:${string}:v${number}` | `urn:qauth:event:${string}:v${number}-rc.${number}`;
+  | `urn:qauth:event:${string}:v${number}`
+  | `urn:qauth:event:${string}:v${number}-rc.${number}`;
 
 /** The version part of an identifier: a major version and, for a candidate, its number. */
 export interface EventVersion {

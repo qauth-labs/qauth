@@ -2,8 +2,6 @@ import { globSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import nx from '@nx/eslint-plugin';
-import prettierPlugin from 'eslint-plugin-prettier';
-import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import * as jsoncParser from 'jsonc-eslint-parser';
 import ts from 'typescript';
 
@@ -143,26 +141,15 @@ function dependencyChecksConfigs() {
 }
 
 /**
- * The projects that may import `@qauth-labs/server-keys/custody` (see the key
- * custody guard below): the library itself and the signer's wiring.
+ * ESLint runs one rule here: `@nx/dependency-checks`, on package.json files.
+ * Everything else, the Nx module boundaries and the key custody guard
+ * included, is Oxlint's (.oxlintrc.json), and formatting is Oxfmt's
+ * (.oxfmtrc.json). Oxlint does not lint JSON, so this rule stays on ESLint,
+ * as the `dependency-checks` target that @nx/eslint/plugin infers for every
+ * project with a package.json (nx.json). CI runs it in the `affected (lint)`
+ * leg, beside Oxlint's `lint`.
  */
-const KEY_CUSTODY_WIRING = ['libs/server/keys/**', 'libs/fastify/plugins/signer/**'];
-
-/**
- * Any import below `@qauth-labs/server-keys/`: the `/custody` entry point or a
- * deep path into the package. Written without `/` so it reads the same as an
- * esquery regex inside a selector and as a `no-restricted-imports` pattern.
- */
-const KEY_CUSTODY_IMPORT = /^@qauth-labs.server-keys./;
-
-const KEY_CUSTODY_MESSAGE =
-  "Only the signer's wiring imports the KEK provider and envelope API (ADR-019 Decision 9). " +
-  "Sign, encrypt and read keys through the Signer interface of '@qauth-labs/server-keys'.";
-
 export default [
-  ...nx.configs['flat/base'],
-  ...nx.configs['flat/typescript'],
-  ...nx.configs['flat/javascript'],
   {
     ignores: [
       '**/.astro/**',
@@ -175,217 +162,19 @@ export default [
       '**/node_modules/**',
       '**/out-tsc/**',
       '**/web-build/**',
-      '**/vitest.config.ts',
-      '**/vitest.workspace.ts',
-      '**/vite.config.*.timestamp*',
-      '**/vitest.config.*.timestamp*',
-      '**/routeTree.gen.ts',
-    ],
-  },
-  {
-    files: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
-    rules: {
-      '@nx/enforce-module-boundaries': [
-        'error',
-        {
-          enforceBuildableLibDependency: true,
-          allow: [],
-          depConstraints: [
-            // Shared layer (bottom layer - no internal dependencies)
-            // Shared libraries contain pure utilities, errors, and common types
-            // They can only depend on external npm packages, not other workspace libs
-            {
-              sourceTag: 'scope:shared',
-              onlyDependOnLibsWithTags: [],
-            },
-            // Core layer (foundational primitives - the true bottom layer)
-            // Core libraries provide low-level, framework-agnostic primitives
-            // (crypto, encoding). Like the shared layer, they depend on nothing
-            // internal (leaf) and are consumable by every layer above (infra,
-            // server, fastify, app). Kept a strict leaf on purpose: a crypto
-            // primitive must not reach up into domain/error libs.
-            {
-              sourceTag: 'scope:core',
-              onlyDependOnLibsWithTags: [],
-            },
-            // UI layer
-            // UI libraries contain React components and utilities
-            // They can only depend on external npm packages, not other workspace libs
-            {
-              sourceTag: 'scope:ui',
-              onlyDependOnLibsWithTags: [],
-            },
-            // Wire suite (#450, ADR-018 §5): the black-box HTTP suite in
-            // apps/wire-suite. It may use `fetch`, `jose` and its own helpers,
-            // and NO workspace project: a helper shared with the server could
-            // carry the same encoding bug on both sides and hide it. Its
-            // `type:testing` tag does not widen this, because Nx requires
-            // every matching constraint to pass.
-            {
-              sourceTag: 'scope:wire-suite',
-              onlyDependOnLibsWithTags: [],
-            },
-            // ...and nothing imports the wire suite.
-            {
-              sourceTag: '*',
-              notDependOnLibsWithTags: ['scope:wire-suite'],
-            },
-            {
-              sourceTag: 'type:testing',
-              onlyDependOnLibsWithTags: [
-                'scope:core',
-                'scope:shared',
-                'scope:ui',
-                'scope:infra',
-                'scope:server',
-                'scope:fastify',
-              ],
-            },
-            // Infrastructure layer
-            // Infrastructure libraries handle external services (DB, Cache, etc.)
-            // Can depend on: other infra libs, shared libs
-            // Cannot depend on: server, fastify, app layers
-            {
-              sourceTag: 'scope:infra',
-              onlyDependOnLibsWithTags: ['scope:core', 'scope:infra', 'scope:shared'],
-            },
-            // Server utilities layer
-            // Server libraries contain business logic utilities (password, config, etc.)
-            // Can depend on: other server libs, shared libs
-            // Cannot depend on: infra, fastify, app layers
-            {
-              sourceTag: 'scope:server',
-              onlyDependOnLibsWithTags: ['scope:core', 'scope:server', 'scope:shared'],
-            },
-            // Fastify plugins layer
-            // Fastify plugins wrap infrastructure and server utilities for Fastify
-            // Can depend on: other fastify plugins, server libs, infra libs, shared libs
-            // Cannot depend on: app layer
-            {
-              sourceTag: 'scope:fastify',
-              onlyDependOnLibsWithTags: [
-                'scope:core',
-                'scope:fastify',
-                'scope:server',
-                'scope:infra',
-                'scope:shared',
-              ],
-            },
-            // Application layer (top layer)
-            // Applications are the entry points and can use all layers
-            // Can depend on: fastify plugins, shared libs, ui
-            {
-              sourceTag: 'scope:app',
-              onlyDependOnLibsWithTags: [
-                'scope:core',
-                'scope:fastify',
-                'scope:shared',
-                'scope:server-config',
-                'scope:ui',
-              ],
-            },
-            // The delivery role (ADR-019 Decisions 8 and 9, #460) holds no
-            // private key and must not be able to load one. It is also
-            // `scope:server`, and this narrows it: it reaches only the
-            // shared layer (the event contract), never core-crypto, the
-            // config library, server-jwt or server-keys. It signs through
-            // the handle the signer role gives it.
-            {
-              sourceTag: 'type:event-delivery',
-              onlyDependOnLibsWithTags: ['scope:shared'],
-            },
-            // Key custody (ADR-019 Decision 9)
-            // `@qauth-labs/server-keys` is also `scope:server`, and Nx applies
-            // every constraint whose tag a project carries, so this one narrows
-            // it: the library that opens stored keys reaches only the core and
-            // shared layers, never another server library such as config.
-            {
-              sourceTag: 'type:key-custody',
-              onlyDependOnLibsWithTags: ['scope:core', 'scope:shared'],
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    files: [
-      '**/*.ts',
-      '**/*.tsx',
-      '**/*.cts',
-      '**/*.mts',
+      // ESLint lints .js, .cjs and .mjs files unless told not to, and every
+      // file a block below names. Only package.json is ESLint's now, and a
+      // project with no package.json (test-vectors) then has nothing to lint,
+      // so @nx/eslint/plugin infers no target for it.
       '**/*.js',
-      '**/*.jsx',
       '**/*.cjs',
       '**/*.mjs',
+      '**/*.json',
+      '!**/package.json',
     ],
-    // Override or add rules here
-    rules: {},
   },
-
-  // The experimental-feature registry (#476). `scripts/experimental-status.mjs`
-  // loads libs/shared/stability through Node's own type stripping, which keeps
-  // an import of a type that is not marked `type` and then finds no such
-  // export at run time. So an import used only as a type says so. The
-  // library's tsconfig sets `erasableSyntaxOnly` for the other half: no enum,
-  // namespace or parameter property, which type stripping cannot remove.
   {
-    files: ['libs/shared/stability/src/**/*.ts'],
-    rules: {
-      '@typescript-eslint/consistent-type-imports': ['error', { fixStyle: 'inline-type-imports' }],
-    },
-  },
-
-  // Key custody guard (#464, ADR-019 Decision 9).
-  //
-  // ADR-019 provisions the KEK to the signer role alone. `@qauth-labs/server-keys`
-  // therefore has two entry points: the package itself, with the `Signer`
-  // interface and public facts that any project may import, and `/custody`, with
-  // the KEK provider, the envelope API, the key factory and the in-process
-  // signer. Only the signer's wiring may import `/custody`; every other project
-  // signs, encrypts and reads keys through `Signer` (`fastify.signer`).
-  //
-  // `@nx/enforce-module-boundaries` works per project and cannot tell one entry
-  // point of a package from another, so this is a path rule. It also refuses a
-  // deep import such as `@qauth-labs/server-keys/src/lib/envelope`, which would
-  // otherwise reach the same code past the entry point, and any string that
-  // names either path, which covers `import()`, `require()` and the forms
-  // `no-restricted-imports` does not see. A path assembled at run time still
-  // passes: this keeps honest code honest, the signer role's own process and
-  // database user are what hold the line (ADR-019 Decision 9). A KEK adapter package (#577-#579) joins KEY_CUSTODY_WIRING when it lands.
-  {
-    files: [
-      '**/*.ts',
-      '**/*.tsx',
-      '**/*.cts',
-      '**/*.mts',
-      '**/*.js',
-      '**/*.jsx',
-      '**/*.cjs',
-      '**/*.mjs',
-    ],
-    ignores: KEY_CUSTODY_WIRING,
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        { patterns: [{ regex: KEY_CUSTODY_IMPORT.source, message: KEY_CUSTODY_MESSAGE }] },
-      ],
-      // Any other string naming the path: a dynamic import(), require(),
-      // createRequire(...)(...), a type-level import('...'), or a template
-      // literal. Import and export declarations are left to the rule above, so
-      // each import is reported once.
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: `:not(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, TSExternalModuleReference) > Literal[value=${KEY_CUSTODY_IMPORT}]`,
-          message: KEY_CUSTODY_MESSAGE,
-        },
-        {
-          selector: `TemplateElement[value.raw=${KEY_CUSTODY_IMPORT}]`,
-          message: KEY_CUSTODY_MESSAGE,
-        },
-      ],
-    },
+    plugins: { '@nx': nx },
   },
 
   // Phantom-dependency guard (#370).
@@ -399,22 +188,4 @@ export default [
   // pnpm's isolated layout does not, and the container crash-loops on boot.
   // This rule turns that runtime failure into a lint failure.
   ...dependencyChecksConfigs(),
-
-  {
-    plugins: {
-      'simple-import-sort': simpleImportSort,
-    },
-    rules: {
-      'simple-import-sort/imports': 'error',
-      'simple-import-sort/exports': 'error',
-    },
-  },
-  {
-    plugins: {
-      prettier: prettierPlugin,
-    },
-    rules: {
-      'prettier/prettier': 'error',
-    },
-  },
 ];

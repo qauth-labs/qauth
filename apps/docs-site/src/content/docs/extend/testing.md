@@ -23,11 +23,11 @@ and a schema change no unit test could see.
 ## Tier 1 — unit
 
 The fast suite. Vitest, no containers, no network. Every project has an inferred `test` target
-(`nx.json:77`), so `pnpm exec nx test auth-server` runs one project's suite and
+(`nx.json:107`), so `pnpm exec nx test auth-server` runs one project's suite and
 `pnpm exec nx run-many -t test --all` runs all of them.
 
 Root config: `vitest.config.ts`. Each project's own `vitest.config.ts` merges it, which is why
-`nx.json:110` lists the root config under `sharedGlobals` — a change to the exclude globs or the
+`nx.json:164` lists the root config under `sharedGlobals` — a change to the exclude globs or the
 coverage thresholds must invalidate every project's cached `test` result, and the inferred targets
 do not list it themselves.
 
@@ -166,14 +166,14 @@ Both are about Nx's cache, and both are re-breakable by an edit that looks like 
 
 ### #285 — `nx test` passed while running zero tests
 
-`nx.json:112` carries the post-mortem in full:
+`nx.json:171` carries the post-mortem in full:
 
 > #285: this was `["sharedGlobals"]`, dropping Nx's built-in `{projectRoot}/**/*` entry. Every
 > `default`-hashed target (test, build) therefore hashed only ci.yml and ignored the project's own
 > sources, so a cached green `test` result was replayed even after a failing spec was added. Keep
 > `{projectRoot}/**/*` first — it is what makes a source edit invalidate the task.
 
-The fixed value is at `nx.json:118`. The failure mode is the dangerous kind: nothing errors,
+The fixed value is at `nx.json:177`. The failure mode is the dangerous kind: nothing errors,
 nothing warns, and the output says the target succeeded — because it did, once, before your code
 existed. If you ever see a suite pass suspiciously fast after a change you expected to break it,
 re-run with `--skip-nx-cache` before concluding anything.
@@ -282,7 +282,7 @@ cites a registered spec section counts as evidence for that row.
 Three rules keep it honest:
 
 - **It shares no code with the server.** `nx lint` fails an import of any workspace project into
-  the suite, and an import of the suite from anywhere (`scope:wire-suite` in `eslint.config.mjs`).
+  the suite, and an import of the suite from anywhere (`scope:wire-suite` in `.oxlintrc.json`).
   A helper used on both sides could carry the same encoding bug and hide it.
 - **It refuses to start without `QAUTH_WIRE_ALLOW_WRITES=1`**, because it registers users and uses
   clients on the server it targets.
@@ -313,7 +313,8 @@ approve a break. Experimental operations are never compared.
 ## Before you open a pull request
 
 ```bash
-pnpm exec nx affected -t lint typecheck test build
+pnpm exec nx affected -t lint dependency-checks typecheck test build
+pnpm format:check                               # Oxfmt, as the `format` job runs it
 pnpm exec vitest run --coverage
 pnpm exec nx run auth-server:openapi-export     # if you changed a route; commit both exports
 pnpm stable-surface                             # drift, tags and breaks since the last release
@@ -329,7 +330,7 @@ pnpm exec nx run docs-site:typecheck
 pnpm exec nx build docs-site
 ```
 
-On Windows, expect `nx lint` noise unrelated to your change — see the
+On Windows, expect `pnpm format:check` noise unrelated to your change — see the
 [CRLF gotcha](/extend/repo-map/#local-development-gotcha-crlf-on-windows).
 
 ## See also

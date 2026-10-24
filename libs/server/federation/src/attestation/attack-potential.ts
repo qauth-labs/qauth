@@ -53,7 +53,10 @@
  * fails closed but would look like a wallet-compatibility bug.
  */
 export type AttackPotentialResistance =
-  'iso_18045_basic' | 'iso_18045_enhanced-basic' | 'iso_18045_moderate' | 'iso_18045_high';
+  | 'iso_18045_basic'
+  | 'iso_18045_enhanced-basic'
+  | 'iso_18045_moderate'
+  | 'iso_18045_high';
 
 /**
  * The levels in ASCENDING order of resistance.

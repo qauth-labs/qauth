@@ -485,7 +485,8 @@ export default async function (fastify: FastifyInstance) {
         consentPage({
           clientName: client.name,
           clientHomepage: (client.metadata as Record<string, unknown> | null)?.homepage_uri as
-            string | undefined,
+            | string
+            | undefined,
           // The precedence `resolveAudience` applies to the token's `aud`: the
           // requested `resource` overrides the client's configured audience,
           // so the screen names the resource server the token will be for.

@@ -33,15 +33,21 @@ the underlying tooling:
 ```bash
 pnpm nx serve auth-server        # run an app
 pnpm nx test <project>           # test one project
-pnpm nx affected -t lint test typecheck   # validate only what you changed
-pnpm format                      # prettier --write .
+pnpm nx affected -t lint dependency-checks test typecheck   # validate only what you changed
+pnpm format                      # oxfmt: format the repository in place
+pnpm format:check                # oxfmt --check, as CI's format job runs it
 ```
 
-Before opening a PR, make sure the affected projects pass:
+Before opening a PR, make sure the affected projects pass and the files are formatted:
 
 ```bash
-pnpm nx affected -t lint test typecheck build
+pnpm nx affected -t lint dependency-checks test typecheck build
+pnpm format:check
 ```
+
+`lint` runs Oxlint (`.oxlintrc.json`); `dependency-checks` runs the one rule still on ESLint,
+`@nx/dependency-checks`, on package.json files (`eslint.config.mjs`); Oxfmt formats with
+`.oxfmtrc.json`.
 
 ## Architecture principles
 
@@ -67,13 +73,14 @@ commitlint via a husky `commit-msg` hook:
 - **Common scopes**: `auth`, `oauth`, `db`, `config`, `ci`, `api`, `portal`
 - Example: `feat(oauth): add RFC 8693 token exchange for agent delegation`
 
-A husky `pre-commit` hook runs lint-staged (ESLint + Prettier) on staged files.
+A husky `pre-commit` hook runs lint-staged (`oxlint --fix`, then Oxfmt) on staged files.
 
 ## Pull requests
 
 - Keep PRs small and focused; write a clear English description.
 - Link issues with `Fixes #N` / `Closes #N`.
-- Ensure `pnpm nx affected -t lint test typecheck build` passes before requesting review.
+- Ensure `pnpm nx affected -t lint dependency-checks test typecheck build` and
+  `pnpm format:check` pass before requesting review.
 - A PR that adds, renames or removes an environment key registers it in the
   configuration key registry in the same PR, with its tier, role, default and
   one sentence (see [`libs/server/config`](./libs/server/config/README.md#configuration-key-registry)).

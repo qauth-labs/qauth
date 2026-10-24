@@ -59,14 +59,14 @@ One transaction (users insert first — `user_credentials.user_id` FKs it):
 
 1. `INSERT INTO users (realm_id)` — pure anchor.
 2. `INSERT INTO user_credentials (provider_type='password',
-external_sub=normalized_email, credential_data={password_hash,
-email_verified: false})` — a duplicate registration surfaces HERE via the
+   external_sub=normalized_email, credential_data={password_hash,
+   email_verified: false})` — a duplicate registration surfaces HERE via the
    credentials unique index. The route catches it and answers the same `202`
    as for a free address (ANT-2026-SPEMY9GU); the existing owner gets a mail
    instead. Never let it reach the error handler's `409`.
 3. `user_attributes` upsert from `PasswordProvider.extractAttributes()`.
 4. `INSERT INTO email_verification_tokens (credential_id, token_hash,
-expires_at)` — the token's ONLY identity link is the credential.
+   expires_at)` — the token's ONLY identity link is the credential.
 
 On email verification (one transaction): mark the token used, set
 `credential_data.email_verified = true` (race-safe `jsonb_set`), and set the

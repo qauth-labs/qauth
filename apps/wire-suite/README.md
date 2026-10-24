@@ -13,7 +13,7 @@ test that cites a registered spec section counts as evidence for that row.
 
 - **No server code.** The suite may use `fetch`, `jose` and its own helpers, and no workspace
   project. `nx lint` enforces it in both directions: `scope:wire-suite` may depend on no project,
-  and no project may depend on it (`eslint.config.mjs`). A helper shared with the server could
+  and no project may depend on it (`.oxlintrc.json`). A helper shared with the server could
   carry the same encoding bug on both sides and hide it.
 - **Configured only through the environment** (below). The suite refuses to start without
   `QAUTH_WIRE_ALLOW_WRITES=1`, because it registers users and uses clients on the server it

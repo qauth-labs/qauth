@@ -4,10 +4,10 @@
 # (*.sh, *.bash, *.js, *.ts, *.json, *.yml, *.yaml, *.md) and every text type
 # added since — *.tsx, *.mjs, *.mts, *.astro, *.mdx, *.css, *.sql, *.toml, *.rs —
 # fell through it. On a checkout with core.autocrlf=true (the Windows default)
-# those files land CRLF against LF blobs, and both `prettier --check` and the
-# `prettier/prettier` ESLint rule then reject them with `Delete ␍` on lines the
-# developer never touched, while `git status` stays clean. CI runs ubuntu-latest,
-# so it never reproduces there. See #363.
+# those files land CRLF against LF blobs, and the format check (Prettier then,
+# through `prettier --check` and the `prettier/prettier` ESLint rule; Oxfmt now)
+# rejects them on lines the developer never touched, while `git status` stays
+# clean. CI runs ubuntu-latest, so it never reproduces there. See #363.
 #
 # Enumerating them one at a time is what fails: #389 hit exactly this on the
 # docs site and answered it by appending `*.mdx` to the list, leaving *.astro,

@@ -1,10 +1,24 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "plugins": [
+    // `lint`: Oxlint (.oxlintrc.json), one batched process for every project
+    // in the run.
+    {
+      "plugin": "@nx/oxlint",
+      "options": {
+        "targetName": "lint"
+      }
+    },
+    // `dependency-checks`: the one rule still on ESLint, @nx/dependency-checks
+    // on package.json files (eslint.config.mjs), because Oxlint does not lint
+    // JSON. `extensions` makes a project's JSON files what earns it the target;
+    // eslint.config.mjs ignores every JSON file but package.json, so a project
+    // without one (test-vectors) gets none.
     {
       "plugin": "@nx/eslint/plugin",
       "options": {
-        "targetName": "lint"
+        "targetName": "dependency-checks",
+        "extensions": ["json"]
       }
     },
     {

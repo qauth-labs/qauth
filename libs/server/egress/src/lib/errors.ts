@@ -16,7 +16,13 @@
  * `address`.
  */
 export type EgressErrorReason =
-  'scheme' | 'credentials' | 'address' | 'redirect' | 'size' | 'timeout' | 'network';
+  | 'scheme'
+  | 'credentials'
+  | 'address'
+  | 'redirect'
+  | 'size'
+  | 'timeout'
+  | 'network';
 
 /**
  * `blocked`: a check refused the call, and nothing more was sent to the

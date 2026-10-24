@@ -84,9 +84,10 @@ Closes #62
 ### Pre-PR Checklist
 
 1. `git status` — no unintended uncommitted changes
-2. `pnpm nx affected -t lint` — lint passes
-3. `pnpm nx affected -t test` — tests pass
-4. CI will run `nx affected -t lint test build` — ensure it will pass
+2. `pnpm nx affected -t lint dependency-checks` — lint passes (Oxlint, and @nx/dependency-checks on package.json files)
+3. `pnpm format:check` — Oxfmt finds nothing to reformat
+4. `pnpm nx affected -t test` — tests pass
+5. CI will run `nx affected -t lint dependency-checks typecheck test build` and `oxfmt --check` — ensure they will pass
 
 ## Skills to Use
 

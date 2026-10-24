@@ -125,7 +125,7 @@ it in the redirect:
   authenticates, an unbounded write there would be a pre-auth memory-pressure
   primitive against the same Redis that holds live browser sessions and
   rate-limit counters. Exceeding it returns `400 invalid_request:
-authorization request is too large`
+  authorization request is too large`
   (`apps/auth-server/src/app/helpers/pending-authorization.ts:215`)
   rather than either a `500` or a `Location` header no proxy would forward.
 

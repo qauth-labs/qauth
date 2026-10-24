@@ -14,7 +14,7 @@
           "fields": ["compilerOptions"]
         },
         {
-          "externalDependencies": ["vitest"]
+          "externalDependencies": ["vitest", "oxfmt"]
         },
         {
           "env": "CI"
@@ -27,10 +27,11 @@
         "{workspaceRoot}/libs/infra/db/src/scripts/**/*.ts",
         "{workspaceRoot}/apps/docs-site/public/schemas/events/**/*",
         "{workspaceRoot}/apps/docs-site/src/content/docs/reference/events.md",
-        "{workspaceRoot}/stable-surface/surfaces.json"
+        "{workspaceRoot}/stable-surface/surfaces.json",
+        "{workspaceRoot}/.oxfmtrc.json"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. The tests also read files elsewhere: the legacy-map test searches apps/auth-server/src and libs/infra/db/src/scripts for today's event names, and the artifact tests compare the generated schemas, the docs page and the stable-surface registry with the committed copies. Without these entries a change to one of those files would replay a cached pass."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. The tests also read files elsewhere: the legacy-map test searches apps/auth-server/src and libs/infra/db/src/scripts for today's event names, and the artifact tests compare the generated schemas, the docs page (formatted with the repo's Oxfmt config, hence `oxfmt` among the external dependencies) and the stable-surface registry with the committed copies. Without these entries a change to one of those files would replay a cached pass."
       }
     },
     "schema-export": {

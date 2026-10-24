@@ -108,7 +108,9 @@ async function throughPortal(
   });
   await server.ready();
   try {
-    const { port } = server.node?.server?.address() as AddressInfo;
+    const address = server.node?.server?.address() as AddressInfo | undefined;
+    if (!address) throw new Error('the server is not listening');
+    const { port } = address;
     await new Promise<void>((resolve, reject) => {
       const req = httpRequest(
         { host: '127.0.0.1', port, path: '/login', method: 'POST', headers },

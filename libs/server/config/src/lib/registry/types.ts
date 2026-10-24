@@ -68,7 +68,10 @@ export type KeyOwner =
  *   default is always written this way, so its value is never printed.
  */
 export type KeyDefault =
-  string | null | { readonly required: true } | { readonly computed: string };
+  | string
+  | null
+  | { readonly required: true }
+  | { readonly computed: string };
 
 /** A previous name of a key that still works, with a warning. */
 export interface KeyAlias {

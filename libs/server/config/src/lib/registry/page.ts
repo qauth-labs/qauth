@@ -153,7 +153,7 @@ function aliasSection(registry: readonly ConfigKey[]): string[] {
  * Render the configuration page (`operate/configuration.md`) from the registry:
  * stable keys first, then advanced, then experimental, then renamed keys.
  *
- * The output is Markdown that Prettier may still realign; the registry test
+ * The output is Markdown that Oxfmt may still realign; the registry test
  * formats it before comparing it with the committed page.
  */
 export function renderConfigurationPage(registry: readonly ConfigKey[]): string {

@@ -108,7 +108,7 @@ const file = {
 };
 
 writeFileSync(OUT, `${JSON.stringify(file, null, 2)}\n`);
-execFileSync('pnpm', ['exec', 'prettier', '--write', '--log-level', 'warn', OUT], {
+execFileSync('pnpm', ['exec', 'oxfmt', OUT], {
   stdio: 'inherit',
 });
 console.log(`wrote ${OUT} (${file.cases.length} cases)`);

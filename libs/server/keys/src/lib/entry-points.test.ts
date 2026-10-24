@@ -7,7 +7,7 @@ import * as publicEntry from '../index';
  * The two entry points of `@qauth-labs/server-keys` (issue #464). The public
  * one holds the signer interface and public facts; everything that touches a
  * KEK or key material is in `custody`, which only the signer's wiring may
- * import (eslint.config.mjs).
+ * import (.oxlintrc.json).
  */
 describe('package entry points', () => {
   it.each([
