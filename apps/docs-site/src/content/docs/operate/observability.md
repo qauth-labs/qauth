@@ -159,6 +159,9 @@ process/runtime metrics plus QAuth counters and gauges:
 | `qauth_events_pending`                   | gauge   | `kind`               | Event deliveries not finished yet, by delivery route.               |
 | `qauth_events_delivery_lag_seconds`      | gauge   | none                 | Seconds the oldest event that waits for a delivery has waited.      |
 | `qauth_events_delivery_attempts_total`   | counter | `kind`, `result`     | Event delivery attempts by route and result.                        |
+| `qauth_session_cache_lookups_total`      | counter | `result`             | Browser session cache reads; `hit` over all is the cache hit rate.  |
+| `qauth_session_postgres_reads_total`     | counter | `result`             | Postgres reads of a browser session.                                |
+| `qauth_session_last_seen_writes_total`   | counter | `result`             | Conditional writes of a browser session's last-seen time.           |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -183,6 +186,16 @@ each list as **open** — a new call site can add a value without a schema chang
   `qauth_events_delivery_attempts_total` is `delivered`, `retry` (failed, tried
   again later) or `failed` (failed for good); see
   [Event delivery](#event-delivery).
+- `result` on `qauth_session_cache_lookups_total` is `hit`, `miss`, `revoked`
+  (a recently ended session's tombstone) or `error` (Redis did not answer, and
+  Postgres was read instead). On `qauth_session_postgres_reads_total` it is `ok`
+  or `error`; with Postgres not answering, the session counts as absent. On
+  `qauth_session_last_seen_writes_total` it is `written`, `skipped` (the stored
+  time was recent, usually because another node wrote it first) or `error`.
+  `last_seen_at` is written at most once per `SESSION_LAST_SEEN_INTERVAL`
+  (60 seconds by default) per session. The session service that counts these
+  is in place, but the hosted pages do not use it yet, so they stay at zero for
+  now.
 
 The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
