@@ -9,7 +9,12 @@ vi.mock('node:os', async (importOriginal) => ({
   userInfo,
 }));
 
-import { EVENT_CHAIN_GENESIS_HASH, eventChainHash, operatorCliActor } from './chain';
+import {
+  EVENT_CHAIN_FORMAT,
+  EVENT_CHAIN_GENESIS_HASH,
+  eventChainHash,
+  operatorCliActor,
+} from './chain';
 
 /**
  * The admin chain's hash (issues #459 and #827): SHA-256 over the previous
@@ -35,7 +40,12 @@ const ENVELOPE: EventEnvelope = {
 };
 
 describe('eventChainHash', () => {
-  it('is SHA-256 over the previous hash, the xid and the canonical JSON of the envelope', () => {
+  it('names its format as a release candidate until 1.0.0', () => {
+    // ADR-018 §5: every QAuth-defined version is `1-rc.<M>` until 1.0.0.
+    expect(EVENT_CHAIN_FORMAT).toBe('qauth-event-chain/1-rc.0');
+  });
+
+  it('is SHA-256 over the format id, the previous hash, the xid and the canonical JSON of the envelope', () => {
     // Members sorted by name, no whitespace: RFC 8785.
     const canonical =
       '{"actor":{"id":"root","type":"operator_cli"},"category":"admin",' +
@@ -44,6 +54,7 @@ describe('eventChainHash', () => {
       '"id":"0192f1c4-9999-7000-8000-000000000009","realm":"0192f1c4-1111-7000-8000-000000000001",' +
       '"time":"2026-10-24T12:00:00.000Z","type":"urn:qauth:event:admin.change_applied:v1-rc.0"}';
     const expected = createHash('sha256')
+      .update('qauth-event-chain/1-rc.0\0', 'utf8')
       .update(EVENT_CHAIN_GENESIS_HASH)
       // 905 as an unsigned 64-bit big-endian integer.
       .update(Buffer.from('0000000000000389', 'hex'))

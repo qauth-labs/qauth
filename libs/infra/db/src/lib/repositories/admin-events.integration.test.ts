@@ -21,7 +21,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AdminEventInput, Database, DbTransaction, EventsRepository } from '../../types';
 import { canonicalizeJson } from '../admin-audit/canonical-json';
-import { EVENT_CHAIN_GENESIS_HASH, operatorCliActor } from '../events/chain';
+import { EVENT_CHAIN_FORMAT, EVENT_CHAIN_GENESIS_HASH, operatorCliActor } from '../events/chain';
 import { eventsWriterGrantStatements } from '../events/grants';
 import { eventStreamStart } from '../events/position';
 import { createEventsRepository } from './events.repository';
@@ -228,13 +228,14 @@ describe('admin events integration (real Postgres)', () => {
       expect(await store.verifyChain(other)).toMatchObject({ ok: true, rowsChecked: 10 });
     });
 
-    it('hashes each row over prev_hash, its xid and the canonical JSON of the envelope a reader gets back', async () => {
+    it('hashes each row over the format id, prev_hash, its xid and the canonical JSON of the envelope a reader gets back', async () => {
       const realm = randomUUID();
       await emitInTx(change(realm));
       const [row] = await chainRows(realm);
       const page = await store.readAfter(realm, eventStreamStart(realm), 10);
 
       const expected = createHash('sha256')
+        .update(`${EVENT_CHAIN_FORMAT}\0`, 'utf8')
         .update(row.prev_hash)
         .update(xidBytes(row.xid))
         .update(canonicalizeJson(page.events[0].event), 'utf8')
@@ -354,6 +355,7 @@ describe('admin events integration (real Postgres)', () => {
       const edited = page.events.find((stored) => stored.event.id === rows[1].id);
       if (!edited) throw new Error('edited row not read');
       const rehash = createHash('sha256')
+        .update(`${EVENT_CHAIN_FORMAT}\0`, 'utf8')
         .update(rows[1].prev_hash)
         .update(xidBytes(rows[1].xid))
         .update(canonicalizeJson(edited.event), 'utf8')

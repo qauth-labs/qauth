@@ -476,9 +476,11 @@ await db.transaction(async (tx) => {
 
 A realm's admin events form one hash chain. Each admin row stores the `hash`
 of the realm's admin row before it as `prev_hash` (32 zero bytes for the
-first), and its own `hash` is SHA-256 over `prev_hash`, the row's `xid` as 8
+first), and its own `hash` is SHA-256 over the chain format's id,
+`qauth-event-chain/1-rc.0`, and a NUL byte, `prev_hash`, the row's `xid` as 8
 bytes (unsigned, big-endian) and the RFC 8785 canonical JSON of its envelope
-(`eventChainHash`). A changed row no longer hashes to its `hash`; a removed row
+(`eventChainHash`). The format id is a release candidate until 1.0.0
+(ADR-018 §5): a change to what the hash covers raises it. A changed row no longer hashes to its `hash`; a removed row
 leaves the next row's `prev_hash` pointing at nothing. `xid` is not in the
 envelope, but readers take rows in `(xid, seq)` order, so a row whose `xid` was
 moved below a reader's position would be hidden from that reader: hashing it

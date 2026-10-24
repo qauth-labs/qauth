@@ -10,8 +10,9 @@ import { canonicalizeJson } from '../admin-audit/canonical-json';
  *
  * Each admin row of `events` stores the `hash` of the realm's admin row
  * before it as `prev_hash`, and {@link EVENT_CHAIN_GENESIS_HASH} for the
- * first. Its own `hash` is {@link eventChainHash}: SHA-256 over the 32 bytes
- * of `prev_hash`, the row's `xid` as 8 bytes, unsigned and big-endian, and the
+ * first. Its own `hash` is {@link eventChainHash}: SHA-256 over the chain
+ * format's id ({@link EVENT_CHAIN_FORMAT}) and a NUL byte, the 32 bytes of
+ * `prev_hash`, the row's `xid` as 8 bytes, unsigned and big-endian, and the
  * UTF-8 bytes of the RFC 8785 canonical JSON of the envelope the row holds,
  * exactly as a reader gets it back. A changed row no longer hashes to its
  * `hash`; a removed row leaves the next row's `prev_hash` pointing at nothing.
@@ -36,14 +37,23 @@ import { canonicalizeJson } from '../admin-audit/canonical-json';
 /** `prev_hash` of a realm's first admin event: 32 zero bytes. */
 export const EVENT_CHAIN_GENESIS_HASH: Buffer = Buffer.alloc(32);
 
+/**
+ * The chain format's id, hashed first, so a hash says which format made it.
+ * A QAuth-defined version, so a release candidate until QAuth 1.0.0
+ * (ADR-018 §5): a change to what the hash covers raises `<M>`, and the
+ * release that ships 1.0.0 drops the suffix.
+ */
+export const EVENT_CHAIN_FORMAT = 'qauth-event-chain/1-rc.0';
+
 /** The largest `xid8`: 2^64 - 1. */
 const MAX_XID8 = (1n << 64n) - 1n;
 
 /**
- * An admin row's `hash`: SHA-256 over `prevHash`, `xid` as 8 bytes (unsigned,
- * big-endian) and the canonical JSON of the envelope. Changing what it covers
- * changes every hash, so this is version 1 of the chain format; #827 added
- * `xid` before any deployment held a chained row.
+ * An admin row's `hash`: SHA-256 over {@link EVENT_CHAIN_FORMAT} and a NUL
+ * byte, `prevHash`, `xid` as 8 bytes (unsigned, big-endian) and the canonical
+ * JSON of the envelope. Changing what it covers changes every hash and raises
+ * the format's release candidate. `1-rc.0` is the first format with an id; it
+ * has the `xid` (#827). No deployment held a row chained before it.
  *
  * @param prevHash - the `hash` of the realm's admin row before this one
  * @param xid - the row's `xid`, the writing transaction's `xid8`
@@ -61,6 +71,7 @@ export function eventChainHash(prevHash: Buffer, xid: bigint, envelope: EventEnv
   const xidBytes = Buffer.alloc(8);
   xidBytes.writeBigUInt64BE(xid);
   return createHash('sha256')
+    .update(`${EVENT_CHAIN_FORMAT}\0`, 'utf8')
     .update(prevHash)
     .update(xidBytes)
     .update(canonicalizeJson(envelope), 'utf8')

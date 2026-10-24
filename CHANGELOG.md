@@ -184,8 +184,9 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   will write the rest is still to come.
 - **Schema**: migration 0032 chains admin events by hash ([#459]). Each admin
   row of `events` stores the hash of the realm's admin row before it as
-  `prev_hash`, and its own `hash` is SHA-256 over `prev_hash`, the row's `xid`
-  and the RFC 8785 canonical JSON of the envelope. The `xid` decides where a
+  `prev_hash`, and its own `hash` is SHA-256 over the chain format's id
+  (`qauth-event-chain/1-rc.0`, a release candidate until 1.0.0), `prev_hash`,
+  the row's `xid` and the RFC 8785 canonical JSON of the envelope. The `xid` decides where a
   reader of the stream finds the row, so a row whose `xid` was moved breaks the
   chain at that row ([#827]). Every event of an admin type joins the chain,
   through `emit` as well: the writer takes the realm's advisory transaction
