@@ -40,6 +40,7 @@ import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
+import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
 import { clientIdParamSchema, exactUrl } from '../../schemas/common';
 import { authorizeQuerySchema, maxAgeParamSchema, resourceParamSchema } from '../../schemas/oauth';
@@ -87,8 +88,7 @@ const consentFormSchema = z.object({
   csrf_token: z.string().min(1),
   // Mirror of the original authorize params so we don't need to stash them
   // in the session (keeps the session payload small + stateless enough).
-  // Same bound as `authorizeQuerySchema.client_id`: the wrong-CSRF refusal
-  // audits it.
+  // Same bound as `authorizeQuerySchema.client_id`.
   client_id: clientIdParamSchema,
   // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
   redirect_uri: exactUrl(),
@@ -587,16 +587,13 @@ export default async function (fastify: FastifyInstance) {
       }
 
       if (!csrfTokensEqual(session.csrfToken, body.csrf_token)) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: null,
-          event: 'oauth.consent.csrf_failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { client_id: body.client_id },
-        });
+        // No client: the posted `client_id` is not resolved before this check.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+          { form: 'consent' },
+          { userId: session.userId, actor: 'user' }
+        );
         throw new BadRequestError('invalid_csrf_token');
       }
 
@@ -626,16 +623,12 @@ export default async function (fastify: FastifyInstance) {
       // Deny path: redirect with error=access_denied, state preserved
       // (RFC 6749 §4.1.2.1).
       if (body.decision === 'deny') {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: client.id,
-          event: 'oauth.consent.denied',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { client_id: body.client_id },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:consent.denied:v1-rc.0',
+          { error: 'access_denied' },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         return reply.redirect(
           buildRedirectUrl(body.redirect_uri, {
             error: 'access_denied',
@@ -659,21 +652,12 @@ export default async function (fastify: FastifyInstance) {
       // `invalid_scope`, state preserved.
       const exceedingAgentScopes = findExceedingAgentScopesForClient(body.scope, client);
       if (exceedingAgentScopes.length > 0) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: client.id,
-          event: 'oauth.consent.denied',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            error: 'invalid_scope',
-            reason: 'agent_scope_mode_exceeded',
-            client_id: body.client_id,
-            exceeding: exceedingAgentScopes.join(' '),
-          },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:consent.denied:v1-rc.0',
+          { error: 'invalid_scope', reason: 'agent_scope_mode_exceeded' },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         return reply.redirect(
           buildRedirectUrl(body.redirect_uri, {
             error: 'invalid_scope',
@@ -697,22 +681,12 @@ export default async function (fastify: FastifyInstance) {
       const boundScopes = session.consentScopes?.[client.clientId];
       const postedScopes = filterRequestedScopes(body.scope, client);
       if (boundScopes === undefined || !scopeSetsEqual(boundScopes, postedScopes)) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: client.id,
-          event: 'oauth.consent.denied',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            error: 'invalid_scope',
-            reason: 'consent_scope_mismatch',
-            client_id: body.client_id,
-            bound: boundScopes ?? null,
-            posted: postedScopes,
-          },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:consent.denied:v1-rc.0',
+          { error: 'invalid_scope', reason: 'consent_scope_mismatch' },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         return reply.redirect(
           buildRedirectUrl(body.redirect_uri, {
             error: 'invalid_scope',
@@ -735,22 +709,12 @@ export default async function (fastify: FastifyInstance) {
       const boundResources = session.consentResources?.[client.clientId] ?? [];
       const postedResources = body.resource ?? [];
       if (!resourceSetsEqual(boundResources, postedResources)) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: client.id,
-          event: 'oauth.consent.denied',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            error: 'invalid_target',
-            reason: 'consent_resource_mismatch',
-            client_id: body.client_id,
-            bound: boundResources,
-            posted: postedResources,
-          },
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:consent.denied:v1-rc.0',
+          { error: 'invalid_target', reason: 'consent_resource_mismatch' },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         return reply.redirect(
           buildRedirectUrl(body.redirect_uri, {
             error: 'invalid_target',
@@ -794,22 +758,17 @@ export default async function (fastify: FastifyInstance) {
         enforceDangerousStepUp: policy.agentStepUpEnforced,
       });
       if (stepUp.requiresFreshLogin) {
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: client.id,
-          event: 'oauth.stepup.required',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            client_id: body.client_id,
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          {
             reason: 'fresh_authentication_required',
-            dangerous: stepUp.dangerous,
-            prompt: prompt ?? null,
-            maxAge: body.max_age ?? null,
+            ...(stepUp.dangerous.length > 0 ? { dangerousScopes: stepUp.dangerous } : {}),
+            ...(prompt === null ? {} : { prompt }),
+            ...(body.max_age === undefined ? {} : { maxAge: body.max_age }),
           },
-        });
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         const returnTo = buildAuthorizeUrl({
           client_id: body.client_id,
           redirect_uri: body.redirect_uri,
@@ -883,53 +842,42 @@ export default async function (fastify: FastifyInstance) {
       if (!code) throw new Error('Unreachable');
 
       // ADR-007 §2 (#185): every elevation that grants a dangerous scope is
-      // audited as a distinct step-up event (in addition to the normal
-      // consent.granted record), with the fresh `auth_time` so an operator can
+      // recorded as a distinct step-up event (in addition to the normal
+      // consent.granted event), with the fresh `auth_time` so an operator can
       // see the dangerous grant was minted right after a re-authentication.
       const dangerousGranted = scopes.filter(isDangerousScope);
       if (dangerousGranted.length > 0) {
-        // Per-agent action audit (ADR-007 §2, #186). When the elevating client
-        // is an agent (fail-closed `isAgentClient`), attribute the elevation to
-        // it and record the effective agent scope mode so the dangerous grant
-        // is accountable in the agent-activity view. A non-agent client records
-        // no agent fields (existing behavior unchanged). This is a user-driven
-        // consent elevation, not on-behalf-of delegation, so there is no `act`
-        // chain.
-        const elevatingAgent = isAgentClient(client);
-        await fastify.repositories.auditLogs.create({
-          userId: session.userId,
-          oauthClientId: client.id,
-          actorClientId: elevatingAgent ? client.clientId : null,
-          scopeMode: elevatingAgent ? highestAgentModeInScopes(scopes) : null,
-          event: 'oauth.stepup.elevation',
-          eventType: 'auth',
-          success: true,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {
-            client_id: body.client_id,
-            dangerousScopes: dangerousGranted,
+        // Per-agent action record (ADR-007 §2, #186). When the elevating
+        // client is an agent (fail-closed `isAgentClient`), the event records
+        // the effective agent scope mode so the dangerous grant is accountable
+        // in the agent-activity view; a non-agent client records none. The
+        // actor is the user, who granted the elevation, and the agent is the
+        // event's client: this is a user-driven consent elevation, not
+        // on-behalf-of delegation, so there is no `act` chain.
+        const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(scopes) : null;
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.elevated:v1-rc.0',
+          {
             scopes,
-            authTime: session.createdAt,
+            dangerousScopes: dangerousGranted,
+            ...(scopeMode === null ? {} : { scopeMode }),
+            authenticatedAt: new Date(session.createdAt).toISOString(),
           },
-        });
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
       }
 
-      await fastify.repositories.auditLogs.create({
-        userId: session.userId,
-        oauthClientId: client.id,
-        event: 'oauth.consent.granted',
-        eventType: 'auth',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: {
-          client_id: body.client_id,
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:consent.granted:v1-rc.0',
+        {
           scopes,
           remembered: body.allow_forever === '1',
-          dangerousScopes: dangerousGranted,
+          ...(dangerousGranted.length > 0 ? { dangerousScopes: dangerousGranted } : {}),
         },
-      });
+        { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+      );
 
       return reply.redirect(
         buildRedirectUrl(body.redirect_uri, {

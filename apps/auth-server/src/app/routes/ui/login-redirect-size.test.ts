@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 /**
  * Login-redirect header-size regression (issue #316 follow-up).
@@ -53,11 +53,24 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { RESUME_PATH_PREFIX } from '../../helpers/pending-authorization';
 import { signSessionId } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import authorizeRoute from '../oauth/authorize';
 import consentRoute from './consent';
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 /**
  * nginx's default `large_client_header_buffers 4 8k` bounds a single header
@@ -183,7 +196,6 @@ function makeFastify() {
       authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
       users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
-      auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     jwtUtils: {
       extractFromHeader: vi.fn().mockReturnValue(null),
@@ -256,10 +268,9 @@ function expectCompactLoginBounce(
  * identical-looking compact redirect — so the assertions above pass while the
  * call site under test never runs. That is exactly what happened here once.
  */
-function expectStepUpBranchRan(fastify: FastifyInstance): void {
-  const create = fastify.repositories.auditLogs.create as unknown as Mock;
-  const events = create.mock.calls.map((c) => (c[0] as { event?: string })?.event);
-  expect(events).toContain('oauth.stepup.required');
+function expectStepUpBranchRan(): void {
+  const events = emitUserEventMock.mock.calls.map((c) => c[1]);
+  expect(events).toContain('urn:qauth:event:step_up.required:v1-rc.0');
 }
 
 describe('login redirect size — /oauth/authorize', () => {
@@ -325,7 +336,7 @@ describe('login redirect size — /oauth/authorize', () => {
       reply
     );
 
-    expectStepUpBranchRan(fastify);
+    expectStepUpBranchRan();
     expectCompactLoginBounce(state.redirected, fastify, {
       state: WORST_CASE_STATE,
       prompt: 'login',
@@ -407,7 +418,7 @@ describe('login redirect size — /ui/consent', () => {
       reply
     );
 
-    expectStepUpBranchRan(fastify);
+    expectStepUpBranchRan();
     expectCompactLoginBounce(state.redirected, fastify, {
       state: WORST_CASE_STATE,
       scope: 'write:foo',

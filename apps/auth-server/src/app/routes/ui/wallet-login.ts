@@ -38,6 +38,7 @@ import {
   verifyLoginCsrfCookie,
   WALLET_FLOW_COOKIE_NAME,
 } from '../../helpers/session-cookie';
+import { emitUserEvent } from '../../helpers/user-events';
 import {
   advanceWalletLinkFlow,
   WALLET_LINK_CONFLICT,
@@ -658,11 +659,7 @@ async function advanceWalletLoginFlow(
   if (via === 'poll') await terminate(fastify, handle, flow);
 
   if (resolution.status !== 'authenticated') {
-    await auditWalletLogin(fastify, request, {
-      userId: null,
-      success: false,
-      metadata: { assertedIdentifier: flow.assertedIdentifier, reason: 'not_resolved' },
-    });
+    await recordWalletSignInFailure(request, flow, 'not_resolved');
     if (via === 'return') await concludeReturnLeg(fastify, handle, flow, rejectedMarker);
     return { status: 'rejected' };
   }
@@ -676,11 +673,7 @@ async function advanceWalletLoginFlow(
       { userId: resolution.userId },
       'wallet presentation resolved to a missing or disabled user'
     );
-    await auditWalletLogin(fastify, request, {
-      userId: null,
-      success: false,
-      metadata: { assertedIdentifier: flow.assertedIdentifier, reason: 'user_unavailable' },
-    });
+    await recordWalletSignInFailure(request, flow, 'user_unavailable');
     if (via === 'return') await concludeReturnLeg(fastify, handle, flow, rejectedMarker);
     return { status: 'rejected' };
   }
@@ -714,11 +707,12 @@ async function advanceWalletLoginFlow(
   await trackBrowserSession(fastify, user.id, sessionId);
 
   await fastify.repositories.users.updateLastLogin(user.id);
-  await auditWalletLogin(fastify, request, {
-    userId: user.id,
-    success: true,
-    metadata: { sessionId, returnTo: flow.returnTo, verifierProfile: flow.verifierProfile },
-  });
+  await emitUserEvent(
+    request,
+    'urn:qauth:event:user.signed_in:v1-rc.0',
+    { method: 'wallet', verifierProfile: flow.verifierProfile },
+    { realmId: flow.realmId, userId: user.id, actor: 'user' }
+  );
 
   setSessionCookie(reply, sessionId);
 
@@ -726,7 +720,7 @@ async function advanceWalletLoginFlow(
     // The wallet opened this leg in a NEW tab. The binding stays in the shared
     // cookie jar so the ORIGINAL tab's next poll can still prove it holds the
     // flow, and the marker is what that poll will find where the flow was. It
-    // is written AFTER the session and the audit row, so a marker without a
+    // is written AFTER the session and the sign-in event, so a marker without a
     // word exists only for a sign-in that happened, and BEFORE the flow is
     // deleted, so that poll never finds neither. It carries the session id
     // so consuming it can re-issue the cookie this response is about to set
@@ -837,21 +831,22 @@ async function terminate(
   await deleteWalletPresentationStash(fastify, flow.stateHash);
 }
 
-async function auditWalletLogin(
-  fastify: FastifyInstance,
+/**
+ * Record a refused wallet sign-in. It has no subject, as the audit row had no
+ * user: the presentation reached no usable account. The asserted identifier
+ * is what the person typed, and is never recorded.
+ */
+async function recordWalletSignInFailure(
   request: FastifyRequest,
-  entry: { userId: string | null; success: boolean; metadata: Record<string, unknown> }
+  flow: WalletLoginFlow,
+  reason: 'not_resolved' | 'user_unavailable'
 ): Promise<void> {
-  await fastify.repositories.auditLogs.create({
-    userId: entry.userId,
-    oauthClientId: null,
-    event: entry.success ? 'ui.wallet_login.success' : 'ui.wallet_login.failure',
-    eventType: 'auth',
-    success: entry.success,
-    ipAddress: request.ip,
-    userAgent: request.headers['user-agent'] || null,
-    metadata: entry.metadata,
-  });
+  await emitUserEvent(
+    request,
+    'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+    { method: 'wallet', reason, verifierProfile: flow.verifierProfile },
+    { realmId: flow.realmId, actor: 'user' }
+  );
 }
 
 function sendHtml(reply: FastifyReply, body: string, statusCode?: number): FastifyReply {
@@ -964,16 +959,12 @@ export default async function (fastify: FastifyInstance) {
       // cannot mint presentation requests (each of which is a DB row).
       const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'ui.wallet_login.csrf_failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {},
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+          { form: 'wallet_sign_in' },
+          { actor: 'user' }
+        );
         const freshCsrf = generateCsrfToken();
         setLoginCsrfCookie(reply, freshCsrf);
         return sendHtml(
@@ -1334,9 +1325,9 @@ export default async function (fastify: FastifyInstance) {
    * byte-identical page ({@link walletReturnRefusalPage}): HTTP 200 (in-app
    * browsers decorate non-2xx navigations), no "Try again" (a new flow in the
    * wrong cookie jar is a trap), the password footer kept. The reason is
-   * logged server-side only; NOTHING is audited on refusal — the Response
-   * Endpoint audits nothing on its refusals either, and an audit row per
-   * junk landing would be a write primitive for anyone with a URL; and no
+   * logged server-side only; NO event is recorded on refusal — the Response
+   * Endpoint records none on its refusals either, and an event per junk
+   * landing would be a write primitive for anyone with a URL; and no
    * request-supplied text is echoed — there is nothing to echo. The refusal
    * page and the completed pages carry a nonced `history.replaceState` that
    * scrubs the (already spent) code from the address bar; a browser without
@@ -1497,7 +1488,7 @@ async function findReturningFlow(
  * §5.1 says the Verifier MUST reject — even though the browser holds the
  * binder. Both are treated as step 3 treats a foreign landing:
  * `discardWalletPresentation` (parked bytes gone, signal `return_rejected`),
- * a warning that says which, the refusal page. Nothing is audited, and the
+ * a warning that says which, the refusal page. No event is recorded, and the
  * state machine is not entered: it would refuse the mismatch too, but its
  * same-user gate answers `expired` without discarding anything —
  * indistinguishable from its other gates by design, the right answer for a

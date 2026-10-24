@@ -18,6 +18,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
+import type { emitUserEvent } from '../../helpers/user-events';
+
+// Hoisted rather than imported: a static import of the helper would load the
+// real `config/env`, which this file mocks per test (see `loadRoute`). The
+// factory runs once; every re-imported route calls this one function.
+const { emitUserEventMock } = vi.hoisted(() => ({
+  emitUserEventMock: vi.fn<typeof emitUserEvent>(),
+}));
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  emitUserEventMock.mockImplementation(checkedEmitUserEvent(actual.userEventFor));
+  return { ...actual, emitUserEvent: emitUserEventMock };
+});
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
+
+/** The `wallet.presentation_received` event of an accepted submission. */
+const PRESENTATION_RECEIVED = 'urn:qauth:event:wallet.presentation_received:v1-rc.0';
 
 /**
  * Route tests for the OID4VP `direct_post` response endpoint (#233).
@@ -102,9 +124,6 @@ function createFastifyStub() {
       oid4vpRequestStates: {
         redeem: vi.fn(),
         redeemByEncryptionKid: vi.fn(),
-      },
-      auditLogs: {
-        create: vi.fn().mockResolvedValue(undefined),
       },
     },
     sessionUtils: {
@@ -389,22 +408,18 @@ describe('POST /oid4vp/response — accepted submission', () => {
     expect(fastify.repositories.users).toBeUndefined();
   });
 
-  it('audits the accepted submission, marked as NOT an authentication', async () => {
+  it('records the accepted submission, with no subject and no actor: it is NOT an authentication', async () => {
     const { reply } = makeReply();
+    const request = makeRequest({ vp_token: VP_TOKEN, state: STATE });
 
-    await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
+    await handler(request, reply);
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: null,
-        event: 'oid4vp.response.received',
-        success: true,
-        metadata: expect.objectContaining({
-          requestStateId: 'req-state-1',
-          presentationCount: 1,
-          authenticated: false,
-        }),
-      })
+    // The type says it is not a sign-in; the realm is the request state's.
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      PRESENTATION_RECEIVED,
+      { verifierProfile: 'oid4vp-1.0-base', presentationCount: 1 },
+      { realmId: 'realm-1' }
     );
   });
 
@@ -416,9 +431,9 @@ describe('POST /oid4vp/response — accepted submission', () => {
     expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledOnce();
     expect(reply.statusCode).toBe(200);
     expect(sent).toEqual([{}]);
-    // An error response is not an accepted presentation, so it is not audited
-    // as one.
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    // An error response is not an accepted presentation, so it is not
+    // recorded as one.
+    expect(emitUserEventMock).not.toHaveBeenCalled();
   });
 
   it('never echoes the wallet-supplied error text back to the wallet', async () => {
@@ -649,13 +664,10 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
     );
   });
 
-  it('does not audit or authenticate anything when the stored dcql_query is unusable', async () => {
-    const { fastify } = await refusalOf(
-      good,
-      pendingState({ dcqlQuery: { credentials: [{ id: 'pid' }] } })
-    );
+  it('records no event and authenticates nothing when the stored dcql_query is unusable', async () => {
+    await refusalOf(good, pendingState({ dcqlQuery: { credentials: [{ id: 'pid' }] } }));
 
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
   });
 
   it('refuses when the posture changed between request and response', async () => {
@@ -714,14 +726,14 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
     expect(wire.size).toBe(1);
   });
 
-  it('keeps the specific reason in the server log only, and audits nothing', async () => {
+  it('keeps the specific reason in the server log only, and records no event', async () => {
     const { error, fastify } = await refusalOf(good, undefined);
 
     expect(fastify.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ reason: expect.stringContaining('state did not redeem') }),
       expect.any(String)
     );
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
     expect(JSON.stringify(error)).not.toContain('already consumed');
   });
 
@@ -857,7 +869,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
     });
   });
 
-  it('audits the accepted encrypted submission exactly as a cleartext one', async () => {
+  it('records the accepted encrypted submission exactly as a cleartext one', async () => {
     const pair = await mintPair();
     const { fastify, handler } = await registerHaip();
     fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
@@ -870,15 +882,11 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       reply
     );
 
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'oid4vp.response.received',
-        metadata: expect.objectContaining({
-          verifierProfile: 'haip-1.0',
-          presentationCount: 1,
-          authenticated: false,
-        }),
-      })
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      PRESENTATION_RECEIVED,
+      { verifierProfile: 'haip-1.0', presentationCount: 1 },
+      { realmId: 'realm-1' }
     );
   });
 
@@ -924,7 +932,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       signal: 'wallet_error',
     });
     expect(JSON.stringify([...store.values()])).not.toContain('access_denied');
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
   });
 
   describe('refusals are indistinguishable, and the row is always consumed first', () => {
@@ -1150,13 +1158,13 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       );
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
       // The browser learns the wallet said no — and nothing else: no bytes are
-      // parked, the wallet's own text is not carried, nothing is audited.
+      // parked, the wallet's own text is not carried, no event is recorded.
       expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
         signal: 'wallet_error',
       });
       expect(store.get(`wallet-presentation:${hashOid4vpState(STATE)}`)).toBeUndefined();
       expect(JSON.stringify([...store.values()])).not.toContain('access_denied');
-      expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+      expect(emitUserEventMock).not.toHaveBeenCalled();
       expect(fastify.log.info).toHaveBeenCalledWith(
         expect.objectContaining({ requestStateId: 'req-state-1' }),
         expect.stringContaining('§8.3.1')
@@ -1422,7 +1430,6 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
           redeem: vi.fn().mockResolvedValue(post.byKid ? undefined : row),
           redeemByEncryptionKid: vi.fn().mockResolvedValue(post.byKid ? row : undefined),
         },
-        auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
       } as never);
       app.decorate('sessionUtils', {
         setSession: async (key: string, value: unknown) => {
@@ -1542,11 +1549,11 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     expect(stateHash).toBe(hashOid4vpState(STATE));
     expect(written).toEqual({ codeHash: sha256Hex(code), codeExpiresAt: expect.any(Number) });
     expect(written.codeHash).not.toBe(code);
-    // Nowhere in anything the handler handed to a repository, the audit log
-    // or the store does the plaintext appear — only the wallet sees it.
+    // Nowhere in anything the handler handed to a repository, the event
+    // store or the store does the plaintext appear — only the wallet sees it.
     const everythingPersisted = JSON.stringify([
       fastify.repositories.oid4vpRequestStates.redeem.mock.calls,
-      fastify.repositories.auditLogs.create.mock.calls,
+      emitUserEventMock.mock.calls.map((call) => call.slice(1)),
       [...store.entries()],
     ]);
     expect(everythingPersisted).not.toContain(code);
@@ -1594,18 +1601,18 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     // and HAIP's MUST has no success qualifier. The user who declined on this
     // device is looking at the tab that waits; the return leg is how it
     // learns to stop.
-    const { fastify, store, reply, body } = await submit(declined, sameDeviceState());
+    const { store, reply, body } = await submit(declined, sameDeviceState());
 
     expect(reply.statusCode).toBe(200);
     expect(Object.keys(body)).toEqual(['redirect_uri']);
     expect(responseCodeOf(body)).toMatch(RESPONSE_CODE_SHAPE);
-    // Still an error: signalled as one, nothing parked, nothing audited, the
+    // Still an error: signalled as one, nothing parked, no event, the
     // wallet's text nowhere.
     expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
       signal: 'wallet_error',
     });
     expect(store.get(`wallet-presentation:${hashOid4vpState(STATE)}`)).toBeUndefined();
-    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
     expect(JSON.stringify(body)).not.toContain('access_denied');
   });
 

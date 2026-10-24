@@ -408,7 +408,6 @@ describe('login round-trip', () => {
     // Render the login page with it and confirm the value survives into the
     // hidden field that the POST handler reads back.
     const loginFastify = makeFastify();
-    (loginFastify.fastify as any).repositories = { auditLogs: { create: vi.fn() } };
     await loginRoute(loginFastify.fastify);
     const { reply, state } = createReply();
     await loginFastify.ctx.get!({ query: { return_to: returnTo }, headers: {} }, reply);

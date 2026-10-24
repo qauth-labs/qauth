@@ -26,6 +26,7 @@ import {
   verifyLoginCsrfCookie,
 } from '../../helpers/session-cookie';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent } from '../../helpers/user-events';
 import { resolveWalletLoginCapability } from '../../helpers/wallet-login-request';
 
 /**
@@ -196,7 +197,8 @@ function loginPage(opts: {
 }
 
 const loginFormSchema = z.object({
-  // Bounded like the JSON login's: a refused sign-in writes it to `audit_logs`.
+  // Bounded like the JSON login's (RFC 5321 caps an address at 254): the
+  // refusal page renders it back into the form.
   email: z.string().min(1).max(EMAIL_MAX_LENGTH),
   password: passwordSchema.min(1),
   return_to: z.string().optional(),
@@ -293,16 +295,12 @@ export default async function (fastify: FastifyInstance) {
       // BEFORE any credential work so a CSRF probe never reaches the DB.
       const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'ui.login.csrf_failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: {},
-        });
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+          { form: 'sign_in' },
+          { actor: 'user' }
+        );
         // Re-render with a fresh token so the user can retry legitimately.
         const freshCsrf = generateCsrfToken();
         setLoginCsrfCookie(reply, freshCsrf);
@@ -351,16 +349,13 @@ export default async function (fastify: FastifyInstance) {
       const lockout = await registerLoginAttempt(fastify.redis, lockoutIdentifiers);
       if (lockout.locked) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: null,
-          event: 'ui.login.failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { email: normalizedEmail, reason: 'locked_out' },
-        });
+        // No subject, and never the typed address: the attempt names no user.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+          { method: 'password', reason: 'locked_out' },
+          { actor: 'user' }
+        );
         if (lockout.retryAfterSeconds !== undefined) {
           reply.header('Retry-After', String(lockout.retryAfterSeconds));
         }
@@ -384,7 +379,7 @@ export default async function (fastify: FastifyInstance) {
       // hosted UI either. It is refused EXACTLY like a wrong password (same
       // 401 page, same floor, same order of work, still counted): a page of
       // its own told a just-registered free address from a registered one
-      // (ANT-2026-SPEMY9GU). Only the audit row keeps the reason.
+      // (ANT-2026-SPEMY9GU). Only the event keeps the reason.
       const unverified =
         check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
 
@@ -403,18 +398,20 @@ export default async function (fastify: FastifyInstance) {
 
       if (check.status !== 'ok' || unverified || !user || !user.enabled) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
-        await fastify.repositories.auditLogs.create({
-          userId: unverified ? check.credential.userId : null,
-          oauthClientId: null,
-          event: 'ui.login.failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: unverified
-            ? { email: normalizedEmail, reason: 'email_not_verified' }
-            : { email: normalizedEmail },
-        });
+        // The unverified account is a known user, and the event's subject.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+          {
+            method: 'password',
+            reason: unverified ? 'email_not_verified' : 'invalid_credentials',
+          },
+          {
+            realmId: realm.id,
+            userId: unverified ? check.credential.userId : null,
+            actor: 'user',
+          }
+        );
         return renderRefusal(401, signInRefusal());
       }
 
@@ -441,16 +438,12 @@ export default async function (fastify: FastifyInstance) {
       await trackBrowserSession(fastify, user.id, sessionId);
 
       await fastify.repositories.users.updateLastLogin(user.id);
-      await fastify.repositories.auditLogs.create({
-        userId: user.id,
-        oauthClientId: null,
-        event: 'ui.login.success',
-        eventType: 'auth',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { sessionId, returnTo },
-      });
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:user.signed_in:v1-rc.0',
+        { method: 'password' },
+        { realmId: realm.id, userId: user.id, actor: 'user' }
+      );
 
       setSessionCookie(reply, sessionId);
       // Burn the login-CSRF cookie now that authentication succeeded. Fastify
