@@ -73,11 +73,11 @@ const LEAKY_CONSTRAINT_NAME = 'user_credentials_realm_provider_sub_unique';
 
 /**
  * Test-only API family routes (#506): a paged list and a lookup that fails.
- * Under `/developer/v1`, so the error handler answers them with problem
+ * Under `/developer/v1-rc.0`, so the error handler answers them with problem
  * documents, exactly as it will a real family route.
  */
-const FAMILY_LIST_ROUTE = '/developer/v1/__error-handler-wiring__/widgets';
-const FAMILY_MISSING_ROUTE = '/developer/v1/__error-handler-wiring__/widgets/missing';
+const FAMILY_LIST_ROUTE = '/developer/v1-rc.0/__error-handler-wiring__/widgets';
+const FAMILY_MISSING_ROUTE = '/developer/v1-rc.0/__error-handler-wiring__/widgets/missing';
 
 const FORM: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
 
