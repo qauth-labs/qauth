@@ -400,6 +400,28 @@ catalog:
   '@fastify/swagger': '^9.9.2'
   '@fastify/swagger-ui': '^6.1.2'
   '@node-rs/argon2': '^2.2.2'
+  # OpenTelemetry log export of events (ADR-018 §3, issue #541), auth-server
+  # only, used only when OTEL_EVENTS_ENABLED=true. Exact versions, because the
+  # SDK's packages are released together and require each other exactly
+  # (sdk-logs 0.223.0 needs core and resources 2.12.0): a range would let one
+  # of them move alone and put a second copy in the tree. 0.223.0 / 2.12.0 is
+  # the last release older than minimumReleaseAge; sdk-logs 0.223.0 accepts
+  # @opentelemetry/api below 1.10.0, hence 1.9.1. No advisory names these
+  # versions (GHSA-8988-4f7v-96qf, against core, is fixed in 2.8.0).
+  # - api: the active span's trace and span id at the time an event commits.
+  # - api-logs: the log record type and its severity numbers.
+  # - sdk-logs: the logger provider that turns a record into an OTLP one; the
+  #   queue in front of the exporter is QAuth's own processor.
+  # - exporter-logs-otlp-http: sends the records over OTLP/HTTP (JSON).
+  # - resources: the `service.name` resource from OTEL_SERVICE_NAME.
+  # - core: the result code an export reports, and the context that keeps an
+  #   export's own HTTP request out of the operator's traces.
+  '@opentelemetry/api': '1.9.1'
+  '@opentelemetry/api-logs': '0.223.0'
+  '@opentelemetry/core': '2.12.0'
+  '@opentelemetry/exporter-logs-otlp-http': '0.223.0'
+  '@opentelemetry/resources': '2.12.0'
+  '@opentelemetry/sdk-logs': '0.223.0'
   '@react-email/render': '^2.1.1'
   dotenv: '^18.0.8'
   drizzle-orm: '^0.45.4'
