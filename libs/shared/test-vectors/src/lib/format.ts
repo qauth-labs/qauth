@@ -34,7 +34,8 @@ export const VECTOR_CASE_ID_PATTERN = new RegExp(`^${SEGMENT}$`);
 
 const jsonObject = z.record(z.string(), z.unknown());
 
-const nonEmptyText = z.string().trim().min(1);
+/** Text with at least one non-space character; a pattern, so the JSON Schema states it too. */
+const nonEmptyText = z.string().regex(/\S/, 'must not be blank');
 
 export const vectorCaseSchema = z
   .strictObject({

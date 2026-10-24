@@ -17,12 +17,12 @@
     },
     "description": {
       "type": "string",
-      "minLength": 1,
+      "pattern": "\\S",
       "description": "What the cases test, and what input and expected mean in this file. A reader in another language implements the check from this text."
     },
     "source": {
       "type": "string",
-      "minLength": 1,
+      "pattern": "\\S",
       "description": "Where the cases come from: a specification section, or the tool and version that generated them."
     },
     "cases": {
@@ -55,7 +55,7 @@
           "notes": {
             "description": "Why the case exists, or where its values come from.",
             "type": "string",
-            "minLength": 1
+            "pattern": "\\S"
           }
         },
         "required": [
