@@ -65,6 +65,13 @@ function dependencyChecksConfigs() {
       // Neither has an import site in shipped source, by design.
       ignoredDependencies: ['react-dom', 'tailwindcss'],
     },
+    {
+      files: ['apps/docs-site/package.json'],
+      // Astro loads it at config time, when `markdown.remarkPlugins` is set:
+      // since 7.4 the unified Markdown pipeline is an optional peer that astro
+      // resolves itself, so nothing in the site imports it.
+      ignoredDependencies: ['@astrojs/markdown-remark'],
+    },
   ];
 
   return scopes.map(({ files, ignoredDependencies }) => ({
