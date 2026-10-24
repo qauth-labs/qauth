@@ -256,6 +256,24 @@ describe('prepareEnvironmentKeys — ML-DSA-65', () => {
     expect(error.details).toEqual({ variables: ['JWT_MLDSA_PRIVATE_KEY'] });
   });
 
+  it('accepts a padded seed and refuses one with padding before its end', async () => {
+    const [padded] = await prepareEnvironmentKeys(
+      { mlDsa: { seed: source(`${SEED}=`, 'JWT_MLDSA_PRIVATE_KEY') } },
+      { enabledSignatureAlgorithms: HYBRID_CAPABLE }
+    );
+    expect(padded.material).toEqual(Buffer.from(SEED, 'base64url'));
+
+    const error = await refusal(
+      prepareEnvironmentKeys(
+        // Decoding stops at the first `=`, so this passes the length check and
+        // reaches the padding check, where `/=+$/` backtracked for seconds.
+        { mlDsa: { seed: source(`${SEED}${'='.repeat(100_000)}x`, 'JWT_MLDSA_PRIVATE_KEY') } },
+        { enabledSignatureAlgorithms: HYBRID_CAPABLE }
+      )
+    );
+    expect(error.details).toEqual({ variables: ['JWT_MLDSA_PRIVATE_KEY'] });
+  });
+
   it('needs SIGNING_ALGORITHM_MODE to enable ML-DSA-65', async () => {
     await expect(
       prepareEnvironmentKeys(

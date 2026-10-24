@@ -249,7 +249,7 @@ async function prepareMlDsaKey(
   const material = Buffer.from(seed, 'base64url');
   if (
     material.length !== ML_DSA_SEED_BYTES ||
-    material.toString('base64url') !== seed.replace(/=+$/, '')
+    material.toString('base64url') !== withoutPadding(seed)
   ) {
     material.fill(0);
     throw new InvalidConfigurationError(
@@ -310,6 +310,16 @@ function configuredKid(source: EnvironmentKeySource | undefined): string | undef
     );
   }
   return kid;
+}
+
+/**
+ * `value` without its trailing `=` padding. A loop rather than `/=+$/`, which
+ * backtracks quadratically on a long run of `=` that is not at the end.
+ */
+function withoutPadding(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x3d) end--;
+  return value.slice(0, end);
 }
 
 function variablesOf(...sources: (EnvironmentKeySource | undefined)[]): string[] {
