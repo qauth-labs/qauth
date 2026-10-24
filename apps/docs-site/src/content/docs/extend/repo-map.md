@@ -94,9 +94,9 @@ project may use, and `@qauth-labs/server-keys/custody`, with the KEK provider, e
 the key factory and the in-process signer. Module boundaries work per project and cannot tell the
 two apart, so a block in `.oxlintrc.json` (the key custody guard: `no-restricted-imports`, plus
 `qauth/no-restricted-syntax` from `tools/oxlint/qauth-plugin.mjs` for `require()` and the other
-forms an import rule does not see) refuses
-`/custody`, and any deep path into the package, everywhere except `libs/server/keys` and the signer's
-wiring, `libs/fastify/plugins/signer`. Sign through `fastify.signer`; do not widen the list.
+forms an import rule does not see) refuses `/custody`, and any deep path into the package,
+everywhere except `libs/server/keys` and the signer's wiring, `libs/fastify/plugins/signer`. Sign
+through `fastify.signer`; do not widen the list.
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 
