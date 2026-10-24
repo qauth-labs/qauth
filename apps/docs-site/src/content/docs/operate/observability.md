@@ -319,8 +319,11 @@ one.
 
 When the export is on, the server checks these values at boot: a malformed
 URL, header list, timeout or compression refuses to start, with the variable's
-name in the error. The error never repeats a header value. When the export is
-off, the server leaves them alone. They are process-wide, and another
+name in the error, and so does a TLS file the process cannot read, or a client
+certificate set without its key or a key without its certificate. The
+exporter would otherwise drop an unreadable CA file without a word and trust
+the public CAs instead. The error never repeats a header value. When the
+export is off, the server leaves them alone. They are process-wide, and another
 OpenTelemetry component of yours may read them.
 
 The records are JSON-encoded OTLP (`http/json`). `OTEL_EXPORTER_OTLP_PROTOCOL`
@@ -387,8 +390,11 @@ an event that carries a password, a token, a key or a value shaped like one,
 and the export checks every event against the same rules before it queues the
 record. The export adds no masking of its own. On events that a person's own
 request caused, the body includes the request's IP address and `User-Agent`,
-as the event store does. Your collector and the storage behind it then hold
-that personal data.
+as the event store does. An admin event's `diff` carries the before and after
+values an admin changed, a contact address included, and a field an event type
+declares as personal data goes out as it is stored. Your collector and the
+storage behind it then hold that personal data, and how long they keep it is
+yours to set: the event store's retention does not reach the exported copy.
 
 ### Queue, drops and limits
 

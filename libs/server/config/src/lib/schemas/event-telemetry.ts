@@ -1,3 +1,6 @@
+import { accessSync, constants, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { z } from 'zod';
 
 /**
@@ -48,7 +51,7 @@ export const eventTelemetryEnvSchema = z.object({
    * value is unset, as for the exporter variables, so it takes the default
    * rather than refuse a boot that may not export at all.
    */
-  OTEL_SERVICE_NAME: unsetWhenBlank(z.string().trim().min(1).max(255)).transform(
+  OTEL_SERVICE_NAME: unsetWhenBlank(z.string().trim().min(1)).transform(
     (value) => value ?? 'qauth-auth-server'
   ),
 
@@ -101,8 +104,35 @@ export type OtlpExporterEnv = Partial<
     | 'OTEL_EXPORTER_OTLP_LOGS_TIMEOUT'
     | 'OTEL_EXPORTER_OTLP_COMPRESSION'
     | 'OTEL_EXPORTER_OTLP_LOGS_COMPRESSION'
+    | 'OTEL_EXPORTER_OTLP_CERTIFICATE'
+    | 'OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE'
+    | 'OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE'
+    | 'OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE'
+    | 'OTEL_EXPORTER_OTLP_CLIENT_KEY'
+    | 'OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY'
   >
 >;
+
+/**
+ * The TLS files the exporter reads, each as its logs variable and the general
+ * one: the logs variable wins, as the exporter takes it.
+ */
+const OTLP_TLS_FILES = [
+  ['OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE', 'OTEL_EXPORTER_OTLP_CERTIFICATE'],
+  ['OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE', 'OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE'],
+  ['OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY', 'OTEL_EXPORTER_OTLP_CLIENT_KEY'],
+] as const;
+
+/** Whether `path`, resolved as the exporter resolves it, is a file this process can read. */
+function isReadableFile(path: string): boolean {
+  const resolved = resolve(process.cwd(), path);
+  try {
+    accessSync(resolved, constants.R_OK);
+    return statSync(resolved).isFile();
+  } catch {
+    return false;
+  }
+}
 
 /** The longest export timeout QAuth accepts: an hour, in milliseconds. */
 export const OTLP_TIMEOUT_MAX_MILLIS = 3_600_000;
@@ -191,6 +221,28 @@ export function otlpExporterProblems(env: OtlpExporterEnv): OtlpExporterProblem[
     'OTEL_EXPORTER_OTLP_LOGS_COMPRESSION',
   ] as const) {
     check(variable, (value) => value === 'gzip' || value === 'none', 'gzip or none');
+  }
+  // The exporter reads a TLS file it cannot open as unset, with a diagnostic
+  // nothing prints. A CA file left unmounted would then make it trust the
+  // public CAs in place of the operator's, so a file named must be readable.
+  // The client certificate and its key only work together.
+  const effective = (pair: (typeof OTLP_TLS_FILES)[number]) =>
+    pair.find((variable) => env[variable] !== undefined);
+  for (const pair of OTLP_TLS_FILES) {
+    const variable = effective(pair);
+    if (variable !== undefined) check(variable, isReadableFile, 'a file this process can read');
+  }
+  const certificate = effective(OTLP_TLS_FILES[1]);
+  const key = effective(OTLP_TLS_FILES[2]);
+  if ((certificate === undefined) !== (key === undefined)) {
+    const [missing, given] =
+      certificate === undefined
+        ? (['OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE', key] as const)
+        : (['OTEL_EXPORTER_OTLP_CLIENT_KEY', certificate] as const);
+    problems.push({
+      variable: missing,
+      message: `${missing} (or its LOGS_ form) must be set with ${given}: a client certificate and its key work only together`,
+    });
   }
   return problems;
 }

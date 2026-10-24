@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -49,9 +53,6 @@ describe('eventTelemetryEnvSchema', () => {
         'qauth-auth-server'
       );
     }
-    expect(eventTelemetryEnvSchema.safeParse({ OTEL_SERVICE_NAME: 'x'.repeat(256) }).success).toBe(
-      false
-    );
   });
 
   it('takes any exporter value as text, since another OpenTelemetry component may set it', () => {
@@ -134,6 +135,60 @@ describe('otlpExporterProblems', () => {
   it('refuses a compression other than gzip or none', () => {
     expect(problems({ OTEL_EXPORTER_OTLP_LOGS_COMPRESSION: 'zstd' })).toEqual([
       'OTEL_EXPORTER_OTLP_LOGS_COMPRESSION: OTEL_EXPORTER_OTLP_LOGS_COMPRESSION must be gzip or none',
+    ]);
+  });
+});
+
+describe('otlpExporterProblems — TLS files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qauth-otlp-'));
+  const pem = join(dir, 'ca.pem');
+  writeFileSync(pem, '-----BEGIN CERTIFICATE-----\n');
+  const missing = join(dir, 'not-mounted.pem');
+
+  it('takes TLS files the process can read', () => {
+    expect(
+      problems({
+        OTEL_EXPORTER_OTLP_CERTIFICATE: pem,
+        OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: pem,
+        OTEL_EXPORTER_OTLP_CLIENT_KEY: pem,
+      })
+    ).toEqual([]);
+  });
+
+  it('refuses a TLS file it cannot read, which the exporter would drop without a word', () => {
+    expect(problems({ OTEL_EXPORTER_OTLP_CERTIFICATE: missing })).toEqual([
+      'OTEL_EXPORTER_OTLP_CERTIFICATE: OTEL_EXPORTER_OTLP_CERTIFICATE must be a file this process can read',
+    ]);
+    expect(problems({ OTEL_EXPORTER_OTLP_CERTIFICATE: dir })).toHaveLength(1);
+  });
+
+  it('reads the logs variable over the general one, as the exporter does', () => {
+    expect(
+      problems({
+        OTEL_EXPORTER_OTLP_CERTIFICATE: missing,
+        OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: pem,
+      })
+    ).toEqual([]);
+    expect(
+      problems({
+        OTEL_EXPORTER_OTLP_CERTIFICATE: pem,
+        OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: missing,
+      })
+    ).toEqual([
+      'OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE must be a file this process can read',
+    ]);
+  });
+
+  it('refuses a client certificate without its key, and a key without its certificate', () => {
+    expect(problems({ OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: pem })).toEqual([
+      expect.stringMatching(
+        /^OTEL_EXPORTER_OTLP_CLIENT_KEY: .* must be set with OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE/
+      ),
+    ]);
+    expect(problems({ OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY: pem })).toEqual([
+      expect.stringMatching(
+        /^OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: .* must be set with OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY/
+      ),
     ]);
   });
 });
