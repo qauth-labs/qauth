@@ -417,13 +417,18 @@ Table "event_deliveries" {
   }
 }
 
-// How far the fan-out has read each realm's stream. A realm has a row only
-// while it has a destination.
+// How far the fan-out has read each realm's stream, per route kind. A realm
+// has a row for a kind only while it has a destination of that kind.
 Table "event_delivery_positions" {
-  "realm_id" uuid [pk]
+  "realm_id" uuid [not null]
+  "destination_kind" varchar(32) [not null, note: "The route kind whose destinations this position feeds"]
   "xid" xid8 [not null, note: "The last event read, or a horizon"]
   "seq" bigint [not null, note: "0 before the first event of xid"]
   "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    (realm_id, destination_kind) [pk, name: "event_delivery_positions_pk"]
+  }
 }
 
 // ============================================================================

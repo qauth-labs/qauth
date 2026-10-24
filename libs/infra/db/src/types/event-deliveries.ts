@@ -27,8 +27,17 @@ export interface EventDeliveryDestination {
 /** What {@link EventDeliveriesRepository.fanOut} takes. */
 export interface EventFanOutRequest {
   /**
-   * Every destination of every route, enabled ones only. A realm that has
-   * none has nothing fanned out, and its position is forgotten.
+   * The route kinds the calling node serves. Only their positions are read,
+   * moved and forgotten, so a node that serves fewer kinds than another, as
+   * during a rollout, leaves the other kinds alone. Empty: nothing is done.
+   */
+  readonly kinds: readonly string[];
+  /**
+   * Every enabled destination of those kinds. A realm with no destination of
+   * a kind has nothing fanned out for it, and its position for that kind is
+   * forgotten.
+   *
+   * A destination of a kind not in `kinds` is refused.
    */
   readonly destinations: readonly EventDeliveryDestination[];
   /** The worker's clock, in epoch milliseconds. */
@@ -41,15 +50,15 @@ export interface EventFanOutRequest {
 
 /** What one {@link EventDeliveriesRepository.fanOut} did. */
 export interface EventFanOutResult {
-  /** Realms whose stream was read. */
+  /** Streams read: one per realm and route kind. */
   readonly realms: number;
-  /** Realms another worker was fanning out, left to it. */
+  /** Streams another worker was fanning out, left to it. */
   readonly skippedRealms: number;
   /** Events read. */
   readonly events: number;
   /** Delivery rows written. */
   readonly deliveries: number;
-  /** Whether a realm still had events when it reached `maxPagesPerRealm`. */
+  /** Whether a stream still had events when it reached `maxPagesPerRealm`. */
   readonly more: boolean;
 }
 
@@ -127,11 +136,14 @@ export type EventDeliveryAttemptRecord =
  */
 export interface EventDeliveriesRepository {
   /**
-   * Write the delivery rows for the events after each realm's position, and
-   * move the positions on. A realm another worker is fanning out is skipped
-   * (`pg_try_advisory_xact_lock`), so one node does each realm at a time. A
-   * realm seen for the first time starts at the horizon: a new destination
-   * receives the events committed from then on, not the realm's history.
+   * Write the delivery rows for the events after each position, one per
+   * realm and route kind, and move the positions on. A stream another worker
+   * is fanning out is skipped (`pg_try_advisory_xact_lock`), so one node does
+   * each at a time. A stream seen for the first time starts at the horizon: a
+   * new destination receives the events committed from then on, not the
+   * realm's history.
+   *
+   * @throws {TypeError} on a destination of a kind the request does not serve
    */
   fanOut(request: EventFanOutRequest): Promise<EventFanOutResult>;
 
@@ -141,7 +153,8 @@ export interface EventDeliveriesRepository {
   /**
    * Claim due rows, earliest due first within each destination, skipping the
    * rows another claim holds (`FOR UPDATE SKIP LOCKED`). Each claim counts
-   * an attempt and leases the row until `now + leaseMs`.
+   * an attempt and leases the row until `now + leaseMs`. A row whose event is
+   * stored in a layout this release cannot read is left to a node that can.
    */
   claim(request: EventDeliveryClaimRequest): Promise<ClaimedEventDelivery[]>;
 

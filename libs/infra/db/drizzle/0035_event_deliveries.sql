@@ -27,11 +27,14 @@ CREATE TABLE "event_deliveries" (
 );
 --> statement-breakpoint
 CREATE TABLE "event_delivery_positions" (
-	"realm_id" uuid PRIMARY KEY NOT NULL,
+	"realm_id" uuid NOT NULL,
+	"destination_kind" varchar(32) NOT NULL,
 	"xid" "xid8" NOT NULL,
 	"seq" bigint NOT NULL,
 	"updated_at" bigint DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000) NOT NULL,
-	CONSTRAINT "event_delivery_positions_seq_valid" CHECK ("event_delivery_positions"."seq" >= 0)
+	CONSTRAINT "event_delivery_positions_pk" PRIMARY KEY("realm_id","destination_kind"),
+	CONSTRAINT "event_delivery_positions_seq_valid" CHECK ("event_delivery_positions"."seq" >= 0),
+	CONSTRAINT "event_delivery_positions_kind_not_empty" CHECK ("event_delivery_positions"."destination_kind" <> '')
 );
 --> statement-breakpoint
 ALTER TABLE "event_deliveries" ADD CONSTRAINT "event_deliveries_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

@@ -12,7 +12,7 @@ import { quoteRoleName, type TablePrivilege } from '../role-grants';
  *   fan-out's rows and claim and finish them. A row is deleted only with its
  *   event, by the retention job (#536), through the foreign key.
  * - `event_delivery_positions`: every row privilege, since the fan-out
- *   forgets the position of a realm that has no destination left.
+ *   forgets the position of a realm that has no destination of a kind left.
  *
  * Nothing else: no key table, no session or token table. The role holds no
  * private key (ADR-019 Decision 9); it asks the signer to sign.

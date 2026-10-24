@@ -287,7 +287,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `oldestUnreadEventAge()` returns how long, in seconds, the oldest committed event has been held back from readers. It returns no event, so it takes no realm.
   - A position (`EventPosition`) is opaque text that names its realm, `xid` and `seq`. Start a realm's stream with `eventStreamStart(realmId)`. A position of another realm, or one that does not parse, throws `EventPositionError`.
 - **`createEventDeliveriesRepository(db)`**: The delivery queue of the delivery role (ADR-019 Decision 8, #460): one `event_deliveries` row per destination and event. See [Event delivery](#event-delivery).
-  - `fanOut({ destinations, now })` writes the rows for the events after each realm's position and moves the position on, one realm at a time per node.
+  - `fanOut({ kinds, destinations, now })` writes the rows for the events after each position, one per realm and route kind, and moves the position on, one stream at a time per node. It touches only the positions of the `kinds` the caller serves.
   - `dueDestinations(kinds, now)`, `claim({ picks, now, leaseMs, maxAttempts })`, `record(claim, outcome, now)` and `release(claims, now)` run the claims.
   - `minOffered(realmId)` returns the lowest position every destination has finished, for the retention job (#536).
   - `pendingByKind()` and `deliveryLagSeconds(now)` feed the metrics; `listForEvent(eventId)` returns an event's deliveries.
@@ -550,17 +550,20 @@ The delivery role (`@qauth-labs/server-event-delivery`, #460) hands each event
 to each destination of a route, at least once and with the same id, through
 `createEventDeliveriesRepository`:
 
-- **Fan-out.** Each realm with a destination has a position in
-  `event_delivery_positions`. `fanOut` reads the realm's events after it, below
-  the horizon (the read rule of the [event store](#event-store)), and writes one
-  row per destination whose type and category filters match, in the
-  transaction that moves the position. A crash before the commit writes and
-  moves nothing; a second run writes no row twice
-  (`event_deliveries_event_destination_unique`). It takes a per-realm
-  `pg_try_advisory_xact_lock` and leaves a realm another node holds. A realm
-  seen for the first time starts at the horizon, and the position of a realm
-  whose last destination went is removed: a new destination receives events
-  from about the time it was added, not the realm's history.
+- **Fan-out.** Each realm with a destination of a route kind has a position
+  for that kind in `event_delivery_positions`. `fanOut` reads the realm's
+  events after it, below the horizon (the read rule of the
+  [event store](#event-store)), and writes one row per destination of the kind
+  whose type and category filters match, in the transaction that moves the
+  position. A crash before the commit writes and moves nothing; a second run
+  writes no row twice (`event_deliveries_event_destination_unique`). It takes a
+  `pg_try_advisory_xact_lock` per realm and kind and leaves a stream another
+  node holds. A stream seen for the first time starts at the horizon, and the
+  position of a realm whose last destination of a kind went is removed: a new
+  destination receives events from about the time it was added, not the
+  realm's history. A node moves and removes only the positions of the kinds it
+  serves, so nodes with different routes, as during a rollout, do not move
+  each other's.
 - **Claims and leases.** `claim` takes due rows of the destinations it is
   given with `FOR UPDATE SKIP LOCKED`, counts the attempt and leases each row:
   `locked_until` and `next_attempt_at` become the lease's end, so a worker that
@@ -568,13 +571,14 @@ to each destination of a route, at least once and with the same id, through
   the claim still holds the row (same attempt, lease not given back), so a
   worker whose lease ran out cannot overwrite a newer attempt. A due row whose
   attempts are used up was interrupted on its last one and ends `failed`
-  (`attempt_interrupted`).
+  (`attempt_interrupted`). A row whose event is stored in a later layout than
+  this release reads is left to a node that reads it.
 - **Clock.** Every time in the queue is epoch milliseconds from the worker's
   clock, not the database's: the lease and the retry schedule run on one clock,
   and a test can drive them.
 - **Retention.** `minOffered(realmId)` is the lowest position every
   destination has finished: before the realm's oldest unfinished row, and at
-  most its position. A row is deleted with its event (`ON DELETE CASCADE`).
+  most the lowest of its positions. A row is deleted with its event (`ON DELETE CASCADE`).
 - **Grants.** `eventDeliveryGrantStatements(role)`: `SELECT` on `events`,
   `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, and every row privilege
   on `event_delivery_positions`. Nothing else.
@@ -772,7 +776,7 @@ libs/infra/db/
 - **events**: One row per event, written in the transaction of the change it records: the envelope's `id` (a UUIDv7, unique), realm, category, type, time, actor, subject, client, request and `data`, plus `seq` (an identity), `xid` (the writing transaction, `xid8`) and `schema_version` (the row layout, 1). Readers take a realm's rows in `(xid, seq)` order below their snapshot's xmin (`idx_events_realm_position`). Also indexed by `(realm_id, type)`, by `subject_id` and by `time` for retention. No foreign keys: an event outlives the realm, user or client it names
 
 - **event_deliveries**: One row per destination (`destination_kind`, `destination_id`) and event (`event_id`, `ON DELETE CASCADE`), unique on that triple: status (`pending`, `delivered`, `failed`), attempt count, `next_attempt_at`, `locked_until` (the lease), last status code and error class, and the event's realm, position (`event_xid`, `event_seq`) and time. Partial indexes on pending rows serve the claims, `minOffered` and the lag (#460)
-- **event_delivery_positions**: The fan-out's position in each realm's stream that has a destination (#460)
+- **event_delivery_positions**: The fan-out's position in each realm's stream, per route kind that has a destination there; keyed by `(realm_id, destination_kind)` (#460)
 
 ### Admin Audit Tables (ADR-019 Decision 7)
 

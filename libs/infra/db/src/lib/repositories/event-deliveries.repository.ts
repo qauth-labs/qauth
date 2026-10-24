@@ -19,12 +19,13 @@ import {
   envelopeOf,
   type EnvelopeRow,
   EVENT_READ_LIMIT_MAX,
+  EVENT_ROW_SCHEMA_VERSION,
 } from './events.repository';
 
 /**
- * The prefix of a realm's fan-out lock key. The lock is
- * `pg_try_advisory_xact_lock(hashtextextended(prefix || realm_id, 0))`, a key
- * no other lock of QAuth uses.
+ * The prefix of the fan-out lock key of one realm and route kind. The lock is
+ * `pg_try_advisory_xact_lock(hashtextextended(prefix || realm_id || ':' ||
+ * kind, 0))`, a key no other lock of QAuth uses.
  */
 export const EVENT_FAN_OUT_LOCK_PREFIX = 'qauth:events:fan-out:';
 
@@ -95,8 +96,13 @@ function checkKind(kind: string, caller: string): void {
   }
 }
 
-function checkDestination(destination: EventDeliveryDestination): void {
+function checkDestination(destination: EventDeliveryDestination, kinds: ReadonlySet<string>): void {
   checkKind(destination.kind, 'fanOut');
+  if (!kinds.has(destination.kind)) {
+    throw new TypeError(
+      `eventDeliveries.fanOut: a destination of kind "${destination.kind}", which the request does not serve`
+    );
+  }
   if (
     typeof destination.id !== 'string' ||
     destination.id === '' ||
@@ -158,13 +164,14 @@ function matches(
  */
 export function createEventDeliveriesRepository(db: Database): EventDeliveriesRepository {
   /**
-   * One page of one realm, in one transaction: read the events after the
-   * realm's position and below the horizon, write their delivery rows, and
-   * move the position. The page's events, rows and new position commit
-   * together, or none of them does.
+   * One page of one realm for one route kind, in one transaction: read the
+   * events after the position and below the horizon, write their delivery
+   * rows, and move the position. The page's events, rows and new position
+   * commit together, or none of them does.
    */
   async function fanOutPage(
     realmId: string,
+    kind: string,
     destinations: readonly EventDeliveryDestination[],
     pageSize: number,
     now: number
@@ -172,7 +179,7 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
     return db.transaction(
       async (tx): Promise<PageOutcome> => {
         const { rows: lock } = await tx.execute<{ locked: boolean }>(sql`
-          select pg_try_advisory_xact_lock(hashtextextended(${EVENT_FAN_OUT_LOCK_PREFIX}::text || (${realmId})::uuid::text, 0)) as "locked"
+          select pg_try_advisory_xact_lock(hashtextextended(${EVENT_FAN_OUT_LOCK_PREFIX}::text || (${realmId})::uuid::text || ':' || ${kind}::text, 0)) as "locked"
         `);
         if (lock[0]?.locked !== true) return { kind: 'busy' };
 
@@ -182,15 +189,20 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
             seq: sql<string>`${eventDeliveryPositions.seq}::text`,
           })
           .from(eventDeliveryPositions)
-          .where(eq(eventDeliveryPositions.realmId, realmId));
+          .where(
+            and(
+              eq(eventDeliveryPositions.realmId, realmId),
+              eq(eventDeliveryPositions.destinationKind, kind)
+            )
+          );
 
         // A realm seen for the first time starts at the horizon: its
         // destinations receive what is committed from now on.
         if (!position) {
           await tx.execute(sql`
-            insert into ${eventDeliveryPositions} (realm_id, xid, seq, updated_at)
-            select ${realmId}::uuid, pg_snapshot_xmin(pg_current_snapshot()), 0, ${now}
-            on conflict (realm_id) do nothing
+            insert into ${eventDeliveryPositions} (realm_id, destination_kind, xid, seq, updated_at)
+            select ${realmId}::uuid, ${kind}, pg_snapshot_xmin(pg_current_snapshot()), 0, ${now}
+            on conflict (realm_id, destination_kind) do nothing
           `);
           return { kind: 'started' };
         }
@@ -262,7 +274,12 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         await tx
           .update(eventDeliveryPositions)
           .set({ xid: next.xid, seq: next.seq, updatedAt: now })
-          .where(eq(eventDeliveryPositions.realmId, realmId));
+          .where(
+            and(
+              eq(eventDeliveryPositions.realmId, realmId),
+              eq(eventDeliveryPositions.destinationKind, kind)
+            )
+          );
         return { kind: 'read', events: read.length, deliveries, full };
       },
       { isolationLevel: 'read committed' }
@@ -284,45 +301,65 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         1000,
         'maxPagesPerRealm'
       );
-      const byRealm = new Map<string, EventDeliveryDestination[]>();
-      for (const destination of request.destinations) {
-        checkDestination(destination);
-        const realm = destination.realmId.toLowerCase();
-        const list = byRealm.get(realm) ?? [];
-        list.push(destination);
-        byRealm.set(realm, list);
+      const kinds = new Set<string>();
+      for (const kind of request.kinds) {
+        checkKind(kind, 'fanOut');
+        kinds.add(kind);
       }
-      const realms = [...byRealm.keys()];
+      // One stream per realm and kind: its destinations and its position.
+      const streams = new Map<
+        string,
+        { realmId: string; kind: string; destinations: EventDeliveryDestination[] }
+      >();
+      for (const destination of request.destinations) {
+        checkDestination(destination, kinds);
+        const realmId = destination.realmId.toLowerCase();
+        const key = `${realmId}:${destination.kind}`;
+        const stream = streams.get(key) ?? { realmId, kind: destination.kind, destinations: [] };
+        stream.destinations.push(destination);
+        streams.set(key, stream);
+      }
+      const result = { realms: 0, skippedRealms: 0, events: 0, deliveries: 0, more: false };
+      // A node that serves no kind touches no position: another node may.
+      if (kinds.size === 0) return result;
+      const pairs = [...streams.values()];
+      const pairRealms = sql.param(pairs.map((pair) => pair.realmId));
+      const pairKinds = sql.param(pairs.map((pair) => pair.kind));
 
-      // A realm without a destination keeps no position: a destination
-      // added later starts from its own time, not from where an earlier one
-      // stopped.
+      // A realm without a destination of a kind keeps no position for it: a
+      // destination added later starts from its own time, not from where an
+      // earlier one stopped. Only the kinds this node serves are touched.
       await db.execute(sql`
         delete from ${eventDeliveryPositions}
-        where ${eventDeliveryPositions.realmId} <> all(${sql.param(realms)}::uuid[])
+        where ${eventDeliveryPositions.destinationKind} = any(${sql.param([...kinds])}::text[])
+          and not exists (
+            select 1 from unnest(${pairRealms}::uuid[], ${pairKinds}::text[]) as "pair"("realm", "kind")
+            where "pair"."realm" = ${eventDeliveryPositions.realmId}
+              and "pair"."kind" = ${eventDeliveryPositions.destinationKind}
+          )
       `);
+      if (pairs.length === 0) return result;
 
-      const result = { realms: 0, skippedRealms: 0, events: 0, deliveries: 0, more: false };
-      if (realms.length === 0) return result;
-
-      // Only the realms with work: no position yet, or a final event after it.
-      const { rows: waiting } = await db.execute<{ realm_id: string }>(sql`
-        select "realm"."id"::text as "realm_id"
-        from unnest(${sql.param(realms)}::uuid[]) as "realm"("id")
-        left join ${eventDeliveryPositions} on ${eventDeliveryPositions.realmId} = "realm"."id"
+      // Only the streams with work: no position yet, or a final event after it.
+      const { rows: waiting } = await db.execute<{ realm_id: string; kind: string }>(sql`
+        select "pair"."realm"::text as "realm_id", "pair"."kind" as "kind"
+        from unnest(${pairRealms}::uuid[], ${pairKinds}::text[]) as "pair"("realm", "kind")
+        left join ${eventDeliveryPositions}
+          on ${eventDeliveryPositions.realmId} = "pair"."realm"
+          and ${eventDeliveryPositions.destinationKind} = "pair"."kind"
         where ${eventDeliveryPositions.realmId} is null or exists (
           select 1 from ${events}
-          where ${events.realmId} = "realm"."id"
+          where ${events.realmId} = "pair"."realm"
             and (${events.xid}, ${events.seq}) > (${eventDeliveryPositions.xid}, ${eventDeliveryPositions.seq})
             and ${events.xid} < pg_snapshot_xmin(pg_current_snapshot())
         )
       `);
 
-      for (const { realm_id: realmId } of waiting) {
-        const destinations = byRealm.get(realmId) ?? [];
+      for (const { realm_id: realmId, kind } of waiting) {
+        const destinations = streams.get(`${realmId}:${kind}`)?.destinations ?? [];
         let pages = 0;
         for (;;) {
-          const page = await fanOutPage(realmId, destinations, pageSize, now);
+          const page = await fanOutPage(realmId, kind, destinations, pageSize, now);
           if (page.kind === 'busy') {
             result.skippedRealms += 1;
             break;
@@ -402,6 +439,12 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
               and ${eventDeliveries.destinationId} = "pick"."id"
               and ${eventDeliveries.status} = 'pending'
               and ${eventDeliveries.nextAttemptAt} <= ${now}
+              -- An event stored in a later layout waits for a node that reads it.
+              and exists (
+                select 1 from ${events}
+                where ${events.id} = ${eventDeliveries.eventId}
+                  and ${events.schemaVersion} <= ${EVENT_ROW_SCHEMA_VERSION}
+              )
             order by ${eventDeliveries.nextAttemptAt}
             limit "pick"."n"
             for update skip locked
@@ -496,11 +539,16 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         waiting_seq: string | null;
       }>(sql`
         select pg_snapshot_xmin(pg_current_snapshot())::text as "horizon",
-          ${eventDeliveryPositions.xid}::text as "position_xid",
-          ${eventDeliveryPositions.seq}::text as "position_seq",
+          "position"."xid"::text as "position_xid", "position"."seq"::text as "position_seq",
           "waiting"."xid"::text as "waiting_xid", "waiting"."seq"::text as "waiting_seq"
         from (select 1) as "one"
-        left join ${eventDeliveryPositions} on ${eventDeliveryPositions.realmId} = ${realm}
+        left join lateral (
+          select ${eventDeliveryPositions.xid} as "xid", ${eventDeliveryPositions.seq} as "seq"
+          from ${eventDeliveryPositions}
+          where ${eventDeliveryPositions.realmId} = ${realm}
+          order by ${eventDeliveryPositions.xid}, ${eventDeliveryPositions.seq}
+          limit 1
+        ) as "position" on true
         left join lateral (
           select ${eventDeliveries.eventXid} as "xid", ${eventDeliveries.eventSeq} as "seq"
           from ${eventDeliveries}
@@ -510,8 +558,8 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         ) as "waiting" on true
       `);
       const row = rows[0];
-      // Without a position the realm has no destination: nothing below the
-      // horizon will be fanned out any more.
+      // The lowest position of the realm's route kinds. Without one the realm
+      // has no destination: nothing below the horizon is fanned out any more.
       let xid = BigInt(row.position_xid ?? row.horizon);
       let seq = BigInt(row.position_seq ?? '0');
       if (row.waiting_xid !== null && row.waiting_seq !== null) {
@@ -538,7 +586,7 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
     async deliveryLagSeconds(now): Promise<number> {
       checkTime(now, 'now');
       // The oldest event an unfinished row waits on, and the oldest event the
-      // fan-out has not read yet (the first after each realm's position).
+      // fan-out has not read yet (the first after each position).
       const { rows } = await db.execute<{ oldest: string | null }>(sql`
         select least(
           (select min(${eventDeliveries.eventTime}) from ${eventDeliveries}

@@ -39,6 +39,8 @@ const SIGNED_IN = 'urn:qauth:event:user.signed_in:v1-rc.0';
 const SIGNED_OUT = 'urn:qauth:event:user.signed_out:v1-rc.0';
 const NOW = 1_800_000_000_000;
 const LEASE = 60_000;
+/** The route kinds the suite's fan-outs serve. */
+const KINDS = ['test', 'other'];
 
 function signedIn(realm: string): EmitEvent<'urn:qauth:event:user.signed_in:v1-rc.0'> {
   const userId = randomUUID();
@@ -133,7 +135,7 @@ describe('event deliveries integration (real Postgres)', () => {
 
   /** Fan out once so each realm has a position, as a running role would have. */
   async function start(destinations: EventDeliveryDestination[]): Promise<void> {
-    await queue.fanOut({ destinations, now: NOW });
+    await queue.fanOut({ kinds: KINDS, destinations, now: NOW });
   }
 
   async function rows(): Promise<
@@ -157,14 +159,14 @@ describe('event deliveries integration (real Postgres)', () => {
         destination(realm, 'none', { types: [] }),
       ];
 
-      expect(await queue.fanOut({ destinations, now: NOW })).toMatchObject({
+      expect(await queue.fanOut({ kinds: KINDS, destinations, now: NOW })).toMatchObject({
         realms: 1,
         events: 0,
         deliveries: 0,
       });
       const signIn = await store.emitInOwnTransaction(signedIn(realm));
       const signOut = await store.emitInOwnTransaction(signedOut(realm));
-      expect(await queue.fanOut({ destinations, now: NOW })).toMatchObject({
+      expect(await queue.fanOut({ kinds: KINDS, destinations, now: NOW })).toMatchObject({
         realms: 1,
         events: 2,
         deliveries: 3,
@@ -184,10 +186,10 @@ describe('event deliveries integration (real Postgres)', () => {
       const destinations = [destination(realm, 'a')];
       await start(destinations);
       await store.emitInOwnTransaction(signedIn(realm));
-      await queue.fanOut({ destinations, now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations, now: NOW });
       await pool().query(`UPDATE event_delivery_positions SET xid = '0', seq = 0`);
 
-      expect(await queue.fanOut({ destinations, now: NOW })).toMatchObject({
+      expect(await queue.fanOut({ kinds: KINDS, destinations, now: NOW })).toMatchObject({
         events: 1,
         deliveries: 0,
       });
@@ -212,13 +214,13 @@ describe('event deliveries integration (real Postgres)', () => {
       try {
         // Committed after the open transaction began: not final until it ends.
         after = await store.emitInOwnTransaction(signedIn(realm));
-        await queue.fanOut({ destinations, now: NOW });
+        await queue.fanOut({ kinds: KINDS, destinations, now: NOW });
         expect(await rows()).toEqual([]);
       } finally {
         release.open();
         await open;
       }
-      await queue.fanOut({ destinations, now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations, now: NOW });
       expect(new Set((await rows()).map((row) => row.event_id))).toEqual(new Set([late, after]));
     });
 
@@ -231,9 +233,17 @@ describe('event deliveries integration (real Postgres)', () => {
       await store.emitInOwnTransaction(signedIn(other));
 
       expect(
-        await queue.fanOut({ destinations, now: NOW, pageSize: 2, maxPagesPerRealm: 2 })
+        await queue.fanOut({
+          kinds: KINDS,
+          destinations,
+          now: NOW,
+          pageSize: 2,
+          maxPagesPerRealm: 2,
+        })
       ).toMatchObject({ realms: 2, events: 5, more: true });
-      expect(await queue.fanOut({ destinations, now: NOW, pageSize: 2 })).toMatchObject({
+      expect(
+        await queue.fanOut({ kinds: KINDS, destinations, now: NOW, pageSize: 2 })
+      ).toMatchObject({
         events: 1,
         more: false,
       });
@@ -251,13 +261,61 @@ describe('event deliveries integration (real Postgres)', () => {
       const realm = randomUUID();
       await start([destination(realm, 'a')]);
       await store.emitInOwnTransaction(signedIn(realm));
-      await queue.fanOut({ destinations: [], now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations: [], now: NOW });
       expect((await pool().query('SELECT * FROM event_delivery_positions')).rows).toEqual([]);
 
       // Back with a destination: it starts at the horizon, not at the old position.
       await start([destination(realm, 'a')]);
-      await queue.fanOut({ destinations: [destination(realm, 'a')], now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations: [destination(realm, 'a')], now: NOW });
       expect(await rows()).toEqual([]);
+    });
+
+    it('keeps one position per route kind, and touches only the kinds a node serves', async () => {
+      const realm = randomUUID();
+      const both = [destination(realm, 'w'), { ...destination(realm, 's'), kind: 'other' }];
+      await queue.fanOut({ kinds: KINDS, destinations: both, now: NOW });
+      const positions = async () =>
+        (
+          await pool().query(
+            `SELECT destination_kind, xid::text, seq::text FROM event_delivery_positions
+              ORDER BY destination_kind`
+          )
+        ).rows;
+      expect((await positions()).map((row) => row.destination_kind)).toEqual(['other', 'test']);
+
+      // A node that serves only `test`, with no destination of it, as an
+      // older release during a rollout might: it forgets its own kind only.
+      await queue.fanOut({ kinds: ['test'], destinations: [], now: NOW });
+      expect((await positions()).map((row) => row.destination_kind)).toEqual(['other']);
+      // And a node with no route touches nothing.
+      await queue.fanOut({ kinds: [], destinations: [], now: NOW });
+      expect((await positions()).map((row) => row.destination_kind)).toEqual(['other']);
+
+      // A node that serves only `test` moves the `test` position, never the other one.
+      await queue.fanOut({ kinds: ['test'], destinations: [both[0]], now: NOW });
+      const before = await positions();
+      const signIn = await store.emitInOwnTransaction(signedIn(realm));
+      await queue.fanOut({ kinds: ['test'], destinations: [both[0]], now: NOW });
+      const after = await positions();
+      expect(after.find((row) => row.destination_kind === 'other')).toEqual(
+        before.find((row) => row.destination_kind === 'other')
+      );
+      expect(await rows()).toEqual([
+        { destination_id: 'w', event_id: signIn, status: 'pending', attempt_count: 0 },
+      ]);
+      // The other kind's node still delivers the event to its destination.
+      await queue.fanOut({ kinds: ['other'], destinations: [both[1]], now: NOW });
+      expect((await rows()).map((row) => row.destination_id).sort()).toEqual(['s', 'w']);
+    });
+
+    it('refuses a destination of a kind the request does not serve', async () => {
+      await expect(
+        queue.fanOut({
+          kinds: ['test'],
+          destinations: [{ ...destination(randomUUID(), 'x'), kind: 'other' }],
+          now: NOW,
+        })
+      ).rejects.toThrow(TypeError);
     });
 
     it('leaves a realm another worker is fanning out to that worker', async () => {
@@ -268,18 +326,18 @@ describe('event deliveries integration (real Postgres)', () => {
       try {
         await holder.query('BEGIN');
         await holder.query(
-          `SELECT pg_advisory_xact_lock(hashtextextended('qauth:events:fan-out:' || $1::uuid::text, 0))`,
+          `SELECT pg_advisory_xact_lock(hashtextextended('qauth:events:fan-out:' || $1::uuid::text || ':test', 0))`,
           [realm]
         );
         expect(
-          await queue.fanOut({ destinations: [destination(realm, 'a')], now: NOW })
+          await queue.fanOut({ kinds: KINDS, destinations: [destination(realm, 'a')], now: NOW })
         ).toMatchObject({ realms: 0, skippedRealms: 1, deliveries: 0 });
         await holder.query('ROLLBACK');
       } finally {
         holder.release();
       }
       expect(
-        await queue.fanOut({ destinations: [destination(realm, 'a')], now: NOW })
+        await queue.fanOut({ kinds: KINDS, destinations: [destination(realm, 'a')], now: NOW })
       ).toMatchObject({ realms: 1, deliveries: 1 });
     });
   });
@@ -290,7 +348,7 @@ describe('event deliveries integration (real Postgres)', () => {
       const list = destinations.map((id) => destination(realm, id));
       await start(list);
       for (let i = 0; i < count; i += 1) await store.emitInOwnTransaction(signedIn(realm));
-      await queue.fanOut({ destinations: list, now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations: list, now: NOW });
       return realm;
     }
 
@@ -423,7 +481,7 @@ describe('event deliveries integration (real Postgres)', () => {
       });
     });
 
-    it('hands over no event it cannot read, but still claims the row', async () => {
+    it('leaves an event stored in a later layout to a node that reads it', async () => {
       await queued(['a'], 1);
       await pool().query('ALTER TABLE events DISABLE TRIGGER events_no_update');
       try {
@@ -431,13 +489,17 @@ describe('event deliveries integration (real Postgres)', () => {
       } finally {
         await pool().query('ALTER TABLE events ENABLE TRIGGER events_no_update');
       }
-      const [claim] = await queue.claim({
-        picks: [{ kind: 'test', id: 'a', limit: 1 }],
-        now: NOW,
-        leaseMs: LEASE,
-        maxAttempts: 5,
-      });
-      expect(claim.event).toBeNull();
+      expect(
+        await queue.claim({
+          picks: [{ kind: 'test', id: 'a', limit: 1 }],
+          now: NOW,
+          leaseMs: LEASE,
+          maxAttempts: 5,
+        })
+      ).toEqual([]);
+      expect(await rows()).toEqual([
+        expect.objectContaining({ status: 'pending', attempt_count: 0 }),
+      ]);
     });
 
     it('lives as long as its event', async () => {
@@ -457,7 +519,7 @@ describe('event deliveries integration (real Postgres)', () => {
 
       await store.emitInOwnTransaction(signedIn(realm));
       await store.emitInOwnTransaction(signedIn(realm));
-      await queue.fanOut({ destinations, now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations, now: NOW });
       const [oldest] = (
         await pool().query(
           `SELECT xid::text, seq::text FROM events WHERE realm_id = $1 ORDER BY xid, seq LIMIT 1`,
@@ -488,6 +550,34 @@ describe('event deliveries integration (real Postgres)', () => {
       });
     });
 
+    it("is at most the lowest position of the realm's kinds", async () => {
+      const realm = randomUUID();
+      const other = { ...destination(realm, 's'), kind: 'other' };
+      await queue.fanOut({
+        kinds: KINDS,
+        destinations: [destination(realm, 'w'), other],
+        now: NOW,
+      });
+      await store.emitInOwnTransaction(signedIn(realm));
+      // Only `test` reads on; `other` stays behind.
+      await queue.fanOut({ kinds: ['test'], destinations: [destination(realm, 'w')], now: NOW });
+      const claims = await queue.claim({
+        picks: [{ kind: 'test', id: 'w', limit: 5 }],
+        now: NOW,
+        leaseMs: LEASE,
+        maxAttempts: 5,
+      });
+      for (const claim of claims) await queue.record(claim, { result: 'delivered' }, NOW);
+      const { rows: behind } = await pool().query(
+        `SELECT xid::text, seq::text FROM event_delivery_positions WHERE destination_kind = 'other'`
+      );
+      expect(decodeEventPosition(await queue.minOffered(realm))).toEqual({
+        realmId: realm,
+        xid: BigInt(behind[0].xid),
+        seq: BigInt(behind[0].seq),
+      });
+    });
+
     it('is the horizon for a realm without destinations', async () => {
       const realm = randomUUID();
       await store.emitInOwnTransaction(signedIn(realm));
@@ -513,7 +603,7 @@ describe('event deliveries integration (real Postgres)', () => {
       // Not fanned out yet: the lag counts it already.
       expect(await queue.deliveryLagSeconds(Number(time) + 1500)).toBe(1.5);
 
-      await queue.fanOut({ destinations, now: NOW });
+      await queue.fanOut({ kinds: KINDS, destinations, now: NOW });
       expect(await queue.pendingByKind()).toEqual({ test: 1, other: 1 });
       expect(await queue.deliveryLagSeconds(Number(time) + 2500)).toBe(2.5);
     });
@@ -545,9 +635,9 @@ describe('event deliveries integration (real Postgres)', () => {
     it('fans out, claims, records, releases and reads its metrics', async () => {
       const realm = randomUUID();
       const destinations = [destination(realm, 'a')];
-      await deliveryQueue.fanOut({ destinations, now: NOW });
+      await deliveryQueue.fanOut({ kinds: KINDS, destinations, now: NOW });
       await store.emitInOwnTransaction(signedIn(realm));
-      expect(await deliveryQueue.fanOut({ destinations, now: NOW })).toMatchObject({
+      expect(await deliveryQueue.fanOut({ kinds: KINDS, destinations, now: NOW })).toMatchObject({
         deliveries: 1,
       });
 
@@ -564,7 +654,7 @@ describe('event deliveries integration (real Postgres)', () => {
       expect(await deliveryQueue.deliveryLagSeconds(NOW)).toBeGreaterThanOrEqual(0);
       expect(decodeEventPosition(await deliveryQueue.minOffered(realm)).realmId).toBe(realm);
       expect(await deliveryQueue.listForEvent(first.eventId)).toHaveLength(1);
-      await deliveryQueue.fanOut({ destinations: [], now: NOW });
+      await deliveryQueue.fanOut({ kinds: KINDS, destinations: [], now: NOW });
     });
 
     it('cannot write or delete events, delete deliveries, or read another table', async () => {

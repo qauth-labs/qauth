@@ -1,5 +1,5 @@
 {
-  "id": "6cfff731-5eb0-40ba-b2cf-c9aeca28e056",
+  "id": "25378e27-76df-4ad7-b5ba-45eac5a4bc67",
   "prevId": "34091db6-1f2f-4a02-84e5-2f87dc346f3c",
   "version": "7",
   "dialect": "postgresql",
@@ -1917,7 +1917,13 @@
         "realm_id": {
           "name": "realm_id",
           "type": "uuid",
-          "primaryKey": true,
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_kind": {
+          "name": "destination_kind",
+          "type": "varchar(32)",
+          "primaryKey": false,
           "notNull": true
         },
         "xid": {
@@ -1942,13 +1948,22 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "event_delivery_positions_pk": {
+          "name": "event_delivery_positions_pk",
+          "columns": ["realm_id", "destination_kind"]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
         "event_delivery_positions_seq_valid": {
           "name": "event_delivery_positions_seq_valid",
           "value": "\"event_delivery_positions\".\"seq\" >= 0"
+        },
+        "event_delivery_positions_kind_not_empty": {
+          "name": "event_delivery_positions_kind_not_empty",
+          "value": "\"event_delivery_positions\".\"destination_kind\" <> ''"
         }
       },
       "isRLSEnabled": false

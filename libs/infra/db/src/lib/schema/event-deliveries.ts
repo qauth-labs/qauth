@@ -5,6 +5,7 @@ import {
   index,
   integer,
   pgTable,
+  primaryKey,
   smallint,
   unique,
   uuid,
@@ -147,21 +148,30 @@ export const eventDeliveries = pgTable(
 );
 
 /**
- * How far the fan-out has read each realm's stream (issue #460): the
- * position after which it next reads. A realm has a row only while it has a
- * destination; the fan-out removes the row when its last destination goes,
- * so a destination added later starts from that time, not from the old
- * position.
+ * How far the fan-out has read each realm's stream for each route kind
+ * (issue #460): the position after which it next reads.
+ *
+ * One row per realm and kind, so a node that serves fewer kinds than another,
+ * such as a node of an older release during a rollout, moves and forgets only
+ * the positions of its own kinds. A row exists only while the realm has a
+ * destination of that kind; the fan-out removes it when the last one goes, so
+ * a destination added later starts from that time, not from the old position.
  */
 export const eventDeliveryPositions = pgTable(
   'event_delivery_positions',
   {
-    realmId: uuid('realm_id').primaryKey(),
+    realmId: uuid('realm_id').notNull(),
+    /** The route kind whose destinations this position feeds. */
+    destinationKind: varchar('destination_kind', { length: 32 }).notNull(),
     /** The `xid` of the position: the last event read, or a horizon. */
     xid: xid8('xid').notNull(),
     /** The `seq` of the position; 0 before the first event of `xid`. */
     seq: bigint('seq', { mode: 'bigint' }).notNull(),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
   },
-  (t) => [check('event_delivery_positions_seq_valid', sql`${t.seq} >= 0`)]
+  (t) => [
+    primaryKey({ columns: [t.realmId, t.destinationKind], name: 'event_delivery_positions_pk' }),
+    check('event_delivery_positions_seq_valid', sql`${t.seq} >= 0`),
+    check('event_delivery_positions_kind_not_empty', sql`${t.destinationKind} <> ''`),
+  ]
 );
