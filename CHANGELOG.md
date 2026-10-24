@@ -188,8 +188,11 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   lock, and a unique index on `(realm_id, prev_hash)` keeps a writer that raced
   it from forking the chain. `verifyChain(realmId, from?)` and the command
   `pnpm nx run infra-db:events:verify-chain -- --realm=<name>` report the first
-  admin event that was changed, or that follows one that was removed. A trigger
-  now refuses every `UPDATE` on `events`, the owner's included, and
+  admin event that was changed, or that follows one that was removed; run from
+  a head kept outside the database, they also fail when the chain was cut back
+  to before that head. A second trigger refuses an admin row that does not
+  follow the realm's head or sets its own `seq`. A trigger now refuses every
+  `UPDATE` on `events`, the owner's included, and
   `eventsWriterGrantStatements()` grants a writing role `INSERT` and `SELECT`
   only. The migration adds two nullable columns, checks, two indexes and the
   trigger; the check that admin rows are chained is added `NOT VALID`, so rows

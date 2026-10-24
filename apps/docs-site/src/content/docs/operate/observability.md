@@ -238,10 +238,11 @@ exists, and `--json` prints the report as JSON.
 The chain shows a changed or removed event, but not a chain rewritten from
 some event to the end, or the newest events cut, by someone who can write the
 database. Keep the head it prints somewhere outside the database, and run the
-next check from it with `--from-seq=<seq> --from-hash=<hex>`. That run checks
-the events after the kept head, and fails when the chain since that head no
-longer follows from it, however much of it was rewritten. Events cut from the
-end leave no break: the new head is then older than it should be.
+next check from it with `--from-seq=<seq> --from-hash=<hex>`. That run first
+checks that the kept head is still there with the same hash, then the events
+after it. It fails when the chain was cut back to before the kept head, or
+rewritten up to it or after it. Events cut after the kept head leave no break:
+the new head is then older than it should be.
 
 ### Example Prometheus scrape config
 

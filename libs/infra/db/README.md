@@ -479,19 +479,29 @@ at nothing.
 - **One chain per realm.** The writer holds the realm's advisory transaction
   lock from reading the chain head to the end of its transaction, so the chain
   runs in `seq` order. A unique index on `(realm_id, prev_hash)` lets no two
-  rows follow one hash: a REPEATABLE READ writer that read a stale head gets a
-  unique violation (23505) instead of forking the chain; retry it.
+  rows follow one hash: a REPEATABLE READ or SERIALIZABLE writer that read a
+  stale head gets a unique violation (23505) or a serialization failure
+  (40001) instead of forking the chain; retry it. `emitInOwnTransaction` runs
+  an admin event under READ COMMITTED.
+- **Only at the head.** The trigger `events_admin_follows_head` refuses an
+  admin row whose `prev_hash` is not the realm's head, or whose `seq` was not
+  the identity's, so a role that can insert cannot make a row the head of a
+  realm forever.
 - **Emit last.** Because the lock lasts to the end of the transaction, write the
   admin event last. A transaction that writes admin events to several realms
   writes them in a fixed order, by realm id, or two such transactions can
   deadlock.
-- **Checked on write.** The writer reads its row back and throws if the row
-  does not hash as written, so a row the chain would reject never commits.
-  That read is why a writer needs `SELECT`.
+- **Checked on write.** The writer reads its row back, in a savepoint, and
+  throws if the row does not hash as written; the savepoint undoes the insert,
+  so a row the chain would reject never commits, even when the caller catches
+  the error. That read is why a writer needs `SELECT`.
 - **What the chain shows.** The hash is unkeyed: whoever can rewrite a row and
   every row after it, or cut the newest rows, leaves a chain that verifies.
   Keep the head `verifyChain` returns outside the database, and verify from it
-  later: `verifyChain(realmId, head)`.
+  later: `verifyChain(realmId, head)` first checks that the head's own row is
+  still there with its hash (`anchor_missing`, `anchor_mismatch`), so a chain
+  cut back to before it, or rewritten up to it, fails. Rows cut after the kept
+  head leave no break; the next head is then older than expected.
 
 #### Base Repository Interface
 
