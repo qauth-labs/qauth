@@ -18,7 +18,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
-import { flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
+import { actDepth, flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import { clientAddressKey } from '../../helpers/client-address';
 import {
   authenticateClientRequest,
@@ -1315,17 +1315,6 @@ function audToArray(aud: string | string[] | undefined): string[] {
  */
 function arrayToAud(values: string[]): string | string[] {
   return values.length === 1 ? values[0] : values;
-}
-
-/** Count the delegation depth of an `act` chain (1 = single actor). */
-function actDepth(act: ActClaim | undefined): number {
-  let depth = 0;
-  let cursor: ActClaim | undefined = act;
-  while (cursor) {
-    depth += 1;
-    cursor = cursor.act;
-  }
-  return depth;
 }
 
 /**
