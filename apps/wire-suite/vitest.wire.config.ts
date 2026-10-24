@@ -25,6 +25,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     watch: false,
+    // Vitest 5 clears every mock before each test by default. Kept off so a
+    // call recorded in beforeAll or at module scope still counts, as in v4.
+    clearMocks: false,
     globalSetup: ['./src/global-setup.ts'],
     // Every request crosses a real network and the registration path hashes
     // a password with Argon2id.

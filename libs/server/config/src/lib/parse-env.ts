@@ -27,8 +27,9 @@ import { z } from 'zod';
  * ```
  */
 export function parseEnv<T extends z.ZodTypeAny>(schema: T): z.infer<T> {
-  // Load environment variables from .env file
-  dotenv.config();
+  // Load environment variables from .env file. Variables already set win, even
+  // when DOTENV_OVERRIDE is set (dotenv 18 reads it).
+  dotenv.config({ override: false });
 
   // Parse and validate against the schema
   return schema.parse(process.env);

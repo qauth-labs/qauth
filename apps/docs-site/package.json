@@ -5,7 +5,8 @@
   "type": "module",
   "dependencies": {
     "astro": "catalog:",
-    "@astrojs/starlight": "catalog:"
+    "@astrojs/starlight": "catalog:",
+    "@astrojs/markdown-remark": "catalog:"
   },
   "devDependencies": {
     "@astrojs/check": "catalog:",

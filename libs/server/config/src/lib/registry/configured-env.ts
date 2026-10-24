@@ -46,7 +46,9 @@ export interface ConfiguredEnv {
  */
 export function readConfiguredEnv(registry: readonly ConfigKey[], source?: RawEnv): ConfiguredEnv {
   if (source === undefined) {
-    dotenv.config();
+    // Explicit, because dotenv 18 otherwise takes `override` from a
+    // DOTENV_OVERRIDE variable, and variables already set must win.
+    dotenv.config({ override: false });
   }
   const aliased = applyKeyAliases(source ?? process.env, registry);
 

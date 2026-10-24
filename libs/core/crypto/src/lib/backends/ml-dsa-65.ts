@@ -21,7 +21,7 @@ import type {
  * `@noble/post-quantum` library (ADR-005, #243). No native code — the AC's
  * "no native dependencies" holds by construction.
  *
- * `@noble/post-quantum` v0.6.1 API used here:
+ * `@noble/post-quantum` v0.7.1 API used here:
  * - `ml_dsa65.keygen(seed)` → `{ publicKey, secretKey }` (deterministic from a
  *   32-byte seed).
  * - `ml_dsa65.sign(message, secretKey)` → signature. Default signing is HEDGED
@@ -134,9 +134,10 @@ export const mlDsa65Backend: SignatureBackend = {
     let ok: boolean;
     try {
       // noble: verify(signature, message, publicKey). Returns false for a
-      // forged OR wrong-length signature; it throws (RangeError) only for a
+      // forged OR wrong-length signature; it throws a RangeError for a
       // wrong-length public key (which importKey already rejects, so this
-      // catch guards only a directly-constructed bad key). The catch and the
+      // catch guards only a directly-constructed bad key) and a TypeError for
+      // a signature that is not a Uint8Array. The catch and the
       // `!ok` branch normalize to the SAME CryptoVerificationError, so no
       // oracle distinguishes forged from malformed.
       ok = ml_dsa65.verify(signature, message, publicKey.material());

@@ -1,7 +1,7 @@
 import nx from '@nx/eslint-plugin';
 import prettierPlugin from 'eslint-plugin-prettier';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
-import jsoncParser from 'jsonc-eslint-parser';
+import * as jsoncParser from 'jsonc-eslint-parser';
 
 /**
  * Files inside a project that are NOT part of what it ships: build tooling and
@@ -64,6 +64,13 @@ function dependencyChecksConfigs() {
       // is the styling contract behind every utility class the components emit.
       // Neither has an import site in shipped source, by design.
       ignoredDependencies: ['react-dom', 'tailwindcss'],
+    },
+    {
+      files: ['apps/docs-site/package.json'],
+      // Astro loads it at config time, when `markdown.remarkPlugins` is set:
+      // since 7.4 the unified Markdown pipeline is an optional peer that astro
+      // resolves itself, so nothing in the site imports it.
+      ignoredDependencies: ['@astrojs/markdown-remark'],
     },
   ];
 
