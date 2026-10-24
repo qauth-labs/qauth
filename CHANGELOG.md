@@ -71,6 +71,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first boot ([#485]): `NODE_ENV=production` refuses an unset KEK and the
   published development KEK.
 
+- **The KEK in AWS KMS** ([#577], ADR-019 Decision 9). The optional package
+  `@qauth-labs/keys-aws-kms` keeps the key-encryption key in a symmetric KMS key:
+  `KEK_PROVIDER=aws-kms` makes the signer load it, and it sends data keys to KMS
+  `Encrypt` and `Decrypt` with the key's associated data as the encryption
+  context. Signing stays local. `KEK_AWS_KMS_KEY_ID` names the key by its ARN
+  (an alias is refused) and `KEK_AWS_REGION`, optional, must match it;
+  credentials come only from the default AWS credential chain. `kekRef` is the
+  key ARN and the key material that wrapped the row. KMS calls are tried at most
+  3 times, with connection and request timeouts. The auth server does not depend
+  on the package and its image does not carry it; the package's README shows
+  how to add it, the IAM policy of the signer role (`kms:Encrypt` and
+  `kms:Decrypt` on the one key) and what happens during a KMS outage.
+
 - **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
   ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
   URL (plain `http` only on `localhost`, for development) without a trailing
@@ -660,6 +673,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#488]: https://github.com/qauth-labs/qauth/issues/488
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#553]: https://github.com/qauth-labs/qauth/issues/553
+[#577]: https://github.com/qauth-labs/qauth/issues/577
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21
