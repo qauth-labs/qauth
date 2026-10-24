@@ -1,7 +1,13 @@
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
+import { loadVectors } from '@qauth-labs/shared-test-vectors';
 import { describe, expect, it } from 'vitest';
 
-import { delegationChainColumn, flattenActChain } from './agent-audit';
+import {
+  actDepth,
+  delegationChainColumn,
+  flattenActChain,
+  MAX_DELEGATION_DEPTH,
+} from './agent-audit';
 
 describe('flattenActChain (ADR-007 §2, #186)', () => {
   it('returns [] for undefined', () => {
@@ -46,5 +52,27 @@ describe('delegationChainColumn (ADR-007 §2, #186)', () => {
       'agentB',
       'agentA',
     ]);
+  });
+});
+
+/**
+ * The shared `act` chain vectors (`test-vectors/agent/act-chain.json`): the
+ * flattened chain, the depth the minting gate counts, and the cap of 4. Each
+ * case's whole `expected` object is rebuilt from these helpers, so a wrong
+ * value anywhere in a case fails it.
+ */
+describe('agent/act-chain shared vectors (RFC 8693 §4.1, ADR-007 §2)', () => {
+  const vectors = loadVectors<
+    { act?: ActClaim },
+    { chain: string[]; depth: number; within_cap: boolean }
+  >('agent/act-chain');
+
+  it.each(vectors.cases)('$id', ({ input, expected }) => {
+    const depth = actDepth(input.act);
+    expect({
+      chain: flattenActChain(input.act),
+      depth,
+      within_cap: depth <= MAX_DELEGATION_DEPTH,
+    }).toEqual(expected);
   });
 });

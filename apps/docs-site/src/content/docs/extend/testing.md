@@ -3,7 +3,7 @@ title: Testing
 description: The five tiers — unit, testcontainers integration, the repo-wide coverage gate, the documentation invariants, and the black-box wire suite — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
 sidebar:
   order: 4
-lastVerified: '2026-10-20'
+lastVerified: '2026-10-24'
 ---
 
 QAuth has three test tiers, a fourth that guards this documentation site, and a fifth that tests
@@ -76,6 +76,27 @@ that caught #365; the first would not have. `formbody` still has a real ordering
 guard of either kind.
 
 [#365]: https://github.com/qauth-labs/qauth/issues/365
+
+### Shared test vectors
+
+`test-vectors/` holds language-neutral test vectors
+([ADR-018 §6](/reference/records/adr/018-1-0-scope-and-stability/#6-sdks-and-the-rust-core)):
+plain JSON files of cases, each an `input` and the `expected` result. Every SDK runs them, in
+whatever language it is written, and the server's unit tests run them against its own code. The
+first files cover PKCE S256 (`libs/server/pkce`), the RFC 9068 access token checks
+(`libs/server/jwt`), `act` chain reading with the delegation depth cap
+(`apps/auth-server/src/app/helpers/agent-audit.ts`), and Standard Webhooks signatures. The server
+has no webhook signer to run the last file against, so the vector library checks it with
+`node:crypto` in the meantime.
+
+A test reads a file with `loadVectors(id)` from `@qauth-labs/shared-test-vectors` and rebuilds each
+case's whole `expected` object from the code under test, so a wrong value anywhere in a case fails
+that case. `pnpm exec nx run test-vectors:validate` checks every file against the `qauth-vectors/1-rc.0`
+format. The `test-vectors` project's `test` target depends on it, so it runs in this tier.
+
+Vectors are append-only: changing a case's expected result takes a new case id. The
+[`test-vectors` README](../../../../../../test-vectors/README.md) describes the format, how a reader
+in another language uses the files, and the versioning rule.
 
 ## Tier 2 — integration (testcontainers)
 

@@ -1,0 +1,86 @@
+{
+  "schema": "qauth-vectors/1-rc.0",
+  "id": "webhooks/signature",
+  "description": "Standard Webhooks signatures. input.secret is the signing secret in its whsec_ form: the bytes after the prefix, base64-decoded, are the HMAC key. input.id, input.timestamp (Unix seconds) and input.body (text, signed as its UTF-8 bytes) are the webhook-id, webhook-timestamp and body of one message. expected.signature is the webhook-signature header value, \"v1,\" followed by the standard base64 of HMAC-SHA256(key, id + \".\" + timestamp + \".\" + body). Every secret except the one in reference-library-example is a throwaway test secret: it decodes to an ASCII string that says so.",
+  "source": "Standard Webhooks specification, \"Signature scheme\"; generated with the reference JavaScript library standardwebhooks@1.1.1 (npm) by test-vectors/generators/webhooks-signature.mjs",
+  "cases": [
+    {
+      "id": "reference-library-example",
+      "input": {
+        "secret": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        "id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+        "timestamp": 1614265330,
+        "body": "{\"test\": 2432232314}"
+      },
+      "expected": {
+        "signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+      },
+      "notes": "The secret, id, timestamp and body of the reference libraries' own tests. The secret is public and secures nothing."
+    },
+    {
+      "id": "qauth-event",
+      "input": {
+        "secret": "whsec_cWF1dGggdGhyb3dhd2F5IHRlc3QgIzAx",
+        "id": "0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42",
+        "timestamp": 1792661400,
+        "body": "{\"id\":\"0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42\",\"type\":\"urn:qauth:event:user.signed_in:v1-rc.0\",\"time\":\"2026-10-22T09:30:00.123Z\",\"realm\":\"0199f2b4-1a2b-7c3d-8e4f-5a6b7c8d9e0f\",\"category\":\"user\",\"actor\":{\"type\":\"user\",\"id\":\"0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a\"},\"subject\":{\"type\":\"user\",\"id\":\"0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a\"},\"data\":{\"method\":\"password\"}}"
+      },
+      "expected": {
+        "signature": "v1,mfwjHZ1XAoOuE1gvvfDWHk9QGNLO3T+2FP6hZbNmbhA="
+      },
+      "notes": "A QAuth event as a webhook body: the webhook-id is the event id."
+    },
+    {
+      "id": "body-signed-byte-for-byte",
+      "input": {
+        "secret": "whsec_cWF1dGggdGhyb3dhd2F5IHRlc3QgIzAx",
+        "id": "0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42",
+        "timestamp": 1792661400,
+        "body": "{\n  \"id\": \"0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42\",\n  \"type\": \"urn:qauth:event:user.signed_in:v1-rc.0\",\n  \"time\": \"2026-10-22T09:30:00.123Z\",\n  \"realm\": \"0199f2b4-1a2b-7c3d-8e4f-5a6b7c8d9e0f\",\n  \"category\": \"user\",\n  \"actor\": {\n    \"type\": \"user\",\n    \"id\": \"0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a\"\n  },\n  \"subject\": {\n    \"type\": \"user\",\n    \"id\": \"0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a\"\n  },\n  \"data\": {\n    \"method\": \"password\"\n  }\n}\n"
+      },
+      "expected": {
+        "signature": "v1,AUHfm1Rk5krln2fn6MiFgQt1o89ZNL+nXovp+gT2wCE="
+      },
+      "notes": "The same event, pretty-printed with a trailing newline. The signature covers the body as sent, never a re-serialized form, so it differs from qauth-event."
+    },
+    {
+      "id": "non-ascii-body",
+      "input": {
+        "secret": "whsec_cWF1dGggdGhyb3dhd2F5IHRlc3QgIzAx",
+        "id": "msg_utf8",
+        "timestamp": 1792661400,
+        "body": "{\"name\":\"Zoë 🔐\"}"
+      },
+      "expected": {
+        "signature": "v1,M7NtwM0/l8x2nF6UcEKiTzYDZIMbN+mbScJWGdvR7Qw="
+      },
+      "notes": "The body is signed as UTF-8 bytes."
+    },
+    {
+      "id": "empty-body",
+      "input": {
+        "secret": "whsec_cWF1dGggdGhyb3dhd2F5IHRlc3QgIzAx",
+        "id": "msg_empty",
+        "timestamp": 1792661400,
+        "body": ""
+      },
+      "expected": {
+        "signature": "v1,v8OHmSEA1Mn7yIwq9NOyQPHorzHUW/QMWnP6WeLZ8O0="
+      },
+      "notes": "The signed content still has both full stops: \"msg_empty.1792661400.\"."
+    },
+    {
+      "id": "other-secret",
+      "input": {
+        "secret": "whsec_cWF1dGggdGhyb3dhd2F5IHRlc3QgIzAy",
+        "id": "0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42",
+        "timestamp": 1792661400,
+        "body": "{\"id\":\"0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42\",\"type\":\"urn:qauth:event:user.signed_in:v1-rc.0\",\"time\":\"2026-10-22T09:30:00.123Z\",\"realm\":\"0199f2b4-1a2b-7c3d-8e4f-5a6b7c8d9e0f\",\"category\":\"user\",\"actor\":{\"type\":\"user\",\"id\":\"0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a\"},\"subject\":{\"type\":\"user\",\"id\":\"0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a\"},\"data\":{\"method\":\"password\"}}"
+      },
+      "expected": {
+        "signature": "v1,6vg2V/85EAIwV0UrAKprJHvVOAJI2neAMHQn/pqhvbI="
+      },
+      "notes": "qauth-event under another secret: the signature depends on the key."
+    }
+  ]
+}

@@ -7,6 +7,7 @@
     "tslib": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-test-vectors": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "vitest": "catalog:"

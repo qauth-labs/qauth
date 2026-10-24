@@ -37,6 +37,11 @@
 >
 > - §10: a per-provider switch that counts an upstream sign-in as strong in ADR-017's downgrade
 >   rule is planned for 1.x. In 1.0 an upstream sign-in ranks with the password.
+>
+> **Amended 2026-10-24** with the maintainer's decision of that day on the test-vector format.
+>
+> - §6: the shared test-vector format is a release candidate, `qauth-vectors/1-rc.<M>`, until
+>   1.0.0, like the event types in §5.
 
 ## Context
 
@@ -331,7 +336,9 @@ a minor release once four conditions hold:
 - `qauth-broker` is a local process with a language-neutral protocol. It keeps DPoP keys away from
   the model, and it alone decides a new node's parent and type (ADR-014 §12).
 - A Python `resource-guard` comes next. Go comes later.
-- Every SDK runs shared, language-neutral test vectors.
+- Every SDK runs shared, language-neutral test vectors. Their file format follows the rule for
+  event types (§5): until 1.0.0 it is `qauth-vectors/1-rc.<M>`, a breaking change raises `<M>`, and
+  the release that ships 1.0.0 drops the suffix. Decided 2026-10-24 (maintainer).
 - This set replaces the README's SDK plan. The vanilla JS and React SDKs listed there are dropped.
 
 The Rust core, `qauth-core`, holds verification primitives:

@@ -22,6 +22,22 @@ import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
 export const MAX_DELEGATION_DEPTH = 4;
 
 /**
+ * Count the delegation depth of an `act` chain: the number of nested `act`
+ * objects, every link counted (0 for `undefined`, 1 for a single actor). The
+ * token-exchange minting gate (`token.ts`) refuses a chain deeper than
+ * {@link MAX_DELEGATION_DEPTH}.
+ */
+export function actDepth(act: ActClaim | undefined): number {
+  let depth = 0;
+  let cursor: ActClaim | undefined = act;
+  while (cursor) {
+    depth += 1;
+    cursor = cursor.act;
+  }
+  return depth;
+}
+
+/**
  * Flatten an RFC 8693 `act` delegation chain into the ordered list of actor
  * `client_id`s. Index 0 is the most recent (outermost) actor — the agent that
  * performed THIS action — and each following entry is a prior actor, walking

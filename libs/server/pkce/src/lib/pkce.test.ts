@@ -1,3 +1,4 @@
+import { loadVectors } from '@qauth-labs/shared-test-vectors';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -139,5 +140,26 @@ describe('generatePkcePair', () => {
     const p2 = generatePkcePair();
     expect(p1.codeVerifier).not.toBe(p2.codeVerifier);
     expect(p1.codeChallenge).not.toBe(p2.codeChallenge);
+  });
+});
+
+/**
+ * The shared PKCE vectors (`test-vectors/pkce/s256.json`), which every SDK
+ * runs too. Each case's whole `expected` object is rebuilt from this
+ * library's functions, so a wrong value anywhere in a case fails it.
+ */
+describe('pkce/s256 shared vectors (RFC 7636 §4.6)', () => {
+  const vectors = loadVectors<
+    { code_verifier: string; code_challenge: string },
+    { computed_challenge: string | null; accepted: boolean }
+  >('pkce/s256');
+
+  it.each(vectors.cases)('$id', ({ input, expected }) => {
+    expect({
+      computed_challenge: isValidCodeVerifierFormat(input.code_verifier)
+        ? generateCodeChallenge(input.code_verifier)
+        : null,
+      accepted: verifyCodeChallenge(input.code_verifier, input.code_challenge),
+    }).toEqual(expected);
   });
 });
