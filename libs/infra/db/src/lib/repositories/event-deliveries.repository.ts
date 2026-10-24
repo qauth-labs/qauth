@@ -4,14 +4,20 @@ import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
 import type {
   ClaimedEventDelivery,
   Database,
+  DbClient,
   DueEventDestination,
   EventDeliveriesRepository,
   EventDeliveryAttemptRecord,
   EventDeliveryClaimRef,
   EventDeliveryDestination,
   EventFanOutResult,
+  OfferedDestinations,
 } from '../../types';
-import { encodeEventPosition, type EventPosition } from '../events/position';
+import {
+  encodeEventPosition,
+  type EventPosition,
+  type EventPositionParts,
+} from '../events/position';
 import { eventDeliveries, eventDeliveryPositions } from '../schema/event-deliveries';
 import { events } from '../schema/events';
 import {
@@ -152,6 +158,101 @@ function matches(
     (destination.types === undefined || destination.types.includes(type)) &&
     (destination.categories === undefined || destination.categories.includes(category))
   );
+}
+
+/**
+ * The latest position of a realm's stream that every destination has
+ * finished: {@link EventDeliveriesRepository.minOffered}, and the bound of the
+ * retention job (#536), which deletes only events at or before it.
+ *
+ * It is the lowest of:
+ *
+ * - each route kind's fan-out position in the realm: the events after it are
+ *   not fanned out yet;
+ * - the position just before the realm's oldest event with an unfinished
+ *   delivery (`pending`): `delivered` and `failed` both count as finished,
+ *   so a destination that is down for good blocks only until its retries
+ *   run out;
+ * - the read horizon, when the realm has no position: nothing below it is
+ *   fanned out any more, and the events at or past it are not final.
+ *
+ * With `served`, a disabled destination does not block. For a route kind in
+ * `served.kinds`, only the listed destinations count: a pending delivery to
+ * any other destination of that kind is ignored, and so is the kind's
+ * position when it has no listed destination in the realm (the fan-out
+ * forgets such a position on its next run). A kind left out of
+ * `served.kinds` counts in full, so a caller that lists no route, or whose
+ * route could not be listed, never deletes ahead of a destination.
+ *
+ * One statement: the positions, the oldest unfinished delivery and the
+ * horizon come from one snapshot, so a fan-out that commits between them
+ * cannot be half seen. No later fan-out writes a row for an event at or
+ * before the answer: a position only moves forward, and a new one starts at
+ * the horizon.
+ *
+ * @internal
+ */
+export async function offeredPosition(
+  db: DbClient,
+  realmId: string,
+  served?: OfferedDestinations
+): Promise<EventPositionParts> {
+  const servedKinds = [...new Set(served?.kinds ?? [])];
+  const listed = (served?.destinations ?? []).filter(
+    (destination) =>
+      destination.realmId.toLowerCase() === realmId && servedKinds.includes(destination.kind)
+  );
+  const listedKinds = sql.param(listed.map((destination) => destination.kind));
+  const listedIds = sql.param(listed.map((destination) => destination.id));
+  const { rows } = await db.execute<{
+    horizon: string;
+    position_xid: string | null;
+    position_seq: string | null;
+    waiting_xid: string | null;
+    waiting_seq: string | null;
+  }>(sql`
+    select pg_snapshot_xmin(pg_current_snapshot())::text as "horizon",
+      "position"."xid"::text as "position_xid", "position"."seq"::text as "position_seq",
+      "waiting"."xid"::text as "waiting_xid", "waiting"."seq"::text as "waiting_seq"
+    from (select 1) as "one"
+    left join lateral (
+      select ${eventDeliveryPositions.xid} as "xid", ${eventDeliveryPositions.seq} as "seq"
+      from ${eventDeliveryPositions}
+      where ${eventDeliveryPositions.realmId} = ${realmId}
+        and (not (${eventDeliveryPositions.destinationKind} = any(${sql.param(servedKinds)}::text[]))
+          or ${eventDeliveryPositions.destinationKind} = any(${listedKinds}::text[]))
+      order by ${eventDeliveryPositions.xid}, ${eventDeliveryPositions.seq}
+      limit 1
+    ) as "position" on true
+    left join lateral (
+      select ${eventDeliveries.eventXid} as "xid", ${eventDeliveries.eventSeq} as "seq"
+      from ${eventDeliveries}
+      where ${eventDeliveries.realmId} = ${realmId} and ${eventDeliveries.status} = 'pending'
+        and (not (${eventDeliveries.destinationKind} = any(${sql.param(servedKinds)}::text[]))
+          or exists (
+            select 1 from unnest(${listedKinds}::text[], ${listedIds}::text[]) as "listed"("kind", "id")
+            where "listed"."kind" = ${eventDeliveries.destinationKind}
+              and "listed"."id" = ${eventDeliveries.destinationId}
+          ))
+      order by ${eventDeliveries.eventXid}, ${eventDeliveries.eventSeq}
+      limit 1
+    ) as "waiting" on true
+  `);
+  const row = rows[0];
+  // The lowest position of the realm's route kinds. Without one the realm
+  // has no destination: nothing below the horizon is fanned out any more.
+  let xid = BigInt(row.position_xid ?? row.horizon);
+  let seq = BigInt(row.position_seq ?? '0');
+  if (row.waiting_xid !== null && row.waiting_seq !== null) {
+    // Everything before the oldest unfinished event is finished.
+    const waitingXid = BigInt(row.waiting_xid);
+    const before = BigInt(row.waiting_seq) - 1n;
+    if (waitingXid < xid || (waitingXid === xid && before < seq)) {
+      xid = waitingXid;
+      seq = before;
+    }
+  }
+  return { realmId, xid, seq };
 }
 
 /**
@@ -528,50 +629,7 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
 
     async minOffered(realmId): Promise<EventPosition> {
       const realm = checkRealmId(realmId, 'minOffered');
-      // One statement: the position, the oldest unfinished row and the
-      // horizon from one snapshot, so a fan-out that commits between them
-      // cannot be half seen.
-      const { rows } = await db.execute<{
-        horizon: string;
-        position_xid: string | null;
-        position_seq: string | null;
-        waiting_xid: string | null;
-        waiting_seq: string | null;
-      }>(sql`
-        select pg_snapshot_xmin(pg_current_snapshot())::text as "horizon",
-          "position"."xid"::text as "position_xid", "position"."seq"::text as "position_seq",
-          "waiting"."xid"::text as "waiting_xid", "waiting"."seq"::text as "waiting_seq"
-        from (select 1) as "one"
-        left join lateral (
-          select ${eventDeliveryPositions.xid} as "xid", ${eventDeliveryPositions.seq} as "seq"
-          from ${eventDeliveryPositions}
-          where ${eventDeliveryPositions.realmId} = ${realm}
-          order by ${eventDeliveryPositions.xid}, ${eventDeliveryPositions.seq}
-          limit 1
-        ) as "position" on true
-        left join lateral (
-          select ${eventDeliveries.eventXid} as "xid", ${eventDeliveries.eventSeq} as "seq"
-          from ${eventDeliveries}
-          where ${eventDeliveries.realmId} = ${realm} and ${eventDeliveries.status} = 'pending'
-          order by ${eventDeliveries.eventXid}, ${eventDeliveries.eventSeq}
-          limit 1
-        ) as "waiting" on true
-      `);
-      const row = rows[0];
-      // The lowest position of the realm's route kinds. Without one the realm
-      // has no destination: nothing below the horizon is fanned out any more.
-      let xid = BigInt(row.position_xid ?? row.horizon);
-      let seq = BigInt(row.position_seq ?? '0');
-      if (row.waiting_xid !== null && row.waiting_seq !== null) {
-        // Everything before the oldest unfinished event is finished.
-        const waitingXid = BigInt(row.waiting_xid);
-        const before = BigInt(row.waiting_seq) - 1n;
-        if (waitingXid < xid || (waitingXid === xid && before < seq)) {
-          xid = waitingXid;
-          seq = before;
-        }
-      }
-      return encodeEventPosition({ realmId: realm, xid, seq });
+      return encodeEventPosition(await offeredPosition(db, realm));
     },
 
     async pendingByKind(): Promise<Record<string, number>> {

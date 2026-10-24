@@ -24,6 +24,23 @@ export interface EventDeliveryDestination {
   readonly categories?: readonly EventCategory[];
 }
 
+/**
+ * The destinations a caller knows to be enabled, so that a disabled one does
+ * not hold back the retention job (#536): each route kind the caller lists,
+ * and every enabled destination of those kinds, as the routes list them for
+ * the fan-out.
+ */
+export interface OfferedDestinations {
+  /**
+   * The route kinds whose destinations were listed. A kind left out counts
+   * in full: each of its pending deliveries and its position hold events
+   * back.
+   */
+  readonly kinds: readonly string[];
+  /** Every enabled destination of those kinds, of any realm. */
+  readonly destinations: readonly Pick<EventDeliveryDestination, 'kind' | 'id' | 'realmId'>[];
+}
+
 /** What {@link EventDeliveriesRepository.fanOut} takes. */
 export interface EventFanOutRequest {
   /**
