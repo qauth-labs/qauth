@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-24'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -16,7 +16,7 @@ QAuth uses Docker Compose to orchestrate the following services:
 | -------------------- | -------------------- | -------------------------------------------------------- |
 | **postgres**         | `postgres:18-alpine` | Primary database (PostgreSQL 18 with `uuidv7()` support) |
 | **redis**            | `redis:7-alpine`     | Session cache and rate limiting                          |
-| **migration-runner** | Custom               | Runs database migrations via Nx                          |
+| **migration-runner** | Custom               | Applies the pending database migrations, then exits      |
 | **auth-server**      | Custom               | Main authentication API server                           |
 | **developer-portal** | Custom               | TanStack Start web UI for registration/login/consents    |
 
@@ -206,17 +206,30 @@ docker exec -it qauth-redis redis-cli
 
 ### Migration Runner
 
-A dedicated service that runs database migrations before auth-server starts.
+A dedicated service that applies the pending database migrations before
+auth-server starts.
 
-- Executes `pnpm nx run infra-db:db:migrate`
-- Exits after completion (restart: "no")
-- Auth-server waits for this to complete successfully
+- The image holds Node and one bundled program with the migrations beside it:
+  no pnpm, nx or drizzle-kit. Only `DATABASE_URL` is read.
+- It takes a Postgres advisory lock, so a second runner waits, then finds
+  nothing to do. It logs each migration it applies with its duration.
+- It exits `0` when the database is current, whether it applied migrations or
+  found none pending, and non-zero with a message naming the failed migration
+  otherwise; a failed run rolls back. The exit codes are on the
+  [Upgrades](/operate/upgrades/) page.
+- Exits after completion (restart: "no"); auth-server waits for it to complete
+  successfully.
 
-Run migrations manually:
+Run migrations manually, or only check what is pending:
 
 ```bash
 docker-compose run --rm migration-runner
+docker-compose run --rm migration-runner --check
 ```
+
+The auth server also checks at boot: when the database lacks migrations of its
+release, it waits up to `DB_MIGRATION_WAIT_MS` (60 seconds) for the runner,
+then exits naming them.
 
 > Upgrading an existing deployment past the ADR-002 identity migration
 > (0011)? Read the [Upgrades runbook](/operate/upgrades/) before running this
@@ -621,9 +634,15 @@ docker-compose logs migration-runner
 # Check postgres is ready
 docker-compose ps postgres
 
+# List the pending migrations without changing anything
+docker-compose run --rm migration-runner --check
+
 # Re-run migrations
 docker-compose run --rm migration-runner
 ```
+
+A failed run names the migration that failed and rolls the whole run back, so
+running it again after fixing the cause is safe.
 
 If migration-runner fails specifically on the ADR-002 migration (0011), that
 is very likely a required backfill step you skipped — see the
@@ -762,6 +781,6 @@ This verifies:
 ## See also
 
 - [Keys](/operate/keys/) — generating EdDSA, RS256, and ML-DSA key material, and the PKCS#8 pitfall.
-- [Upgrades](/operate/upgrades/) — the ADR-002 destructive-migration runbook; read it before running `migration-runner` against an existing database.
+- [Upgrades](/operate/upgrades/) — the upgrade procedure (back up, run `migration-runner`, start the new version) and the runbook of the destructive ADR-002 migration 0011.
 - [Observability](/operate/observability/) — logging, metrics, and alerting once the stack is up.
 - [Environment-Aware Authorization](/operate/environment-authorization/) — the `environment` policy dimension referenced throughout this stack.

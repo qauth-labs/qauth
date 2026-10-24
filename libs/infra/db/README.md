@@ -642,6 +642,31 @@ nx run db:db:migrate
 nx run db:db:push
 ```
 
+In a deployment, migrations are applied by the migration runner
+(`apps/migration-runner`, issue #474), not by drizzle-kit: one bundled Node
+program that takes a Postgres advisory lock (`qauth:migrations`), applies the
+pending migrations in one transaction with drizzle's `migrate()` and logs each
+with its duration; `--check` lists the pending ones and changes nothing. Its
+work, and the auth server's boot check, live in `src/lib/migrations/`, which
+the package also exports as `@qauth-labs/infra-db/migrations`, an entry point
+that loads only `pg` and `drizzle-orm`:
+
+- `runMigrations({ connectionString, migrationsFolder, log })` and
+  `checkMigrations(...)`, what the runner and its `--check` run.
+- `readMigrationStatus(db, entries)`: the pending migrations by drizzle's own
+  rule (newer than the newest applied `created_at`), and how many applied ones
+  the list does not know (a database ahead of the code).
+- `waitForMigrations(db, entries, { waitMs })`: waits while the database is
+  behind, then throws `MigrationsPendingError` naming the missing migrations.
+- `MIGRATION_LOCK_NAME`, `acquireMigrationLock` and `releaseMigrationLock`,
+  for any step that must not run beside a migration.
+
+```bash
+# Build and run the runner against DATABASE_URL, or only check
+pnpm nx run migration-runner:migrate
+pnpm nx run migration-runner:migrate -- --check
+```
+
 ### Database Management
 
 ```bash

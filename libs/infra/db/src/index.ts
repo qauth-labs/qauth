@@ -15,3 +15,7 @@ export * from './lib/events';
 
 // Repository exports
 export * from './lib/repositories';
+
+// The migration runner's work and the pending-migration check (#474); also
+// `@qauth-labs/infra-db/migrations`, which loads nothing else
+export * from './lib/migrations';

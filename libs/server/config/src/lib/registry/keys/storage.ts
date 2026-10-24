@@ -13,6 +13,15 @@ export const STORAGE_KEYS = defineKeys([
     docs: 'The Postgres connection URL, credentials included.',
   },
   {
+    name: 'DB_MIGRATION_WAIT_MS',
+    tier: 'advanced',
+    role: 'deployment',
+    owner: 'storage',
+    default: '60000',
+    since: '0.2.0',
+    docs: 'How long, in milliseconds, the auth server waits at boot for the database to have every migration of its release before it exits naming the missing ones, `0` to check once; a database ahead of the release is accepted, as during a rolling upgrade.',
+  },
+  {
     name: 'DB_POOL_MAX',
     tier: 'advanced',
     role: 'deployment',

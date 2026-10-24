@@ -29,6 +29,13 @@ export const databaseEnvSchema = z.object({
    * Connection timeout in milliseconds
    */
   DB_POOL_CONNECTION_TIMEOUT: z.coerce.number().int().min(1).default(2000),
+
+  /**
+   * How long, in milliseconds, the auth server waits at boot for the
+   * database to have every migration of its release (#474). It then exits,
+   * naming the missing ones. `0` checks once; at most an hour.
+   */
+  DB_MIGRATION_WAIT_MS: z.coerce.number().int().min(0).max(3_600_000).default(60_000),
 });
 
 /**

@@ -67,16 +67,16 @@ You need Docker and a workspace install (`pnpm install`).
    ```
 
 3. **Seed the realm and the client.** The seed command provisions clients into an existing realm
-   and prints each generated secret once.
+   and prints each generated secret once. It runs from this checkout, against the port the compose
+   Postgres publishes: the migration-runner image holds only the runner.
 
    ```bash
    docker compose exec postgres psql -U qauth -d qauth \
      -c "INSERT INTO realms (name) VALUES ('master') ON CONFLICT (name) DO NOTHING"
 
-   docker compose run --rm \
-     -v "$PWD/apps/wire-suite/seed/clients.json:/seed/clients.json:ro" \
-     --entrypoint pnpm migration-runner \
-     nx run infra-db:db:seed-oauth-clients -- --manifest=/seed/clients.json
+   DATABASE_URL=postgresql://qauth:qauth_dev_password@localhost:5432/qauth \
+     pnpm nx run infra-db:db:seed-oauth-clients -- \
+     --manifest="$PWD/apps/wire-suite/seed/clients.json"
    ```
 
    A second seed run skips the existing client and prints no secret; add `--rotate` after the
