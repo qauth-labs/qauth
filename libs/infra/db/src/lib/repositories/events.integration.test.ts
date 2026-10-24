@@ -5,8 +5,9 @@
  * change it records; a reader that polls while transactions commit out of
  * `xid` order never skips or repeats an event; an open transaction holds
  * back the events committed after it began, until it ends; a read of one
- * realm never returns another's; and a role granted only `INSERT` can write
- * while it can read nothing back.
+ * realm never returns another's; a role granted only `INSERT` can write
+ * while it can read nothing back; and the telemetry sink is handed an event
+ * only once the COMMIT has succeeded (issue #541).
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
@@ -188,6 +189,91 @@ describe('events integration (real Postgres)', () => {
         ...emitted,
       });
       expect(parseEvent(event)).toEqual(event);
+    });
+  });
+
+  describe('the telemetry rule (issue #541)', () => {
+    /** A repository whose sink keeps the ids it is handed. */
+    function withSink(): { repo: EventsRepository; handed: string[] } {
+      const handed: string[] = [];
+      const repo = createEventsRepository(db(), {
+        telemetry: { record: (e) => handed.push(e.id) },
+      });
+      return { repo, handed };
+    }
+
+    it('hands over a committed event once, after the COMMIT, and never one that rolled back', async () => {
+      const { repo, handed } = withSink();
+      const realm = randomUUID();
+      let rolledBack = '';
+
+      const committed = await db().transaction(async (tx) => {
+        const id = await repo.emit(tx, signedIn(realm));
+        expect(handed).toEqual([]);
+        return id;
+      });
+      await expect(
+        db().transaction(async (tx) => {
+          rolledBack = await repo.emit(tx, signedIn(realm));
+          throw new Rollback();
+        })
+      ).rejects.toBeInstanceOf(Rollback);
+
+      expect(handed).toEqual([committed]);
+      expect(await countById(committed)).toBe(1);
+      expect(await countById(rolledBack)).toBe(0);
+    });
+
+    it("keeps a released savepoint's event for the outer COMMIT and drops a rolled-back savepoint's", async () => {
+      const { repo, handed } = withSink();
+      const realm = randomUUID();
+      let kept = '';
+      let dropped = '';
+
+      await db().transaction(async (tx) => {
+        kept = await tx.transaction((savepoint) => repo.emit(savepoint, signedIn(realm)));
+        await expect(
+          tx.transaction(async (savepoint) => {
+            dropped = await repo.emit(savepoint, signedIn(realm));
+            throw new Rollback();
+          })
+        ).rejects.toBeInstanceOf(Rollback);
+        expect(handed).toEqual([]);
+      });
+
+      expect(handed).toEqual([kept]);
+      expect(await countById(kept)).toBe(1);
+      expect(await countById(dropped)).toBe(0);
+    });
+
+    it('drops the event when the COMMIT itself fails', async () => {
+      const { repo, handed } = withSink();
+      const realm = randomUUID();
+      // A deferred unique constraint is checked at COMMIT, so the statements
+      // succeed and the COMMIT fails.
+      await pool().query(
+        'CREATE TABLE telemetry_commit_probe (x int, CONSTRAINT telemetry_commit_probe_x UNIQUE (x) DEFERRABLE INITIALLY DEFERRED)'
+      );
+      try {
+        let id = '';
+        await expect(
+          db().transaction(async (tx) => {
+            id = await repo.emit(tx, signedIn(realm));
+            await tx.execute(sql`INSERT INTO telemetry_commit_probe (x) VALUES (1), (1)`);
+          })
+        ).rejects.toMatchObject({ cause: { code: '23505' } });
+        expect(await countById(id)).toBe(0);
+        expect(handed).toEqual([]);
+      } finally {
+        await pool().query('DROP TABLE telemetry_commit_probe');
+      }
+    });
+
+    it('hands over an event written in its own transaction once it is stored', async () => {
+      const { repo, handed } = withSink();
+      const id = await repo.emitInOwnTransaction(signedIn(randomUUID()));
+      expect(handed).toEqual([id]);
+      expect(await countById(id)).toBe(1);
     });
   });
 
