@@ -302,8 +302,9 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   route, at least once and with the event's own id, so a receiver drops a
   duplicate. Migration 0035 adds `event_deliveries`, one row per destination
   and event, and `event_delivery_positions`, the fan-out's place in each
-  realm's stream; it is expand-only. The fan-out reads each realm below the
-  event store's horizon, one node at a time per realm. Workers claim
+  realm's stream per route kind; it is expand-only. The fan-out reads each
+  realm below the event store's horizon, one node at a time per realm and
+  kind, and a node moves only the positions of the kinds it has routes for. Workers claim
   deliveries with `FOR UPDATE SKIP LOCKED` and a lease, so a worker that dies
   leaves its deliveries to another, and a destination that is down holds only
   its own deliveries. A failed attempt is retried with exponential backoff and
