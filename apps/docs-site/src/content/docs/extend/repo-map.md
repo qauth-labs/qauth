@@ -75,19 +75,19 @@ Every rule below is a `depConstraints` entry in `.oxlintrc.json:155`, and the co
 the source of record. `onlyDependOnLibsWithTags` lists what a project carrying that source tag may
 import **from inside the workspace**; external npm packages are never restricted.
 
-| Source tag | May import (workspace) | In `.oxlintrc.json` |
-| --- | --- | --- |
-| `scope:core` | nothing — strict leaf | `.oxlintrc.json:170` |
-| `scope:shared` | nothing — strict leaf | `.oxlintrc.json:160` |
-| `scope:ui` | nothing — strict leaf | `.oxlintrc.json:177` |
-| `scope:infra` | `scope:core`, `scope:infra`, `scope:shared` | `.oxlintrc.json:211` |
-| `scope:server` | `scope:core`, `scope:server`, `scope:shared` | `.oxlintrc.json:219` |
-| `scope:fastify` | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared` | `.oxlintrc.json:227` |
-| `scope:app` | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `.oxlintrc.json:240` |
-| `type:testing` | see [the dead rule](#the-typetesting-rule-cannot-grant-anything) | `.oxlintrc.json:196` |
-| `type:key-custody` | `scope:core`, `scope:shared` | `.oxlintrc.json:274` |
-| `scope:migration-runner` | `type:db`, `type:testing` | `.oxlintrc.json:255` |
-| `scope:wire-suite` | nothing — and nothing may import it | `.oxlintrc.json:187` |
+| Source tag               | May import (workspace)                                                           | In `.oxlintrc.json`  |
+| ------------------------ | -------------------------------------------------------------------------------- | -------------------- |
+| `scope:core`             | nothing — strict leaf                                                            | `.oxlintrc.json:170` |
+| `scope:shared`           | nothing — strict leaf                                                            | `.oxlintrc.json:160` |
+| `scope:ui`               | nothing — strict leaf                                                            | `.oxlintrc.json:177` |
+| `scope:infra`            | `scope:core`, `scope:infra`, `scope:shared`                                      | `.oxlintrc.json:211` |
+| `scope:server`           | `scope:core`, `scope:server`, `scope:shared`                                     | `.oxlintrc.json:219` |
+| `scope:fastify`          | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `.oxlintrc.json:227` |
+| `scope:app`              | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `.oxlintrc.json:240` |
+| `type:testing`           | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `.oxlintrc.json:196` |
+| `type:key-custody`       | `scope:core`, `scope:shared`                                                     | `.oxlintrc.json:274` |
+| `scope:migration-runner` | `type:db`, `type:testing`                                                        | `.oxlintrc.json:255` |
+| `scope:wire-suite`       | nothing — and nothing may import it                                              | `.oxlintrc.json:187` |
 
 ### Key custody has a second, path-based rule
 
