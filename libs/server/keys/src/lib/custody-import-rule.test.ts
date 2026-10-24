@@ -9,9 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * The key custody guard of `.oxlintrc.json` (issue #464): only the signer's
- * wiring may import `@qauth-labs/server-keys/custody`, the KEK provider and
- * envelope API. Oxlint lints sample sources placed, by path, in different
- * projects, with the guard's block of the workspace configuration.
+ * wiring and the KEK adapter packages may import
+ * `@qauth-labs/server-keys/custody`, the KEK provider and envelope API. Oxlint
+ * lints sample sources placed, by path, in different projects, with the
+ * guard's block of the workspace configuration.
  *
  * Oxlint reads only files on disk, so the samples go to a temporary directory
  * laid out like the workspace, next to a configuration holding the guard block
@@ -65,6 +66,8 @@ const OUTSIDE = [
 const WIRING = [
   'libs/fastify/plugins/signer/src/lib/sample.ts',
   'libs/server/keys/src/lib/sample.ts',
+  // A KEK adapter implements the provider and runs in the signer's process.
+  'libs/keys/aws-kms/src/lib/sample.ts',
 ];
 
 const FORBIDDEN: [string, string][] = [
@@ -184,6 +187,7 @@ describe('key custody import guard', () => {
     expect(blocks[0].excludeFiles).toEqual([
       'libs/server/keys/**',
       'libs/fastify/plugins/signer/**',
+      'libs/keys/aws-kms/**',
     ]);
   });
 
