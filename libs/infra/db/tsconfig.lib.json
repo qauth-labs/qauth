@@ -6,16 +6,5 @@
     "composite": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "vitest.setup.ts", "vitest.teardown.ts"],
-  "references": [
-    {
-      "path": "../../shared/validation/tsconfig.lib.json"
-    },
-    {
-      "path": "../../shared/errors/tsconfig.lib.json"
-    },
-    {
-      "path": "../../shared/events/tsconfig.lib.json"
-    }
-  ]
+  "include": ["src/**/*.ts", "vitest.setup.ts", "vitest.teardown.ts"]
 }
