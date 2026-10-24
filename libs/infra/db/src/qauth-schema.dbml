@@ -93,6 +93,8 @@ Table "realms" {
   "refresh_token_max_reuse" integer [default: 0, note: "0 = unlimited"]
   "default_locale" varchar(10)
   "supported_locales" jsonb [default: `'[]'::jsonb`]
+  "user_event_retention_days" integer [not null, default: 90, note: "1 to 36500 (#536); seeded by EVENT_RETENTION_USER_DAYS"]
+  "admin_event_retention_days" integer [not null, default: 365, note: "90 to 36500 (#536); seeded by EVENT_RETENTION_ADMIN_DAYS"]
   "metadata" jsonb [note: "Additional realm configuration"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
@@ -377,8 +379,19 @@ Table "events" {
     (realm_id, xid, seq) [name: "idx_events_realm_position"]
     (realm_id, type) [name: "idx_events_realm_type"]
     subject_id [name: "idx_events_subject_id"]
-    time [name: "idx_events_time"]
+    (realm_id, category, time) [name: "idx_events_retention", note: "Retention reads a realm's oldest rows of one category"]
   }
+}
+
+// Where each realm's admin chain starts once the retention job (#536) has
+// deleted its oldest admin rows: the seq and hash of the last one it deleted,
+// written in the same transaction. verifyChain starts from it. No foreign key,
+// as for events.
+Table "event_chain_anchors" {
+  "realm_id" uuid [pk]
+  "seq" bigint [not null, note: "The last admin row deleted; only ever moves forward"]
+  "hash" bytea [not null, note: "That row's hash: the prev_hash of the oldest admin row left"]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
 }
 
 // ============================================================================

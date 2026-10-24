@@ -1,9 +1,17 @@
+import {
+  ADMIN_EVENT_RETENTION_DEFAULT_DAYS,
+  ADMIN_EVENT_RETENTION_MIN_DAYS,
+  EVENT_RETENTION_MAX_DAYS,
+  USER_EVENT_RETENTION_DEFAULT_DAYS,
+  USER_EVENT_RETENTION_MIN_DAYS,
+} from '@qauth-labs/shared-validation';
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -155,6 +163,30 @@ export const realms = pgTable(
      * every existing realm becomes `production` (the prior, strict behaviour).
      */
     maxEnvironmentLaxity: environmentEnum('max_environment_laxity').notNull().default('production'),
+    /**
+     * Days the realm keeps its user events (ADR-020 §3, issue #536), 1 to
+     * 36500. The retention job deletes a user event once it is older than
+     * this and every enabled delivery destination has finished it.
+     *
+     * A realm policy (ADR-019 Decision 10): `EVENT_RETENTION_USER_DAYS`
+     * seeds it when the realm is created (`createRealmsRepository`'s seeds),
+     * and the realm row owns it from then on. The column default, 90, is
+     * what a realm created before migration 0036 got.
+     */
+    userEventRetentionDays: integer('user_event_retention_days')
+      .notNull()
+      .default(USER_EVENT_RETENTION_DEFAULT_DAYS),
+    /**
+     * Days the realm keeps its admin events (ADR-020 §3, issue #536), never
+     * fewer than 90: the CHECK below refuses a lower value for every writer.
+     * The retention job deletes only the oldest admin events, in chain
+     * order, and stores the last one it deleted as the realm's chain anchor
+     * (`event_chain_anchors`). Seeded by `EVENT_RETENTION_ADMIN_DAYS`; the
+     * column default is 365.
+     */
+    adminEventRetentionDays: integer('admin_event_retention_days')
+      .notNull()
+      .default(ADMIN_EVENT_RETENTION_DEFAULT_DAYS),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -183,6 +215,16 @@ export const realms = pgTable(
     check(
       'realms_webauthn_rp_id_normalised',
       sql`${t.webauthnRpId} ~ '^[a-z0-9_-]+(\\.[a-z0-9_-]+)*$' and ${t.webauthnRpId} !~ '^[0-9.]+$'`
+    ),
+    // The limits of `eventRetentionProblems` (shared-validation), so a row
+    // written by hand cannot keep admin events fewer than 90 days (#536).
+    check(
+      'realms_user_event_retention_days_range',
+      sql`${t.userEventRetentionDays} between ${sql.raw(String(USER_EVENT_RETENTION_MIN_DAYS))} and ${sql.raw(String(EVENT_RETENTION_MAX_DAYS))}`
+    ),
+    check(
+      'realms_admin_event_retention_days_range',
+      sql`${t.adminEventRetentionDays} between ${sql.raw(String(ADMIN_EVENT_RETENTION_MIN_DAYS))} and ${sql.raw(String(EVENT_RETENTION_MAX_DAYS))}`
     ),
   ]
 );

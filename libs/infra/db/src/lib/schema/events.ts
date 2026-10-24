@@ -13,7 +13,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import { bytea } from './sql-helpers';
+import { bytea, EPOCH_MS_NOW } from './sql-helpers';
 
 /**
  * Postgres `xid8`, the 64-bit transaction id that never wraps around, read and
@@ -87,6 +87,16 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  * statements fire it, the owner included. Deletes are the retention job's
  * (#536), by grant: a writer holds `INSERT` only, and reads the chain head
  * and its own row through two functions (migration 0033, #827).
+ *
+ * ## Retention (#536)
+ *
+ * The retention job deletes a realm's oldest rows once they are older than
+ * the realm's retention (`realms.user_event_retention_days`,
+ * `realms.admin_event_retention_days`) and every enabled delivery
+ * destination has finished them. It deletes admin rows only from the start
+ * of the chain, never the head, and stores the last one it deleted in
+ * {@link eventChainAnchors}, in the same transaction, so the chain still
+ * verifies from there.
  */
 export const events = pgTable(
   'events',
@@ -172,8 +182,10 @@ export const events = pgTable(
     index('idx_events_realm_position').on(t.realmId, t.xid, t.seq),
     index('idx_events_realm_type').on(t.realmId, t.type),
     index('idx_events_subject_id').on(t.subjectId),
-    // Retention removes the oldest rows first (#536).
-    index('idx_events_time').on(t.time),
+    // Retention (#536): a realm's rows of one category, oldest first, so a
+    // batch reads only rows past their retention, and the oldest row of each
+    // category is one descent per realm.
+    index('idx_events_retention').on(t.realmId, t.category, t.time),
     // The admin chain: no two rows of a realm follow the same hash, and the
     // head and the verifier read a realm's admin rows in seq order.
     uniqueIndex('idx_events_chain_link')
@@ -182,5 +194,36 @@ export const events = pgTable(
     index('idx_events_chain_order')
       .on(t.realmId, t.seq)
       .where(sql`${t.hash} is not null`),
+  ]
+);
+
+/**
+ * Where each realm's admin chain starts after retention (ADR-019 Decision 7,
+ * issue #536): the `seq` and `hash` of the last admin row the retention job
+ * deleted.
+ *
+ * The job writes the anchor in the transaction that deletes the rows, so the
+ * oldest admin row left carries the anchor's `hash` as its `prev_hash`, and
+ * `verifyChain` starts there instead of at the genesis hash. A changed
+ * anchor breaks the chain at that row. The job moves an anchor only forward
+ * (a larger `seq`).
+ *
+ * Only the retention role writes it (`eventRetentionGrantStatements`). Like
+ * `events`, it references no realm: the anchor outlives the realm row.
+ */
+export const eventChainAnchors = pgTable(
+  'event_chain_anchors',
+  {
+    realmId: uuid('realm_id').primaryKey(),
+    /** The `seq` of the last admin row retention deleted. */
+    seq: bigint('seq', { mode: 'bigint' }).notNull(),
+    /** That row's `hash`: the `prev_hash` of the realm's oldest admin row left. */
+    hash: bytea('hash').notNull(),
+    /** When the job last moved the anchor, in epoch milliseconds. */
+    updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+  },
+  (t) => [
+    check('event_chain_anchors_seq_positive', sql`${t.seq} >= 1`),
+    check('event_chain_anchors_hash_sha256', sql`octet_length(${t.hash}) = 32`),
   ]
 );
