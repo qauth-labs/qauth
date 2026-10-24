@@ -524,15 +524,15 @@ importers:
       '@qauth-labs/fastify-plugin-pkce':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/pkce
+      '@qauth-labs/fastify-plugin-sessions':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/sessions
       '@qauth-labs/fastify-plugin-signer':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/signer
       '@qauth-labs/server-config':
         specifier: workspace:*
         version: link:../../libs/server/config
-      '@qauth-labs/server-sessions':
-        specifier: workspace:*
-        version: link:../../libs/server/sessions
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../libs/shared/errors
@@ -906,6 +906,34 @@ importers:
       tslib:
         specifier: 'catalog:'
         version: 2.8.1
+
+  libs/fastify/plugins/sessions:
+    dependencies:
+      '@qauth-labs/fastify-plugin-cache':
+        specifier: workspace:*
+        version: link:../cache
+      '@qauth-labs/fastify-plugin-db':
+        specifier: workspace:*
+        version: link:../db
+      '@qauth-labs/server-sessions':
+        specifier: workspace:*
+        version: link:../../../server/sessions
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.7
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 6.0.1
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
 
   libs/fastify/plugins/signer:
     dependencies:

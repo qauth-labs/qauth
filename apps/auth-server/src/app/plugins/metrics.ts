@@ -30,6 +30,19 @@ export interface AppMetrics {
    * cannot be taken counts as a `failure`.
    */
   jobRuns: Counter<'job' | 'result'>;
+  /**
+   * Browser session cache reads (ADR-019 Decision 3, #469). Labelled by
+   * `result` = `hit` | `miss` | `revoked` | `error`; hits over all reads is the
+   * cache hit rate.
+   */
+  sessionCacheLookups: Counter<'result'>;
+  /** Postgres reads of a browser session (#469), by `result` = `ok` | `error`. */
+  sessionPostgresReads: Counter<'result'>;
+  /**
+   * Conditional `last_seen_at` updates of a browser session (#469), by
+   * `result` = `written` | `skipped` (another node wrote first) | `error`.
+   */
+  sessionLastSeenWrites: Counter<'result'>;
 }
 
 declare module 'fastify' {
@@ -45,7 +58,7 @@ export const METRICS_PLUGIN_NAME = '@qauth-labs/metrics';
  *
  * Creates an isolated prom-client {@link Registry} (so tests and multiple
  * instances do not clash on the global default registry), registers default
- * process/Node metrics, and defines the QAuth auth counters and, when the
+ * process/Node metrics, and defines the QAuth auth and session counters and, when the
  * database plugin is registered, the event store lag gauge. With the event
  * telemetry on, it also serves that export's drop counter. Decorates the
  * Fastify instance with {@link AppMetrics}.
@@ -79,6 +92,27 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registers: [registry],
     });
 
+    const sessionCacheLookups = new Counter({
+      name: 'qauth_session_cache_lookups_total',
+      help: 'Browser session cache reads by outcome; hit over all is the cache hit rate.',
+      labelNames: ['result'] as const,
+      registers: [registry],
+    });
+
+    const sessionPostgresReads = new Counter({
+      name: 'qauth_session_postgres_reads_total',
+      help: 'Postgres reads of a browser session by outcome.',
+      labelNames: ['result'] as const,
+      registers: [registry],
+    });
+
+    const sessionLastSeenWrites = new Counter({
+      name: 'qauth_session_last_seen_writes_total',
+      help: 'Conditional last-seen updates of a browser session by outcome.',
+      labelNames: ['result'] as const,
+      registers: [registry],
+    });
+
     // The event store's read lag (#457): how long the oldest committed event
     // has been held back from readers by an older transaction still open. It
     // is read from the database at each scrape, so it exists only when the
@@ -107,7 +141,15 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registry.registerMetric(fastify.eventTelemetry.droppedRecords);
     }
 
-    const metrics: AppMetrics = { registry, loginAttempts, tokensIssued, jobRuns };
+    const metrics: AppMetrics = {
+      registry,
+      loginAttempts,
+      tokensIssued,
+      jobRuns,
+      sessionCacheLookups,
+      sessionPostgresReads,
+      sessionLastSeenWrites,
+    };
     fastify.decorate('metrics', metrics);
 
     fastify.log.debug('Metrics plugin registered');
