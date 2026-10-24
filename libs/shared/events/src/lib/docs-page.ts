@@ -282,15 +282,20 @@ the transaction of the change it records, so the change and its event commit tog
 
 **Masking.** A secret field holds \`***\` on both sides, whatever its value. A field is secret
 when the operation marks it, or when its name holds a secret, marked or not: a password, pass,
-PIN, secret, token, key, salt, cookie, signature, credential, \`auth\` or connection string, or a
-set-up, reset or other one-time link. A name whose last word only describes the secret is shown:
-\`accessTokenTtl\`, \`tokenEndpointAuthMethod\`, \`signingKeyId\`, \`jwksUri\`. A changed secret is
-still listed, so a rotation shows as \`***\` to \`***\`. A flag (\`true\` or \`false\`) is never
-masked.
+PIN, secret, token, key, salt, pepper, cookie, signature, credential, \`auth\` or connection string,
+a key-encryption or data-encryption key (\`kek\`, \`dek\`), a set-up, reset or other one-time link,
+or a one-time password's link (\`totpUri\`). A name whose last word only describes the secret is
+shown: \`accessTokenTtl\`, \`tokenEndpointAuthMethod\`, \`signingKeyId\`, \`jwksUri\`, \`keyUse\`,
+\`saltRounds\`, \`authServer\`. So is a code or a key that only names something: \`countryCode\`,
+\`attrKey\`. A changed secret is still listed, so a rotation shows as \`***\` to \`***\`. A flag
+(\`true\` or \`false\`) is never masked.
 
 A value shaped like a secret is masked wherever it sits: a token, a signed or encrypted object, a
-PEM block, a URL with a password, an \`Authorization\` header value, or a private or symmetric JWK.
-A public JWK is shown. A member name shaped like a secret refuses the event.
+PEM block, an \`Authorization\` header value, a private or symmetric JWK, or a URL that carries a
+credential: one with a password, a query or fragment member named like a secret
+(\`?access_token=\`, \`?sig=\`, \`?key=\`, \`?code=\`), an \`otpauth://\` URI, or a webhook URL that
+holds its secret in the path. A public JWK is shown. A member name shaped like a secret refuses the
+event.
 
 The field names in a diff are the resource's own, so the payload scanner reads a diff's values,
 not its names, and checks instead that every field named like a secret holds \`***\`. A diff may

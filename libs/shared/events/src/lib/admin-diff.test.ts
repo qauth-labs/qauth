@@ -310,6 +310,115 @@ describe('masking', () => {
     ]);
   });
 
+  // Names #827 found hidden although they hold no secret.
+  it.each([
+    ['countryCode', 'DE', 'TR'],
+    ['keyUse', 'sig', 'enc'],
+    ['saltRounds', 10, 12],
+    ['authServer', 'https://idp.example', 'https://idp2.example'],
+    ['attrKey', 'department', 'team'],
+    ['statusCode', 200, 204],
+    ['sortKey', 'name', 'createdAt'],
+    ['keyOps', ['sign'], ['sign', 'verify']],
+  ])('shows %s, which only looks like a secret', (field, before, after) => {
+    const diff = [{ path: `/${field}`, before, after }];
+    expect(buildAdminDiff({ [field]: before }, { [field]: after })).toEqual(diff);
+    expect(scanAdminDiff(diff)).toEqual([]);
+  });
+
+  // The secret words #827 added, and the codes and keys that stay secret.
+  it.each([
+    'kek',
+    'dek',
+    'pepper',
+    'privkey',
+    'rootKek',
+    'wrappedDek',
+    'passwordPepper',
+    'sshPrivkey',
+    'recoveryCode',
+    'inviteCode',
+    'masterKey',
+  ])('masks %s, and the masking check reports it unmasked', (field) => {
+    expect(buildAdminDiff({ [field]: 'old-value' }, { [field]: 'new-value' })).toEqual([
+      { path: `/${field}`, before: MASK, after: MASK },
+    ]);
+    expect(scanAdminDiff([{ path: `/${field}`, after: 'new-value' }])).toEqual([
+      expect.objectContaining({ path: '/0/after', rule: 'secret_field' }),
+    ]);
+  });
+
+  it('masks a one-time password link by its name, whatever it holds', () => {
+    const qr = 'data:image/png;base64,iVBORw0KGgo';
+    for (const field of ['totpUri', 'otpauthUrl', 'hotpLink']) {
+      expect(buildAdminDiff({}, { [field]: qr })).toEqual([{ path: `/${field}`, after: MASK }]);
+      expect(scanAdminDiff([{ path: `/${field}`, after: qr }])).toEqual([
+        expect.objectContaining({ rule: 'secret_field' }),
+      ]);
+    }
+  });
+
+  // The acceptance criterion of #827: a URL that carries a credential is
+  // masked under any name, and the masking check reports it unmasked.
+  it.each([
+    ['an access token in the query', 'https://api.example/v1/items?access_token=abc123'],
+    ['a token in the query', 'https://api.example/feed.ics?token=abc123'],
+    ['a secret in the query', 'https://api.example/cb?client_id=a&secret=abc123'],
+    ['a signed URL', 'https://files.example/f.bin?expires=1&sig=c2lnbmF0dXJl'],
+    ['an API key in the query', 'https://maps.example/api?key=k-123'],
+    ['a code in the query', 'https://app.example/cb?code=abc123&state=x'],
+    ['an access token in the fragment', 'https://app.example/cb#access_token=abc&state=x'],
+    ['a URL with one in a query value', 'https://app.example/go?next=https://api.example/?token=a'],
+    ['an otpauth URI', 'otpauth://totp/QAuth:alice?secret=JBSWY3DPEHPK3PXP&issuer=QAuth'],
+    ['an otpauth migration URI', 'otpauth-migration://offline?data=CjEKCkhlbGxv'],
+    [
+      'an incoming webhook with its secret in the path',
+      'https://hooks.chat.example/services/T0A1B2C3D/B4E5F6G7H/x9Y8z7W6v5U4t3S2r1Q0p9O8',
+    ],
+    [
+      'a webhook URL with an id and a secret',
+      'https://chat.example/api/webhooks/123456789012345678/Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z',
+    ],
+    [
+      'a URL in prose',
+      'Posts to https://hooks.chat.example/services/T0/B0/x9Y8z7W6v5U4t3S2r1Q0 every day',
+    ],
+  ])('masks %s under a harmless name', (_label, value) => {
+    expect(buildAdminDiff({ note: 'plain' }, { note: value })).toEqual([
+      { path: '/note', before: 'plain', after: MASK },
+    ]);
+    expect(scanAdminDiff([{ path: '/note', after: value }])).toEqual([
+      expect.objectContaining({ path: '/0/after', rule: 'secret_value' }),
+    ]);
+  });
+
+  it('masks a URL that carries a credential under a name that only describes one', () => {
+    const totpUri = 'otpauth://totp/QAuth:alice?secret=JBSWY3DPEHPK3PXP';
+    expect(buildAdminDiff({}, { provisioningUri: totpUri })).toEqual([
+      { path: '/provisioningUri', after: MASK },
+    ]);
+  });
+
+  it('refuses a member name that is a URL carrying a credential', () => {
+    const name = 'https://api.example/?access_token=abc123';
+    expect(() => buildAdminDiff({}, { allow: { [name]: true } })).toThrow(/shaped like a secret/);
+    expect(scanAdminDiff([{ path: '/allow', after: { [name]: true } }])).toEqual([
+      expect.objectContaining({ rule: 'secret_value' }),
+    ]);
+  });
+
+  it.each([
+    ['a redirect URI', 'https://app.example/cb?state=xyz&response_type=code'],
+    ['an authorization URL', 'https://idp.example/authorize?client_id=notes&scope=openid'],
+    ['a discovery URL', 'https://idp.example/.well-known/openid-configuration'],
+    ['an empty secret member', 'https://app.example/cb?token='],
+    ['a webhook URL with no secret in the path', 'https://app.example/webhooks/qauth-events'],
+    ['a webhook host with a short path', 'https://hooks.example/a'],
+  ])('shows %s, which carries no credential', (_label, value) => {
+    expect(buildAdminDiff({}, { url: value })).toEqual([{ path: '/url', after: value }]);
+    expect(scanAdminDiff([{ path: '/url', after: value }])).toEqual([]);
+  });
+
   it('keeps a flag under a secret name: it holds no secret', () => {
     expect(buildAdminDiff({ revokeRefreshToken: false }, { revokeRefreshToken: true })).toEqual([
       { path: '/revokeRefreshToken', before: false, after: true },

@@ -36,10 +36,11 @@ import { fieldNameWords, type PayloadFinding, scanValues } from './payload-rules
  *
  * A value shaped like a secret is masked wherever it sits
  * ({@link isSecretShaped}): a token, a signed or encrypted object, a key, a
- * URL with a password, an `Authorization` header value, or a private JWK
- * (an AKP key's `priv` or `seed` included). A member name shaped like a
- * token, a key or a URL with a password cannot be masked without changing
- * the resource's shape, so it is refused.
+ * URL that carries a credential ({@link hasCredentialUrl}), an
+ * `Authorization` header value, or a private JWK (an AKP key's `priv` or
+ * `seed` included). A member name shaped like a token, a key or a URL that
+ * carries a credential cannot be masked without changing the resource's
+ * shape, so it is refused.
  */
 
 /**
@@ -259,6 +260,17 @@ export const DIFF_SECRET_WORDS: ReadonlySet<string> = new Set([
   'codes',
   'dsn',
   'connection',
+  // Key material by its role: a key-encryption key, a data-encryption key,
+  // a password hash's pepper, a private key written short.
+  'kek',
+  'keks',
+  'dek',
+  'deks',
+  'pepper',
+  'peppers',
+  'privkey',
+  'privkeys',
+  'otpauth',
 ]);
 
 /** Secret words also caught inside a longer word written without a separator. */
@@ -271,9 +283,84 @@ export const DIFF_SECRET_STEMS: readonly string[] = [
   'token',
   'apikey',
   'privatekey',
+  'privkey',
   'signingkey',
   'jwt',
 ];
+
+/**
+ * Words before `code` or `key` that make it a name or a classifier rather
+ * than a secret: a country, status or error code, or the key of an
+ * attribute, a claim, a sort order or a cache entry (`countryCode`,
+ * `statusCode`, `attrKey`, `sortKey`). `recoveryCode`, `inviteCode`, `apiKey`
+ * and `masterKey` stay secret.
+ */
+const NAMING_QUALIFIERS: ReadonlyMap<string, ReadonlySet<string>> = (() => {
+  const code = new Set([
+    'country',
+    'currency',
+    'language',
+    'lang',
+    'locale',
+    'region',
+    'area',
+    'postal',
+    'post',
+    'zip',
+    'dial',
+    'calling',
+    'iso',
+    'status',
+    'error',
+    'http',
+    'response',
+    'reason',
+    'exit',
+    'result',
+    'return',
+    'color',
+    'colour',
+  ]);
+  const key = new Set([
+    'attr',
+    'attrs',
+    'attribute',
+    'attributes',
+    'claim',
+    'claims',
+    'field',
+    'fields',
+    'property',
+    'properties',
+    'prop',
+    'props',
+    'column',
+    'columns',
+    'sort',
+    'partition',
+    'cache',
+    'lookup',
+    'map',
+    'label',
+    'translation',
+    'i18n',
+    'routing',
+    'idempotency',
+    'dedup',
+    'dedupe',
+    'query',
+    'index',
+  ]);
+  return new Map([
+    ['code', code],
+    ['codes', code],
+    ['key', key],
+    ['keys', key],
+  ]);
+})();
+
+/** Words that name a one-time password, whose provisioning link holds its seed. */
+const OTP_WORDS: ReadonlySet<string> = new Set(['otp', 'otps', 'totp', 'hotp', 'otpauth']);
 
 /** Words that name a link, which is a secret only when it is a one-time link. */
 const LINK_WORDS: ReadonlySet<string> = new Set([
@@ -303,9 +390,10 @@ const ONE_TIME_LINK_STEMS: readonly string[] = [
 
 /**
  * Last words that say a field describes a secret rather than holds it: its
- * id, type, method, lifetime, policy or address. `accessTokenTtl`,
- * `tokenEndpointAuthMethod`, `passwordMinScore`, `jwksUri` and
- * `signingKeyId` are shown; `clientSecretHash` and `signingKey` are not.
+ * id, type, method, lifetime, policy, use, work factor or address.
+ * `accessTokenTtl`, `tokenEndpointAuthMethod`, `passwordMinScore`,
+ * `jwksUri`, `signingKeyId`, `keyUse`, `saltRounds` and `authServer` are
+ * shown; `clientSecretHash` and `signingKey` are not.
  */
 export const DESCRIBING_WORDS: ReadonlySet<string> = new Set([
   'id',
@@ -348,19 +436,36 @@ export const DESCRIBING_WORDS: ReadonlySet<string> = new Set([
   'mode',
   'format',
   'version',
+  // What a key is for (a JWK's `use` and `key_ops`, X.509 key usage).
+  'use',
+  'usage',
+  'ops',
+  // A hash's work factor.
+  'rounds',
+  'iterations',
+  'cost',
+  // An address.
   'endpoint',
   'endpoints',
   'uri',
   'uris',
   'url',
   'urls',
+  'server',
+  'servers',
+  'host',
+  'hosts',
+  'port',
 ]);
 
 /**
  * Whether a member's name says it holds a secret (see the module comment):
- * a one-time link (`resetLink`, `setupUrl`); otherwise, unless its last word
- * only describes the secret, a name with a secret word (`smtpPassword`,
- * `pass`, `signingKey`, `connectionString`) or a secret stem (`clientsecret`).
+ * a one-time link (`resetLink`, `setupUrl`) or a one-time password's link
+ * (`totpUri`, `otpauthUrl`); otherwise, unless its last word only describes
+ * the secret, a name with a secret word (`smtpPassword`, `pass`,
+ * `signingKey`, `connectionString`, `kek`) or a secret stem (`clientsecret`).
+ * A `code` or a `key` that the word before it makes a name is no secret
+ * word (`countryCode`, `attrKey`).
  */
 export function namesASecret(name: string): boolean {
   const words = fieldNameWords(name);
@@ -368,18 +473,148 @@ export function namesASecret(name: string): boolean {
   const joined = words.join('');
   if (
     words.some((word) => LINK_WORDS.has(word)) &&
-    ONE_TIME_LINK_STEMS.some((stem) => joined.includes(stem))
+    (ONE_TIME_LINK_STEMS.some((stem) => joined.includes(stem)) ||
+      words.some((word) => OTP_WORDS.has(word)))
   ) {
     return true;
   }
   if (words.length > 1 && DESCRIBING_WORDS.has(words[words.length - 1])) return false;
   return words.some(
-    (word) => DIFF_SECRET_WORDS.has(word) || DIFF_SECRET_STEMS.some((stem) => word.includes(stem))
+    (word, index) =>
+      (DIFF_SECRET_WORDS.has(word) &&
+        !(index > 0 && NAMING_QUALIFIERS.get(word)?.has(words[index - 1]))) ||
+      DIFF_SECRET_STEMS.some((stem) => word.includes(stem))
   );
 }
 
 /** A URL with a password in it: `scheme://user:password@host`. */
 const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]*@/i;
+
+/** Schemes whose URI holds a one-time password's seed. */
+const OTP_SCHEMES: ReadonlySet<string> = new Set(['otpauth:', 'otpauth-migration:']);
+
+/**
+ * Query and fragment member names that hold a credential in a URL although
+ * no resource field is named so: a signed URL's `sig`.
+ */
+const QUERY_SECRET_WORDS: ReadonlySet<string> = new Set(['sig', 'sigs']);
+
+/** Host labels and path segments that say a URL is a webhook's. */
+const WEBHOOK_WORDS: ReadonlySet<string> = new Set([
+  'hook',
+  'hooks',
+  'webhook',
+  'webhooks',
+  'webhookb2',
+]);
+
+/** A path segment shaped like a generated secret: 16 or more URL-safe characters. */
+const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{16,}$/;
+
+/** How deep a URL inside a query value of a URL is read. */
+const MAX_URL_DEPTH = 2;
+
+const SCHEME_CHARACTER = /[A-Za-z0-9+.-]/;
+
+/**
+ * The URLs in a text: from the scheme before the first `://` of each run of
+ * non-space characters to the end of the run. Linear in the text's length.
+ */
+function urlsIn(text: string): string[] {
+  const urls: string[] = [];
+  for (const run of text.split(/\s+/)) {
+    const at = run.indexOf('://');
+    if (at < 1) continue;
+    let start = at;
+    while (start > 0 && SCHEME_CHARACTER.test(run[start - 1])) start -= 1;
+    while (start < at && !/[A-Za-z]/.test(run[start])) start += 1;
+    if (start < at) urls.push(run.slice(start));
+  }
+  return urls;
+}
+
+/** Whether a query or fragment member's name holds a credential. */
+const namesAQuerySecret = (name: string) =>
+  namesASecret(name) || fieldNameWords(name).some((word) => QUERY_SECRET_WORDS.has(word));
+
+/** Whether a path segment is shaped like a generated secret: long, with letters and digits. */
+function isTokenSegment(segment: string): boolean {
+  return (
+    TOKEN_SEGMENT.test(segment) &&
+    (segment.match(/[0-9]/g)?.length ?? 0) >= 2 &&
+    (segment.match(/[A-Za-z]/g)?.length ?? 0) >= 2
+  );
+}
+
+const namesAWebhook = (part: string) =>
+  fieldNameWords(part).some((word) => WEBHOOK_WORDS.has(word));
+
+/**
+ * Whether a webhook URL holds its secret in the path, as an incoming webhook
+ * of a chat service does: a host label or a path segment names a webhook,
+ * and a path segment after it is shaped like a generated secret
+ * (`https://hooks.chat.example/services/T0/B0/<secret>`,
+ * `https://chat.example/api/webhooks/<id>/<secret>`).
+ */
+function isWebhookWithSecret(url: URL): boolean {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+  let named = url.hostname.split('.').some(namesAWebhook);
+  for (const segment of url.pathname.split('/')) {
+    if (named && isTokenSegment(segment)) return true;
+    if (namesAWebhook(segment)) named = true;
+  }
+  return false;
+}
+
+/** Whether query or fragment members hold a credential, or a URL that carries one. */
+function membersHoldACredential(members: URLSearchParams, depth: number): boolean {
+  for (const [name, value] of members) {
+    if (value !== '' && namesAQuerySecret(name)) return true;
+    if (depth < MAX_URL_DEPTH && holdsCredentialUrl(value, depth + 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isCredentialUrl(text: string, depth: number): boolean {
+  if (URL_WITH_PASSWORD.test(text)) return true;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return false;
+  }
+  if (OTP_SCHEMES.has(url.protocol)) return true;
+  if (url.password !== '') return true;
+  if (membersHoldACredential(url.searchParams, depth)) return true;
+  const fragment = url.hash.slice(1);
+  if (fragment.includes('=') && membersHoldACredential(new URLSearchParams(fragment), depth)) {
+    return true;
+  }
+  return isWebhookWithSecret(url);
+}
+
+/**
+ * Whether a text holds a URL that carries a credential, anywhere in it:
+ *
+ * - a password (`scheme://user:password@host`);
+ * - a query or fragment member with a value and a name that holds a secret
+ *   (`?access_token=`, `?token=`, `?secret=`, `?sig=`, `?key=`, `?code=`,
+ *   `#access_token=`), or a URL that carries one;
+ * - an `otpauth://` URI, which holds a one-time password's seed;
+ * - a webhook URL that holds its secret in the path.
+ *
+ * A URL with none of these, such as a redirect URI or a JWKS address, is no
+ * secret.
+ */
+export function hasCredentialUrl(text: string): boolean {
+  return holdsCredentialUrl(text, 0);
+}
+
+function holdsCredentialUrl(text: string, depth: number): boolean {
+  return text.includes('://') && urlsIn(text).some((url) => isCredentialUrl(url, depth));
+}
 
 /**
  * An `Authorization` header value: a scheme that carries a credential and one
@@ -424,8 +659,9 @@ function isSecretPair(value: unknown): boolean {
 /**
  * Whether a value is shaped like a secret whatever its name: a string shaped
  * like a token, a signed or encrypted object or a key (the payload rules'
- * value scan), a URL with a password, or an `Authorization` header value; or
- * an object that is a private or symmetric JWK.
+ * value scan), one that holds a URL that carries a credential, or an
+ * `Authorization` header value; or an object that is a private or symmetric
+ * JWK.
  */
 export function isSecretShaped(value: unknown): boolean {
   if (typeof value === 'string') {
@@ -455,11 +691,12 @@ const hiddenByName = (key: string, value: unknown) => namesASecret(key) && !isJw
 
 /**
  * Whether a member name is shaped like a secret: a token, a signed or
- * encrypted object, a key, or a URL with a password. An `Authorization` value
- * is not looked for here: a name such as "Basic tier" is a name.
+ * encrypted object, a key, or a URL that carries a credential. An
+ * `Authorization` value is not looked for here: a name such as "Basic tier"
+ * is a name.
  */
 function isSecretShapedName(name: string): boolean {
-  return scanValues(name).length > 0 || URL_WITH_PASSWORD.test(name);
+  return scanValues(name).length > 0 || hasCredentialUrl(name);
 }
 
 /** Refuse a member name shaped like a secret, which no mask can hide. */
