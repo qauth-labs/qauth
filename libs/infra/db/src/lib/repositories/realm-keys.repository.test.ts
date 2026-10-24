@@ -126,7 +126,10 @@ const NEW_KEY = {
  * new method does not compile until it is listed here, and the test below
  * fails if the factory returns one this map does not know.
  */
-const CALLS: Record<keyof RealmKeysRepository, (repo: RealmKeysRepository) => Promise<unknown>> = {
+const CALLS: Record<
+  keyof RealmKeysRepository,
+  (repo: RealmKeysRepository, db: DbClient) => Promise<unknown>
+> = {
   create: (repo) =>
     repo.create({ key: NEW_KEY, publicJwk: { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' } }),
   findByKid: (repo) => repo.findByKid(REALM_ID, KID),
@@ -141,11 +144,13 @@ const CALLS: Record<keyof RealmKeysRepository, (repo: RealmKeysRepository) => Pr
       unpublishAt: 1_801_209_600_000,
     }),
   deleteByScope: (repo) => repo.deleteByScope(REALM_ID, 'webhook_signing', 'subscription-1'),
+  // The lock takes the caller's transaction; the recording client stands in for it.
+  lockRealm: (repo, tx) => repo.lockRealm(REALM_ID, tx),
 };
 
 async function run(method: keyof RealmKeysRepository): Promise<CapturedQuery[]> {
   const { db, queries } = createRecordingDb([CREATED_ROW]);
-  await CALLS[method](createRealmKeysRepository(db));
+  await CALLS[method](createRealmKeysRepository(db), db);
   return queries;
 }
 
@@ -178,6 +183,14 @@ describe('createRealmKeysRepository — wrapped material', () => {
 });
 
 describe('createRealmKeysRepository — statements', () => {
+  it('lockRealm takes a transaction-level advisory lock named by the realm', async () => {
+    const queries = await run('lockRealm');
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0].text).toContain('pg_advisory_xact_lock(hashtextextended(');
+    expect(queries[0].values).toEqual([`qauth:realm-keys:${REALM_ID}`]);
+  });
+
   it('create writes the key and its public row inside one transaction', async () => {
     const queries = (await run('create')).map((query) => query.text.toLowerCase());
 
