@@ -88,6 +88,7 @@ import **from inside the workspace**; external npm packages are never restricted
 | `type:key-custody`       | `scope:core`, `scope:shared`                                                     | `.oxlintrc.json:274` |
 | `scope:migration-runner` | `type:db`, `type:testing`                                                        | `.oxlintrc.json:255` |
 | `scope:wire-suite`       | nothing — and nothing may import it                                              | `.oxlintrc.json:187` |
+| `type:kek-adapter`       | `scope:core`, `scope:shared`, `type:key-custody` — and nothing may import it     | `.oxlintrc.json:284` |
 
 ### Key custody has a second, path-based rule
 
@@ -99,8 +100,13 @@ the key factory and the in-process signer. Module boundaries work per project an
 two apart, so a block in `.oxlintrc.json` (the key custody guard: `no-restricted-imports`, plus
 `qauth/no-restricted-syntax` from `tools/oxlint/qauth-plugin.mjs` for `require()` and the other
 forms an import rule does not see) refuses `/custody`, and any deep path into the package,
-everywhere except `libs/server/keys` and the signer's wiring, `libs/fastify/plugins/signer`. Sign
-through `fastify.signer`; do not widen the list.
+everywhere except `libs/server/keys`, the signer's wiring, `libs/fastify/plugins/signer`, and the
+KEK adapter packages under `libs/keys/`, which implement its `KekProvider` and run in the signer's
+process. Sign through `fastify.signer`; do not widen the list beyond a new KEK adapter.
+
+A KEK adapter (`type:kek-adapter`) reaches only the key library and the core and shared layers, and
+no project may depend on one: `KEK_PROVIDER=<name>` imports `@qauth-labs/keys-<name>` by name at run
+time, so the auth server and its image ship without it.
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 

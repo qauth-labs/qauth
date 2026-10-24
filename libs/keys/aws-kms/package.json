@@ -1,0 +1,17 @@
+{
+  "name": "@qauth-labs/keys-aws-kms",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@aws-sdk/client-kms": "catalog:",
+    "@qauth-labs/server-keys": "workspace:*",
+    "@qauth-labs/shared-errors": "workspace:*",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

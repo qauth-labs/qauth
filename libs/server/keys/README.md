@@ -13,15 +13,16 @@ signer, the one component that uses them
 
 ## Entry points
 
-| Import                            | Holds                                                                                                                                               | Who may import it                                |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `@qauth-labs/server-keys`         | The `Signer` interface, the caller roles and their policy, the `typ` table, the key purposes, and the typed errors.                                 | Any project.                                     |
-| `@qauth-labs/server-keys/custody` | The KEK provider, envelope encryption, key generation, the key factory, the in-process signer and the storage ports. Everything that touches a KEK. | This library and the signer's wiring, no others. |
+| Import                            | Holds                                                                                                                                               | Who may import it                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `@qauth-labs/server-keys`         | The `Signer` interface, the caller roles and their policy, the `typ` table, the key purposes, and the typed errors.                                 | Any project.                                                               |
+| `@qauth-labs/server-keys/custody` | The KEK provider, envelope encryption, key generation, the key factory, the in-process signer and the storage ports. Everything that touches a KEK. | This library, the signer's wiring and the KEK adapter packages, no others. |
 
 ADR-019 provisions the KEK to the signer role alone, so a rule in `.oxlintrc.json` fails
 `nx lint` for an import of `@qauth-labs/server-keys/custody`, or of a deep path into the package,
-from any other project. Every other component signs, encrypts and reads keys through `Signer`. A
-KEK adapter package (#577–#579) is added to that rule's list when it lands.
+from any other project. Every other component signs, encrypts and reads keys through `Signer`. The
+KEK adapter packages are on that rule's list too, since they implement `KekProvider` and run in the
+signer's process: [`@qauth-labs/keys-aws-kms`](../../keys/aws-kms/README.md) (#577) is the first.
 
 ## Overview
 
@@ -110,7 +111,9 @@ ciphertext does not match, and an `UnknownKekRefError` when no configured KEK ha
 An adapter is an optional package named `@qauth-labs/keys-<name>`, selected with
 `KEK_PROVIDER=<name>` and imported only when selected. It exports
 `createKekProvider(context): KekProvider`, reads its own settings from `context.env`, and reports
-configuration warnings through `context.warn`.
+configuration warnings through `context.warn`. It lives under `libs/keys/<name>`, is tagged
+`type:kek-adapter` (no project may depend on it) and is added to the key custody guard's
+`excludeFiles` in `.oxlintrc.json`. [`@qauth-labs/keys-aws-kms`](../../keys/aws-kms/README.md) is one.
 
 - Bind the associated data. A byte-oriented backend can authenticate `encodeKeyAad(aad)`.
 - Return a fresh buffer from every `unwrap`. The caller zeroes it, so never hand out a cached data

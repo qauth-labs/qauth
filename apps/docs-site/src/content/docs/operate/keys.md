@@ -28,6 +28,17 @@ Decision 9). Every stored key is wrapped with a key-encryption key (KEK), so
 backups: without it the stored keys cannot be read. Generate one with
 `openssl rand -base64 32`. `NODE_ENV=production` refuses to start without it.
 
+`KEK_PROVIDER` picks where the KEK lives. The default, `local`, reads `KEK` or
+`KEK_PATH`. An optional adapter package can keep it in a key management
+service instead, for example `KEK_PROVIDER=aws-kms` with
+`@qauth-labs/keys-aws-kms`, which sends data keys to AWS KMS to be wrapped and
+unwrapped while signing stays in QAuth. Its
+[guide](https://github.com/qauth-labs/qauth/blob/main/libs/keys/aws-kms/README.md)
+gives the settings, the IAM policy of the signer role and what happens when
+KMS is unavailable. Choose the provider before the first boot that stores keys:
+a key wrapped under one KEK does not open under another until the KEK rotation
+(#545) can re-wrap it.
+
 At every boot the server runs a key step for the default realm, on every node,
 after the realm's own step and under an advisory lock, so nodes that start
 together do it once:

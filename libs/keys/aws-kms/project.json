@@ -1,0 +1,43 @@
+{
+  "name": "keys-aws-kms",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/keys/aws-kms/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:kek-adapter"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "oxlint", "@nx/oxlint", "nx", "typescript"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/.oxlintrc.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `boundaries.test.ts` runs Nx's module-boundaries rule through Oxlint with the options of `.oxlintrc.json`, so a change to `.oxlintrc.json`, to Oxlint, @nx/oxlint, Nx or TypeScript must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared."
+      }
+    },
+    "test-kms": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts libs/keys/aws-kms",
+        "cwd": "{workspaceRoot}"
+      },
+      "cache": false,
+      "description": "Run the KEK provider contract against a real KMS key (opt-in, manual). Set KMS_TEST_KEY_ARN to the ARN of a symmetric encryption key that the caller may use for kms:Encrypt and kms:Decrypt, with credentials from the default AWS credential chain. Without KMS_TEST_KEY_ARN the suite is skipped. CI does not run this target."
+    }
+  },
+  "// targets": "to see all targets run: nx show project keys-aws-kms --web"
+}
