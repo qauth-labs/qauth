@@ -16,7 +16,7 @@ export type EvidenceKind = 'rfc' | 'issue' | 'link' | 'path';
 
 const RFC_PATTERN = /^RFC [1-9]\d*$/;
 const ISSUE_PATTERN = /^#[1-9]\d*$/;
-const LINK_PATTERN = /^https:\/\/[^\s/]+\S*$/;
+const LINK_PATTERN = /^https:\/\/[^\s/]\S*$/;
 const PATH_PATTERN = /^[A-Za-z0-9_.@-]+(?:\/[A-Za-z0-9_.@-]+)*(?:#[A-Za-z0-9_.-]+)?$/;
 
 /**

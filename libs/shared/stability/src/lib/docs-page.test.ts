@@ -35,6 +35,11 @@ beforeAll(async () => {
   });
 });
 
+/** `text` as a regular expression that matches it literally. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** The section of one item: from its heading to the next. */
 function sectionOf(id: string): string {
   const start = page.indexOf(`\n### ${id}\n`);
@@ -65,7 +70,7 @@ describe('the experimental features page', () => {
       expect(section).toContain(item.description);
       for (const condition of PROMOTION_CONDITIONS) {
         expect(section).toMatch(
-          new RegExp(`\\| \\d\\. ${condition.text.replace(/\./g, '\\.')} +\\| (yes|no) +\\|`)
+          new RegExp(`\\| \\d\\. ${escapeRegExp(condition.text)} +\\| (yes|no) +\\|`)
         );
       }
     }

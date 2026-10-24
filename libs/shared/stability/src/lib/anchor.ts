@@ -35,13 +35,29 @@ export function markdownHeadingAnchors(markdown: string): ReadonlySet<string> {
       fenced = !fenced;
       continue;
     }
-    const heading = fenced ? null : /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
+    const heading = fenced ? null : headingText(line);
     if (heading === null) continue;
-    const text = heading[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+    // Neither class matches its own delimiters, so each scan stops at the next
+    // bracket and the replacement stays linear in the line's length.
+    const text = heading.replace(/\[([^[\]]*)\]\([^()]*\)/g, '$1');
     const base = headingAnchor(text);
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     anchors.add(count === 0 ? base : `${base}-${count}`);
   }
   return anchors;
+}
+
+/**
+ * The text of an ATX heading line, without its `#` marker and closing `#`s,
+ * or `null` when the line is not a heading. Written without a backtracking
+ * regular expression, so a line of many spaces stays linear.
+ */
+function headingText(line: string): string | null {
+  const marker = /^#{1,6}\s/.exec(line);
+  if (marker === null) return null;
+  const text = line.slice(marker[0].length).trim();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === '#') end--;
+  return text.slice(0, end).trimEnd();
 }

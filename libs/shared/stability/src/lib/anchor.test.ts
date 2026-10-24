@@ -48,6 +48,13 @@ describe('markdownHeadingAnchors', () => {
     expect([...anchors]).toEqual(['real']);
   });
 
+  it('reads a long line of spaces or brackets in linear time', () => {
+    const anchors = markdownHeadingAnchors(
+      [`# a${' '.repeat(100_000)}b`, `## ${'[\\'.repeat(50_000)}`].join('\n')
+    );
+    expect(anchors.size).toBe(2);
+  });
+
   it('finds the section a fixture names in ADR-018', () => {
     const adr = readFileSync(join(REPO_ROOT, 'docs/adr/018-1-0-scope-and-stability.md'), 'utf8');
     expect(markdownHeadingAnchors(adr).has('8-assurance-before-10')).toBe(true);

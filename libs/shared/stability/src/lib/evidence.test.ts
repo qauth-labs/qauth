@@ -30,6 +30,10 @@ describe('evidenceKind', () => {
   ])('refuses %s', (_label, evidence) => {
     expect(evidenceKind(evidence)).toBeNull();
   });
+
+  it('refuses a long link that ends in a space in linear time', () => {
+    expect(evidenceKind(`https://${'!'.repeat(100_000)} `)).toBeNull();
+  });
 });
 
 describe('evidencePath', () => {
