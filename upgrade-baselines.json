@@ -1,4 +1,4 @@
 {
   "$comment": "Release tags the upgrade-test CI job upgrades from, one matrix entry each (ADR-018 §5). From 1.0 on, list every earlier 1.x minor release. See apps/upgrade-test/README.md.",
-  "baselines": ["v0.1.0-rc.2"]
+  "baselines": ["v0.1.0-rc.2", "v0.1.3"]
 }
