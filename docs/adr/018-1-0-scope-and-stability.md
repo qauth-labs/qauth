@@ -38,8 +38,11 @@
 > - §10: a per-provider switch that counts an upstream sign-in as strong in ADR-017's downgrade
 >   rule is planned for 1.x. In 1.0 an upstream sign-in ranks with the password.
 >
-> **Amended 2026-10-24** with the maintainer's decision of that day on the test-vector format.
+> **Amended 2026-10-24** with the maintainer's decisions of that day on versioned identifiers.
 >
+> - §5: until 1.0.0 every QAuth-defined version is a release candidate, `v1-rc.<M>`, not only the
+>   event types: the step URNs, the API family paths and audiences, the Interaction API path, the
+>   agent URIs and the SCIM extension schema of ADR-014, and every format id.
 > - §6: the shared test-vector format is a release candidate, `qauth-vectors/1-rc.<M>`, until
 >   1.0.0, like the event types in §5.
 
@@ -266,7 +269,8 @@ The contract covers:
 
 - **Wire behaviour** of every stable feature, as a client sees it over HTTP.
 - **The Interaction API, version 1**, at `/interaction/v1`. It is published as OpenAPI, with JSON
-  Schema for its steps. ADR-019 defines it.
+  Schema for its steps. ADR-019 defines it. Until 1.0.0 it is served at `/interaction/v1-rc.<M>`
+  (QAuth-defined identifiers, below).
 - **The three API families**: admin, account and developer. ADR-019 defines them.
 - **The error format outside the protocol endpoints.** The three API families, and every other
   route that is not an OAuth protocol endpoint, answer an error with an RFC 9457 problem details
@@ -276,7 +280,13 @@ The contract covers:
   defines. ADR-019 Decision 7 states the rule. Decided 2026-10-11 (maintainer).
 - **Stable SDKs**, per major version.
 - **QAuth-defined identifiers.** Each carries a version, for example a `urn:qauth:...:v1` form. A
-  future standard identifier can then sit beside it without breaking 1.x.
+  future standard identifier can then sit beside it without breaking 1.x. Until 1.0.0 every such
+  version is a release candidate, and nothing about it is promised: `v1-rc.<M>` in a URN, URI or
+  path (`urn:qauth:ia:password:v1-rc.0`, `/admin/v1-rc.0`), `1-rc.<M>` in a format id,
+  `1.0-rc.<M>` where the form is dotted. A breaking change before then raises `<M>`, so an
+  identifier never names two contracts. The release that ships 1.0.0 drops the suffix, and `v1`
+  is the promise. A new identifier starts at `-rc.0`, never at a bare `v1`. Decided 2026-10-24
+  (maintainer).
 - **A documented subset of configuration keys:** issuer and host, the database, Redis, the KEK
   provider, proxy trust, and the switches of stable features. Other keys are marked advanced or
   experimental. A renamed key keeps working under its old name, with a warning, for the

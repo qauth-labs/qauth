@@ -13,21 +13,23 @@ contract ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)), s
 before the families' first route. A test enforces them over the generated OpenAPI document
 ([Enforcement](#enforcement)).
 
-The Interaction API (`/interaction/v1`) reuses these rules. The OAuth protocol endpoints do not:
-they keep the shapes their specifications define ([Errors](#errors)).
+The Interaction API (`/interaction/v1-rc.0`) reuses these rules. The OAuth protocol endpoints do
+not: they keep the shapes their specifications define ([Errors](#errors)).
 
 ## The three families
 
-| Family    | Caller    | Path prefix     | Audience                     |
-| --------- | --------- | --------------- | ---------------------------- |
-| admin     | Operator  | `/admin/v1`     | `urn:qauth:aud:admin:v1`     |
-| account   | End user  | `/account/v1`   | `urn:qauth:aud:account:v1`   |
-| developer | Developer | `/developer/v1` | `urn:qauth:aud:developer:v1` |
+| Family    | Caller    | Path prefix          | Audience                          |
+| --------- | --------- | -------------------- | --------------------------------- |
+| admin     | Operator  | `/admin/v1-rc.0`     | `urn:qauth:aud:admin:v1-rc.0`     |
+| account   | End user  | `/account/v1-rc.0`   | `urn:qauth:aud:account:v1-rc.0`   |
+| developer | Developer | `/developer/v1-rc.0` | `urn:qauth:aud:developer:v1-rc.0` |
 
-- The major version is in the path. A new major version is served under its own prefix, such as
-  `/admin/v2`, beside the old one ([Versioning](#versioning)).
+- The major version is in the path. Until QAuth 1.0.0 it is a release candidate, `v1-rc.<M>`, and
+  nothing about it is promised ([Release candidates](#release-candidates)). A new major version is
+  served under its own prefix, such as `/admin/v2`, beside the old one ([Versioning](#versioning)).
 - Each token carries one audience, and a family accepts only its own. The audience identifiers
-  carry a version, as ADR-018 §5 requires for every QAuth-defined identifier.
+  carry a version, as ADR-018 §5 requires for every QAuth-defined identifier, and it is the same
+  release candidate as the path's.
 - The admin API's scopes are `admin:read`, `admin:write` and `admin:security`. The account and
   developer families define no scopes here: their guards check the audience and the subject. A
   route that needs a scope adds it in its own change.
@@ -223,7 +225,7 @@ A route declares all of it in its schema, and `@fastify/swagger` copies it onto 
 
 ```ts
 fastify.patch(
-  '/admin/v1/realms/:realmId/policies',
+  '/admin/v1-rc.0/realms/:realmId/policies',
   {
     schema: {
       operationId: 'realms.policies.update',
@@ -270,6 +272,14 @@ months after the announcement, and only in a new major release (ADR-018 §5).
 
 **Major versions.** `v1` stays served for at least 12 months after `v2` ships, and until the next
 major release.
+
+### Release candidates
+
+Before QAuth 1.0.0 nothing is promised, so no path or audience says `v1` yet. Each family is
+served under `v1-rc.<M>`, today `v1-rc.0`, and so is the Interaction API. A breaking change before
+1.0.0 raises `<M>`, so a prefix never names two contracts. The release that ships 1.0.0 serves
+`v1`, and from then on the rules above apply. The same rule covers every QAuth-defined versioned
+identifier (ADR-018 §5).
 
 **Experimental operations.** An experimental operation sits behind a switch and carries
 `x-qauth-stability: experimental`. It is absent from the published document while the switch is

@@ -74,7 +74,7 @@ describe('event type identifiers', () => {
     'urn:qauth:event:User.SignedIn:v1',
     'urn:qauth:event:user..signed_in:v1',
     'urn:qauth:event:user.signed-in:v1',
-    'urn:qauth:ia:password:v1',
+    'urn:qauth:ia:password:v1-rc.0',
     'urn:qauth:event:user.signed_in:v1-rc',
     'urn:qauth:event:user.signed_in:v1-rc.',
     'urn:qauth:event:user.signed_in:v1-rc.01',
