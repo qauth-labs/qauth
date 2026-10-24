@@ -16,7 +16,7 @@ import { LEGACY_EVENT_MAP } from './legacy';
  */
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const EVENTS_PAGE_LAST_VERIFIED = '2026-10-23';
+export const EVENTS_PAGE_LAST_VERIFIED = '2026-10-24';
 
 /** Where the schema files are served, relative to the docs site root. */
 const SCHEMA_PATH = '/schemas/events/';
@@ -155,6 +155,11 @@ function typeSection(definition: EventTypeDefinition): string {
     `- Subject: ${definition.subject ? `${code(definition.subject)}, when known` : 'none: the event never carries one'}`,
     `- Schema: [${eventSchemaFile(definition)}](${SCHEMA_PATH}${eventSchemaFile(definition)})`,
   ];
+  if (definition.diff) {
+    facts.push(
+      `- Diff: ${code(`data.${definition.diff}`)} lists what changed, with every secret value masked ([Admin events](#admin-events))`
+    );
+  }
   if (definition.deprecated) {
     facts.push(
       `- Deprecated since ${definition.deprecated.since}, replaced by ${code(definition.deprecated.replacedBy)}`
@@ -239,7 +244,8 @@ others mean the same for every type. A member that does not apply is absent, nev
    that needs a name, an email address, a phone number or an IP address declares that field in
    its registry entry. No type registered today does.
 2. **Never a secret.** No password, code, OTP, token, key, assertion, signature, cookie, secret,
-   or set-up or reset link, in any form. There is no exception.
+   or set-up or reset link, in any form. There is no exception. An admin event's diff shows a
+   changed resource's own fields; there a secret field holds \`***\`, never its value.
 3. **Hidden identifiers are keyed HMACs.** An identifier that must not be revealed, such as the
    address a failed sign-in typed, is carried as an HMAC under a server-side key, never as the
    value and never as a plain hash.
@@ -250,6 +256,45 @@ single event passes before it is stored or sent, applies them again: a field nam
 or a value shaped like a token or a key, refuses the event. The scanner reads names, so a field that holds an
 id, a type or a count of such a thing passes when its name ends in \`Id\`, \`Type\` or \`Count\`
 (\`apiKeyId\`, \`issuedTokenType\`).`,
+    `## Admin events`,
+    `An admin event records a change an administrator, a service account or an operator made
+([ADR-020 §3](/reference/records/adr/020-ui-surfaces-and-acceptance-criteria/),
+[ADR-019 Decision 7](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)). Admin
+events are always on: no environment key and no realm setting turns them off. Each is written in
+the transaction of the change it records, so the change and its event commit together.
+
+**The diff.** \`data.diff\` lists what the operation changed, one entry per field:
+
+- \`path\` names the field, as a JSON Pointer (RFC 6901) into the changed resource, such as
+  \`/smtp/host\`.
+- \`before\` and \`after\` hold its value. \`before\` is absent when the field did not exist, and
+  \`after\` when it no longer does; \`null\` means the field held \`null\`.
+- Only changed fields are listed. A nested object present on both sides is diffed member by
+  member. Any other value, an array included, is shown whole.
+
+\`\`\`json
+[
+  { "path": "/displayName", "before": "Notes", "after": "Team notes" },
+  { "path": "/smtp/password", "before": "***", "after": "***" },
+  { "path": "/allowedScopes", "before": ["openid"], "after": ["openid", "profile"] }
+]
+\`\`\`
+
+**Masking.** A secret field holds \`***\` on both sides, whatever its value. A field is secret
+when the operation marks it, or when its name looks like a secret by the payload rules, marked or
+not. A string shaped like a token or a key is masked wherever it sits. A changed secret is still
+listed, so a rotation shows as \`***\` to \`***\`. The field names in a diff are the resource's
+own, so the payload scanner reads a diff's values, not its names, and checks instead that every
+field named like a secret holds \`***\`.
+
+**Approvals.** \`data.approvals\` lists the approvals the operation ran on: both approvals of a
+two-admin operation, each with the approver, the passkey credential it was given with, and who
+created the approver's account.
+
+**The hash chain.** The event store chains a realm's admin events: each stores the hash of the one
+before it, and its own hash is SHA-256 over that hash and the event's canonical JSON (RFC 8785). A
+changed event breaks the chain at that event, and a removed one at the event after it. The
+chain's hashes are stored beside the event and are not part of the envelope.`,
     `## Versioning`,
     `An event type's identifier is \`urn:qauth:event:<name>:v<N>\`. The \`<name>\` is its short
 name: lower-case \`snake_case\` segments joined by full stops, the resource first. \`<N>\` is the

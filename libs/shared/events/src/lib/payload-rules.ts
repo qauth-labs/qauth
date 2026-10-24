@@ -38,6 +38,13 @@ export interface PayloadScanOptions {
    * (rule 1). Secret fields (rule 2) can never be allowed.
    */
   readonly personalData?: readonly string[];
+  /**
+   * Top-level members of the payload whose field names are not read, only
+   * their values: an admin diff's (`admin-diff.ts`), whose names are the
+   * changed resource's own. `scanAdminDiff` checks such a member's masking
+   * in their place.
+   */
+  readonly valuesOnly?: readonly string[];
 }
 
 /** Words that name a secret (rule 2). */
@@ -229,7 +236,8 @@ function fieldFinding(path: string, name: string, rule: Exclude<PayloadRule, 'se
 
 function scan(value: unknown, readNames: boolean, options: PayloadScanOptions): PayloadFinding[] {
   const findings: PayloadFinding[] = [];
-  const visit = (node: unknown, path: string) => {
+  const valuesOnly = new Set(options.valuesOnly ?? []);
+  const visit = (node: unknown, path: string, names: boolean) => {
     if (typeof node === 'string') {
       if (hasCompactJose(node) || PEM.test(node)) {
         findings.push({
@@ -241,19 +249,19 @@ function scan(value: unknown, readNames: boolean, options: PayloadScanOptions): 
       return;
     }
     if (Array.isArray(node)) {
-      node.forEach((item, index) => visit(item, `${path}/${index}`));
+      node.forEach((item, index) => visit(item, `${path}/${index}`, names));
       return;
     }
     if (typeof node === 'object' && node !== null) {
       for (const [key, child] of Object.entries(node)) {
         const childPath = `${path}/${escapePointer(key)}`;
-        const rule = readNames ? classifyFieldName(key, options) : null;
+        const rule = names ? classifyFieldName(key, options) : null;
         if (rule) findings.push(fieldFinding(childPath, key, rule));
-        visit(child, childPath);
+        visit(child, childPath, names && !(path === '' && valuesOnly.has(key)));
       }
     }
   };
-  visit(value, '');
+  visit(value, '', readNames);
   return findings;
 }
 
