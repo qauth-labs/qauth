@@ -1,12 +1,14 @@
 import type { RegisteredEventType } from './registry';
 
 /**
- * Today's event names, mapped to the registered types (#456). Before the
- * event contract, events were free strings: `audit_logs.event`, written by
+ * The event names from before the event contract, mapped to the registered
+ * types (#456). Events were free strings: `audit_logs.event`, written by
  * `auditLogs.create` in `apps/auth-server/src` and by the client-suspension
- * script in `libs/infra/db`, and the log-only names of `logAuthEvent`. The
- * backfill of EVT-03 (#458) copies audit rows into the event store with this
- * map.
+ * script in `libs/infra/db` until #458 replaced both with the event store, and
+ * the names of `logAuthEvent`, which still logs them. Migration 0031 (#458)
+ * copied the audit rows into the event store with this map; its test keeps
+ * the SQL copy of the map equal to this one, so an entry changes only with a
+ * migration that copies again.
  *
  * Several old strings map to one type: the old names said which route or
  * page an event came from (`ui.login.*` beside `user.login.*`); a type says
