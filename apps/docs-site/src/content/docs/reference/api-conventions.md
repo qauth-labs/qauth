@@ -191,6 +191,7 @@ routes that #513 converts names the same errors in upper case (`VALIDATION_ERROR
 | `precondition_failed`         | 412    | The `If-Match` value does not match the current `ETag` of the resource.                                                             |
 | `content_too_large`           | 413    | The request body is larger than the server accepts.                                                                                 |
 | `unsupported_media_type`      | 415    | The media type of the request body is not one the operation accepts.                                                                |
+| `misdirected_request`         | 421    | The server does not answer for the host the request names, or not for this operation on that host.                                  |
 | `unprocessable_content`       | 422    | The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource. |
 | `weak_password`               | 422    | The new password is too weak. `errors` carries the feedback under `/password`.                                                      |
 | `precondition_required`       | 428    | The update needs an `If-Match` header.                                                                                              |

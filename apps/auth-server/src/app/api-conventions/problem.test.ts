@@ -28,7 +28,9 @@ const CODE_ROW = /^\|\s*`([a-z_]+)`\s*\|\s*(\d{3})\s*\|\s*(.*?)\s*\|\s*$/;
 
 describe('problem codes (#506)', () => {
   it('gives every status the code its entry lists for that status', () => {
-    for (const status of [400, 401, 403, 404, 405, 409, 412, 413, 415, 422, 428, 429, 500, 503]) {
+    for (const status of [
+      400, 401, 403, 404, 405, 409, 412, 413, 415, 421, 422, 428, 429, 500, 503,
+    ]) {
       expect(PROBLEM_CODES[codeForStatus(status)].status).toBe(status);
     }
   });
