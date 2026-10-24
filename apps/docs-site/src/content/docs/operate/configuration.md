@@ -185,15 +185,16 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Database and Redis
 
-| Key                          | Role       | Default | Since | Description                                                                                                                         |
-| ---------------------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `DB_POOL_CONNECTION_TIMEOUT` | deployment | `2000`  | 0.1.0 | How long, in milliseconds, the pool waits for a new Postgres connection.                                                            |
-| `DB_POOL_IDLE_TIMEOUT`       | deployment | `10000` | 0.1.0 | How long, in milliseconds, an idle Postgres connection stays in the pool.                                                           |
-| `DB_POOL_MAX`                | deployment | `20`    | 0.1.0 | The largest number of connections in the Postgres pool, at least 2 for the auth server, whose running jobs hold one for their lock. |
-| `DB_POOL_MIN`                | deployment | `2`     | 0.1.0 | The smallest number of connections the Postgres pool keeps.                                                                         |
-| `REDIS_COMMAND_TIMEOUT`      | deployment | `5000`  | 0.1.0 | How long, in milliseconds, the server waits for one Redis command.                                                                  |
-| `REDIS_CONNECTION_TIMEOUT`   | deployment | `10000` | 0.1.0 | How long, in milliseconds, the server waits to connect to Redis.                                                                    |
-| `REDIS_MAX_RETRIES`          | deployment | `3`     | 0.1.0 | How many times one Redis command is retried before it fails.                                                                        |
+| Key                          | Role       | Default | Since | Description                                                                                                                                                                                                                                            |
+| ---------------------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DB_MIGRATION_WAIT_MS`       | deployment | `60000` | 0.2.0 | How long, in milliseconds, the auth server waits at boot for the database to have every migration of its release before it exits naming the missing ones, `0` to check once; a database ahead of the release is accepted, as during a rolling upgrade. |
+| `DB_POOL_CONNECTION_TIMEOUT` | deployment | `2000`  | 0.1.0 | How long, in milliseconds, the pool waits for a new Postgres connection.                                                                                                                                                                               |
+| `DB_POOL_IDLE_TIMEOUT`       | deployment | `10000` | 0.1.0 | How long, in milliseconds, an idle Postgres connection stays in the pool.                                                                                                                                                                              |
+| `DB_POOL_MAX`                | deployment | `20`    | 0.1.0 | The largest number of connections in the Postgres pool, at least 2 for the auth server, whose running jobs hold one for their lock.                                                                                                                    |
+| `DB_POOL_MIN`                | deployment | `2`     | 0.1.0 | The smallest number of connections the Postgres pool keeps.                                                                                                                                                                                            |
+| `REDIS_COMMAND_TIMEOUT`      | deployment | `5000`  | 0.1.0 | How long, in milliseconds, the server waits for one Redis command.                                                                                                                                                                                     |
+| `REDIS_CONNECTION_TIMEOUT`   | deployment | `10000` | 0.1.0 | How long, in milliseconds, the server waits to connect to Redis.                                                                                                                                                                                       |
+| `REDIS_MAX_RETRIES`          | deployment | `3`     | 0.1.0 | How many times one Redis command is retried before it fails.                                                                                                                                                                                           |
 
 ### Signing
 

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import { awaitDatabaseMigrations } from '@qauth-labs/fastify-plugin-db';
 import Fastify, { LogController } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -123,6 +124,20 @@ async function start() {
     for (const experimental of envExperimentalWarnings) {
       server.log.warn({ variable: experimental.variable }, experimental.message);
     }
+
+    // The database must have every migration of this release (#474, ADR-018
+    // §5) before the boot steps read it. Behind, the server waits up to
+    // DB_MIGRATION_WAIT_MS for the migration runner a deployment may start
+    // beside it, then exits naming the missing migrations. Ahead, it starts:
+    // during a rolling upgrade the old release runs on the new schema. Here,
+    // before the app, because Fastify fails an `onReady` hook that runs
+    // longer than its 10 s plugin timeout.
+    await awaitDatabaseMigrations({
+      connectionString: env.DATABASE_URL,
+      waitMs: env.DB_MIGRATION_WAIT_MS,
+      connectTimeoutMs: env.DB_POOL_CONNECTION_TIMEOUT,
+      log: server.log,
+    });
 
     // Swagger UI + OpenAPI spec registration. Gated behind `ENABLE_SWAGGER`
     // (F-07): defaults to `true` in non-production and `false` in production
