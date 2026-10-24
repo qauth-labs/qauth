@@ -347,8 +347,10 @@ service:
 
 The collector is your own, and it often sits on a private network. So the export
 does not go through QAuth's SSRF-safe egress client, which guards the
-destinations that clients and users register. Point the endpoint only at a
-collector you run.
+destinations that clients and users register; ADR-019 Decision 8 records this
+as its one exception. Its destination comes only from these variables, never
+from a realm admin, a client or a user. Point the endpoint only at a collector
+you run.
 
 Under Docker Compose every variable above is forwarded to the `auth-server`
 container. A certificate or key variable names a path inside the container, so
