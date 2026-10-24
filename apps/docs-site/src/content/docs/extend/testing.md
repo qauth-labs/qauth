@@ -116,7 +116,7 @@ target: since #240 its wallet-federation E2E boots the real server against testc
 Postgres **and** Redis.
 
 **This is the only tier that exercises real DDL, and that is not a nice-to-have.** The comment
-above the `integration` job (`ci.yml:129`) states the reasoning better than a paraphrase would:
+above the `integration` job in `ci.yml` states the reasoning better than a paraphrase would:
 
 > The `affected` and `coverage` jobs above can never exercise real DDL: every unit suite mocks the
 > repositories, and both vitest.config.ts and the coverage gate exclude `*.integration.test.ts`.
@@ -135,11 +135,11 @@ failure anywhere else.
 Locally, an integration suite skips when Docker is not running. On CI it does not: inside
 `requireDockerOrSkip` there is a CI branch that throws instead of skipping
 (`libs/shared/testing/src/lib/pg-testcontainer.ts:117`), with a message explaining that skipping
-"turns the run into a green no-op". The `integration` job (`ci.yml:140`) runs on
+"turns the run into a green no-op". The `integration` job in `ci.yml` runs on
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
 
-The job is affected-scoped like the `affected` job (`ci.yml:162`), so a schema, migration, or
+The job is affected-scoped like the `affected` job, so a schema, migration, or
 repository change runs it and a docs-only pull request pays nothing.
 
 ## Tier 3 — the repo-wide coverage gate
@@ -153,8 +153,8 @@ functions 65, lines 70 — and the comment there is explicit that they sit comfo
 numbers so the gate passes now and fails on a real regression, to be ratcheted up as the
 container-backed suite grows.
 
-CI runs this in its **own job**, `coverage` (`ci.yml:75`), separate from the affected per-project
-`test` targets, which the `affected (test)` job runs (`ci.yml:59`). The reason, from that job's
+CI runs this in its **own job**, `coverage`, separate from the affected per-project
+`test` targets, which the `affected (test)` job runs. The reason, from that job's
 comment: the per-project runs write per-project coverage directories, so the threshold has to be
 evaluated once across the whole fast unit suite rather than per project. Running
 `nx affected -t test` locally therefore tells you nothing about the gate; run the command above
