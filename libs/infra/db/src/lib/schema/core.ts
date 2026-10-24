@@ -88,18 +88,27 @@ export const realms = pgTable(
      */
     isOperator: boolean('is_operator').notNull().default(false),
     /**
-     * The passkey RP ID the realm's passkeys are bound to (ADR-019 Decision 2,
-     * issue #467): NULL until the first passkey is enrolled, which writes the
-     * RP ID in effect then. From then on it is the realm's lock. A configured
-     * RP ID that differs refuses to boot, because another one would orphan
-     * every enrolled passkey.
+     * The realm's passkey RP ID (ADR-019 Decision 2, issues #467 and #553):
+     * NULL means the realm's primary host, the default. A value is a parent
+     * domain of it that the operator opted in to (`allowParentDomainRpId`);
+     * `resolveRpId` in `@qauth-labs/shared-validation` reads the two.
      *
-     * PERMANENT once set, like the issuer: the trigger
-     * `realms_webauthn_rp_id_permanent` refuses every UPDATE that changes a
-     * non-NULL value. Stored in the realm host form (`normaliseRealmHost`),
-     * never an IP literal (CHECKs below).
+     * Changeable until the realm's first passkey is enrolled, then locked with
+     * {@link realms.webauthnRpIdLockedAt}: the trigger
+     * `realms_webauthn_rp_id_locked` refuses every change once that is set,
+     * because another RP ID would orphan every enrolled passkey. Stored in the
+     * realm host form (`normaliseRealmHost`), never an IP literal (CHECKs
+     * below). Only `setWebAuthnRpId` writes it; `UpdateRealm` leaves it out.
      */
     webauthnRpId: varchar('webauthn_rp_id', { length: 253 }),
+    /**
+     * When the realm's first passkey enrolment locked its RP ID, in epoch ms
+     * (#553); NULL while the realm has none. Written once, by
+     * `lockRpIdForEnrolment` in the transaction that stores that passkey, and
+     * permanent: the trigger `realms_webauthn_rp_id_locked` refuses clearing
+     * or changing it, and every change of {@link realms.webauthnRpId} after it.
+     */
+    webauthnRpIdLockedAt: bigint('webauthn_rp_id_locked_at', { mode: 'number' }),
     accessTokenLifespan: bigint('access_token_lifespan', { mode: 'number' }).default(900),
     refreshTokenLifespan: bigint('refresh_token_lifespan', { mode: 'number' }).default(604800),
     sslRequired: sslRequiredEnum('ssl_required').default('external'),

@@ -5,8 +5,13 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { InvalidRealmHostError, normaliseRealmHost } from '@qauth-labs/shared-validation';
-import { and, eq, InferInsertModel, InferSelectModel, sql } from 'drizzle-orm';
+import {
+  InvalidRealmHostError,
+  normaliseRealmHost,
+  resolveRpId,
+  rpIdCoversHost,
+} from '@qauth-labs/shared-validation';
+import { and, eq, InferInsertModel, InferSelectModel, isNull, sql } from 'drizzle-orm';
 
 import type { DbTransaction } from '../../types';
 import { DbClient } from '../db';
@@ -16,13 +21,25 @@ import { BaseRepository } from './base.repository';
 export type Realm = InferSelectModel<typeof realms>;
 export type NewRealm = InferInsertModel<typeof realms>;
 /**
- * Fields a realm update may change. `webauthnRpId` is left out on purpose
- * (#467): the passkey RP ID lock is written only by `lockWebAuthnRpId`, which
- * normalises it and holds the realm row while the first enrolment commits.
+ * Fields a realm update may change. The passkey RP ID columns are left out on
+ * purpose (#467, #553): `setWebAuthnRpId` writes the RP ID, refusing it once
+ * the realm is locked, and only `lockRpIdForEnrolment` writes the lock.
  */
-export type UpdateRealm = Partial<Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId'>> & {
+export type UpdateRealm = Partial<
+  Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId' | 'webauthnRpIdLockedAt'>
+> & {
   updatedAt?: number;
 };
+
+/** What {@link RealmsRepository.lockRpIdForEnrolment} hands the enrolment (#553). */
+export interface RpIdEnrolmentLock {
+  /** The RP ID to store the passkey under: `resolveRpId` of the locked realm. */
+  readonly rpId: string;
+  /** When the realm's first enrolment locked the RP ID, in epoch ms. */
+  readonly lockedAt: number;
+  /** Whether this call took the lock, which only the realm's first enrolment does. */
+  readonly lockedNow: boolean;
+}
 
 /** A `realm_hosts` row (ADR-019 Decision 1, issue #470). */
 export type RealmHost = InferSelectModel<typeof realmHosts>;
@@ -113,19 +130,42 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
   findOperator(tx?: DbClient): Promise<Realm | undefined>;
 
   /**
-   * Lock the realm's passkey RP ID (ADR-019 Decision 2, issue #467): write it
-   * where the realm has none, and accept it where it is already this one. The
-   * first passkey enrolment calls this in the transaction that stores the
-   * credential, so a realm never holds a passkey under an RP ID it is not
-   * locked to. A changed RP ID would orphan every enrolled passkey, so once
-   * set the column never changes (trigger `realms_webauthn_rp_id_permanent`).
+   * Set the realm's passkey RP ID (ADR-019 Decision 2, issue #553): a parent
+   * domain of its primary host, or `null` for the primary host itself. Allowed
+   * only while no passkey has locked it; a value that names the RP ID the
+   * realm is locked to changes nothing.
+   *
+   * The caller checks the value with the RP ID rules of the WebAuthn provider
+   * first (`resolveRelyingPartyId`: the `allowParentDomainRpId` opt-in, the
+   * label boundary, the Public Suffix List). This method refuses only what no
+   * caller may store: a value that is not a host name, an IP literal, and a
+   * name that is not the primary host or a parent domain of it.
    *
    * @throws InvalidRealmHostError if `rpId` cannot be an RP ID (an IP literal,
    * a URL, a wildcard)
-   * @throws BadRequestError if the realm is locked to another RP ID
+   * @throws BadRequestError if the realm is locked to another RP ID, or `rpId`
+   * is neither the primary host nor a parent domain of it
    * @throws NotFoundError if the realm does not exist
    */
-  lockWebAuthnRpId(realmId: string, rpId: string, tx?: DbClient): Promise<Realm>;
+  setWebAuthnRpId(realmId: string, rpId: string | null, tx?: DbClient): Promise<Realm>;
+
+  /**
+   * Lock the realm's passkey RP ID for an enrolment, and return the RP ID to
+   * store the passkey under (ADR-019 Decision 2, issue #553).
+   *
+   * Sets `webauthn_rp_id_locked_at` where it is empty; a realm already locked
+   * keeps its lock time. The enrolment calls this in the transaction that
+   * stores the passkey, so a realm's first passkey and its lock commit
+   * together, or neither does. The first call holds the realm row until `tx`
+   * ends: a concurrent first enrolment waits, then finds the lock set and gets
+   * the same RP ID. From the lock on, the trigger `realms_webauthn_rp_id_locked`
+   * refuses every change of the RP ID, whoever writes it.
+   *
+   * @throws NotFoundError if the realm does not exist
+   * @throws RealmWithoutIssuerError if the RP ID is the primary host and the
+   * realm has no issuer yet
+   */
+  lockRpIdForEnrolment(tx: DbTransaction, realmId: string): Promise<RpIdEnrolmentLock>;
 
   /**
    * Take the realm provisioning lock until `tx` ends: a transaction-scoped
@@ -403,12 +443,12 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
       return realm;
     },
 
-    async lockWebAuthnRpId(realmId: string, rpId: string, tx?: DbClient): Promise<Realm> {
-      const normalised = normaliseRealmHost(rpId, 'primary');
+    async setWebAuthnRpId(realmId: string, rpId: string | null, tx?: DbClient): Promise<Realm> {
+      const normalised = rpId === null ? null : normaliseRealmHost(rpId, 'primary');
       const invoker = tx ?? defaultDb;
-      // A savepoint inside an outer transaction, as in assignIssuer: the row
-      // lock holds until the caller's transaction ends, so two first
-      // enrolments under different RP IDs cannot both win.
+      // A savepoint inside an outer transaction, as in assignIssuer. The row
+      // lock orders this against a first enrolment's lock: whichever comes
+      // second sees the other's write.
       return invoker.transaction(async (innerTx) => {
         const [current] = await innerTx
           .select()
@@ -420,18 +460,61 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
           throw new NotFoundError('Realm', realmId);
         }
         if (current.webauthnRpId === normalised) return current;
-        if (current.webauthnRpId !== null) {
+
+        const primaryHost = resolveRpId({ issuer: current.issuer, webauthnRpId: null });
+        if (normalised !== null && !rpIdCoversHost(normalised, primaryHost)) {
           throw new BadRequestError(
-            "Realm's passkeys are bound to a different RP ID; the RP ID is locked once a passkey is enrolled"
+            "Realm's passkey RP ID must be its primary host or a parent domain of it"
           );
         }
-        const [locked] = await innerTx
+        if (current.webauthnRpIdLockedAt !== null) {
+          // NULL and the primary host spelled out are the same RP ID.
+          if (resolveRpId({ ...current, webauthnRpId: normalised }) === resolveRpId(current)) {
+            return current;
+          }
+          throw new BadRequestError(
+            "Realm's passkey RP ID is locked by its first passkey enrolment; another RP ID would orphan every enrolled passkey"
+          );
+        }
+        const [updated] = await innerTx
           .update(realms)
           .set({ webauthnRpId: normalised, updatedAt: Date.now() })
           .where(eq(realms.id, realmId))
           .returning();
-        return locked;
+        return updated;
       });
+    },
+
+    async lockRpIdForEnrolment(tx: DbTransaction, realmId: string): Promise<RpIdEnrolmentLock> {
+      // The first enrolment's UPDATE holds the row until `tx` ends. A
+      // concurrent first enrolment waits on it, then re-reads the committed row
+      // (READ COMMITTED), matches nothing, and reads the lock below. A realm
+      // already locked matches nothing at once and takes no row lock, so later
+      // enrolments do not queue on the realm row.
+      const now = Date.now();
+      const [locked] = await tx
+        .update(realms)
+        .set({ webauthnRpIdLockedAt: now, updatedAt: now })
+        .where(and(eq(realms.id, realmId), isNull(realms.webauthnRpIdLockedAt)))
+        .returning();
+      if (locked) {
+        return { rpId: resolveRpId(locked), lockedAt: now, lockedNow: true };
+      }
+
+      const [current] = await tx.select().from(realms).where(eq(realms.id, realmId)).limit(1);
+      if (!current) {
+        throw new NotFoundError('Realm', realmId);
+      }
+      if (current.webauthnRpIdLockedAt === null) {
+        // Only a snapshot older than the other enrolment's commit gets here,
+        // which READ COMMITTED does not take.
+        throw new Error('Realm passkey RP ID lock was not visible after a lost race');
+      }
+      return {
+        rpId: resolveRpId(current),
+        lockedAt: current.webauthnRpIdLockedAt,
+        lockedNow: false,
+      };
     },
 
     async lockProvisioning(tx: DbTransaction): Promise<void> {

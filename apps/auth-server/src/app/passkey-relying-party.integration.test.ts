@@ -1,6 +1,7 @@
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { requireDockerOrSkip, truncateDomainTablesStatement } from '@qauth-labs/shared-testing';
+import { resolveRpId } from '@qauth-labs/shared-validation';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -18,14 +19,16 @@ import { defaultRealmPlugin, type DefaultRealmPluginOptions } from './plugins/de
 
 /**
  * THE PASSKEY RELYING PARTY AGAINST A REAL POSTGRES (ADR-017 Decision 14,
- * ADR-019 Decision 2, issue #467).
+ * ADR-019 Decision 2, issues #467 and #553).
  *
  * What only the database and a booted server can show:
  *
  * - a credential id exists once per realm: a second enrolment of it is
  *   refused, and the refusal leaves nothing behind;
- * - the realm's first enrolment locks its RP ID, and a boot whose
- *   `WEBAUTHN_RP_ID` differs from the lock refuses to start, saying why;
+ * - the boot stores `WEBAUTHN_RP_ID` on the realm row while no passkey has
+ *   locked it; the realm's first enrolment locks it, concurrent first
+ *   enrolments lock it once, and a boot whose `WEBAUTHN_RP_ID` differs from
+ *   the lock refuses to start, saying why;
  * - the association files are served only while the RP ID is the realm host.
  *
  * `WEBAUTHN_ENABLED` stays off throughout: it is refused at boot until F2b is
@@ -159,6 +162,12 @@ describe('the passkey relying party on a real Postgres', () => {
     );
   }
 
+  async function defaultRealm() {
+    const realm = await database().repositories.realms.findByName('master');
+    if (!realm) throw new Error('no default realm');
+    return realm;
+  }
+
   async function passkeyCount(realmId: string): Promise<number> {
     const { rows } = await database().dbPool.query<{ count: string }>(
       `SELECT count(*) FROM user_credentials WHERE realm_id = $1 AND provider_type = 'webauthn'`,
@@ -179,9 +188,40 @@ describe('the passkey relying party on a real Postgres', () => {
         externalSub: 'Y3JlZGVudGlhbC0x',
         credentialData: expect.objectContaining({ rp_id: REALM_HOST, sign_count: 0 }),
       });
-      expect(await database().repositories.realms.findById(realmId)).toMatchObject({
-        webauthnRpId: REALM_HOST,
-      });
+      const realm = await defaultRealm();
+      expect(realm).toMatchObject({ webauthnRpId: null });
+      expect(realm.webauthnRpIdLockedAt).toEqual(expect.any(Number));
+      expect(resolveRpId(realm)).toBe(REALM_HOST);
+    });
+
+    it('locks once when two first enrolments run together, and stores both passkeys', async () => {
+      await bootNode();
+      const realmId = await defaultRealmId();
+      const [ada, grace] = [await newUser(realmId), await newUser(realmId)];
+
+      const results = await Promise.allSettled([
+        enrol(realmId, ada, 'Y29uY3VycmVudC1h'),
+        enrol(realmId, grace, 'Y29uY3VycmVudC1i'),
+      ]);
+
+      expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      expect(await passkeyCount(realmId)).toBe(2);
+      // The row-level choreography of the race is in infra-db's
+      // webauthn-relying-party.integration.test.ts; here, the helper end to end.
+      const realm = await defaultRealm();
+      expect(realm.webauthnRpIdLockedAt).toEqual(expect.any(Number));
+      expect(resolveRpId(realm)).toBe(REALM_HOST);
+    });
+
+    it("refuses a first passkey created under another RP ID than the realm's, and leaves the realm unlocked", async () => {
+      await bootNode();
+      const realmId = await defaultRealmId();
+
+      await expect(
+        enrol(realmId, await newUser(realmId), 'b3RoZXItcnBpZA', 'example.com')
+      ).rejects.toBeInstanceOf(BadRequestError);
+      expect(await passkeyCount(realmId)).toBe(0);
+      expect((await defaultRealm()).webauthnRpIdLockedAt).toBeNull();
     });
 
     it('refuses a duplicate credential id in the realm, for another account too, and leaves nothing behind', async () => {
@@ -214,14 +254,38 @@ describe('the passkey relying party on a real Postgres', () => {
   });
 
   describe('the RP ID lock at boot', () => {
-    it('boots with any valid WEBAUTHN_RP_ID while the realm has no passkey', async () => {
+    it('stores any valid WEBAUTHN_RP_ID on the realm while it has no passkey', async () => {
       await bootNode();
       await expect(
         bootNode({ passkeys: { rpId: 'example.com', allowParentDomainRpId: true } })
       ).resolves.toBeDefined();
-      expect(await database().repositories.realms.findByName('master')).toMatchObject({
-        webauthnRpId: null,
+      expect(await defaultRealm()).toMatchObject({
+        webauthnRpId: 'example.com',
+        webauthnRpIdLockedAt: null,
       });
+
+      await expect(bootNode()).resolves.toBeDefined();
+      expect(await defaultRealm()).toMatchObject({ webauthnRpId: null });
+    });
+
+    it('locks a parent-domain RP ID at the first enrolment and keeps reporting it', async () => {
+      await bootNode({ passkeys: { rpId: 'example.com', allowParentDomainRpId: true } });
+      const realmId = await defaultRealmId();
+
+      await enrol(realmId, await newUser(realmId), 'cGFyZW50LWRvbWFpbg', 'example.com');
+
+      const realm = await defaultRealm();
+      expect(realm.webauthnRpIdLockedAt).toEqual(expect.any(Number));
+      expect(resolveRpId(realm)).toBe('example.com');
+      await expect(bootNode()).rejects.toThrow(
+        'The default realm "master" has passkeys bound to the RP ID "example.com", but WEBAUTHN_RP_ID gives "auth.example.com".'
+      );
+      await expect(
+        database().dbPool.query(`UPDATE realms SET webauthn_rp_id = NULL WHERE id = $1`, [realmId])
+      ).rejects.toMatchObject({ constraint: 'realms_webauthn_rp_id_locked' });
+      await expect(
+        bootNode({ passkeys: { rpId: 'example.com', allowParentDomainRpId: true } })
+      ).resolves.toBeDefined();
     });
 
     it('refuses to boot when WEBAUTHN_RP_ID changes after the first enrolment, explaining why', async () => {

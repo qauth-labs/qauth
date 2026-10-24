@@ -1,25 +1,40 @@
 /**
  * Real-Postgres integration tests for the passkey relying-party columns
- * (migration 0028, issue #467).
+ * (migrations 0028 and 0034, issues #467 and #553).
  *
- * What only a database can show: the RP ID lock written once and never
- * changed (`realms_webauthn_rp_id_permanent`), its stored form (CHECK
- * `realms_webauthn_rp_id_normalised`), two first enrolments racing under
- * different RP IDs, the operator-set client origins column, and a credential
- * id that exists once per realm (`idx_user_credentials_realm_provider_sub_unique`).
+ * What only a database can show: the RP ID setting and its lock
+ * (`realms.webauthn_rp_id`, `realms.webauthn_rp_id_locked_at`), the lock taken
+ * once by the first enrolment and then refused to every writer
+ * (`realms_webauthn_rp_id_locked`), two first enrolments racing on one realm,
+ * the stored form of an RP ID (CHECK `realms_webauthn_rp_id_normalised`), the
+ * operator-set client origins column, and a credential id that exists once
+ * per realm (`idx_user_credentials_realm_provider_sub_unique`).
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import { InvalidRealmHostError } from '@qauth-labs/shared-validation';
+import { InvalidRealmHostError, resolveRpId } from '@qauth-labs/shared-validation';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import type { UserCredentialsRepository } from '../../types';
+import type { DbTransaction, UserCredentialsRepository } from '../../types';
 import { users } from '../schema';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
-import { createRealmsRepository, type RealmsRepository } from './realms.repository';
+import {
+  createRealmsRepository,
+  type RealmsRepository,
+  type RpIdEnrolmentLock,
+} from './realms.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
+
+/** A promise and the function that settles it. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 describe('passkey relying-party columns (real Postgres)', () => {
   let ctx: IntegrationDb | undefined;
@@ -52,9 +67,10 @@ describe('passkey relying-party columns (real Postgres)', () => {
     return ctx.database;
   }
 
-  async function seedRealm(name = 'master', host = 'auth.example.com') {
-    return (await realmsRepo.createWithPrimaryHost({ name, issuer: `https://${host}` }, host))
-      .realm;
+  async function seedRealm(name = 'master', host = 'auth.example.com', port = '') {
+    return (
+      await realmsRepo.createWithPrimaryHost({ name, issuer: `https://${host}${port}` }, host)
+    ).realm;
   }
 
   async function seedUser(realmId: string) {
@@ -62,68 +78,73 @@ describe('passkey relying-party columns (real Postgres)', () => {
     return user;
   }
 
-  describe('realms.webauthn_rp_id, the RP ID lock', () => {
-    it('is NULL on a realm with no passkey', async () => {
-      expect((await seedRealm()).webauthnRpId).toBeNull();
+  /** Store a passkey as the enrolment does: the lock, then the credential, in one transaction. */
+  async function enrol(
+    realmId: string,
+    externalSub: string,
+    tx: DbTransaction
+  ): Promise<RpIdEnrolmentLock> {
+    const lock = await realmsRepo.lockRpIdForEnrolment(tx, realmId);
+    const [user] = await tx.insert(users).values({ realmId }).returning();
+    await credentials.create(
+      {
+        userId: user.id,
+        realmId,
+        providerType: 'webauthn',
+        externalSub,
+        credentialData: { rp_id: lock.rpId },
+      },
+      tx
+    );
+    return lock;
+  }
+
+  async function storedLock(realmId: string) {
+    const { rows } = await database().pool.query<{
+      webauthn_rp_id: string | null;
+      webauthn_rp_id_locked_at: string | null;
+    }>(`SELECT webauthn_rp_id, webauthn_rp_id_locked_at FROM realms WHERE id = $1`, [realmId]);
+    return rows[0];
+  }
+
+  describe('realms.webauthn_rp_id, the RP ID setting', () => {
+    it('is NULL, the realm host, and unlocked on a new realm', async () => {
+      const realm = await seedRealm();
+      expect(realm).toMatchObject({ webauthnRpId: null, webauthnRpIdLockedAt: null });
+      expect(resolveRpId(realm)).toBe('auth.example.com');
     });
 
-    it('is written by the first lock and accepted again by the same RP ID', async () => {
+    it('takes a parent domain, normalised, and goes back to the realm host while unlocked', async () => {
       const realm = await seedRealm();
 
-      const locked = await realmsRepo.lockWebAuthnRpId(realm.id, 'auth.example.com');
-      expect(locked.webauthnRpId).toBe('auth.example.com');
-      await expect(
-        realmsRepo.lockWebAuthnRpId(realm.id, 'AUTH.example.com.')
-      ).resolves.toMatchObject({ webauthnRpId: 'auth.example.com' });
-    });
-
-    it('refuses another RP ID once locked, through the repository and by hand', async () => {
-      const realm = await seedRealm();
-      await realmsRepo.lockWebAuthnRpId(realm.id, 'auth.example.com');
-
-      await expect(realmsRepo.lockWebAuthnRpId(realm.id, 'example.com')).rejects.toBeInstanceOf(
-        BadRequestError
-      );
-      await expect(
-        database().pool.query(`UPDATE realms SET webauthn_rp_id = 'example.com' WHERE id = $1`, [
-          realm.id,
-        ])
-      ).rejects.toMatchObject({ code: '23514', constraint: 'realms_webauthn_rp_id_permanent' });
-      await expect(
-        database().pool.query(`UPDATE realms SET webauthn_rp_id = NULL WHERE id = $1`, [realm.id])
-      ).rejects.toMatchObject({ constraint: 'realms_webauthn_rp_id_permanent' });
-      expect((await realmsRepo.findById(realm.id))?.webauthnRpId).toBe('auth.example.com');
-    });
-
-    it('leaves other columns of a locked realm writable', async () => {
-      const realm = await seedRealm();
-      await realmsRepo.lockWebAuthnRpId(realm.id, 'auth.example.com');
-
-      await expect(realmsRepo.update(realm.id, { enabled: false })).resolves.toMatchObject({
-        enabled: false,
-        webauthnRpId: 'auth.example.com',
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, 'Example.COM.')).resolves.toMatchObject({
+        webauthnRpId: 'example.com',
+      });
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, null)).resolves.toMatchObject({
+        webauthnRpId: null,
+      });
+      expect(await storedLock(realm.id)).toEqual({
+        webauthn_rp_id: null,
+        webauthn_rp_id_locked_at: null,
       });
     });
 
-    it('lets one of two racing first enrolments win, under the realm row lock', async () => {
+    it('refuses a name that is neither the primary host nor a parent of it, and an IP', async () => {
       const realm = await seedRealm();
 
-      const results = await Promise.allSettled([
-        realmsRepo.lockWebAuthnRpId(realm.id, 'auth.example.com'),
-        realmsRepo.lockWebAuthnRpId(realm.id, 'example.com'),
-      ]);
-
-      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-      const stored = (await realmsRepo.findById(realm.id))?.webauthnRpId;
-      expect(['auth.example.com', 'example.com']).toContain(stored);
-    });
-
-    it('refuses what cannot be an RP ID, in the repository and in the CHECK', async () => {
-      const realm = await seedRealm();
-
-      await expect(realmsRepo.lockWebAuthnRpId(realm.id, '192.0.2.1')).rejects.toBeInstanceOf(
+      for (const rpId of ['evil.com', 'notexample.com', 'login.example.com']) {
+        await expect(realmsRepo.setWebAuthnRpId(realm.id, rpId)).rejects.toBeInstanceOf(
+          BadRequestError
+        );
+      }
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, '192.0.2.1')).rejects.toBeInstanceOf(
         InvalidRealmHostError
       );
+      expect((await storedLock(realm.id)).webauthn_rp_id).toBeNull();
+    });
+
+    it('refuses what cannot be an RP ID in the CHECK, for a writer that skips the repository', async () => {
+      const realm = await seedRealm();
       for (const value of ['Auth.Example.com', '192.0.2.1', '[::1]', 'auth.example.com:443']) {
         await expect(
           database().pool.query(`UPDATE realms SET webauthn_rp_id = $2 WHERE id = $1`, [
@@ -132,6 +153,143 @@ describe('passkey relying-party columns (real Postgres)', () => {
           ])
         ).rejects.toMatchObject({ constraint: 'realms_webauthn_rp_id_normalised' });
       }
+    });
+  });
+
+  describe('lockRpIdForEnrolment, the RP ID lock', () => {
+    it('locks on the first enrolment, returns the realm host without the issuer port, and keeps the first lock time', async () => {
+      const realm = await seedRealm('master', 'auth.example.com', ':8443');
+
+      const first = await database().db.transaction((tx) => enrol(realm.id, 'Zmlyc3Q', tx));
+      expect(first).toMatchObject({ rpId: 'auth.example.com', lockedNow: true });
+      expect(await storedLock(realm.id)).toEqual({
+        webauthn_rp_id: null,
+        webauthn_rp_id_locked_at: String(first.lockedAt),
+      });
+
+      const second = await database().db.transaction((tx) => enrol(realm.id, 'c2Vjb25k', tx));
+      expect(second).toEqual({
+        rpId: 'auth.example.com',
+        lockedAt: first.lockedAt,
+        lockedNow: false,
+      });
+    });
+
+    it('rolls back with the enrolment that took it, leaving the realm unlocked', async () => {
+      const realm = await seedRealm();
+
+      await expect(
+        database().db.transaction(async (tx) => {
+          await realmsRepo.lockRpIdForEnrolment(tx, realm.id);
+          throw new Error('the passkey could not be stored');
+        })
+      ).rejects.toThrow('the passkey could not be stored');
+      expect((await storedLock(realm.id)).webauthn_rp_id_locked_at).toBeNull();
+    });
+
+    it('makes a later change of the RP ID fail at the database, whoever writes it', async () => {
+      const realm = await seedRealm();
+      await database().db.transaction((tx) => enrol(realm.id, 'bG9ja2Vk', tx));
+
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, 'example.com')).rejects.toBeInstanceOf(
+        BadRequestError
+      );
+      for (const statement of [
+        `UPDATE realms SET webauthn_rp_id = 'example.com' WHERE id = $1`,
+        // NULL and the host spelled out are one RP ID, but the stored value is locked as is.
+        `UPDATE realms SET webauthn_rp_id = 'auth.example.com' WHERE id = $1`,
+        `UPDATE realms SET webauthn_rp_id_locked_at = NULL WHERE id = $1`,
+        `UPDATE realms SET webauthn_rp_id_locked_at = webauthn_rp_id_locked_at + 1 WHERE id = $1`,
+        `UPDATE realms SET webauthn_rp_id_locked_at = NULL, webauthn_rp_id = 'example.com' WHERE id = $1`,
+      ]) {
+        await expect(database().pool.query(statement, [realm.id])).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'realms_webauthn_rp_id_locked',
+        });
+      }
+      expect(await realmsRepo.findById(realm.id)).toMatchObject({ webauthnRpId: null });
+    });
+
+    it('accepts a setting that names the locked RP ID again, and changes nothing', async () => {
+      const realm = await seedRealm();
+      await database().db.transaction((tx) => enrol(realm.id, 'c2FtZQ', tx));
+      const before = await storedLock(realm.id);
+
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, null)).resolves.toMatchObject({
+        webauthnRpId: null,
+      });
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, 'AUTH.example.com')).resolves.toMatchObject(
+        { webauthnRpId: null }
+      );
+      expect(await storedLock(realm.id)).toEqual(before);
+    });
+
+    it('leaves the other columns of a locked realm writable', async () => {
+      const realm = await seedRealm();
+      await database().db.transaction((tx) => enrol(realm.id, 'b3RoZXI', tx));
+
+      await expect(realmsRepo.update(realm.id, { enabled: false })).resolves.toMatchObject({
+        enabled: false,
+        webauthnRpId: null,
+      });
+    });
+
+    it('reports a parent-domain RP ID in resolveRpId after the lock', async () => {
+      const realm = await seedRealm();
+      await realmsRepo.setWebAuthnRpId(realm.id, 'example.com');
+
+      const lock = await database().db.transaction((tx) => enrol(realm.id, 'cGFyZW50', tx));
+      expect(lock).toMatchObject({ rpId: 'example.com', lockedNow: true });
+
+      const locked = await realmsRepo.findById(realm.id);
+      if (!locked) throw new Error('realm gone');
+      expect(locked.webauthnRpIdLockedAt).toBe(lock.lockedAt);
+      expect(resolveRpId(locked)).toBe('example.com');
+      await expect(realmsRepo.setWebAuthnRpId(realm.id, null)).rejects.toBeInstanceOf(
+        BadRequestError
+      );
+    });
+
+    it('locks once when two first enrolments race, and both get the same RP ID', async () => {
+      const realm = await seedRealm();
+      await realmsRepo.setWebAuthnRpId(realm.id, 'example.com');
+      const firstLocked = deferred();
+      const releaseFirst = deferred();
+
+      const first = database().db.transaction(async (tx) => {
+        const lock = await enrol(realm.id, 'cmFjZS1h', tx);
+        firstLocked.resolve();
+        await releaseFirst.promise;
+        return lock;
+      });
+      await firstLocked.promise;
+      const second = database().db.transaction((tx) => enrol(realm.id, 'cmFjZS1i', tx));
+
+      // The second enrolment is queued on the realm row the first one holds.
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const { rows } = await database().pool.query<{ waiting: string }>(
+          `SELECT count(*) AS waiting FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'`
+        );
+        if (Number(rows[0].waiting) > 0) break;
+        if (Date.now() > deadline) throw new Error('the second enrolment never waited');
+        await new Promise((settle) => setTimeout(settle, 20));
+      }
+      releaseFirst.resolve();
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(a).toMatchObject({ rpId: 'example.com', lockedNow: true });
+      expect(b).toEqual({ rpId: 'example.com', lockedAt: a.lockedAt, lockedNow: false });
+      expect(await storedLock(realm.id)).toEqual({
+        webauthn_rp_id: 'example.com',
+        webauthn_rp_id_locked_at: String(a.lockedAt),
+      });
+      const { rows } = await database().pool.query<{ count: string }>(
+        `SELECT count(*) FROM user_credentials WHERE realm_id = $1 AND provider_type = 'webauthn'`,
+        [realm.id]
+      );
+      expect(Number(rows[0].count)).toBe(2);
     });
   });
 
