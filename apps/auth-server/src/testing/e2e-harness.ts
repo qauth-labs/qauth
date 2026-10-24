@@ -120,6 +120,9 @@ export const REQUIRED_TEST_ENVIRONMENT: Record<string, string> = Object.freeze({
   NODE_ENV: 'test',
   JWT_ISSUER: 'https://auth.example.com',
   SESSION_COOKIE_SECRET: 'e2e-session-cookie-secret-of-at-least-32-characters',
+  // The key-encryption key (#462). The key boot step (#485) refuses to import
+  // the key variables under the published development KEK.
+  KEK: Buffer.alloc(32, 0xe2).toString('base64'),
   EMAIL_PROVIDER: 'mock',
   EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
   EMAIL_BASE_URL: 'https://auth.example.com',
@@ -178,7 +181,9 @@ export async function bootAuthServer(
       key.startsWith('OID4VP_') ||
       key.startsWith('WALLET_') ||
       key.startsWith('ACR_') ||
-      key.startsWith('WEBAUTHN_')
+      key.startsWith('WEBAUTHN_') ||
+      key === 'KEK' ||
+      key.startsWith('KEK_')
     ) {
       delete process.env[key];
     }
