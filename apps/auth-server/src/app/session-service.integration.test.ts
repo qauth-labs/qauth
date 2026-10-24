@@ -299,8 +299,9 @@ describe('the session service on a real Postgres and Redis', () => {
     expect(await b.sessionService.get({ realmId, sid })).toBeNull();
     expect(await a.redis.exists(sessionCacheKey(realmId, sid))).toBe(0);
     const tombstoneTtl = await a.redis.pttl(`${sessionCacheKey(realmId, sid)}:revoked`);
-    expect(tombstoneTtl).toBeGreaterThan(0);
-    expect(tombstoneTtl).toBeLessThanOrEqual(MINUTE);
+    // Twice the cache time.
+    expect(tombstoneTtl).toBeGreaterThan(MINUTE);
+    expect(tombstoneTtl).toBeLessThanOrEqual(2 * MINUTE);
 
     // C's own cache never saw the tombstone; its entry lapses within its
     // cache time (1 s), and Postgres then says the session ended.

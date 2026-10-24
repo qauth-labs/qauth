@@ -177,6 +177,13 @@ describe('create', () => {
     expect(store.calls.inserts).toBe(0);
   });
 
+  it('refuses a malformed realm id before Postgres sees it', async () => {
+    await expect(serviceWith().create(signIn({ realmId: 'default' }))).rejects.toBeInstanceOf(
+      UnknownSessionRealmError
+    );
+    expect(store.calls.realmReads).toBe(0);
+  });
+
   it('fails when Postgres is down, and caches nothing', async () => {
     store.down = true;
     await expect(serviceWith().create(signIn())).rejects.toThrow('store down');
@@ -261,6 +268,18 @@ describe('get', () => {
     expect(await service.get({ realmId: REALM_A, sid })).not.toBeNull();
     clock.advance(1 * SECOND);
     expect(await service.get({ realmId: REALM_A, sid })).toBeNull();
+  });
+
+  it('does not serve an entry that claims more than the cache time from now', async () => {
+    const service = serviceWith();
+    const { sid } = await service.create(signIn());
+    const entry = cache.entry(REALM_A, sid);
+    if (entry === undefined) throw new Error('no entry');
+    await cache.write({ ...entry, freshUntil: clock.now() + 2 * MINUTE }, 2 * MINUTE);
+
+    expect(await service.get({ realmId: REALM_A, sid })).toMatchObject({ sid });
+    expect(counted.counts).toMatchObject({ 'cache:miss': 1, 'store:ok': 1 });
+    expect(cache.entry(REALM_A, sid)?.freshUntil).toBe(clock.now() + MINUTE);
   });
 
   it('answers absent for a revoked session', async () => {
@@ -569,6 +588,18 @@ describe('with the cache down', () => {
     expect(counted.counts['cache:miss']).toBeUndefined();
   });
 
+  it('does not ask a cache that failed the read to store the result', async () => {
+    const service = serviceWith();
+    const { sid } = await service.create(signIn());
+    const writes = cache.calls.writes;
+    cache.read = async () => {
+      throw new Error('cache down');
+    };
+
+    expect(await service.get({ realmId: REALM_A, sid })).toMatchObject({ sid });
+    expect(cache.calls.writes).toBe(writes);
+  });
+
   it('works after the cache lost its data', async () => {
     const service = serviceWith();
     const { sid } = await service.create(signIn());
@@ -716,8 +747,10 @@ describe('revoke', () => {
     expect(await service.get({ realmId: REALM_A, sid })).toBeNull();
     expect(counted.counts['cache:revoked']).toBe(1);
 
-    // The tombstone lasts the cache time.
-    clock.advance(MINUTE);
+    // The tombstone lasts twice the cache time.
+    clock.advance(2 * MINUTE - 1);
+    expect(await cache.read(REALM_A, sid)).toEqual({ kind: 'revoked' });
+    clock.advance(1);
     expect(await cache.read(REALM_A, sid)).toEqual({ kind: 'empty' });
     expect(await service.get({ realmId: REALM_A, sid })).toBeNull();
   });

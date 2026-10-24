@@ -61,9 +61,10 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
   miss, or a last-seen write that falls due), the session is absent; a cached session is served for
   no longer than the cache time. `get` never throws for either; `create` and `revoke` throw when
   Postgres cannot store the change.
-- **Revoke.** Postgres first, then a tombstone is written over the cache entry for the cache time. A
-  read that sees the tombstone answers "absent", so a fill that raced the revocation cannot bring the
-  session back.
+- **Revoke.** Postgres first, then a tombstone is written over the cache entry for twice the cache
+  time. A read that sees the tombstone answers "absent", so a fill that raced the revocation cannot
+  bring the session back, even one that reached Redis late. Reads on the node that were already
+  waiting on Postgres do not answer the reads that start after the revocation.
 - **Not stored.** The CSRF values and the consent scopes are volatile per-flow values. They are not
   part of a session here and never reach Postgres; the session record keeps only its own columns,
   and the cache entry leaves out the address and the user agent too.
