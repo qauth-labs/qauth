@@ -2,10 +2,23 @@ import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-la
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { emitUserEvent } from '../../helpers/user-events';
 import errorHandler from '../../plugins/error-handler';
 import userinfoRoute from './userinfo';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
+
+beforeEach(() => {
+  emitUserEventMock.mockClear();
+});
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
@@ -67,9 +80,6 @@ function createFastifyStub() {
       userAttributes: {
         findVerifiedByUserIdAndKey: Mock;
       };
-      auditLogs: {
-        create: Mock;
-      };
     };
   } = {
     withTypeProvider: () => {
@@ -120,9 +130,6 @@ function createFastifyStub() {
           },
         ]) as unknown as Mock,
       },
-      auditLogs: {
-        create: vi.fn() as unknown as Mock,
-      },
     },
   } as unknown as FastifyInstance & {
     withTypeProvider: () => RouteRegistrar;
@@ -133,9 +140,6 @@ function createFastifyStub() {
       };
       userAttributes: {
         findVerifiedByUserIdAndKey: Mock;
-      };
-      auditLogs: {
-        create: Mock;
       };
     };
   };
@@ -200,17 +204,12 @@ describe('GET /userinfo route', () => {
       email_verified: true,
     });
 
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
-    expect(auditLogMock).toHaveBeenCalledWith({
-      userId: 'user-1',
-      oauthClientId: null,
-      event: 'oauth.userinfo.success',
-      eventType: 'token',
-      success: true,
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: {},
-    });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:userinfo.served:v1-rc.0',
+      {},
+      expect.objectContaining({ userId: 'user-1', clientId: 'client-1', actor: 'client' })
+    );
   });
 
   it('returns the name claim derived from first/last name', async () => {
@@ -410,22 +409,13 @@ describe('GET /userinfo route', () => {
       new JWTInvalidError('Access token subject is not a user')
     );
 
-    // `audit_logs.user_id` references `users`: an unconfirmed subject goes to
-    // metadata, or the insert would fail and turn the refusal into a 500.
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
-    expect(auditLogMock).toHaveBeenCalledWith({
-      userId: null,
-      oauthClientId: null,
-      event: 'oauth.userinfo.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: {
-        error: 'Access token subject is not a user',
-        tokenSub: 'missing-user',
-      },
-    });
+    // An unconfirmed subject is not the event's subject: it names no user.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'subject_not_a_user' },
+      expect.objectContaining({ userId: null })
+    );
   });
 
   it('refuses the token of a user disabled since it was minted (401, no claims)', async () => {
@@ -455,8 +445,11 @@ describe('GET /userinfo route', () => {
 
     await expect(handler(request, reply)).rejects.toThrow(JWTInvalidError);
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-7', event: 'oauth.userinfo.failure' })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'user_disabled' },
+      expect.objectContaining({ userId: 'user-7' })
     );
   });
 
@@ -538,19 +531,12 @@ describe('GET /userinfo route', () => {
 
     await expect(handler(request, reply)).rejects.toThrow(JWTInvalidError);
 
-    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
-    expect(auditLogMock).toHaveBeenCalledWith({
-      userId: null,
-      oauthClientId: null,
-      event: 'oauth.userinfo.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: '127.0.0.1',
-      userAgent: 'vitest',
-      metadata: {
-        error: 'Missing JWT payload',
-      },
-    });
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'missing_token' },
+      expect.objectContaining({ userId: null })
+    );
   });
 
   it('returns 401 for invalid or malformed access token signature', async () => {
@@ -886,16 +872,11 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
   function expectRefusedBeforeAnyLookup(fastify: FastifyInstance) {
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: null,
-        event: 'oauth.userinfo.failure',
-        success: false,
-        metadata: {
-          error: 'Access token audience does not include the userinfo endpoint',
-          tokenSub: 'user-1',
-        },
-      })
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'audience_mismatch' },
+      expect.objectContaining({ userId: null })
     );
   }
 
@@ -1038,14 +1019,13 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
   function expectRefusedAsNoUser(fastify: FastifyInstance, tokenSub: string) {
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledTimes(1);
-    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: null,
-        event: 'oauth.userinfo.failure',
-        success: false,
-        metadata: { error: 'Access token subject is not a user', tokenSub },
-      })
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'subject_not_a_user' },
+      // The machine token's subject is its own client: recorded as the client.
+      expect.objectContaining({ userId: null, clientId: tokenSub })
     );
   }
 

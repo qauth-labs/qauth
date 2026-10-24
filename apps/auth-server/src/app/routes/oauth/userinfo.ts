@@ -9,6 +9,7 @@ import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
 /**
@@ -79,26 +80,33 @@ function hasUserSubject(payload: { sub: string; clientId?: string }): boolean {
 async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest) {
   const startTime = Date.now();
   let userId: string | null = null;
+  let realmId: string | null = null;
 
   try {
     const payload = request.jwtPayload;
 
     if (!payload || !payload.sub) {
-      throw new JWTInvalidError('Missing JWT payload');
+      throw withEventReason(new JWTInvalidError('Missing JWT payload'), 'missing_token');
     }
 
     // Audience before anything else: a token for another resource server is
     // refused (401, RFC 6750 §3.1 `invalid_token`) without a user lookup, so
     // its holder learns nothing about the subject.
     if (!isAddressedToUserinfo(payload, resolveUserinfoEndpoint(fastify.jwtUtils.getIssuer()))) {
-      throw new JWTInvalidError('Access token audience does not include the userinfo endpoint');
+      throw withEventReason(
+        new JWTInvalidError('Access token audience does not include the userinfo endpoint'),
+        'audience_mismatch'
+      );
     }
 
     // A token with no end-user has no claims to return. Refused before the
     // user lookup, so a `client_id` is never read as a `users.id` (#754; OIDC
     // Core §5.3.3, RFC 6750 §3.1 `invalid_token`).
     if (!hasUserSubject(payload)) {
-      throw new JWTInvalidError('Access token subject is not a user');
+      throw withEventReason(
+        new JWTInvalidError('Access token subject is not a user'),
+        'subject_not_a_user'
+      );
     }
 
     const user = await fastify.repositories.users.findById(payload.sub);
@@ -107,16 +115,20 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // the same refusal: the token is not valid for this endpoint any more.
     // RFC 6750 §3.1 defines no "not found" for a protected resource.
     if (!user) {
-      throw new JWTInvalidError('Access token subject is not a user');
+      throw withEventReason(
+        new JWTInvalidError('Access token subject is not a user'),
+        'subject_not_a_user'
+      );
     }
 
     userId = user.id;
+    realmId = user.realmId;
 
     // A token outlives the login that minted it; a user disabled since gets
     // no claims, as introspection reports the token inactive and every grant
     // refuses to mint for the user (401, RFC 6750 §3.1 `invalid_token`).
     if (!user.enabled) {
-      throw new JWTInvalidError('Token subject is disabled');
+      throw withEventReason(new JWTInvalidError('Token subject is disabled'), 'user_disabled');
     }
 
     // OIDC Core §5.4: userinfo claims are gated by the scopes the access
@@ -149,16 +161,18 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // same helper (#755), so the two release the same profile claims.
     Object.assign(responseBody, resolveProfileClaimsForScopes(user, grantedScopes));
 
-    await fastify.repositories.auditLogs.create({
-      userId: user.id,
-      oauthClientId: null,
-      event: 'oauth.userinfo.success',
-      eventType: 'token',
-      success: true,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {},
-    });
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:userinfo.served:v1-rc.0',
+      {},
+      {
+        realmId: user.realmId,
+        userId: user.id,
+        clientId: payload.clientId,
+        actor: 'client',
+        act: payload.act,
+      }
+    );
 
     await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.USERINFO);
 
@@ -167,24 +181,22 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // aligned with the route's response schema across both GET and POST.
     return responseBody;
   } catch (error) {
-    // `audit_logs.user_id` is a uuid referencing `users`: only a subject the
-    // lookup above confirmed goes there. Any other token subject — a
-    // `client_id`, a deleted user's id — would fail the insert and turn the
-    // refusal into a 500, so it is kept in `metadata.tokenSub` instead.
-    const tokenSub = request.jwtPayload?.sub;
-    await fastify.repositories.auditLogs.create({
-      userId,
-      oauthClientId: null,
-      event: 'oauth.userinfo.failure',
-      eventType: 'token',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        ...(userId === null && tokenSub ? { tokenSub } : {}),
-      },
-    });
+    // Only a subject the lookup above confirmed is the event's subject. Any
+    // other token subject (a `client_id`, a deleted user's id) names no user,
+    // so the event has none.
+    const payload = request.jwtPayload;
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      failureData(error),
+      {
+        realmId,
+        userId,
+        clientId: payload?.clientId,
+        actor: 'client',
+        act: payload?.act,
+      }
+    );
 
     await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.USERINFO);
 
