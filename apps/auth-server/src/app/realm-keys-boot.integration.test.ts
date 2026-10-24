@@ -195,7 +195,7 @@ describe('key import at first boot, through the real auth-server', () => {
     try {
       expect(await storedKeys(second)).toEqual(before);
       const warned = lines
-        .filter((line) => line.msg.includes('is no longer read'))
+        .filter((line) => line.msg.includes("is in the realm's key store"))
         .map((line) => line.variable);
       expect(warned).toEqual([
         'JWT_PRIVATE_KEY',

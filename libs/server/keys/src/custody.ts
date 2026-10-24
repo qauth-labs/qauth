@@ -95,8 +95,10 @@ export {
   bootRealmKeys,
   type BootRealmKeysOptions,
   type EnvironmentKeyOutcome,
+  type InactiveKeyOutcome,
   type RealmKeyBootStore,
   type RealmKeysBootResult,
+  type ReplacedKeyOutcome,
   type StoredPublicKey,
 } from './lib/realm-key-boot';
 export type {

@@ -79,6 +79,8 @@ export interface StoredKeySummary {
   readonly kid: string;
   readonly algorithm: string;
   readonly status: StoredKeyStatus;
+  /** The hybrid pair the key belongs to (ADR-005); `null` for a key outside one. */
+  readonly pairId: string | null;
   /** Epoch ms; `null` for a purpose that is never published. */
   readonly publishAt: number | null;
   /** Epoch ms. */

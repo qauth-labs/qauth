@@ -12,10 +12,15 @@ import {
 } from './environment-keys';
 import type { KekProvider } from './kek-provider';
 import { computeKekRef, DEV_KEK_DEFAULT } from './kek-sources';
-import { KeyCreationRefusedError, KeyIdConflictError } from './key-creation-errors';
+import {
+  KeyChangeRefusedError,
+  KeyCreationRefusedError,
+  KeyIdConflictError,
+} from './key-creation-errors';
 import { type CreatedKey, createKeyFactory, type KeyFactoryOptions } from './key-factory';
 import { jwkThumbprintKid } from './key-generation';
-import type { RealmKeyStore, StoredKeyStatus } from './key-store';
+import { KEY_PURPOSES } from './key-purposes';
+import type { RealmKeyStore, StoredKeyStatus, StoredKeySummary } from './key-store';
 import { isRealmId } from './realm-id';
 
 /**
@@ -32,25 +37,32 @@ import { isRealmId } from './realm-id';
  *    key. A signing key counts as stored when the realm has a published key
  *    with the same public key (RFC 7638 thumbprint), whatever its `kid`. The
  *    cookie secret is imported only into a realm with no `cookie_hmac` key.
- * 3. `provisionRealmKeys` creates the standard keys still missing:
+ * 3. A signing key the store lacks, while the realm has an active key of its
+ *    algorithm, replaces that key: the stored key, and its hybrid partner, are
+ *    retired and unpublished at once. Changing the variable is how a deployment
+ *    replaces a signing key until rotation through the store ships (manual
+ *    rotation #544, emergency retirement #551).
+ * 4. `provisionRealmKeys` creates the standard keys still missing:
  *    `event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
  *    on a fresh deployment.
- * 4. A fresh realm, one that had no `token_signing` key and imported none,
+ * 5. A fresh realm, one that had no `token_signing` key and imported none,
  *    also gets an RS256 `token_signing` key: OpenID Connect requires an OP to
  *    sign ID tokens with RS256.
+ *
+ * A variable that holds a key the store keeps, but not as its active key (a
+ * key a replacement retired), changes nothing: the step reports it in
+ * `inactive`.
  *
  * All of it is one transaction: every key or none. The step refuses, and
  * stores nothing, when:
  *
  * - a key must be imported and the KEK is the published development KEK: a
  *   real key wrapped with it would be as good as plaintext;
- * - a variable holds another key than the realm's active key of its
- *   algorithm: the store has held the realm's keys since the first boot after
- *   the upgrade, and a stored key changes by rotation, not through the
- *   variable;
  * - a variable holds a key the realm marked `compromised`;
- * - the ML-DSA-65 key would join an Ed25519 key stored without one: both keys
- *   of a hybrid pair are stored together (ADR-005).
+ * - one key of the hybrid pair is new to the store and the other is not: both
+ *   keys of a pair are stored, and replaced, together (ADR-005);
+ * - a new key comes with a configured `kid` that is already another stored
+ *   key's: a `kid` names one key.
  */
 
 /** A published key as {@link RealmKeyBootStore.listPublicKeys} returns it. */
@@ -96,15 +108,37 @@ export interface EnvironmentKeyOutcome {
   readonly variables: readonly string[];
 }
 
+/** A configured key that replaced the realm's active key of its algorithm. */
+export interface ReplacedKeyOutcome extends EnvironmentKeyOutcome {
+  /**
+   * The stored keys this boot retired and unpublished for it: the key it
+   * replaced, and that key's hybrid partner when the partner was not replaced
+   * too.
+   */
+  readonly retiredKids: readonly string[];
+}
+
+/** A configured key the store holds, but not as its active key. */
+export interface InactiveKeyOutcome extends EnvironmentKeyOutcome {
+  /** The stored key's status: `retired`, or `next`. */
+  readonly status: Exclude<StoredKeyStatus, 'active' | 'compromised'>;
+  /** The realm's active key of the algorithm, or `null` when it has none. */
+  readonly activeKid: string | null;
+}
+
 /** What {@link bootRealmKeys} did. */
 export interface RealmKeysBootResult {
-  /** The configured keys this boot imported. */
+  /** The configured keys this boot imported, replacements included. */
   readonly imported: readonly EnvironmentKeyOutcome[];
+  /** The imported keys that replaced a stored key, with the keys they retired. */
+  readonly replaced: readonly ReplacedKeyOutcome[];
   /**
-   * The configured keys the realm already held. For the cookie secret: the
-   * realm already had a cookie key, which may not be this secret.
+   * The configured keys the realm already held as active keys. For the cookie
+   * secret: the realm already had a cookie key, which may not be this secret.
    */
   readonly alreadyStored: readonly EnvironmentKeyOutcome[];
+  /** The configured keys the store holds, but not as its active key. Nothing changed for them. */
+  readonly inactive: readonly InactiveKeyOutcome[];
   /** The keys this boot generated: the missing standard keys, and RS256 on a fresh realm. */
   readonly generated: readonly CreatedKey[];
 }
@@ -117,13 +151,15 @@ const DEVELOPMENT_KEK_REF = computeKekRef(Buffer.from(DEV_KEK_DEFAULT, 'base64')
  * and the refusals.
  *
  * @throws InvalidConfigurationError for a configured key that cannot be
- *   imported, or an import that would use the development KEK. The message
- *   names the variables; the details carry the stored `kid` where one is
- *   involved.
+ *   imported, an import that would use the development KEK, half a hybrid
+ *   pair to import, or a new key whose configured `kid` is already another
+ *   stored key's. The message names the variables; the details carry the
+ *   stored `kid` where one is involved.
  * @throws KeyCreationRefusedError when the realm id is not a UUID, or when
  *   hybrid signing is on and the realm holds half a pair
  *   (`HYBRID_PAIR_INCOMPLETE`)
- * @throws KeyIdConflictError when a configured `kid` is already another key's
+ * @throws KeyIdConflictError when a new key's thumbprint `kid` is already
+ *   another key's
  */
 export async function bootRealmKeys<Tx>(
   options: BootRealmKeysOptions<Tx>
@@ -165,7 +201,14 @@ export async function bootRealmKeys<Tx>(
         { purpose: 'token_signing', scopeId: null },
         tx
       );
-      const { toImport, alreadyStored } = await sortEnvironmentKeys(store, realmId, keys, tx);
+      const { pending, alreadyStored, inactive } = await sortEnvironmentKeys(
+        store,
+        realmId,
+        keys,
+        tx
+      );
+      const toImport = pending.map(({ key }) => key);
+      checkHybridPair(realmId, keys, toImport);
       if (toImport.length > 0 && (await usesDevelopmentKek(kekProvider))) {
         throw new InvalidConfigurationError(
           'Keys from the key variables must be imported into the key store, but no KEK is set: with KEK_PROVIDER=local, KEK or KEK_PATH wraps every stored key, and without one the keys would be wrapped with the published development KEK. Set KEK or KEK_PATH, for example to the output of `openssl rand -base64 32`, and boot again. See this error\'s "details" for the variables.',
@@ -173,7 +216,10 @@ export async function bootRealmKeys<Tx>(
         );
       }
 
-      const imported = await importKeys(store, kekProvider, realmId, toImport, now(), tx);
+      const at = now();
+      // Retire first: the one-active index allows no moment with two.
+      const replaced = await retireReplacedKeys(store, realmId, pending, at, tx);
+      const imported = await importKeys(store, kekProvider, realmId, toImport, at, tx);
       const generated = [...(await factory.provisionRealmKeys(realmId, { tx }))];
       const fresh =
         tokenKeysBefore.length === 0 && !toImport.some((key) => key.purpose === 'token_signing');
@@ -187,7 +233,7 @@ export async function bootRealmKeys<Tx>(
           }))
         );
       }
-      return { imported, alreadyStored, generated };
+      return { imported, replaced, alreadyStored, inactive, generated };
     });
   } finally {
     for (const key of keys) key.material.fill(0);
@@ -200,15 +246,29 @@ async function usesDevelopmentKek(provider: KekProvider): Promise<boolean> {
   return (await provider.health()).kekRef === DEVELOPMENT_KEK_REF;
 }
 
-/** Split the configured keys into those to import and those the realm holds. */
+/** A configured key to import, and the active key it replaces, if any. */
+interface PendingImport {
+  readonly key: EnvironmentKey;
+  readonly replaces?: StoredKeySummary;
+}
+
+/**
+ * Split the configured keys into those to import, with the active keys they
+ * replace, those the realm holds as active keys, and those it holds otherwise.
+ */
 async function sortEnvironmentKeys<Tx>(
   store: RealmKeyBootStore<Tx>,
   realmId: string,
   keys: readonly EnvironmentKey[],
   tx: Tx
-): Promise<{ toImport: EnvironmentKey[]; alreadyStored: EnvironmentKeyOutcome[] }> {
-  const toImport: EnvironmentKey[] = [];
+): Promise<{
+  pending: PendingImport[];
+  alreadyStored: EnvironmentKeyOutcome[];
+  inactive: InactiveKeyOutcome[];
+}> {
+  const pending: PendingImport[] = [];
   const alreadyStored: EnvironmentKeyOutcome[] = [];
+  const inactive: InactiveKeyOutcome[] = [];
   let published: { readonly key: StoredPublicKey; readonly thumbprint: string }[] | undefined;
 
   for (const key of keys) {
@@ -219,7 +279,7 @@ async function sortEnvironmentKeys<Tx>(
         tx
       );
       if (stored.length === 0) {
-        toImport.push(key);
+        pending.push({ key });
       } else {
         const current = stored.find((row) => row.status === 'active') ?? stored[0];
         alreadyStored.push(outcome(key, current.kid));
@@ -232,32 +292,119 @@ async function sortEnvironmentKeys<Tx>(
       ({ key: stored, thumbprint }) =>
         stored.purpose === key.purpose && thumbprint === key.thumbprint
     );
-    if (match !== undefined) {
-      if (match.key.status === 'compromised') {
-        throw new InvalidConfigurationError(
-          `${key.variables.join(' and ')} holds a key the realm marked compromised. Remove the variable.`,
-          { variables: key.variables, realmId, kid: match.key.kid }
-        );
-      }
-      alreadyStored.push(outcome(key, match.key.kid));
-      continue;
-    }
-
     const active = await store.listByRealm(
       realmId,
       { purpose: key.purpose, scopeId: null, status: 'active' },
       tx
     );
     const current = active.find((row) => row.algorithm === key.algorithm);
-    if (current !== undefined) {
+    if (match === undefined) {
+      pending.push(current === undefined ? { key } : { key, replaces: current });
+      continue;
+    }
+
+    const { status } = match.key;
+    if (status === 'compromised') {
       throw new InvalidConfigurationError(
-        `${key.variables.join(' and ')} holds another ${key.algorithm} key than the one the realm's key store holds. The store has held the realm's keys since the first boot after the upgrade, and a stored key is replaced by rotation, not through the variable. Put back the key the store holds (its kid is in this error's "details"), or remove the variable once nothing reads it.`,
-        { variables: key.variables, realmId, kid: current.kid }
+        `${key.variables.join(' and ')} holds a key the realm marked compromised. Remove the variable.`,
+        { variables: key.variables, realmId, kid: match.key.kid }
       );
     }
-    toImport.push(key);
+    if (status === 'active') {
+      alreadyStored.push(outcome(key, match.key.kid));
+    } else {
+      inactive.push(
+        Object.freeze({ ...outcome(key, match.key.kid), status, activeKid: current?.kid ?? null })
+      );
+    }
   }
-  return { toImport, alreadyStored };
+  return { pending, alreadyStored, inactive };
+}
+
+/**
+ * Refuse half a hybrid pair to import. With hybrid signing on, both keys of
+ * the pair are configured; the store holds them under one `pair_id`, so both
+ * are new to it, or neither (ADR-005).
+ */
+function checkHybridPair(
+  realmId: string,
+  keys: readonly EnvironmentKey[],
+  toImport: readonly EnvironmentKey[]
+): void {
+  const mlDsa = keys.find((key) => key.algorithm === 'ML-DSA-65');
+  if (mlDsa === undefined) return;
+  const ed25519 = keys.find((key) => key.algorithm === 'EdDSA');
+  const mlDsaIsNew = toImport.includes(mlDsa);
+  if (ed25519 !== undefined && toImport.includes(ed25519) === mlDsaIsNew) return;
+  if (ed25519 === undefined) {
+    if (!mlDsaIsNew) return;
+    throw new InvalidConfigurationError(
+      `${mlDsa.variables.join(' and ')} holds an ML-DSA-65 key to import, but no Ed25519 key comes with it: both keys of a hybrid pair are stored together.`,
+      { variables: mlDsa.variables, realmId }
+    );
+  }
+  const [fresh, kept] = mlDsaIsNew ? [mlDsa, ed25519] : [ed25519, mlDsa];
+  throw new InvalidConfigurationError(
+    `${fresh.variables.join(' and ')} holds a ${fresh.algorithm} key the realm's key store lacks, but ${kept.variables.join(' and ')} holds the ${kept.algorithm} key it already stores. Both keys of a hybrid pair are stored, and replaced, together: set ${kept.variables[0]} to a new key as well, and boot again.`,
+    { variables: fresh.variables, realmId }
+  );
+}
+
+/**
+ * Retire the active keys the configured keys replace, with the hybrid partner
+ * of each when the partner is not replaced too: a pair retires together
+ * (ADR-005). A retired published key leaves its JWKS at once. The variable
+ * change took it out of service, so no overlap applies; a deployment that
+ * wants one waits for rotation through the store (#544).
+ */
+async function retireReplacedKeys<Tx>(
+  store: RealmKeyBootStore<Tx>,
+  realmId: string,
+  pending: readonly PendingImport[],
+  at: number,
+  tx: Tx
+): Promise<ReplacedKeyOutcome[]> {
+  const replacedKids = new Set(pending.flatMap(({ replaces }) => replaces?.kid ?? []));
+  const retired = new Set<string>();
+  const replacements: ReplacedKeyOutcome[] = [];
+  for (const { key, replaces } of pending) {
+    if (replaces === undefined) continue;
+    const active = await store.listByRealm(
+      realmId,
+      { purpose: key.purpose, scopeId: null, status: 'active' },
+      tx
+    );
+    const partners =
+      replaces.pairId === null
+        ? []
+        : active.filter(
+            (row) =>
+              row.pairId === replaces.pairId &&
+              row.kid !== replaces.kid &&
+              !replacedKids.has(row.kid)
+          );
+    const kids = [replaces.kid, ...partners.map((row) => row.kid)].filter(
+      (kid) => !retired.has(kid)
+    );
+    const unpublishAt = KEY_PURPOSES[key.purpose].published ? at : null;
+    for (const kid of kids) {
+      const moved = await store.updateStatus(
+        realmId,
+        kid,
+        { status: 'retired', retireAt: at, unpublishAt },
+        tx
+      );
+      if (moved === undefined) {
+        throw new KeyChangeRefusedError(
+          'KEY_CHANGED',
+          `A '${key.purpose}' key changed status during the key boot step; nothing was stored`
+        );
+      }
+      retired.add(kid);
+    }
+    replacements.push(Object.freeze({ ...outcome(key, key.kid), retiredKids: kids }));
+  }
+  return replacements;
 }
 
 async function thumbprintsOf(
@@ -280,22 +427,19 @@ async function importKeys<Tx>(
   at: number,
   tx: Tx
 ): Promise<EnvironmentKeyOutcome[]> {
-  // ML-DSA-65 keys are configured only with hybrid signing on (see
-  // `bootRealmKeys`), so one to import means the realm's pair is imported now:
-  // its Ed25519 key must come with it.
-  const ed25519 = keys.find((key) => key.algorithm === 'EdDSA');
-  const mlDsa = keys.find((key) => key.algorithm === 'ML-DSA-65');
-  if (mlDsa !== undefined && ed25519 === undefined) {
-    throw new InvalidConfigurationError(
-      `${mlDsa.variables.join(' and ')} holds an ML-DSA-65 key to import, but the realm's Ed25519 key is already stored without it. Both keys of a hybrid pair are stored together, so the ML-DSA-65 key cannot join the stored Ed25519 key; rotate the token-signing keys to a new pair.`,
-      { variables: mlDsa.variables, realmId }
-    );
-  }
-  const pairId = mlDsa !== undefined ? randomUUID() : null;
+  // An ML-DSA-65 key to import comes with its Ed25519 key (`checkHybridPair`),
+  // so the two are the realm's new pair.
+  const pairId = keys.some((key) => key.algorithm === 'ML-DSA-65') ? randomUUID() : null;
 
   const imported: EnvironmentKeyOutcome[] = [];
   for (const key of keys) {
     if ((await store.findByKid(realmId, key.kid, tx)) !== undefined) {
+      if (key.thumbprint !== null && key.kid !== key.thumbprint) {
+        throw new InvalidConfigurationError(
+          `${key.variables.join(' and ')} holds a new ${key.algorithm} key, but its configured kid is already another stored key's. A new key needs a new kid: change the kid variable, or remove it to use the key's thumbprint.`,
+          { variables: key.variables, realmId, kid: key.kid }
+        );
+      }
       throw new KeyIdConflictError(key.kid);
     }
     const sealed = await sealKeyMaterial(kekProvider, key.material, {

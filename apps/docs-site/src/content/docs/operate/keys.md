@@ -36,7 +36,9 @@ together do it once:
    `JWT_PRIVATE_KEY` as the Ed25519 signing key, `JWT_RS256_PRIVATE_KEY` as the
    RS256 one, `JWT_MLDSA_PRIVATE_KEY` (with `HYBRID_SIGNING_ENABLED` on) as the
    ML-DSA-65 key of the hybrid pair, and `SESSION_COOKIE_SECRET`, when you set
-   it, as the cookie key. A `_PATH` variable counts as its variable.
+   it, as the cookie key. A `_PATH` variable counts as its variable. A signing
+   key the store lacks replaces the store's active key of its algorithm (see
+   "Replacing a signing key" below).
 2. It creates the keys the realm still lacks: the event-signing and
    data-at-rest keys, and the cookie key when `SESSION_COOKIE_SECRET` is unset.
    A realm that neither holds nor imports a signing key gets an Ed25519 and an
@@ -57,14 +59,35 @@ The boot stops, and names the variable, when:
   would protect nothing;
 - `JWT_PUBLIC_KEY` or `JWT_RS256_PUBLIC_KEY` is not the public half of its
   private key;
-- a key variable holds another key than the one the store imported from it.
-  After the import, a key changes by rotation, not through its variable: put
-  the old value back.
+- a new key comes with a `JWT_RS256_KID` or `JWT_MLDSA_KID` that already
+  names a stored key: a new key needs a new `kid`;
+- with hybrid signing on, only one of `JWT_PRIVATE_KEY` and
+  `JWT_MLDSA_PRIVATE_KEY` holds a new key: the two keys of a pair are stored,
+  and replaced, together.
 
-**For now, keep the key variables set.** The warning says they are no longer
-read, but tokens are still signed with them until token signing moves onto the
-key store (#491), and the session cookie until #493. The upgrade guide (#501)
-says when to remove them.
+**For now, keep the key variables set.** Tokens are still signed with them
+until token signing moves onto the key store (#491), and the session cookie
+until #493, and the warning says so. The upgrade guide (#501) says when to
+remove them.
+
+### Replacing a signing key
+
+Until rotation through the key store ships (manual rotation #544, emergency
+retirement #551), you replace a signing key as before the key store: put the
+new key in its variable and restart. At boot, a key variable that holds a key
+the store lacks replaces the store's active key of that algorithm. The old key
+is retired and leaves the JWKS at once, so tokens it signed stop verifying, as
+they did before. Each node logs a warning with the new and the retired `kid`.
+
+- Give a new RS256 or ML-DSA-65 key a new `JWT_RS256_KID` or `JWT_MLDSA_KID`,
+  or unset the variable to use the key's thumbprint.
+- With hybrid signing on, change `JWT_PRIVATE_KEY` and `JWT_MLDSA_PRIVATE_KEY`
+  together. Turning hybrid signing on after the upgrade is such a replacement:
+  set a new `JWT_PRIVATE_KEY` along with the ML-DSA-65 key.
+- A variable that holds a key the store retired changes nothing in the store,
+  and each boot warns about it: the store keeps its active key, which signs once
+  token signing moves onto the store. So a node that still has the old value
+  during a rolling restart boots, and warns.
 
 ### Adding a key: `auth-server:keys:create`
 
@@ -80,7 +103,9 @@ tsx src/keys-create.ts --purpose token_signing --algorithm RS256
 
 It prints the new key's `kid` and public JWK as one JSON line. `--realm` picks
 a realm other than `DEFAULT_REALM_NAME`. A realm has one active key per purpose
-and algorithm, so a replacement is created with `--status next`.
+and algorithm, so a replacement is created with `--status next`. A `next`
+signing key starts signing once rotation through the store ships (#542); until
+then, replace a signing key through its variable, as above.
 
 ## The PKCS#8 vs PKCS#1 pitfall (read this first)
 

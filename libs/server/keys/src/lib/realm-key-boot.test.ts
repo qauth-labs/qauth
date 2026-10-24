@@ -18,6 +18,7 @@ import { bootRealmKeys, type BootRealmKeysOptions } from './realm-key-boot';
 
 const REALM = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
 const NOW = 1_800_000_000_000;
+const LATER = NOW + 60_000;
 const ED25519_ONLY: readonly SignatureAlgorithm[] = ['EdDSA'];
 const HYBRID_CAPABLE: readonly SignatureAlgorithm[] = ['EdDSA', 'ML-DSA-65'];
 const COOKIE_SECRET = 'an-operator-session-cookie-secret-0123456789';
@@ -223,20 +224,95 @@ describe('bootRealmKeys — later boots', () => {
     ]);
   });
 
-  it('refuses a variable that now holds another key, and stores nothing', async () => {
+  it('replaces the active key when a variable holds a new one, retiring and unpublishing it at once', async () => {
     const store = createMemoryKeyStore();
     const { imported } = await boot(store, { environmentKeys: UPGRADE });
-    const rows = store.rows.length;
+    const oldKid = imported[0].kid;
+
+    const result = await boot(store, {
+      now: () => LATER,
+      environmentKeys: { ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') } },
+    });
+
+    const [replacement] = result.imported;
+    expect(replacement).toMatchObject({ purpose: 'token_signing', algorithm: 'EdDSA' });
+    expect(replacement.kid).not.toBe(oldKid);
+    expect(result.replaced).toEqual([{ ...replacement, retiredKids: [oldKid] }]);
+    expect(result.alreadyStored).toEqual([]);
+    expect(result.generated).toEqual([]);
+    expect(storedKey(store, oldKid)).toMatchObject({
+      status: 'retired',
+      retireAt: LATER,
+      unpublishAt: LATER,
+    });
+    expect(storedKey(store, replacement.kid)).toMatchObject({
+      status: 'active',
+      activateAt: LATER,
+      publishAt: LATER,
+    });
+  });
+
+  it('replaces the RS256 key under a new configured kid', async () => {
+    const store = createMemoryKeyStore();
+    await boot(store, { environmentKeys: UPGRADE });
+
+    const result = await boot(store, {
+      environmentKeys: {
+        rs256: {
+          privateKey: source(pem('rsa'), 'JWT_RS256_PRIVATE_KEY'),
+          kid: source('rsa-2', 'JWT_RS256_KID'),
+        },
+      },
+    });
+
+    expect(result.replaced).toEqual([
+      expect.objectContaining({ algorithm: 'RS256', kid: 'rsa-2', retiredKids: ['rsa-1'] }),
+    ]);
+    expect(storedKey(store, 'rsa-1').status).toBe('retired');
+  });
+
+  it('refuses a new key under the configured kid of the key it would replace, and stores nothing', async () => {
+    const store = createMemoryKeyStore();
+    await boot(store, { environmentKeys: UPGRADE });
+    const before = store.rows.map(({ key }) => `${key.kid}:${key.status}`);
 
     const error = await refusal(
       boot(store, {
-        environmentKeys: { ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') } },
+        environmentKeys: {
+          rs256: {
+            privateKey: source(pem('rsa'), 'JWT_RS256_PRIVATE_KEY'),
+            kid: source('rsa-1', 'JWT_RS256_KID'),
+          },
+        },
       })
     );
 
-    expect(error.message).toContain('JWT_PRIVATE_KEY holds another EdDSA key');
-    expect(error.details).toMatchObject({ variables: ['JWT_PRIVATE_KEY'], kid: imported[0].kid });
+    expect(error.message).toContain('A new key needs a new kid');
+    expect(error.details).toMatchObject({
+      variables: ['JWT_RS256_PRIVATE_KEY', 'JWT_RS256_KID'],
+      kid: 'rsa-1',
+    });
+    expect(store.rows.map(({ key }) => `${key.kid}:${key.status}`)).toEqual(before);
+  });
+
+  it('changes nothing for a variable that holds a key the store retired, and reports it', async () => {
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, { environmentKeys: UPGRADE });
+    const { imported: replacements } = await boot(store, {
+      environmentKeys: { ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') } },
+    });
+    const rows = store.rows.length;
+
+    const result = await boot(store, { environmentKeys: { ed25519: UPGRADE.ed25519 } });
+
+    expect(result.imported).toEqual([]);
+    expect(result.replaced).toEqual([]);
+    expect(result.alreadyStored).toEqual([]);
+    expect(result.inactive).toEqual([
+      { ...imported[0], status: 'retired', activeKid: replacements[0].kid },
+    ]);
     expect(store.rows).toHaveLength(rows);
+    expect(storedKey(store, replacements[0].kid).status).toBe('active');
   });
 
   it('refuses a variable that holds a key the realm marked compromised', async () => {
@@ -289,7 +365,108 @@ describe('bootRealmKeys — later boots', () => {
       })
     );
 
+    expect(error.message).toContain('set JWT_PRIVATE_KEY to a new key as well');
     expect(error.details).toMatchObject({ variables: ['JWT_MLDSA_PRIVATE_KEY'] });
+  });
+
+  it('turns hybrid signing on when both keys of the pair are new: the Ed25519 key is replaced', async () => {
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, {
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      environmentKeys: { ed25519: UPGRADE.ed25519 },
+    });
+
+    const result = await boot(store, {
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      hybridSigning: true,
+      environmentKeys: {
+        ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') },
+        mlDsa: { seed: source(SEED, 'JWT_MLDSA_PRIVATE_KEY') },
+      },
+    });
+
+    const [ed25519, mlDsa] = result.imported;
+    expect(result.replaced).toEqual([{ ...ed25519, retiredKids: [imported[0].kid] }]);
+    const pairId = storedKey(store, ed25519.kid).pairId;
+    expect(pairId).toEqual(expect.any(String));
+    expect(storedKey(store, mlDsa.kid)).toMatchObject({ status: 'active', pairId });
+  });
+
+  it('replaces both keys of a hybrid pair as a new pair', async () => {
+    const store = createMemoryKeyStore();
+    const hybrid = { enabledSignatureAlgorithms: HYBRID_CAPABLE, hybridSigning: true };
+    const first = await boot(store, {
+      ...hybrid,
+      environmentKeys: {
+        ed25519: UPGRADE.ed25519,
+        mlDsa: { seed: source(SEED, 'JWT_MLDSA_PRIVATE_KEY') },
+      },
+    });
+    const oldPair = storedKey(store, first.imported[0].kid).pairId;
+
+    const result = await boot(store, {
+      ...hybrid,
+      environmentKeys: {
+        ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') },
+        mlDsa: { seed: source(randomBytes(32).toString('base64url'), 'JWT_MLDSA_PRIVATE_KEY') },
+      },
+    });
+
+    expect(result.replaced.map((key) => [key.algorithm, key.retiredKids])).toEqual([
+      ['EdDSA', [first.imported[0].kid]],
+      ['ML-DSA-65', [first.imported[1].kid]],
+    ]);
+    const [ed25519, mlDsa] = result.imported;
+    const newPair = storedKey(store, ed25519.kid).pairId;
+    expect(newPair).not.toBe(oldPair);
+    expect(storedKey(store, mlDsa.kid).pairId).toBe(newPair);
+    for (const { kid } of first.imported) expect(storedKey(store, kid).status).toBe('retired');
+  });
+
+  it('refuses a new Ed25519 key while the ML-DSA-65 variable still holds the stored half', async () => {
+    const store = createMemoryKeyStore();
+    const hybrid = { enabledSignatureAlgorithms: HYBRID_CAPABLE, hybridSigning: true };
+    const mlDsa = { seed: source(SEED, 'JWT_MLDSA_PRIVATE_KEY') };
+    await boot(store, { ...hybrid, environmentKeys: { ed25519: UPGRADE.ed25519, mlDsa } });
+    const before = store.rows.map(({ key }) => `${key.kid}:${key.status}`);
+
+    const error = await refusal(
+      boot(store, {
+        ...hybrid,
+        environmentKeys: {
+          ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') },
+          mlDsa,
+        },
+      })
+    );
+
+    expect(error.message).toContain('set JWT_MLDSA_PRIVATE_KEY to a new key as well');
+    expect(error.details).toMatchObject({ variables: ['JWT_PRIVATE_KEY'] });
+    expect(store.rows.map(({ key }) => `${key.kid}:${key.status}`)).toEqual(before);
+  });
+
+  it('retires the hybrid partner of a replaced key when hybrid signing is off', async () => {
+    const store = createMemoryKeyStore();
+    const first = await boot(store, {
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      hybridSigning: true,
+      environmentKeys: {
+        ed25519: UPGRADE.ed25519,
+        mlDsa: { seed: source(SEED, 'JWT_MLDSA_PRIVATE_KEY') },
+      },
+    });
+    const [oldEd25519, oldMlDsa] = first.imported.map((key) => key.kid);
+
+    const result = await boot(store, {
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      environmentKeys: { ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') } },
+    });
+
+    expect(result.replaced).toEqual([
+      expect.objectContaining({ algorithm: 'EdDSA', retiredKids: [oldEd25519, oldMlDsa] }),
+    ]);
+    expect(storedKey(store, oldMlDsa)).toMatchObject({ status: 'retired', unpublishAt: NOW });
+    expect(storedKey(store, result.imported[0].kid).pairId).toBeNull();
   });
 });
 
