@@ -24,6 +24,7 @@ export {
 } from './lib/redis-session-cache';
 export {
   createSessionService,
+  DEFAULT_SESSION_CACHE_TIMEOUT_MS,
   DEFAULT_SESSION_CACHE_TTL_SECONDS,
   DEFAULT_SESSION_LAST_SEEN_INTERVAL_SECONDS,
   type SessionServiceOptions,

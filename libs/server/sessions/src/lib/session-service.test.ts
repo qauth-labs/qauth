@@ -594,6 +594,70 @@ describe('with the cache down', () => {
   });
 });
 
+describe('with a cache that does not answer', () => {
+  const never = () => new Promise<never>(() => undefined);
+
+  it('reads Postgres once the cache timeout has passed', async () => {
+    const service = serviceWith({ cacheTimeoutMs: 20 });
+    const { sid } = await service.create(signIn());
+    cache.read = never;
+
+    const started = Date.now();
+    expect(await service.get({ realmId: REALM_A, sid })).toMatchObject({ sid });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(counted.counts).toMatchObject({ 'cache:error': 1, 'store:ok': 1 });
+  });
+
+  it('signs in and ends sessions without waiting for it', async () => {
+    const service = serviceWith({ cacheTimeoutMs: 20 });
+    cache.write = never;
+    cache.markRevoked = never;
+
+    const { sid } = await service.create(signIn());
+    expect(await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out' })).not.toBeNull();
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a timeout that is not a positive number of milliseconds', () => {
+    expect(() => serviceWith({ cacheTimeoutMs: 0 })).toThrow('cacheTimeoutMs');
+  });
+});
+
+describe('a read in flight when the session ends', () => {
+  it('does not answer the reads that start after the end', async () => {
+    const service = serviceWith();
+    const { sid } = await service.create(signIn());
+    cache.down = true;
+    // The first Postgres read is held until the session has ended.
+    const find = store.find.bind(store);
+    const before = await find(REALM_A, sid);
+    let reached: () => void = () => undefined;
+    const atPostgres = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    store.find = async () => {
+      store.find = find;
+      reached();
+      await held;
+      return before;
+    };
+
+    const early = service.get({ realmId: REALM_A, sid });
+    await atPostgres;
+    await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out' });
+    const late = service.get({ realmId: REALM_A, sid });
+    release();
+
+    // The early read raced the end and may say live; the late one may not.
+    await early;
+    expect(await late).toBeNull();
+  });
+});
+
 describe('with Postgres down', () => {
   it('answers absent for a session the cache does not hold, without throwing', async () => {
     const service = serviceWith();
