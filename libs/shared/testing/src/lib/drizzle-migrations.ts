@@ -101,6 +101,23 @@ export function qauthMigrationsFolderWithFirst(
 }
 
 /**
+ * Add a migration to the end of a migrations folder copy (issue #474),
+ * generated one second after the last one: a newer release's migration, or
+ * one that fails.
+ */
+export function appendQauthMigration(migrationsFolder: string, tag: string, sql: string): void {
+  const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+    entries: (JournalEntry & Record<string, unknown>)[];
+  };
+  const last = journal.entries.at(-1);
+  if (last === undefined) throw new Error(`${journalPath} has no migration to follow`);
+  journal.entries.push({ ...last, idx: last.idx + 1, tag, when: last.when + 1000 });
+  writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+  writeFileSync(path.join(migrationsFolder, `${tag}.sql`), sql);
+}
+
+/**
  * Every domain table an integration suite truncates between tests.
  *
  * Order is irrelevant (`CASCADE`), but completeness is not: a table missing from

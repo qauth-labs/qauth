@@ -10,12 +10,14 @@
  * which also scopes the advisory lock: Postgres keys it per database.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import { MIGRATION_LOCK_NAME } from '@qauth-labs/infra-db/migrations';
 import {
+  appendQauthMigration,
   applyQauthMigrations,
+  createPostgresDatabase,
   QAUTH_MIGRATIONS_FOLDER,
   qauthMigrationsFolderWithFirst,
   qauthMigrationTags,
@@ -23,7 +25,7 @@ import {
   type StartedPostgres,
   startPostgresContainer,
 } from '@qauth-labs/shared-testing';
-import { Client, Pool } from 'pg';
+import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 const RUNNER = path.resolve(process.cwd(), 'dist/apps/migration-runner/main.js');
@@ -74,7 +76,6 @@ async function until(condition: () => Promise<boolean> | boolean, what: string):
 
 describe('migration runner (built program, testcontainers Postgres)', () => {
   let container: StartedPostgres | undefined;
-  let admin: Pool | undefined;
   let dockerUp = false;
   let databases = 0;
   const folders: string[] = [];
@@ -86,7 +87,6 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     container = await startPostgresContainer();
-    admin = new Pool({ connectionString: container.connectionString, max: 2 });
   }, 180_000);
 
   afterEach(() => {
@@ -94,21 +94,16 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
   });
 
   afterAll(async () => {
-    await admin?.end();
     await container?.stop();
   });
 
   /** A new, empty database on the container, by URL. */
   async function freshDatabase(ctx: { skip: () => void }): Promise<string> {
-    if (!dockerUp || !admin || !container) {
+    if (!dockerUp || !container) {
       ctx.skip();
       throw new Error('unreachable');
     }
-    const name = `runner_${++databases}`;
-    await admin.query(`CREATE DATABASE ${name}`);
-    const url = new URL(container.connectionString);
-    url.pathname = `/${name}`;
-    return url.toString();
+    return createPostgresDatabase(container.connectionString, `runner_${++databases}`);
   }
 
   /** Run one query on a database and disconnect. */
@@ -257,15 +252,7 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
     // The first two real migrations, then one that collides with the first.
     const folder = qauthMigrationsFolderWithFirst(2);
     folders.push(folder);
-    const journalPath = path.join(folder, 'meta/_journal.json');
-    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
-      entries: { idx: number; version: string; when: number; tag: string; breakpoints: boolean }[];
-    };
-    const last = journal.entries[1];
-    if (last === undefined) throw new Error('the journal has fewer than two migrations');
-    journal.entries.push({ ...last, idx: 2, when: last.when + 1, tag: '9999_collides' });
-    writeFileSync(journalPath, JSON.stringify(journal));
-    writeFileSync(path.join(folder, '9999_collides.sql'), 'CREATE TABLE "realms" ("id" integer);');
+    appendQauthMigration(folder, '9999_collides', 'CREATE TABLE "realms" ("id" integer);');
 
     const result = await runRunner(url, [`--migrations-folder=${folder}`]);
     expect(result.code).toBe(1);
@@ -284,16 +271,10 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
 
   it('exits 0 on a database ahead of it, saying so', async (ctx) => {
     const url = await freshDatabase(ctx);
-    await applyQauthMigrations(url);
-    const [newest] = await query<{ when: string }>(
-      url,
-      'SELECT max(created_at)::text AS "when" FROM drizzle.__drizzle_migrations'
-    );
-    await query(
-      url,
-      'INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)',
-      ['from-a-newer-release', Number(newest?.when) + 1000]
-    );
+    const newer = qauthMigrationsFolderWithFirst(KNOWN);
+    folders.push(newer);
+    appendQauthMigration(newer, '9999_from_a_newer_release', 'SELECT 1;');
+    await applyQauthMigrations(url, newer);
 
     const ahead =
       " The database also has 1 migration newer than this runner's, from a newer release; " +

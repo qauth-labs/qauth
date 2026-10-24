@@ -1,3 +1,4 @@
+import { Client } from 'pg';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
 
 /**
@@ -61,6 +62,29 @@ export async function startPostgresContainer(): Promise<StartedPostgres> {
       await container.stop();
     },
   };
+}
+
+/**
+ * Create an empty database on the server `connectionString` points at and
+ * return its URL, for a suite that needs one database per case (issue #474).
+ *
+ * @param name - a plain lower-case identifier; it is not quoted.
+ */
+export async function createPostgresDatabase(
+  connectionString: string,
+  name: string
+): Promise<string> {
+  if (!/^[a-z_][a-z0-9_]*$/.test(name)) throw new Error(`not a plain database name: ${name}`);
+  const client = new Client({ connectionString });
+  await client.connect();
+  try {
+    await client.query(`CREATE DATABASE ${name}`);
+  } finally {
+    await client.end();
+  }
+  const url = new URL(connectionString);
+  url.pathname = `/${name}`;
+  return url.toString();
 }
 
 /**
