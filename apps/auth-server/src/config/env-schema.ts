@@ -5,6 +5,7 @@ import {
   databaseEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
+  eventTelemetryEnvSchema,
   federationEnvSchema,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
@@ -54,6 +55,10 @@ export const envSchema = z
     ...rateLimitEnvSchema.shape,
     ...emailEnvSchema.shape,
     ...observabilityEnvSchema.shape,
+    // The OpenTelemetry log export of events (#541): OTEL_EVENTS_ENABLED
+    // (default off), OTEL_SERVICE_NAME and the standard OTEL_EXPORTER_OTLP_*
+    // variables, which the exporter reads from the environment itself.
+    ...eventTelemetryEnvSchema.shape,
     // Wallet federation (ADR-004): WALLET_FEDERATION_ENABLED (#232, default
     // off) and OID4VP_VERIFIER_PROFILE (#299, deliberately no default). Both
     // arrive through this spread, which is why federationEnvSchema must stay a

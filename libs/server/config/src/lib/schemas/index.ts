@@ -11,6 +11,7 @@ export { type BaseEnv, baseEnvSchema } from './base';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
 export { type EmailEnv, emailEnvSchema } from './email';
+export { type EventTelemetryEnv, eventTelemetryEnvSchema } from './event-telemetry';
 export {
   type FederationEnv,
   federationEnvSchema,
