@@ -432,13 +432,16 @@ transactions short, and never hold one open across a network call.
 
 Migration 0029 is expand-only: one `CREATE TABLE` and its `CREATE INDEX`
 statements. Migration 0032 adds the hash chain of admin events and the trigger
-that refuses updates (below).
+that refuses updates (below). Migration 0033 adds the two functions a writer
+reads through.
 
 **No updates.** A trigger refuses every `UPDATE` on `events`, for every role
 whose statements fire it, the owner included, even one that matches no row.
-Only the retention job deletes (#536). A writing role is granted `INSERT` and
-`SELECT` only: `eventsWriterGrantStatements(role)` returns the statements, which
-the per-role grants of the topology area apply. QAuth creates no database users;
+Only the retention job deletes (#536). A writing role is granted `INSERT` on
+`events` and `EXECUTE` on `events_admin_chain_head` and `events_own_row`, and no
+`SELECT` (#827): with it, a writer could read every realm's events, request IPs,
+user agents and admin diffs included. `eventsWriterGrantStatements(role)`
+returns the statements, which the per-role grants of the topology area apply. QAuth creates no database users;
 until the roles are split, the one database user owns the table, and the hash
 chain shows an admin event it removed.
 
@@ -496,7 +499,11 @@ at nothing.
 - **Checked on write.** The writer reads its row back, in a savepoint, and
   throws if the row does not hash as written; the savepoint undoes the insert,
   so a row the chain would reject never commits, even when the caller catches
-  the error. That read is why a writer needs `SELECT`.
+  the error. The writer reads through two `SECURITY DEFINER` functions, not
+  the table: `events_admin_chain_head(realm_id)` returns the realm's head
+  hash, and `events_own_row(id)` returns the row only to the transaction that
+  wrote it. `verifyChain` and `events:verify-chain` read the table: run them
+  as a role that may, such as the table owner, not as a writer.
 - **What the chain shows.** The hash is unkeyed: whoever can rewrite a row and
   every row after it, or cut the newest rows, leaves a chain that verifies.
   Keep the head `verifyChain` returns outside the database, and verify from it

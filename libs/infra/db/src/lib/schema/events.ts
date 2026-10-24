@@ -82,7 +82,8 @@ export const xid8 = customType<{ data: bigint; driverData: string }>({
  *
  * A trigger refuses every `UPDATE` on the table, for every role whose
  * statements fire it, the owner included. Deletes are the retention job's
- * (#536), by grant: a writer holds `INSERT` and `SELECT` only.
+ * (#536), by grant: a writer holds `INSERT` only, and reads the chain head
+ * and its own row through two functions (migration 0033, #827).
  */
 export const events = pgTable(
   'events',

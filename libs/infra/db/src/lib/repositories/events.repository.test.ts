@@ -564,7 +564,7 @@ describe('emitAdminEvent', () => {
     expect(queries.map((q) => q.text.trim().split(/\s+/).slice(0, 2).join(' '))).toEqual([
       'begin',
       'select pg_advisory_xact_lock(hashtextextended($1::text',
-      'select "hash"',
+      'select "events_admin_chain_head"($1::uuid)',
       // The insert and its read-back run in a savepoint, undone on a mismatch.
       'savepoint sp1',
       'insert into',

@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
-import { EVENTS_WRITER_GRANTS, eventsWriterGrantStatements } from './grants';
+import {
+  EVENTS_WRITER_FUNCTIONS,
+  EVENTS_WRITER_GRANTS,
+  eventsWriterGrantStatements,
+} from './grants';
 
 /**
- * The event store's writer grants (issue #459): INSERT and SELECT on
- * `events`, nothing else. The container suite runs them against Postgres.
+ * The event store's writer grants (issues #459 and #827): INSERT on
+ * `events` and EXECUTE on the two functions an admin event reads through,
+ * no SELECT. The container suite runs them against Postgres.
  */
 describe('eventsWriterGrantStatements', () => {
-  it('grants INSERT and SELECT on events, after revoking everything else', () => {
-    expect(EVENTS_WRITER_GRANTS).toEqual({ events: ['SELECT', 'INSERT'] });
+  it('grants INSERT on events and EXECUTE on the two read functions, after revoking everything else', () => {
+    expect(EVENTS_WRITER_GRANTS).toEqual({ events: ['INSERT'] });
+    expect(EVENTS_WRITER_FUNCTIONS).toEqual([
+      '"events_admin_chain_head"(uuid)',
+      '"events_own_row"(uuid)',
+    ]);
     expect(eventsWriterGrantStatements('qauth_app')).toEqual([
       'REVOKE ALL ON TABLE "events" FROM "qauth_app"',
-      'GRANT SELECT, INSERT ON TABLE "events" TO "qauth_app"',
+      'GRANT INSERT ON TABLE "events" TO "qauth_app"',
+      'GRANT EXECUTE ON FUNCTION "events_admin_chain_head"(uuid), "events_own_row"(uuid) TO "qauth_app"',
     ]);
   });
 

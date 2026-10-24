@@ -6,8 +6,8 @@
  * one unbroken chain; a row a superuser changed or removed breaks it where
  * `verifyChain` says; a writer that raced the lock cannot fork it; the
  * trigger refuses every UPDATE, the owner's included; and a role holding the
- * writer grants can write and verify admin events but cannot change or remove
- * one.
+ * writer grants can write admin events but cannot read, change or remove
+ * one (#827).
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
@@ -441,14 +441,19 @@ describe('admin events integration (real Postgres)', () => {
       expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 1 });
     });
 
-    it('pins the search_path of the trigger functions', async () => {
+    it('pins the search_path of the trigger and read functions', async () => {
       const { rows } = await pool().query(
-        `SELECT proname, proconfig FROM pg_proc
-          WHERE proname IN ('events_no_update', 'events_admin_follows_head') ORDER BY proname`
+        `SELECT proname, prosecdef, proconfig FROM pg_proc
+          WHERE proname IN ('events_no_update', 'events_admin_follows_head',
+                            'events_admin_chain_head', 'events_own_row')
+          ORDER BY proname`
       );
+      const pinned = ['search_path=pg_catalog, pg_temp'];
       expect(rows).toEqual([
-        { proname: 'events_admin_follows_head', proconfig: ['search_path=pg_catalog, pg_temp'] },
-        { proname: 'events_no_update', proconfig: ['search_path=pg_catalog, pg_temp'] },
+        { proname: 'events_admin_chain_head', prosecdef: true, proconfig: pinned },
+        { proname: 'events_admin_follows_head', prosecdef: true, proconfig: pinned },
+        { proname: 'events_no_update', prosecdef: false, proconfig: pinned },
+        { proname: 'events_own_row', prosecdef: true, proconfig: pinned },
       ]);
     });
 
@@ -627,6 +632,8 @@ describe('admin events integration (real Postgres)', () => {
 
   describe('a role holding the writer grants', () => {
     const ROLE = 'qauth_events_admin_writer';
+    /** A role with no grant at all: what PUBLIC may do, it may. */
+    const NOBODY = 'qauth_events_no_grants';
     let writer: Pool | undefined;
     let writerStore: EventsRepository;
 
@@ -637,6 +644,7 @@ describe('admin events integration (real Postgres)', () => {
       // users come from the topology area; this temporary role stands in.
       await pool().query(`CREATE ROLE ${ROLE} LOGIN PASSWORD '${ROLE}'`);
       await pool().query(`GRANT USAGE ON SCHEMA public TO ${ROLE}`);
+      await pool().query(`CREATE ROLE ${NOBODY} NOLOGIN`);
       // Twice: the statements are idempotent.
       for (let i = 0; i < 2; i += 1) {
         for (const statement of eventsWriterGrantStatements(ROLE)) await pool().query(statement);
@@ -657,19 +665,30 @@ describe('admin events integration (real Postgres)', () => {
       return drizzle(writer) as unknown as Database;
     }
 
-    it('holds INSERT and SELECT on events, nothing else', async () => {
+    it('holds INSERT on events and EXECUTE on the two read functions, nothing else', async () => {
       const { rows } = await pool().query(
         `SELECT table_name, privilege_type FROM information_schema.role_table_grants
           WHERE grantee = $1 ORDER BY table_name, privilege_type`,
         [ROLE]
       );
-      expect(rows).toEqual([
-        { table_name: 'events', privilege_type: 'INSERT' },
-        { table_name: 'events', privilege_type: 'SELECT' },
+      expect(rows).toEqual([{ table_name: 'events', privilege_type: 'INSERT' }]);
+
+      const { rows: functions } = await pool().query(
+        `SELECT f AS function,
+                has_function_privilege($1, f, 'EXECUTE') AS writer,
+                has_function_privilege($2, f, 'EXECUTE') AS nobody
+           FROM unnest(ARRAY['events_admin_chain_head(uuid)', 'events_own_row(uuid)']) AS f`,
+        [ROLE, NOBODY]
+      );
+      expect(functions).toEqual([
+        { function: 'events_admin_chain_head(uuid)', writer: true, nobody: false },
+        { function: 'events_own_row(uuid)', writer: true, nobody: false },
       ]);
     });
 
-    it('can write admin events, in a transaction and in one of its own, and verify the chain', async () => {
+    // The acceptance criterion of #827: a role given the writer grants emits
+    // an admin event and cannot read events.
+    it('can write admin events, in a transaction and in one of its own, and cannot read them', async () => {
       const realm = randomUUID();
       await emitInTx(change(realm), writerStore, writerDb());
       await writerStore.emitInOwnTransaction({
@@ -679,18 +698,51 @@ describe('admin events integration (real Postgres)', () => {
         subject: { type: 'client', id: 'portal' },
         data: {},
       });
+      await writerStore.emitInOwnTransaction({
+        type: 'urn:qauth:event:user.signed_in:v1-rc.0',
+        realm,
+        actor: { type: 'user', id: ADMIN_ID },
+        subject: { type: 'user', id: ADMIN_ID },
+        data: { method: 'password' },
+      });
 
-      expect(await writerStore.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 2 });
+      // 42501 = insufficient_privilege.
+      expect(await sqlState(writer?.query('SELECT * FROM events') ?? Promise.resolve())).toBe(
+        '42501'
+      );
+      expect(await sqlState(writerStore.readAfter(realm, eventStreamStart(realm), 10))).toBe(
+        '42501'
+      );
+      expect(await sqlState(writerStore.verifyChain(realm))).toBe('42501');
+      // The owner reads what the writer wrote.
+      expect(await store.verifyChain(realm)).toMatchObject({ ok: true, rowsChecked: 2 });
+      expect((await store.readAfter(realm, eventStreamStart(realm), 10)).events).toHaveLength(3);
     });
 
-    // The acceptance criterion of #459: a role with insert and select only
-    // cannot update or delete rows in events.
-    it('cannot UPDATE, DELETE or TRUNCATE events', async () => {
+    it('reads through the functions only the head, and only a row its own transaction wrote', async () => {
+      const realm = randomUUID();
+      const id = await emitInTx(change(realm));
+      const [head] = await chainRows(realm);
+      if (!writer) throw new Error('no writer pool');
+
+      const { rows: heads } = await writer.query(
+        'SELECT events_admin_chain_head($1) AS hash, events_admin_chain_head($2) AS none',
+        [realm, randomUUID()]
+      );
+      expect(heads).toEqual([{ hash: head.hash, none: null }]);
+      // Another transaction's row, committed: not returned.
+      expect((await writer.query('SELECT * FROM events_own_row($1)', [id])).rows).toEqual([]);
+    });
+
+    // The acceptance criteria of #459 and #827: a writer cannot read,
+    // update or delete rows in events.
+    it('cannot SELECT, UPDATE, DELETE or TRUNCATE events', async () => {
       const realm = randomUUID();
       const id = await emitInTx(change(realm));
 
       // 42501 = insufficient_privilege: the grants stop it before the trigger runs.
       for (const statement of [
+        `SELECT data FROM events WHERE id = '${id}'`,
         `UPDATE events SET data = '{}'::jsonb WHERE id = '${id}'`,
         `DELETE FROM events WHERE id = '${id}'`,
         'TRUNCATE events',

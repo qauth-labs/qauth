@@ -176,8 +176,10 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   the approver's account. A command-line tool on the server host records itself
   as an `operator_cli` actor with the operating-system user
   (`operatorCliActor()`). Admin events are always on: no environment key and no
-  realm setting turns them off, and tests fail when a configuration key or a
-  realm column reads like a switch for them. Today only the client suspension
+  realm setting turns them off. Tests fail when a configuration key, a realm
+  column or a member a realm `jsonb` column's type declares names events
+  (`event`, `audit`, `log`, `sink`, …) and no allow list says why it turns
+  nothing off ([#827]). Today only the client suspension
   command writes admin events, which now join the chain; the admin API that
   will write the rest is still to come.
 - **Schema**: migration 0032 chains admin events by hash ([#459]). Each admin
@@ -192,12 +194,19 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   a head kept outside the database, they also fail when the chain was cut back
   to before that head. A second trigger refuses an admin row that does not
   follow the realm's head or sets its own `seq`. A trigger now refuses every
-  `UPDATE` on `events`, the owner's included, and
-  `eventsWriterGrantStatements()` grants a writing role `INSERT` and `SELECT`
-  only. The migration adds two nullable columns, checks, two indexes and the
+  `UPDATE` on `events`, the owner's included. The migration adds two nullable columns, checks, two indexes and the
   trigger; the check that admin rows are chained is added `NOT VALID`, so rows
   written before it, such as the client suspensions migration 0031 copied from
   `audit_logs`, are left as they are.
+- **Schema**: migration 0033 adds the two functions a role that writes events
+  reads through ([#827], ADR-019 Decision 7): `events_admin_chain_head`, the
+  realm's chain head, and `events_own_row`, the row the calling transaction
+  wrote. Both are `SECURITY DEFINER`, with `EXECUTE` revoked from `PUBLIC`.
+  `eventsWriterGrantStatements()` grants a writing role `INSERT` on `events`
+  and `EXECUTE` on the two functions, and no `SELECT`, so a writer cannot read
+  any realm's events, request IPs, user agents or admin diffs. `verifyChain`
+  and `events:verify-chain` run as a role that may read the table. The
+  migration only creates the functions.
 
 - **Passkeys: the WebAuthn provider and the relying-party settings** ([#467],
   ADR-017 Decision 14, ADR-019 Decision 2). One WebAuthn `CredentialProvider`
@@ -512,6 +521,7 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21
 
