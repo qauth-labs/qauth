@@ -413,7 +413,7 @@ qauth/
 
 **Infrastructure:**
 
-- **Monorepo**: Nx 23
+- **Monorepo**: Nx 24
 - **Package Manager**: pnpm 12
 - **Linting**: ESLint 10
 - **Containerization**: Docker
