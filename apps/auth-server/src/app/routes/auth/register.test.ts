@@ -23,7 +23,16 @@ vi.mock('../../../config/env', () => ({
 import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { emitUserEvent } from '../../helpers/user-events';
 import registerRoute from './register';
+
+vi.mock('../../helpers/user-events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/user-events')>();
+  const { checkedEmitUserEvent } = await import('../../../testing/user-events');
+  return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
+});
+
+const emitUserEventMock = vi.mocked(emitUserEvent);
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -201,6 +210,7 @@ async function register(setup?: (fastify: FastifyInstance) => void) {
 
 beforeEach(() => {
   vi.mocked(ensureMinimumResponseTime).mockClear();
+  emitUserEventMock.mockClear();
 });
 
 describe('POST /auth/register', () => {
@@ -248,6 +258,16 @@ describe('POST /auth/register', () => {
         used: false,
       }),
       TX
+    );
+
+    // The account's event, in the same transaction: it commits with the
+    // account or not at all.
+    expect(emitUserEventMock).toHaveBeenCalledOnce();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:user.registered:v1-rc.0',
+      { method: 'password' },
+      { tx: TX, realmId: 'realm-1', userId: 'user-1', actor: 'user' }
     );
 
     // ORDER GUARD: the users insert precedes the credentials insert
@@ -306,6 +326,8 @@ describe('POST /auth/register', () => {
       expect(fastify.repositories.users.create).toHaveBeenCalledOnce();
       expect(fastify.repositories.userAttributes.upsertMany).not.toHaveBeenCalled();
       expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
+      // No event either: a registration that did not happen records none.
+      expect(emitUserEventMock).not.toHaveBeenCalled();
     });
 
     it('mails the owner of a verified account a notice, not a link', async () => {
