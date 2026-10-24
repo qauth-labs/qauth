@@ -1,0 +1,8 @@
+{
+  "name": "server-sessions",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/sessions/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:sessions"],
+  "// targets": "to see all targets run: nx show project server-sessions --web"
+}

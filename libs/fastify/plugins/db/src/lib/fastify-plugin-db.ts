@@ -13,6 +13,7 @@ import {
   createOid4vpRequestStatesRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
+  createSessionsRepository,
   createUserAttributesRepository,
   createUserCredentialsRepository,
   createUsersRepository,
@@ -26,6 +27,7 @@ import {
   type Oid4vpRequestStatesRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
+  type SessionsRepository,
   type UserAttributesRepository,
   type UserCredentialsRepository,
   type UsersRepository,
@@ -72,9 +74,17 @@ declare module 'fastify' {
        * builds its own on the database it connects to.
        */
       eventDeliveries: EventDeliveriesRepository;
+      /**
+       * Browser sessions (ADR-019 Decision 3, #468). Routes reach them through
+       * `fastify.sessionService` (#469), which adds the cache, the realm's
+       * lifetimes and the last-seen throttle.
+       */
+      sessions: SessionsRepository;
     };
   }
 }
+
+export const DATABASE_PLUGIN_NAME = packageJson.name;
 
 /**
  * Fastify plugin for database connection
@@ -119,6 +129,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       oid4vpRequestStates: createOid4vpRequestStatesRepository(database.db),
       events: createEventsRepository(database.db, { telemetry: options.eventTelemetry }),
       eventDeliveries: createEventDeliveriesRepository(database.db),
+      sessions: createSessionsRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {
@@ -137,6 +148,6 @@ export const databasePlugin = fp<DatabasePluginOptions>(
     });
   },
   {
-    name: packageJson.name,
+    name: DATABASE_PLUGIN_NAME,
   }
 );

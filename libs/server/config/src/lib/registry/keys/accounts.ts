@@ -124,6 +124,15 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: 'The browser session lifetime, in seconds, counted from sign-in.',
   },
   {
+    name: 'SESSION_LAST_SEEN_INTERVAL',
+    tier: 'advanced',
+    role: 'deployment',
+    owner: 'sessions',
+    default: '60',
+    since: '0.2.0',
+    docs: 'How often, at most, in seconds, the last-seen time of a browser session is written; the idle limit of its realm is judged from that time.',
+  },
+  {
     name: 'SESSION_COOKIE_SECURE',
     tier: 'advanced',
     role: 'deployment',

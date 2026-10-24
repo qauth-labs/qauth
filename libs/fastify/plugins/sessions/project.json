@@ -1,0 +1,8 @@
+{
+  "name": "fastify-plugin-sessions",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/sessions/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:sessions"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-sessions --web"
+}

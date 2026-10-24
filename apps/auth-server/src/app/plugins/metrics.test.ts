@@ -174,6 +174,23 @@ describe('metrics + request-id', () => {
     await app.close();
   });
 
+  it('exposes the browser session counters (#469)', async () => {
+    const app = await buildApp();
+
+    app.metrics.sessionCacheLookups.inc({ result: 'hit' });
+    app.metrics.sessionPostgresReads.inc({ result: 'ok' });
+    app.metrics.sessionLastSeenWrites.inc({ result: 'written' });
+
+    const res = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(res.body).toContain('# TYPE qauth_session_cache_lookups_total counter');
+    expect(res.body).toContain('qauth_session_cache_lookups_total{result="hit"');
+    expect(res.body).toContain('qauth_session_postgres_reads_total{result="ok"');
+    expect(res.body).toContain('qauth_session_last_seen_writes_total{result="written"');
+
+    await app.close();
+  });
+
   it('generates a request id and echoes it on the response header', async () => {
     const app = await buildApp();
     app.get('/ping', async () => ({ ok: true }));

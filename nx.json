@@ -43,10 +43,12 @@
         "libs/server/keys/*",
         "libs/server/egress/*",
         "libs/server/event-delivery/*",
+        "libs/server/sessions/*",
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
         "libs/fastify/plugins/signer/*",
         "libs/fastify/plugins/event-delivery/*",
+        "libs/fastify/plugins/sessions/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*"
       ]
@@ -76,10 +78,12 @@
         "libs/server/keys/*",
         "libs/server/egress/*",
         "libs/server/event-delivery/*",
+        "libs/server/sessions/*",
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
         "libs/fastify/plugins/signer/*",
         "libs/fastify/plugins/event-delivery/*",
+        "libs/fastify/plugins/sessions/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*"
       ],
