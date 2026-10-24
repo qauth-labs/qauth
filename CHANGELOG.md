@@ -338,6 +338,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes the new tables yet: browser sessions stay in Redis until the session
   service lands.
 
+- **The browser session service** ([#469], ADR-019 Decision 3). The new
+  `@qauth-labs/server-sessions` library creates, reads and ends browser
+  sessions with Postgres as the source of truth and Redis as a cache in front
+  of it, and the auth-server decorates it as `fastify.sessionService` through
+  `@qauth-labs/fastify-plugin-sessions`. A read takes the realm and the `sid`,
+  goes to Redis first and to Postgres on a miss, and fills Redis for at most
+  60 seconds, never past the session's end. A session is absent when it is
+  revoked, past its absolute end, past the realm's idle limit or in another
+  realm. The realm row's `sso_max_lifespan` and `sso_idle_timeout` set the
+  absolute end and the idle limit; without them the end is
+  `SESSION_COOKIE_TTL` after creation and there is no idle limit.
+  `last_seen_at` is written at most once per `SESSION_LAST_SEEN_INTERVAL`
+  (a new advanced key, 60 seconds by default) per session, by one conditional
+  `UPDATE`, so several nodes do not all write. A revocation updates Postgres
+  and leaves a short Redis tombstone. With Redis down, reads go to Postgres;
+  with Postgres down, a session that needs it is absent and a cached one is
+  served no longer than the cache time. `/metrics` counts cache reads,
+  Postgres reads and last-seen writes. No route uses the service yet: browser
+  sessions stay in Redis until the sign-in and the session lookup move onto it
+  ([#488]).
+
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
   the default realm's step and under an advisory lock on the realm, the
@@ -594,6 +615,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#464]: https://github.com/qauth-labs/qauth/issues/464
 [#467]: https://github.com/qauth-labs/qauth/issues/467
 [#468]: https://github.com/qauth-labs/qauth/issues/468
+[#469]: https://github.com/qauth-labs/qauth/issues/469
 [#470]: https://github.com/qauth-labs/qauth/issues/470
 [#476]: https://github.com/qauth-labs/qauth/issues/476
 [#478]: https://github.com/qauth-labs/qauth/issues/478
@@ -601,6 +623,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#485]: https://github.com/qauth-labs/qauth/issues/485
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
+[#488]: https://github.com/qauth-labs/qauth/issues/488
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#827]: https://github.com/qauth-labs/qauth/issues/827
