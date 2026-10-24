@@ -5,10 +5,5 @@
     "declaration": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "./package.json"],
-  "references": [
-    {
-      "path": "../../../infra/cache/tsconfig.lib.json"
-    }
-  ]
+  "include": ["src/**/*.ts", "./package.json"]
 }

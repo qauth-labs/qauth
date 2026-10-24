@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { nxReadySignal } from '@nx/vite/plugins/nx-ready-signal.plugin';
 import tailwindcss from '@tailwindcss/vite';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
@@ -58,5 +59,10 @@ export default defineConfig(({ command }) => ({
       },
     }),
     react(),
+    // Tells an Nx task that runs the dev or preview server when it is
+    // listening, which @nx/vite/plugin infers as `readyWhen: { signal: true }`
+    // for the inferred `serve` and `preview` targets. It has no build hooks
+    // and does nothing outside such a task.
+    nxReadySignal(),
   ],
 }));

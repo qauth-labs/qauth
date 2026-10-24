@@ -15,8 +15,8 @@ jobs:
   # test and build run side by side instead of one after another in a single
   # `nx affected -t lint typecheck test build`. Each leg installs and computes
   # the affected set on its own, and the legs share no task results (there is
-  # no remote cache): a task another target depends on runs again in that
-  # target's leg, as the `build` targets that `typecheck` depends on do.
+  # no remote cache): a task another target depends on runs in that target's
+  # leg, as test-vectors' `validate` runs in the test leg before its `test`.
   # `fail-fast: false` keeps what the single command did, which ran every task
   # and reported every failure: a red leg does not cancel the others.
   affected:
