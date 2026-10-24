@@ -79,6 +79,16 @@ services:
       REDIS_CONNECTION_TIMEOUT: ${REDIS_CONNECTION_TIMEOUT:-10000}
       REDIS_COMMAND_TIMEOUT: ${REDIS_COMMAND_TIMEOUT:-5000}
 
+      # Key-encryption key (ADR-019 Decision 9). Wraps every key in the realm
+      # key store; the first boot imports the JWT keys and SESSION_COOKIE_SECRET
+      # into it and refuses without a KEK. REQUIRED in production.
+      # Generate with: openssl rand -base64 32
+      KEK_PROVIDER: ${KEK_PROVIDER:-}
+      KEK: ${KEK:-}
+      KEK_PATH: ${KEK_PATH:-}
+      KEK_PREVIOUS: ${KEK_PREVIOUS:-}
+      KEK_PREVIOUS_PATH: ${KEK_PREVIOUS_PATH:-}
+
       # JWT (from .env file)
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}

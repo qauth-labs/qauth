@@ -108,6 +108,13 @@ if [ ! -f "$STATE_DIR/session-secret" ]; then
   node -e 'process.stdout.write(require("node:crypto").randomBytes(48).toString("base64"))' \
     >"$STATE_DIR/session-secret"
 fi
+# The key-encryption key (#485): kept with the stack's state, so a restarted
+# server still opens the keys the first boot stored.
+if [ ! -f "$STATE_DIR/kek" ]; then
+  node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64"))' \
+    >"$STATE_DIR/kek"
+  chmod 600 "$STATE_DIR/kek"
+fi
 
 # --- Environment (the same minimum the CI container smoke test boots with) ---
 : "${NODE_ENV:=production}"
@@ -123,11 +130,12 @@ fi
 : "${JWT_ISSUER:=http://localhost:${PORT}}"
 : "${SESSION_COOKIE_SECRET:=$(cat "$STATE_DIR/session-secret")}"
 : "${SESSION_COOKIE_SECURE:=false}"
+: "${KEK_PATH:=$STATE_DIR/kek}"
 : "${EMAIL_PROVIDER:=mock}"
 : "${EMAIL_FROM_ADDRESS:=noreply@example.test}"
 : "${EMAIL_BASE_URL:=http://localhost:${PORT}}"
 export NODE_ENV HOST PORT LOG_LEVEL DATABASE_URL REDIS_URL REDIS_HOST REDIS_PORT \
-  JWT_PRIVATE_KEY JWT_PUBLIC_KEY JWT_ISSUER SESSION_COOKIE_SECRET SESSION_COOKIE_SECURE \
+  JWT_PRIVATE_KEY JWT_PUBLIC_KEY JWT_ISSUER SESSION_COOKIE_SECRET SESSION_COOKIE_SECURE KEK_PATH \
   EMAIL_PROVIDER EMAIL_FROM_ADDRESS EMAIL_BASE_URL
 
 # --- Migrations, the way the migration-runner image applies them -------------

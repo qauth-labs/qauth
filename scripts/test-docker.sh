@@ -34,6 +34,15 @@ if ! grep -q "JWT_PRIVATE_KEY" .env || grep -q "JWT_PRIVATE_KEY=\"\"" .env; then
     exit 1
 fi
 
+# Check that a KEK is set: the server wraps every stored key with it, and
+# refuses to start without one when NODE_ENV=production (#485)
+if ! grep -qE '^KEK(_PATH)?=.+' .env; then
+    echo -e "${RED}❌ KEK not set in .env file!${NC}"
+    echo -e "${YELLOW}   Generate one with: openssl rand -base64 32${NC}"
+    echo -e "   Then set KEK=<the output> in .env, and keep a copy with your backups"
+    exit 1
+fi
+
 echo -e "${GREEN}✅ Environment check passed${NC}"
 echo ""
 
