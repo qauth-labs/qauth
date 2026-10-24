@@ -40,11 +40,18 @@ describe('eventTelemetryEnvSchema', () => {
     expect(eventTelemetryEnvSchema.safeParse({ OTEL_EVENTS_ENABLED: 'yes' }).success).toBe(false);
   });
 
-  it('takes a service name and refuses a blank one', () => {
+  it('takes a service name, and a blank one as unset', () => {
     expect(
       eventTelemetryEnvSchema.parse({ OTEL_SERVICE_NAME: 'auth-eu-1' }).OTEL_SERVICE_NAME
     ).toBe('auth-eu-1');
-    expect(eventTelemetryEnvSchema.safeParse({ OTEL_SERVICE_NAME: '   ' }).success).toBe(false);
+    for (const blank of ['', '   ']) {
+      expect(eventTelemetryEnvSchema.parse({ OTEL_SERVICE_NAME: blank }).OTEL_SERVICE_NAME).toBe(
+        'qauth-auth-server'
+      );
+    }
+    expect(eventTelemetryEnvSchema.safeParse({ OTEL_SERVICE_NAME: 'x'.repeat(256) }).success).toBe(
+      false
+    );
   });
 
   it('takes any exporter value as text, since another OpenTelemetry component may set it', () => {

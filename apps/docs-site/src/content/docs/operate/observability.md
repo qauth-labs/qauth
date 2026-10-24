@@ -416,11 +416,13 @@ up. The server logs two other losses instead of counting them: the records
 left at shutdown (a warning), and an event that fails the event contract,
 which the event store's own check already keeps out (an error). The counter
 is on `/metrics` only while the export is on. A rule like this one tells you
-when the collector falls behind or cannot be reached:
+when records keep being dropped for 15 minutes, as they are when the collector
+falls behind or cannot be reached; a single burst, such as a collector
+restart, does not fire it:
 
 ```yaml
 - alert: QAuthEventExportDropping
-  expr: increase(qauth_events_telemetry_dropped_total[15m]) > 0
+  expr: increase(qauth_events_telemetry_dropped_total[5m]) > 0
   for: 15m
   labels:
     severity: warning

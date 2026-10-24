@@ -43,8 +43,14 @@ export const eventTelemetryEnvSchema = z.object({
     .default('false')
     .transform((val) => val === 'true' || val === '1'),
 
-  /** The `service.name` resource attribute of every exported record. */
-  OTEL_SERVICE_NAME: z.string().trim().min(1).max(255).default('qauth-auth-server'),
+  /**
+   * The `service.name` resource attribute of every exported record. A blank
+   * value is unset, as for the exporter variables, so it takes the default
+   * rather than refuse a boot that may not export at all.
+   */
+  OTEL_SERVICE_NAME: unsetWhenBlank(z.string().trim().min(1).max(255)).transform(
+    (value) => value ?? 'qauth-auth-server'
+  ),
 
   /** The collector's base URL; `/v1/logs` is appended. */
   OTEL_EXPORTER_OTLP_ENDPOINT: otlpSetting(),
