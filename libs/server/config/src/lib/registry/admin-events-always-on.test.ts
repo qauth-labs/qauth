@@ -20,6 +20,14 @@ import type { ConfigKey } from './types';
  * `log`, `sink`, …) is listed in ALLOWED with the reason it turns nothing
  * off, or the test fails.
  */
+/**
+ * The logs-signal form of a standard OTLP exporter variable (#541): where and
+ * how the OpenTelemetry export sends its copy of an event, never whether an
+ * event is stored.
+ */
+const OTLP_LOGS_VARIABLE =
+  'A standard OTLP exporter variable of the logs signal (#541): it sets where and how the OpenTelemetry export sends its copy of an event. Every event, admin events included, is stored and chained whatever it says.';
+
 const ALLOWED: Readonly<Record<string, string>> = {
   LOG_LEVEL:
     "The lowest level of the server's own process log. Events are not written to that log, and no level stops one.",
@@ -27,6 +35,13 @@ const ALLOWED: Readonly<Record<string, string>> = {
     "Formats the server's own process log for a terminal. Events are not written to that log.",
   OTEL_EVENTS_ENABLED:
     'Turns on the OpenTelemetry log export of stored events (#541). Every event, admin events included, is stored and chained whatever it says; it decides only whether a copy also leaves as a log record.',
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: OTLP_LOGS_VARIABLE,
+  OTEL_EXPORTER_OTLP_LOGS_HEADERS: OTLP_LOGS_VARIABLE,
+  OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: OTLP_LOGS_VARIABLE,
+  OTEL_EXPORTER_OTLP_LOGS_COMPRESSION: OTLP_LOGS_VARIABLE,
+  OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE: OTLP_LOGS_VARIABLE,
+  OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE: OTLP_LOGS_VARIABLE,
+  OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY: OTLP_LOGS_VARIABLE,
 };
 
 /** Every name a key registry and the env schemas hold. */
