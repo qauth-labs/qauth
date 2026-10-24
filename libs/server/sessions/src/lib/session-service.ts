@@ -5,7 +5,13 @@ import {
   type SessionVerdict,
   sessionVerdict,
 } from './lifetimes';
-import type { SessionCache, SessionLogger, SessionMetrics, SessionStore } from './ports';
+import type {
+  SessionCache,
+  SessionCacheLookup,
+  SessionLogger,
+  SessionMetrics,
+  SessionStore,
+} from './ports';
 import type {
   BrowserSession,
   CachedSession,
@@ -42,7 +48,7 @@ export interface SessionServiceSettings {
   lastSeenIntervalSeconds?: number;
   /**
    * How long, in seconds, a cache entry may serve a session without asking
-   * Postgres, and how long a revocation's tombstone stays. Defaults to
+   * Postgres; a revocation's tombstone stays twice as long. Defaults to
    * {@link DEFAULT_SESSION_CACHE_TTL_SECONDS}.
    */
   cacheTtlSeconds?: number;
@@ -264,8 +270,17 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     }
   }
 
-  /** Read the session from Postgres, touch it when due, and fill the cache. */
-  async function readThrough(realmId: string, sid: string): Promise<LiveSession | null> {
+  /**
+   * Read the session from Postgres, touch it when due, and fill the cache,
+   * unless `fill` is off because the cache did not answer the read before.
+   */
+  async function readThrough(
+    realmId: string,
+    sid: string,
+    fill: boolean
+  ): Promise<LiveSession | null> {
+    // The entry's freshness counts from before the read, so it lapses before
+    // the tombstone of a revocation that came after the read.
     const readAt = now();
     let stored;
     try {
@@ -282,13 +297,17 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       return null;
     }
     let live: LiveSession = { record: cachedRecordOf(session), lifetimes };
-    if (verdictOf(live, readAt) !== 'live') return null;
-    if (touchIsDue(live, readAt)) {
+    // Judged when the answer is in, not when the read began.
+    const judgedAt = now();
+    if (verdictOf(live, judgedAt) !== 'live') return null;
+    if (touchIsDue(live, judgedAt)) {
       const touched = await touch(live);
       if (touched === 'error') return null;
-      if (touched === 'written') live = { ...live, record: { ...live.record, lastSeenAt: readAt } };
+      if (touched === 'written') {
+        live = { ...live, record: { ...live.record, lastSeenAt: judgedAt } };
+      }
     }
-    await fillCache(live, readAt + cacheTtlMs);
+    if (fill) await fillCache(live, readAt + cacheTtlMs);
     return live;
   }
 
@@ -312,7 +331,7 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       // Skipped: another node wrote it first, or the session ended since the
       // entry was filled. Postgres says which.
     }
-    return readThrough(live.record.realmId, live.record.id);
+    return readThrough(live.record.realmId, live.record.id, true);
   }
 
   function shared(key: string, work: () => Promise<LiveSession | null>) {
@@ -327,6 +346,9 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
 
   return {
     async create(input: CreateSessionInput): Promise<BrowserSession> {
+      if (!UUID.test(input.realmId.toLowerCase())) {
+        throw new UnknownSessionRealmError(input.realmId);
+      }
       const lifetimes = await store.findRealmLifetimes(input.realmId);
       if (lifetimes === undefined) throw new UnknownSessionRealmError(input.realmId);
       const createdAt = now();
@@ -356,15 +378,16 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       // query error that would read as an outage.
       if (!UUID.test(realmId) || !UUID.test(sid)) return null;
 
-      const at = now();
       const key = `${realmId}:${sid}`;
-      let lookup;
+      let lookup: SessionCacheLookup | undefined;
       try {
         lookup = await bounded(cache.read(realmId, sid));
       } catch (error) {
         metrics.cacheLookups.inc({ result: 'error' });
         logger.warn({ err: error, realmId }, 'Session cache read failed; reading Postgres');
       }
+      // Taken after the read, which may have waited up to the cache timeout.
+      const at = now();
 
       if (lookup?.kind === 'revoked') {
         metrics.cacheLookups.inc({ result: 'revoked' });
@@ -373,9 +396,14 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       if (lookup?.kind === 'entry') {
         const { entry } = lookup;
         // An entry past its freshness is a miss, whatever expiry the cache
-        // itself gave it: the cache alone never vouches for longer.
+        // itself gave it: the cache alone never vouches for longer. So is one
+        // that claims more than the cache time from now, which no node of
+        // this deployment writes.
         const usable =
-          entry.record.realmId === realmId && entry.record.id === sid && entry.freshUntil > at;
+          entry.record.realmId === realmId &&
+          entry.record.id === sid &&
+          entry.freshUntil > at &&
+          entry.freshUntil <= at + cacheTtlMs;
         if (usable) {
           metrics.cacheLookups.inc({ result: 'hit' });
           const live: LiveSession = { record: entry.record, lifetimes: entry.lifetimes };
@@ -388,7 +416,9 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       }
       if (lookup !== undefined) metrics.cacheLookups.inc({ result: 'miss' });
 
-      const read = await shared(key, () => readThrough(realmId, sid));
+      // A cache that did not answer the read is not asked to store the result.
+      const cacheAnswered = lookup !== undefined;
+      const read = await shared(key, () => readThrough(realmId, sid, cacheAnswered));
       return read === null ? null : browserSessionOf(read);
     },
 
@@ -401,9 +431,12 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       // that come after it.
       inFlight.delete(`${realmId}:${sid}`);
       // Written whether or not this call ended the row: a stale entry of a
-      // session that was already ended goes too.
+      // session that was already ended goes too. It lasts twice the cache
+      // time, so it outlives any entry filled from a read before the end,
+      // even one whose write reached the cache late, read by a node whose
+      // clock lags.
       try {
-        await bounded(cache.markRevoked(realmId, sid, cacheTtlMs));
+        await bounded(cache.markRevoked(realmId, sid, 2 * cacheTtlMs));
       } catch (error) {
         logger.warn(
           { err: error, realmId },
