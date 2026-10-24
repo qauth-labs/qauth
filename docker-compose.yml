@@ -120,6 +120,7 @@ services:
       SESSION_COOKIE_SECRET: ${SESSION_COOKIE_SECRET}
       SESSION_COOKIE_TTL: ${SESSION_COOKIE_TTL:-86400}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_LAST_SEEN_INTERVAL: ${SESSION_LAST_SEEN_INTERVAL:-60}
       # Require a verified account before password login (default: true). For a
       # password account, verified means its address was confirmed. Keep it on:
       # off, register-then-login tells a free address from a registered one.
