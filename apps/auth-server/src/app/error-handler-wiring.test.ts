@@ -60,6 +60,7 @@ import { z } from 'zod';
 
 import { pageQuerySchema, pageSchema } from './api-conventions/paging';
 import { problemResponses } from './api-conventions/problem';
+import type { RealmHostLookup, RealmHostMatch } from './helpers/realm-host-cache';
 
 /** Test-only route that raises a real `UniqueConstraintError`. See {@link buildAssembledApp}. */
 const UNIQUE_CONSTRAINT_ROUTE = '/__error-handler-wiring__/unique-constraint';
@@ -80,6 +81,26 @@ const FAMILY_LIST_ROUTE = '/developer/v1-rc.0/__error-handler-wiring__/widgets';
 const FAMILY_MISSING_ROUTE = '/developer/v1-rc.0/__error-handler-wiring__/widgets/missing';
 
 const FORM: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
+
+/**
+ * The realm the resolver (#486) finds for `localhost`, the host `inject()`
+ * sends when a test names none. The database is unreachable here, so the app
+ * looks hosts up through this stub instead of `realm_hosts`; any other host
+ * names no realm.
+ */
+const REALM_HOST = 'localhost';
+const realmLookup: RealmHostLookup = async (host) =>
+  host === REALM_HOST
+    ? ({
+        realm: {
+          id: '0190e3c4-0000-7000-8000-000000000001',
+          name: 'master',
+          enabled: true,
+          issuer: 'https://auth.example.com',
+        },
+        host: { host: REALM_HOST, kind: 'primary' },
+      } as RealmHostMatch)
+    : undefined;
 
 /**
  * The environment the assembled app boots under.
@@ -176,7 +197,7 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
   await instance.register(async (scope, opts) => {
     // The database is unreachable on purpose (above), so the default realm's
     // boot step (#484), which needs it, stays off.
-    await app(scope, { ...(opts as object), defaultRealmBoot: false });
+    await app(scope, { ...(opts as object), defaultRealmBoot: false, realmLookup });
 
     // ── Acceptance criterion (c): how the F-01 guarantee is exercised.
     //
@@ -198,7 +219,7 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
     // `kErrorHandler` either way and stays green even with the #365 bug
     // reintroduced (verified). The ordering guards are the tests marked
     // `[#365 ORDERING GUARD]`, which run against real autoloaded routes.
-    scope.post(UNIQUE_CONSTRAINT_ROUTE, async () => {
+    scope.post(UNIQUE_CONSTRAINT_ROUTE, { config: { surface: 'api' } }, async () => {
       throw new UniqueConstraintError(LEAKY_CONSTRAINT_NAME);
     });
 
@@ -209,6 +230,7 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
     scope.withTypeProvider<ZodTypeProvider>().get(
       FAMILY_LIST_ROUTE,
       {
+        config: { surface: 'api' },
         schema: {
           querystring: pageQuerySchema,
           response: {
@@ -221,7 +243,7 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
     );
     scope.get(
       FAMILY_MISSING_ROUTE,
-      { schema: { response: { ...problemResponses(404) } } },
+      { config: { surface: 'api' }, schema: { response: { ...problemResponses(404) } } },
       async () => {
         throw new NotFoundError('Widget', 'missing');
       }
@@ -419,6 +441,49 @@ describe('assembled app — global error handler reachability (#365)', () => {
  * revocation endpoints look the realm up before they refuse anything, so their
  * half lives in `error-format.integration.test.ts`, against a real Postgres.
  */
+describe('assembled app — realm resolution by host (#486)', () => {
+  it('answers a host that names no realm with 421 in the custom shape, before the route runs', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: { ...FORM, host: 'unknown.example' },
+      payload: 'grant_type=not-a-real-grant',
+    });
+
+    expect(res.statusCode).toBe(421);
+    expect(res.json()).toEqual({
+      error: 'This server does not answer for the requested host',
+      statusCode: 421,
+      code: 'MISDIRECTED_REQUEST',
+    });
+    expect(res.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('refuses a browser route on an unknown host with no cookie', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/ui/login',
+      headers: { host: 'unknown.example' },
+    });
+
+    expect(res.statusCode).toBe(421);
+    expect(res.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('serves /health on any host, without a realm', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { host: 'unknown.example' },
+    });
+
+    // The database and Redis are unreachable here, so the answer is 503; what
+    // matters is that the host did not decide it.
+    expect(res.statusCode).not.toBe(421);
+    expect(res.json()).toMatchObject({ status: 'unhealthy' });
+  });
+});
+
 describe('assembled app — problem details on the API families (#506)', () => {
   const PROBLEM = /^application\/problem\+json(?:;|$)/;
 
@@ -540,7 +605,7 @@ describe('assembled app — an over-long email is refused before any handler sto
  *
  * ## Why a source assertion, here and nowhere else
  *
- * Three of `app.ts`'s registrations are position-sensitive, and the thing that
+ * Four of `app.ts`'s registrations are position-sensitive, and the thing that
  * makes them dangerous is precisely that breaking them produces NO runtime
  * signal — no throw, no warning, no failed boot. The tests above cover the one
  * invariant that does have a runtime signal (an autoloaded route's error shape)
@@ -555,6 +620,12 @@ describe('assembled app — an over-long email is refused before any handler sto
  *    Unobservable in this suite by construction: the limiter is backed by
  *    `fastify.redis` and this suite runs with an unreachable Redis, so it is
  *    disabled here.
+ *
+ *  - **`realmResolverPlugin` before the rate limiter and the routes (#486).**
+ *    It checks every route's `config.surface` in an `onRoute` hook, so behind
+ *    the routes it would check none of them and the boot refusal for an
+ *    unclassified route would quietly stop. Ahead of the rate limiter, a
+ *    per-realm limit can read the realm it resolved.
  *
  *  - **`errorHandler` before `cors`.** @fastify/cors registers a route of its
  *    own (`options('*')`), so a handler installed after it leaves that one
@@ -573,6 +644,7 @@ describe('assembled app — an over-long email is refused before any handler sto
 describe('app.ts registration order — the invariants with no runtime signal (#365)', () => {
   /** The registration sites, in the order `app.ts` must perform them. */
   const REQUIRED_ORDER = [
+    'fastify.register(realmResolverPlugin,',
     'fastify.register(rateLimitPlugin)',
     'fastify.register(errorHandler)',
     'fastify.register(cors,',

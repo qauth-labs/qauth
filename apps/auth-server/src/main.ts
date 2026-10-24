@@ -38,9 +38,12 @@ const server = Fastify({
   // by default, or the proxies' addresses/CIDRs — never `true` or a hop count).
   // Every per-IP rate limit and the `ip:` failed-login lockout key on
   // `request.ip` (an IPv6 client by its /64; app/helpers/client-address.ts);
-  // behind a proxy with this unset, all callers share one bucket. The public
-  // origin still comes only from JWT_ISSUER — nothing reads
-  // `request.hostname`/`request.protocol` (ADR-013).
+  // behind a proxy with this unset, all callers share one bucket. The same list
+  // decides `request.host`, which picks the request's realm
+  // (app/plugins/realm-resolver.ts, #486): `X-Forwarded-Host` counts only from
+  // a listed hop. The host only selects a realm; no URL is built from it, and
+  // nothing reads `request.protocol`. The public origin still comes from
+  // JWT_ISSUER (ADR-013).
   trustProxy: env.TRUST_PROXY,
   routerOptions: {
     ignoreTrailingSlash: true,
