@@ -33,6 +33,12 @@ import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
+import type { EventLogQueueLimits } from './helpers/event-log-queue';
+import {
+  createEventTelemetry,
+  type EventTelemetry,
+  eventTelemetrySettings,
+} from './helpers/event-telemetry';
 import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
@@ -110,10 +116,25 @@ export interface AppOptions {
    * does: the error-handler wiring test and the route class test.
    */
   realmLookup?: RealmHostLookup;
+  /**
+   * The event telemetry queue's sizes and times (#541), for a suite that
+   * fills the queue or waits for a batch. The defaults unless set.
+   */
+  eventTelemetryLimits?: Partial<EventLogQueueLimits>;
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /**
+     * The OpenTelemetry log export of events (#541), present only when
+     * OTEL_EVENTS_ENABLED is on.
+     */
+    eventTelemetry?: EventTelemetry;
+  }
 }
 
 export async function app(fastify: FastifyInstance, opts: AppOptions) {
-  const { defaultRealmBoot = true, realmLookup, ...pluginOptions } = opts;
+  const { defaultRealmBoot = true, realmLookup, eventTelemetryLimits, ...pluginOptions } = opts;
 
   // ADR-018 §5: an experimental feature may change in a minor release, so a
   // deployment that turns one on is told so at every boot: one `warn` line per
@@ -121,7 +142,21 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // every boot of the app, a test harness's included, says it.
   logExperimentalFeatures(fastify.log);
 
+  // The OpenTelemetry log export of events (ADR-018 §3, #541), before the
+  // database: the event store hands each event to it once the event's
+  // transaction commits. Off by default, and then no exporter exists. It
+  // sends what is queued, for a few seconds at most, when the server closes.
+  const eventTelemetry = createEventTelemetry(eventTelemetrySettings(env), {
+    log: fastify.log,
+    ...(eventTelemetryLimits === undefined ? {} : { limits: eventTelemetryLimits }),
+  });
+  if (eventTelemetry !== undefined) {
+    fastify.decorate('eventTelemetry', eventTelemetry);
+    fastify.addHook('onClose', () => eventTelemetry.shutdown());
+  }
+
   await fastify.register(databasePlugin, {
+    eventTelemetry,
     config: {
       connectionString: env.DATABASE_URL,
       pool: {

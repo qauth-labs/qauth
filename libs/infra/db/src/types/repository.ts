@@ -1128,12 +1128,34 @@ export interface EventPage {
   next: EventPosition;
 }
 
+/**
+ * Where the event store hands each event once its transaction has committed
+ * (ADR-019 Decision 8, issue #541): the auth server's OpenTelemetry log
+ * export. Telemetry, not delivery: it has no delivery guarantee, and an event
+ * the process loses between the commit and the hand-over is not sent again.
+ * The event API and webhooks read the store and carry the guarantee.
+ */
+export interface EventTelemetrySink {
+  /**
+   * Take one committed event, the envelope as it was stored. Called after the
+   * COMMIT, never inside the transaction. It must return at once (it queues)
+   * and never throw; an error it throws anyway is ignored.
+   */
+  record(event: EventEnvelope): void;
+}
+
 /** Options of `createEventsRepository`. */
 export interface EventsRepositoryOptions {
   /** The clock for an event's `time` and id, in epoch milliseconds. Defaults to `Date.now`. */
   now?: () => number;
   /** Admin rows read per query while verifying the chain, a positive integer. Defaults to 500. */
   verifyBatchSize?: number;
+  /**
+   * Hand each committed event to this sink. With it, the repository makes
+   * the root database report its commits (see {@link EventsRepository}).
+   * Without it, nothing leaves the store but through its reads.
+   */
+  telemetry?: EventTelemetrySink;
 }
 
 /**
@@ -1258,6 +1280,16 @@ export type EventChainReport =
  * written after it began until it ends. {@link oldestUnreadEventAge} measures
  * that wait; the auth server publishes it as the gauge
  * `qauth_events_oldest_unread_age_seconds`.
+ *
+ * ## Telemetry
+ *
+ * With a telemetry sink in its options, the repository hands every event it
+ * wrote to the sink once the event's transaction has committed: right after
+ * the insert for {@link emitInOwnTransaction}, and after the outermost COMMIT
+ * for {@link emit}. An event whose transaction or savepoint rolls back is
+ * never handed over. The sink never reads the store. Only a transaction
+ * opened on the root database the repository was made with can report its
+ * commit; an event emitted in any other is stored but not handed over.
  */
 export interface EventsRepository {
   /**

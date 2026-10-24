@@ -1,14 +1,14 @@
 ---
 title: Observability Guide
-description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, Prometheus metrics, and alerting.
+description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, Prometheus metrics, events as OpenTelemetry logs, and alerting.
 sidebar:
   order: 3
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-24'
 ---
 
 This guide covers QAuth's observability surface: structured logging, request-id
 tracking, auth-event logging, failed-login tracking/lockout, Prometheus metrics,
-and recommended alerting.
+events exported as OpenTelemetry logs, and recommended alerting.
 
 ## Overview
 
@@ -19,6 +19,7 @@ and recommended alerting.
 | **Auth-event logging**    | Structured `authEvent` log lines for login/register/logout/token |
 | **Failed-login tracking** | Redis-backed per-identifier counters with temporary lockout      |
 | **Metrics**               | `GET /metrics` in Prometheus text format via `prom-client`       |
+| **Event export**          | Every event as an OpenTelemetry log record, off by default       |
 | **Background jobs**       | Periodic jobs, one node at a time under a Postgres advisory lock |
 | **Alerting**              | Prometheus Alertmanager rules (see below)                        |
 
@@ -153,6 +154,7 @@ process/runtime metrics plus QAuth counters and gauges:
 | `qauth_tokens_issued_total`              | counter | `type`, `grant_type` | Tokens issued by type and grant.                                    |
 | `qauth_job_runs_total`                   | counter | `job`, `result`      | Background job runs by outcome.                                     |
 | `qauth_events_oldest_unread_age_seconds` | gauge   | none                 | Seconds the oldest committed event has been held back from readers. |
+| `qauth_events_telemetry_dropped_total`   | counter | `reason`             | Event log records not exported; present only when the export is on. |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -170,6 +172,9 @@ each list as **open** — a new call site can add a value without a schema chang
   or `jwt-bearer`.
 - `job` is a job's name, e.g. `purge-expired`. `result` is `success`, `failure`
   or `timeout`; see [Background jobs](#background-jobs).
+- `reason` on `qauth_events_telemetry_dropped_total` is `queue_full` or
+  `export_failed`; see
+  [Events as OpenTelemetry logs](#events-as-opentelemetry-logs).
 
 The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
@@ -262,6 +267,175 @@ but `/health`; any other host gets `421 Misdirected Request`. The target above
 works because the Compose file lists `auth-server` in
 `DEFAULT_REALM_ENDPOINT_HOSTS`. A scraper that reaches the server by another
 name, or by a pod address, needs that name or address in the list.
+
+## Events as OpenTelemetry Logs
+
+QAuth can send every event it records to your own OpenTelemetry collector, as
+one log record per event, over OTLP/HTTP. The
+[event reference](/reference/events/) lists the event types. The export is off
+by default.
+
+It is telemetry, with no delivery guarantee. A record can be dropped, and a
+crash between the moment an event commits and the moment it is sent loses that
+record. The event itself is never lost: it stays in the event store either way.
+Build anything that must see every event on the event store, not on this
+export.
+
+### Turning it on
+
+Set the switch and point the exporter at your collector's OTLP/HTTP port:
+
+```sh
+OTEL_EVENTS_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+# Optional:
+OTEL_SERVICE_NAME=qauth-auth-server
+OTEL_EXPORTER_OTLP_HEADERS=x-api-key=<URL-encoded key>
+```
+
+The export reads the standard OpenTelemetry exporter variables, with their
+standard meaning. The
+[configuration reference](/operate/configuration/#advanced-keys) lists each
+one.
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` is the collector's base URL, and the export
+  appends `/v1/logs` to it. `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` is a full URL,
+  used as it is. With neither set, the export sends to
+  `http://localhost:4318/v1/logs`.
+- `OTEL_EXPORTER_OTLP_HEADERS` holds headers such as a collector API key, as
+  URL-encoded `name=value` pairs separated by commas. The configuration page
+  treats it as a secret.
+- `OTEL_EXPORTER_OTLP_TIMEOUT` is how long one export may take, its retries
+  included: 10000 ms by default, an hour at most. `OTEL_EXPORTER_OTLP_COMPRESSION`
+  is `gzip` or `none`.
+- `OTEL_EXPORTER_OTLP_CERTIFICATE` names a PEM file of CA certificates for a
+  collector behind TLS with a private CA. `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`
+  and `OTEL_EXPORTER_OTLP_CLIENT_KEY` name the client certificate and key for
+  mutual TLS.
+- Each of these has a `LOGS_` form (`OTEL_EXPORTER_OTLP_LOGS_HEADERS` and so on)
+  that wins over the general one. The two header lists are merged.
+- `OTEL_SERVICE_NAME` sets the records' `service.name` (`qauth-auth-server` by
+  default). `OTEL_RESOURCE_ATTRIBUTES` is not read.
+
+When the export is on, the server checks these values at boot: a malformed
+URL, header list, timeout or compression refuses to start, with the variable's
+name in the error, and so does a TLS file the process cannot read, or a client
+certificate set without its key or a key without its certificate. The
+exporter would otherwise drop an unreadable CA file without a word and trust
+the public CAs instead. The error never repeats a header value. When the
+export is off, the server leaves them alone. They are process-wide, and another
+OpenTelemetry component of yours may read them.
+
+The records are JSON-encoded OTLP (`http/json`). `OTEL_EXPORTER_OTLP_PROTOCOL`
+is not read, and gRPC is not supported. The OpenTelemetry Collector's `otlp`
+receiver accepts JSON on its HTTP port:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  debug: {}
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [debug]
+```
+
+The collector is your own, and it often sits on a private network. So the export
+does not go through QAuth's SSRF-safe egress client, which guards the
+destinations that clients and users register. Point the endpoint only at a
+collector you run.
+
+Under Docker Compose every variable above is forwarded to the `auth-server`
+container. A certificate or key variable names a path inside the container, so
+mount the file too.
+
+### What a record holds
+
+| Part of the record | Value                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| Body               | The event envelope as a JSON string, the same document the event store holds.                      |
+| Event name         | The event type, such as `urn:qauth:event:user.signed_in:v1-rc.0`.                                  |
+| Timestamp          | The event's `time`.                                                                                |
+| Severity           | The type's severity: `info` is INFO (9), `warning` is WARN (13), `critical` is ERROR2 (18).        |
+| Severity text      | The type's severity as written in the registry: `info`, `warning` or `critical`.                   |
+| Trace and span id  | Those of the span active when the event committed, when the process has one.                       |
+| Resource           | `service.name` from `OTEL_SERVICE_NAME`, and the OpenTelemetry SDK's `telemetry.sdk.*` attributes. |
+| Scope              | `qauth.events`.                                                                                    |
+
+Every record carries these attributes:
+
+| Attribute              | Value                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `qauth.event.id`       | The event id, a UUIDv7. It is the same id on every route an event takes.                          |
+| `qauth.event.type`     | The event type.                                                                                   |
+| `qauth.event.category` | `user` or `admin`.                                                                                |
+| `qauth.realm`          | The id of the realm the event happened in.                                                        |
+| `qauth.subject.id`     | The subject's id, when the event has a subject.                                                   |
+| `qauth.client.id`      | The `client_id` of the client the request came through, when there was one.                       |
+| `qauth.request.id`     | The request id echoed on `REQUEST_ID_HEADER`, when no span is active and the event has a request. |
+
+QAuth starts no traces itself. A record carries a trace id only when the
+process runs an OpenTelemetry tracing setup of yours, such as the Node.js
+auto-instrumentation loaded with `--require`, that made a span active for the
+request. Otherwise `qauth.request.id` links the record to the request's log
+lines (`reqId`) and to the `trace_id` of an error response.
+
+A record holds what the event holds and nothing more. The event store refuses
+an event that carries a password, a token, a key or a value shaped like one,
+and the export checks every event against the same rules before it queues the
+record. The export adds no masking of its own. On events that a person's own
+request caused, the body includes the request's IP address and `User-Agent`,
+as the event store does. An admin event's `diff` carries the before and after
+values an admin changed, a contact address included, and a field an event type
+declares as personal data goes out as it is stored. Your collector and the
+storage behind it then hold that personal data, and how long they keep it is
+yours to set: the event store's retention does not reach the exported copy.
+
+### Queue, drops and limits
+
+Export never fails a request, and a request never waits for the collector.
+When an event commits, the request builds its record and puts it in a queue
+in memory. The server sends the queue's records later, on its own:
+
+- The queue holds up to 2048 records. When it is full, each new record pushes
+  out the oldest one, so a collector that comes back receives the latest
+  events.
+- Records go out in batches of up to 512, one batch at a time. A batch leaves
+  once 512 records wait, or a second after the first of them arrived. Records
+  that arrive while a batch is out wait for it to end.
+- A batch the collector refuses, or that cannot be sent before
+  `OTEL_EXPORTER_OTLP_TIMEOUT`, is dropped after the exporter's own retries.
+  It is not sent again. If an export has not reported 5 seconds after that
+  timeout, its batch is given up and the next one goes out.
+- When the server stops, it spends up to 5 seconds sending what is queued. It
+  logs how many records were left unsent, and drops them.
+
+`qauth_events_telemetry_dropped_total` counts the records the queue gives up.
+`reason="queue_full"` counts records pushed out of a full queue, and
+`reason="export_failed"` counts records in batches that failed or were given
+up. The server logs two other losses instead of counting them: the records
+left at shutdown (a warning), and an event that fails the event contract,
+which the event store's own check already keeps out (an error). The counter
+is on `/metrics` only while the export is on. A rule like this one tells you
+when records keep being dropped for 15 minutes, as they are when the collector
+falls behind or cannot be reached; a single burst, such as a collector
+restart, does not fire it:
+
+```yaml
+- alert: QAuthEventExportDropping
+  expr: increase(qauth_events_telemetry_dropped_total[5m]) > 0
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: 'QAuth is dropping event log records'
+    description: 'The OpenTelemetry collector refuses or does not answer QAuth exports.'
+```
 
 ## Background Jobs
 

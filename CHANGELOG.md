@@ -256,6 +256,24 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
   writes its events there since [#458]; the delivery role and the event API
   come next.
 
+- **Events as OpenTelemetry logs** ([#541], ADR-018 §3, ADR-019 Decision 8).
+  With `OTEL_EVENTS_ENABLED=true` (off by default) the auth-server sends every
+  event it commits to the operator's OpenTelemetry collector as a log record,
+  over OTLP/HTTP with JSON encoding. The body is the event envelope as JSON;
+  the attributes are `qauth.event.id`, `qauth.event.type`,
+  `qauth.event.category`, `qauth.realm`, `qauth.subject.id` and
+  `qauth.client.id`; the severity is the type's; an active span gives the
+  trace and span id, else the record carries `qauth.request.id`. The export
+  reads `OTEL_SERVICE_NAME` and the standard `OTEL_EXPORTER_OTLP_*` variables
+  of the logs signal, all advanced keys; with the export on, the boot refuses
+  a malformed one.
+  It is telemetry with no delivery guarantee: records wait in a bounded queue
+  that drops the oldest when full, export never fails or slows a request, and
+  `qauth_events_telemetry_dropped_total` on `/metrics` counts what was not
+  sent. In `@qauth-labs/infra-db`, `createEventsRepository` takes a
+  `telemetry` sink that it hands each event to once its transaction commits.
+  The observability page (`operate/observability`) describes the setup.
+
 - **Schema**: migration 0030 reshapes the `sessions` table for browser sessions
   ([#468], ADR-019 Decision 3). Each row is one account signed in on one
   browser, tied to a realm and a user, and its `id` is the session's `sid`. It
@@ -493,6 +511,7 @@ approvals })` from `@qauth-labs/infra-db`. Its `data.diff` lists the changed
 [#485]: https://github.com/qauth-labs/qauth/issues/485
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
+[#541]: https://github.com/qauth-labs/qauth/issues/541
 
 ## [0.1.3] - 2026-10-21
 

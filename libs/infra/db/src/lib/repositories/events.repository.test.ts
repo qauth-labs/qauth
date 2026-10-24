@@ -1,4 +1,4 @@
-import { EventValidationError } from '@qauth-labs/shared-events';
+import { type EventEnvelope, EventValidationError } from '@qauth-labs/shared-events';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { Pool } from 'pg';
 import { describe, expect, expectTypeOf, it } from 'vitest';
@@ -10,6 +10,7 @@ import type {
   DbTransaction,
   EmitEvent,
   EventsRepository,
+  EventTelemetrySink,
 } from '../../types';
 import { EVENT_CHAIN_GENESIS_HASH, eventChainHash } from '../events/chain';
 import {
@@ -220,6 +221,111 @@ describe('emitInOwnTransaction', () => {
       'insert into "events"',
     ]);
     expect(insertOf(queries).values).toContain(id);
+  });
+});
+
+/** A sink that keeps what it is handed, with the statements that had run by then. */
+function recordingSink(queries: readonly CapturedQuery[]) {
+  const handed: Array<{ event: EventEnvelope; statements: string[] }> = [];
+  const sink: EventTelemetrySink = {
+    record: (event) => handed.push({ event, statements: queries.map((q) => q.text.toLowerCase()) }),
+  };
+  return { sink, handed };
+}
+
+/** A JWS in compact form: the shape the payload scanner refuses anywhere in an event. */
+const JWS_SHAPED = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlLXZhbHVl';
+
+describe('telemetry (issue #541)', () => {
+  it('hands the stored envelope to the sink once the transaction has committed, never inside it', async () => {
+    const { db, queries } = createRecordingDb();
+    const { sink, handed } = recordingSink(queries);
+    const repo = createEventsRepository(db, { now: () => NOW, telemetry: sink });
+
+    const id = await db.transaction(async (tx) => {
+      const emitted = await repo.emit(tx, SIGNED_IN);
+      expect(handed).toEqual([]);
+      return emitted;
+    });
+
+    expect(handed).toHaveLength(1);
+    expect(handed[0].statements.at(-1)).toBe('commit');
+    expect(handed[0].event).toEqual({
+      id,
+      type: SIGNED_IN.type,
+      time: new Date(NOW).toISOString(),
+      realm: REALM_ID,
+      category: 'user',
+      actor: SIGNED_IN.actor,
+      subject: SIGNED_IN.subject,
+      client: SIGNED_IN.client,
+      request: SIGNED_IN.request,
+      data: SIGNED_IN.data,
+    });
+  });
+
+  it('never hands over an event whose transaction rolls back', async () => {
+    const { db, queries } = createRecordingDb();
+    const { sink, handed } = recordingSink(queries);
+    const repo = createEventsRepository(db, { telemetry: sink });
+
+    await expect(
+      db.transaction(async (tx) => {
+        await repo.emit(tx, SIGNED_IN);
+        throw new Error('the change failed');
+      })
+    ).rejects.toThrow('the change failed');
+    expect(handed).toEqual([]);
+  });
+
+  it('hands over an event written in its own transaction right after the insert', async () => {
+    const { db, queries } = createRecordingDb();
+    const { sink, handed } = recordingSink(queries);
+    const repo = createEventsRepository(db, { telemetry: sink });
+
+    const id = await repo.emitInOwnTransaction(SIGNED_IN);
+
+    expect(handed.map((entry) => entry.event.id)).toEqual([id]);
+    expect(handed[0].statements).toHaveLength(1);
+    expect(handed[0].statements[0]).toMatch(/^insert into "events"/);
+  });
+
+  it('a sink that throws fails neither write', async () => {
+    const { db } = createRecordingDb();
+    const repo = createEventsRepository(db, {
+      telemetry: {
+        record: () => {
+          throw new Error('collector gone');
+        },
+      },
+    });
+
+    await expect(repo.emitInOwnTransaction(SIGNED_IN)).resolves.toEqual(expect.any(String));
+    await expect(db.transaction((tx) => repo.emit(tx, SIGNED_IN))).resolves.toEqual(
+      expect.any(String)
+    );
+  });
+
+  it('an event with a secret-shaped value fails the scanner and reaches neither the table nor the sink', async () => {
+    const { db, queries } = createRecordingDb();
+    const { sink, handed } = recordingSink(queries);
+    const repo = createEventsRepository(db, { telemetry: sink });
+    const leaking = { ...SIGNED_IN, request: { userAgent: JWS_SHAPED } };
+
+    await expect(repo.emitInOwnTransaction(leaking)).rejects.toThrow(
+      /\/request\/userAgent: the value is shaped like a token/
+    );
+    await expect(db.transaction((tx) => repo.emit(tx, leaking))).rejects.toThrow(
+      EventValidationError
+    );
+    expect(queries.filter((q) => q.text.toLowerCase().startsWith('insert'))).toEqual([]);
+    expect(handed).toEqual([]);
+  });
+
+  it('leaves the database untouched without a sink', () => {
+    const { db } = createRecordingDb();
+    createEventsRepository(db);
+    expect(Object.hasOwn(db, 'transaction')).toBe(false);
   });
 });
 
@@ -517,6 +623,32 @@ describe('emitAdminEvent', () => {
 
     expect(queries.map((q) => q.text)).toContain('release savepoint sp1');
     expect(insertedColumns(insertOf(queries))['request_id']).toBeNull();
+  });
+
+  it('hands a chained admin event to the telemetry sink once it commits, in a transaction or its own', async () => {
+    // One recording database per write: the chain's read-back answers with
+    // the first INSERT it recorded.
+    const inTx = createRecordingDb([], chainResponder());
+    const inTxSink = recordingSink(inTx.queries);
+    const inTxRepo = createEventsRepository(inTx.db, { now: () => NOW, telemetry: inTxSink.sink });
+    const own = createRecordingDb([], chainResponder());
+    const ownSink = recordingSink(own.queries);
+    const ownRepo = createEventsRepository(own.db, { now: () => NOW, telemetry: ownSink.sink });
+
+    const inTxId = await inTx.db.transaction((tx) => inTxRepo.emitAdminEvent(tx, ADMIN_CHANGE));
+    const ownId = await ownRepo.emitInOwnTransaction({
+      type: 'urn:qauth:event:client.suspended:v1-rc.0',
+      realm: REALM_ID,
+      actor: { type: 'operator_cli', id: 'root' },
+      subject: { type: 'client', id: 'portal' },
+      data: {},
+    });
+
+    expect(inTxSink.handed.map((entry) => entry.event.id)).toEqual([inTxId]);
+    expect(ownSink.handed.map((entry) => entry.event.id)).toEqual([ownId]);
+    for (const entry of [...inTxSink.handed, ...ownSink.handed]) {
+      expect(entry.statements.at(-1)).toBe('commit');
+    }
   });
 
   it('chains every admin type that emit writes, not only its own', async () => {

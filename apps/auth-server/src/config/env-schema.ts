@@ -5,10 +5,12 @@ import {
   databaseEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
+  eventTelemetryEnvSchema,
   federationEnvSchema,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
   observabilityEnvSchema,
+  otlpExporterProblems,
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
@@ -54,6 +56,11 @@ export const envSchema = z
     ...rateLimitEnvSchema.shape,
     ...emailEnvSchema.shape,
     ...observabilityEnvSchema.shape,
+    // The OpenTelemetry log export of events (#541): OTEL_EVENTS_ENABLED
+    // (default off), OTEL_SERVICE_NAME and the standard OTEL_EXPORTER_OTLP_*
+    // variables, which the exporter reads from the environment itself. They
+    // are checked below, only when the export is on.
+    ...eventTelemetryEnvSchema.shape,
     // Wallet federation (ADR-004): WALLET_FEDERATION_ENABLED (#232, default
     // off) and OID4VP_VERIFIER_PROFILE (#299, deliberately no default). Both
     // arrive through this spread, which is why federationEnvSchema must stay a
@@ -159,6 +166,20 @@ export const envSchema = z
             message: `${name}=true is not allowed when NODE_ENV=production. It turns off the SSRF guard on ${fetches} and exists only for test servers on localhost. Unset it or set it to false.`,
           });
         }
+      }
+    }
+
+    // #541 — the OTLP exporter variables are process-wide: another
+    // OpenTelemetry component of the operator's may set them in a form the SDK
+    // accepts and this check would not. So they are checked only when the
+    // event export, which reads them, is on.
+    if (env.OTEL_EVENTS_ENABLED) {
+      for (const problem of otlpExporterProblems(env)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [problem.variable],
+          message: problem.message,
+        });
       }
     }
 

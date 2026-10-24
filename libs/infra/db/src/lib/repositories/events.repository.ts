@@ -22,8 +22,10 @@ import type {
   EventReadFilters,
   EventsRepository,
   EventsRepositoryOptions,
+  EventTelemetrySink,
   StoredEvent,
 } from '../../types';
+import { afterCommit, trackCommits } from '../events/after-commit';
 import { EVENT_CHAIN_GENESIS_HASH, EVENT_CHAIN_LOCK_PREFIX, eventChainHash } from '../events/chain';
 import {
   compareEventPositions,
@@ -76,6 +78,11 @@ function nulPaths(value: unknown, path: string): string[] {
   return [];
 }
 
+/** Whether a value is an object with no own member. */
+function isEmptyObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && Object.keys(value).length === 0;
+}
+
 /**
  * The envelope an emitted event becomes, checked against the registry, and
  * the row that stores it.
@@ -83,11 +90,6 @@ function nulPaths(value: unknown, path: string): string[] {
  * @throws {EventValidationError} on an unknown type or an event that fails
  *   `parseEvent`, or one Postgres could not store
  */
-/** Whether a value is an object with no own member. */
-function isEmptyObject(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && Object.keys(value).length === 0;
-}
-
 function buildEvent(event: UncheckedEvent, at: number): BuiltEvent {
   const definition = getEventType(event.type);
   if (!definition) {
@@ -346,13 +348,24 @@ function filterConditions(filters: EventReadFilters): SQL[] {
   return conditions;
 }
 
+/** Hand a committed event to the sink, which must never fail the write that made it. */
+function handOver(telemetry: EventTelemetrySink, event: EventEnvelope): void {
+  try {
+    telemetry.record(event);
+  } catch {
+    // The event is stored; telemetry carries no guarantee (EventTelemetrySink).
+  }
+}
+
 /**
  * Factory for the event store repository (ADR-019 Decision 8, issue #457).
- * See {@link EventsRepository} for the write rule, the read rule and the lag.
+ * See {@link EventsRepository} for the write rule, the read rule, the lag and
+ * the telemetry.
  *
  * @param defaultDb - The root database: reads, and the writes of
- *   `emitInOwnTransaction`, run on it.
- * @param options - The clock.
+ *   `emitInOwnTransaction`, run on it. With a telemetry sink, its
+ *   transactions are made to report their commits (`trackCommits`).
+ * @param options - The clock, and the telemetry sink (issue #541).
  * @returns Repository implementing {@link EventsRepository}
  */
 export function createEventsRepository(
@@ -365,9 +378,19 @@ export function createEventsRepository(
     throw new TypeError('createEventsRepository: verifyBatchSize must be a positive integer');
   }
 
+  const telemetry = options.telemetry;
+  if (telemetry !== undefined) trackCommits(defaultDb);
+
   async function emit(tx: DbTransaction, event: UncheckedEvent): Promise<string> {
     const built = buildEvent(event, now());
-    return built.row.category === 'admin' ? appendToChain(tx, built) : insertEvent(tx, built.row);
+    const id =
+      built.row.category === 'admin'
+        ? await appendToChain(tx, built)
+        : await insertEvent(tx, built.row);
+    // A transaction opened elsewhere cannot report its commit, and the
+    // event is then not handed over (see EventsRepository).
+    if (telemetry !== undefined) afterCommit(tx, () => handOver(telemetry, built.envelope));
+    return id;
   }
 
   return {
@@ -375,15 +398,20 @@ export function createEventsRepository(
 
     async emitInOwnTransaction(event) {
       const built = buildEvent(event, now());
-      if (built.row.category === 'admin') {
-        // READ COMMITTED whatever the server's default, so the head is read
-        // after the lock is taken, not from a snapshot taken while waiting.
-        return defaultDb.transaction((tx) => appendToChain(tx, built), {
-          isolationLevel: 'read committed',
-        });
-      }
-      // One INSERT on the root database is a transaction of its own.
-      return insertEvent(defaultDb, built.row);
+      // Once either write returns, the event has committed: the admin
+      // event's transaction, or the one INSERT on the root database, which
+      // is a transaction of its own.
+      const id =
+        built.row.category === 'admin'
+          ? // READ COMMITTED whatever the server's default, so the head is
+            // read after the lock is taken, not from a snapshot taken while
+            // waiting.
+            await defaultDb.transaction((tx) => appendToChain(tx, built), {
+              isolationLevel: 'read committed',
+            })
+          : await insertEvent(defaultDb, built.row);
+      if (telemetry !== undefined) handOver(telemetry, built.envelope);
+      return id;
     },
 
     async emitAdminEvent(tx, input: AdminEventInput) {

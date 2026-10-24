@@ -108,7 +108,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       userCredentials: createUserCredentialsRepository(database.db),
       userAttributes: createUserAttributesRepository(database.db),
       oid4vpRequestStates: createOid4vpRequestStatesRepository(database.db),
-      events: createEventsRepository(database.db),
+      events: createEventsRepository(database.db, { telemetry: options.eventTelemetry }),
     });
 
     fastify.addHook('onReady', async () => {
