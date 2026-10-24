@@ -4,7 +4,9 @@
   "sourceRoot": "libs/shared/test-vectors/src",
   "projectType": "library",
   "tags": ["scope:shared"],
-  "implicitDependencies": ["test-vectors"],
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals", "{workspaceRoot}/test-vectors/**/*"]
+  },
   "targets": {
     "test": {
       "inputs": [
@@ -28,7 +30,7 @@
         "{workspaceRoot}/libs/**/*.test.ts"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. vector-tree.test.ts checks that every vector file is loaded by some test, so it reads every *.test.ts under apps/ and libs/; without them, deleting the last test that loads a file would replay a cached pass. The vector files themselves arrive through ^default: this project depends on test-vectors (implicitDependencies)."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. vector-tree.test.ts checks that every vector file is loaded by some test, so it reads every *.test.ts under apps/ and libs/; without them, deleting the last test that loads a file would replay a cached pass. The vector files themselves arrive through ^default: this project's `default` named input adds {workspaceRoot}/test-vectors/**/*. That is an input glob rather than an implicit dependency on the test-vectors project, because the Docker builders copy only apps/ and libs/, and a dependency on a project they do not have breaks their project graph."
       }
     },
     "schema-export": {
