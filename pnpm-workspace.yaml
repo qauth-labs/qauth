@@ -480,6 +480,11 @@ catalog:
   # reachable from this static site, which uses no View Transitions.
   astro: '7.4.0'
   '@astrojs/starlight': '0.42.6'
+  # Astro 7.4 renders Markdown with Sätteri by default and no longer installs the
+  # unified pipeline. `markdown.remarkPlugins` in astro.config.mjs (the record
+  # link rewriter, #356) runs only on that pipeline, so the site declares it;
+  # astro and Starlight 0.42 both list it as an optional peer (`^7.3.0`).
+  '@astrojs/markdown-remark': '7.3.2'
   # `astro check` (Task 1 fix round 1, #347) — the real type-checking story
   # for an Astro project: it type-checks `.astro` and MDX content through
   # Astro's own language server, which `tsc --emitDeclarationOnly` (the
