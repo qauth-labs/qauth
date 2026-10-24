@@ -1,36 +1,48 @@
 import { describe, expect, it } from 'vitest';
 
-import { findEventSwitches, namesAnEventSwitch } from './always-on';
+import { findEventNames, namesEvents } from './always-on';
 
-describe('namesAnEventSwitch', () => {
+describe('namesEvents', () => {
+  // The names #827 found the switch-word check let through: a switch need
+  // not say "enabled".
   it.each([
+    'ADMIN_EVENTS',
+    'EMIT_ADMIN_EVENTS',
+    'AUDIT_LOG',
+    'EVENT_STORE_MODE',
+    'EVENTS_SINK',
     'ADMIN_EVENTS_ENABLED',
-    'EVENTS_DISABLED',
-    'AUDIT_LOG_ENABLED',
-    'adminEventsOff',
     'skipAuditEvents',
-    'suppress_admin_events',
     'EVENT_OUTBOX_BYPASS',
+    'metadata.auditEnabled',
+    'eventTypes',
+    'LOG_LEVEL',
   ])('reports %s', (name) => {
-    expect(namesAnEventSwitch(name)).toBe(true);
+    expect(namesEvents(name)).toBe(true);
   });
 
   it.each([
-    'ADMIN_EVENT_RETENTION_DAYS',
-    'USER_EVENT_RETENTION_DAYS',
     'FAILED_LOGIN_TRACKING_ENABLED',
     'WALLET_FEDERATION_ENABLED',
-    'LOG_LEVEL',
-    'eventTypes',
+    'loginWithEmailAllowed',
+    'catalogUrl',
     'enabled',
+    'passwordPolicy.preventReuse',
   ])('passes %s', (name) => {
-    expect(namesAnEventSwitch(name)).toBe(false);
+    expect(namesEvents(name)).toBe(false);
+  });
+});
+
+describe('findEventNames', () => {
+  it('lists the names that name events and are not allowed, in order, each once', () => {
+    expect(
+      findEventNames(['A', 'EVENTS_SINK', 'LOG_LEVEL', 'B', 'auditLog', 'EVENTS_SINK'], {
+        LOG_LEVEL: 'the process log, not events',
+      })
+    ).toEqual(['EVENTS_SINK', 'auditLog']);
   });
 
-  it('lists the switches among names, in order', () => {
-    expect(findEventSwitches(['A', 'EVENTS_OFF', 'B', 'auditDisabled'])).toEqual([
-      'EVENTS_OFF',
-      'auditDisabled',
-    ]);
+  it('refuses an allowed name without a reason', () => {
+    expect(() => findEventNames([], { LOG_LEVEL: ' ' })).toThrow(/without a reason/);
   });
 });

@@ -446,9 +446,11 @@ chain shows an admin event it removed.
 
 Every admin change becomes an admin event (ADR-020 §3, ADR-019 Decision 7,
 #459), written with `emitAdminEvent` in the transaction of the change. Admin
-events are always on: no environment key and no realm setting turns them off,
-and tests fail when a configuration key or a realm column reads like a switch
-for them. The event's `data.diff` lists the changed fields with every secret
+events are always on: no environment key and no realm setting turns them off.
+Tests refuse by default: a configuration key, a realm column or a member a realm
+`jsonb` column's type declares whose name holds an event word (`event`, `audit`,
+`log`, `sink`, …) fails them unless an allow list gives the reason it turns
+nothing off. The event's `data.diff` lists the changed fields with every secret
 masked as `***`, and `data.approvals` both approvals of a two-admin operation.
 
 ```typescript
