@@ -22,6 +22,12 @@ test that cites a registered spec section counts as evidence for that row.
   ADR-017 replaces registration with hosted sign-up, and then this one file changes.
 - **Clients come from `seed/clients.json` only.** The run provisions them with the operator seed
   command before the suite starts. The suite never creates a client through the server's routes.
+- **What a default deployment hides comes from `src/fixtures/experimental.ts` only.** The auth
+  server's tests generate it from the maximal OpenAPI export and the experimental-feature registry
+  (`pnpm nx test auth-server -- -u`): every experimental operation, and every discovery member an
+  experimental item adds. `suites/experimental/` checks the server answers each operation as a route
+  that does not exist and lists none of the members, which holds while every switch is at its
+  default, as CI starts the server.
 - **Layout:** `src/suites/<area>/<topic>.wire.test.ts`.
 - **Titles cite the spec and section** in the form the matrix reads, e.g.
   `describe('RFC 8414 §3 — …')` with `it('… (§3.1, §3.2)')`, or `OIDC Core 1.0 §3.1.2.1`. A bare

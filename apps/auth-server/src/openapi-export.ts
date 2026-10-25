@@ -299,8 +299,7 @@ async function main(): Promise<void> {
     typeProviderZod,
     { app },
     { openapiOptions },
-    { listEnabledExperimental },
-    { EXPERIMENTAL_ITEMS },
+    { EXPERIMENTAL_SWITCHES, listEnabledExperimental },
   ] = await Promise.all([
     import('fastify'),
     import('@fastify/swagger'),
@@ -308,16 +307,15 @@ async function main(): Promise<void> {
     import('./app/app'),
     import('./app/openapi-options'),
     import('./config/experimental-features'),
-    import('@qauth-labs/shared-stability'),
   ]);
   const { serializerCompiler, validatorCompiler } = typeProviderZod;
 
+  // `EXPERIMENTAL_SWITCHES` has one reader per built server item, so its keys
+  // are the items the server can turn on.
   const experimentalProblem = experimentalSurfaceProblem(
     surface,
     listEnabledExperimental().map((item) => item.id),
-    EXPERIMENTAL_ITEMS.filter((item) => item.built && item.surface === 'server').map(
-      (item) => item.id
-    )
+    Object.keys(EXPERIMENTAL_SWITCHES)
   );
   if (experimentalProblem !== null) {
     throw new Error(`openapi-export: ${experimentalProblem}`);
