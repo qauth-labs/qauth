@@ -193,6 +193,9 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
   });
   instance.setValidatorCompiler(validatorCompiler);
   instance.setSerializerCompiler(serializerCompiler);
+  // As in `main.ts`: the root answers a path no route serves (#513).
+  const { answerUnknownRouteBeforeBody } = await import('./helpers/request-bounds');
+  instance.addHook('onRequest', answerUnknownRouteBeforeBody);
 
   await instance.register(async (scope, opts) => {
     // The database is unreachable on purpose (above), so the default realm's
@@ -292,21 +295,73 @@ afterAll(async () => {
  *
  * The built-in serializer emits `{statusCode, code, error, message}` where
  * `error` is the HTTP status phrase ("Bad Request", "Unauthorized") and
- * `message` carries `error.message` verbatim — the leak vector in F-01. Every
- * branch of `error-handler.ts` emits `error` as the DOMAIN message and never
- * emits `message` at all, so the presence of `message` (or an `FST_ERR_*`
- * code) is a positive signal that the built-in handler answered.
+ * `message` carries `error.message` verbatim — the leak vector in F-01.
+ * Neither format of `error-handler.ts` emits `statusCode` or `message`, so
+ * either one (or an `FST_ERR_*` code) is a positive signal that the built-in
+ * handler answered.
  */
 function expectNotFastifyBuiltinEnvelope(body: Record<string, unknown>): void {
   expect(body).not.toHaveProperty('message');
+  expect(body).not.toHaveProperty('statusCode');
   expect(String(body['code'] ?? '')).not.toMatch(/^FST_ERR/);
-  expect(body['error']).not.toBe('Bad Request');
-  expect(body['error']).not.toBe('Unauthorized');
-  expect(body['error']).not.toBe('Internal Server Error');
+}
+
+const PROBLEM_CONTENT_TYPE = /^application\/problem\+json(?:;|$)/;
+const JSON_CONTENT_TYPE = /^application\/json(?:;|$)/;
+
+/** An RFC 9457 problem document with QAuth's members (#513), and its `code`. */
+function expectProblem(
+  res: { headers: Record<string, unknown>; statusCode: number; json: () => unknown },
+  label = ''
+): string {
+  expect(String(res.headers['content-type']), label).toMatch(PROBLEM_CONTENT_TYPE);
+  const body = res.json() as Record<string, unknown>;
+  expect(body['status'], label).toBe(res.statusCode);
+  expect(String(body['type']), label).toMatch(
+    /^https:\/\/docs\.qauth\.dev\/reference\/problem-types\/#[a-z-]+$/
+  );
+  expect(typeof body['title'], label).toBe('string');
+  expect(String(body['code']), label).toMatch(/^[a-z][a-z0-9_]*$/);
+  expect(typeof body['trace_id'], label).toBe('string');
+  expect(body, label).not.toHaveProperty('error');
+  expectNotFastifyBuiltinEnvelope(body);
+  return String(body['code']);
+}
+
+/** An OAuth error body (RFC 6749 §5.2) with nothing QAuth adds (#513), and its `error`. */
+function expectOAuthError(
+  res: { headers: Record<string, unknown>; json: () => unknown },
+  label = ''
+): string {
+  expect(String(res.headers['content-type']), label).toMatch(JSON_CONTENT_TYPE);
+  const body = res.json() as Record<string, unknown>;
+  expect(typeof body['error'], label).toBe('string');
+  for (const member of Object.keys(body)) {
+    expect(['error', 'error_description', 'error_uri'], `${label} ${member}`).toContain(member);
+  }
+  expectNotFastifyBuiltinEnvelope(body);
+  return String(body['error']);
 }
 
 describe('assembled app — global error handler reachability (#365)', () => {
-  it('[#365 ORDERING GUARD] (a) POST /oauth/token with an invalid body returns the CUSTOM validation shape, not FST_ERR_VALIDATION', async () => {
+  it('[#365 ORDERING GUARD] (a) POST /oauth/token with an invalid body returns the RFC 6749 §5.2 body, not FST_ERR_VALIDATION', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: FORM,
+      payload: 'client_id=abc',
+    });
+
+    expect(res.statusCode).toBe(400);
+    // The custom handler's validation branch, in the OAuth format (#513) —
+    // and specifically NOT Fastify's built-in
+    // `{statusCode: 400, code: 'FST_ERR_VALIDATION', error: 'Bad Request', message: 'body/grant_type …'}`,
+    // which is what this endpoint returned for as long as the handler was
+    // registered after the AutoLoads.
+    expect(expectOAuthError(res)).toBe('invalid_request');
+  });
+
+  it('(a2) POST /oauth/token with an unknown grant_type answers unsupported_grant_type, with no code or statusCode (RFC 6749 §5.2, #513)', async () => {
     const res = await server.inject({
       method: 'POST',
       url: '/oauth/token',
@@ -315,21 +370,8 @@ describe('assembled app — global error handler reachability (#365)', () => {
     });
 
     expect(res.statusCode).toBe(400);
-    const body = res.json() as Record<string, unknown>;
-
-    // The custom handler's `'validation' in error` branch.
-    expect(body).toMatchObject({
-      error: 'Validation error',
-      code: 'VALIDATION_ERROR',
-      statusCode: 400,
-    });
-    expect(Array.isArray(body['details'])).toBe(true);
-
-    // ...and specifically NOT Fastify's built-in
-    // `{statusCode: 400, code: 'FST_ERR_VALIDATION', error: 'Bad Request', message: 'body/grant_type …'}`,
-    // which is what this endpoint returned for as long as the handler was
-    // registered after the AutoLoads.
-    expectNotFastifyBuiltinEnvelope(body);
+    expect(expectOAuthError(res)).toBe('unsupported_grant_type');
+    expect(res.json()).not.toHaveProperty('code');
   });
 
   it('[#365 ORDERING GUARD] (b) unauthenticated GET /oauth/userinfo answers 401 with an RFC 6750 §3 WWW-Authenticate: Bearer challenge', async () => {
@@ -356,9 +398,7 @@ describe('assembled app — global error handler reachability (#365)', () => {
     expect(description).toBeDefined();
     expect(description).not.toMatch(/[^\x20-\x21\x23-\x5b\x5d-\x7e]/);
 
-    const body = res.json() as Record<string, unknown>;
-    expect(body).toMatchObject({ code: 'JWT_INVALID', statusCode: 401 });
-    expectNotFastifyBuiltinEnvelope(body);
+    expect(expectOAuthError(res)).toBe('invalid_token');
   });
 
   it('(c) a UniqueConstraintError from a route is genericised — the constraint name never reaches the wire (F-01, PR #212)', async () => {
@@ -367,13 +407,10 @@ describe('assembled app — global error handler reachability (#365)', () => {
     expect(res.statusCode).toBe(409);
 
     const body = res.json() as Record<string, unknown>;
-    // Code + status survive so a legitimate client can still branch on the
-    // conflict; only the human-readable message is genericised.
-    expect(body).toMatchObject({
-      error: 'Resource already exists',
-      code: 'UNIQUE_CONSTRAINT_VIOLATION',
-      statusCode: 409,
-    });
+    // The code and the status survive so a legitimate client can still branch
+    // on the conflict; nothing of the message is sent.
+    expect(expectProblem(res)).toBe('unique_constraint_violation');
+    expect(body).not.toHaveProperty('detail');
 
     // The F-01 guarantee, asserted on the RAW body: the constraint name must
     // appear nowhere — not as a field, not embedded in a message, not in a
@@ -383,7 +420,6 @@ describe('assembled app — global error handler reachability (#365)', () => {
     // turning a duplicate registration into an account-enumeration oracle.
     expect(res.body).not.toContain(LEAKY_CONSTRAINT_NAME);
     expect(body['constraint']).toBeUndefined();
-    expectNotFastifyBuiltinEnvelope(body);
   });
 
   it("[#365 ORDERING GUARD] (d) no autoloaded route in the assembled app answers with Fastify's built-in error envelope", async () => {
@@ -394,42 +430,72 @@ describe('assembled app — global error handler reachability (#365)', () => {
     // the moment `register(errorHandler)` moves back below the AutoLoad calls,
     // so this is the broad guard: it does not depend on any single endpoint
     // keeping its current schema.
-    const probes: ReadonlyArray<readonly [string, InjectOptions]> = [
-      ['POST /oauth/token', { method: 'POST', url: '/oauth/token', headers: FORM, payload: 'x=1' }],
+    //
+    // Each probe also names the error format its route answers (#513): the
+    // OAuth protocol endpoints keep the RFC body, every other route answers a
+    // problem document, and no route answers the body of before #513.
+    const probes: ReadonlyArray<readonly [string, 'oauth' | 'problem', InjectOptions]> = [
+      [
+        'POST /oauth/token',
+        'oauth',
+        { method: 'POST', url: '/oauth/token', headers: FORM, payload: 'x=1' },
+      ],
       [
         'POST /oauth/introspect',
+        'oauth',
         { method: 'POST', url: '/oauth/introspect', headers: FORM, payload: 'x=1' },
       ],
       [
         'POST /oauth/revoke',
+        'oauth',
         { method: 'POST', url: '/oauth/revoke', headers: FORM, payload: 'x=1' },
       ],
-      ['GET /oauth/authorize', { method: 'GET', url: '/oauth/authorize' }],
-      ['GET /oauth/userinfo', { method: 'GET', url: '/oauth/userinfo' }],
-      ['POST /auth/login', { method: 'POST', url: '/auth/login', payload: { bad: true } }],
-      ['POST /auth/register', { method: 'POST', url: '/auth/register', payload: { bad: true } }],
-      ['POST /auth/logout', { method: 'POST', url: '/auth/logout', payload: { bad: true } }],
-      ['POST /auth/verify', { method: 'POST', url: '/auth/verify', payload: { bad: true } }],
+      [
+        'POST /oauth/register',
+        'oauth',
+        { method: 'POST', url: '/oauth/register', payload: { redirect_uris: 'x' } },
+      ],
+      ['GET /oauth/authorize', 'oauth', { method: 'GET', url: '/oauth/authorize' }],
+      ['GET /oauth/userinfo', 'oauth', { method: 'GET', url: '/oauth/userinfo' }],
+      [
+        'POST /auth/login',
+        'problem',
+        { method: 'POST', url: '/auth/login', payload: { bad: true } },
+      ],
+      [
+        'POST /auth/register',
+        'problem',
+        { method: 'POST', url: '/auth/register', payload: { bad: true } },
+      ],
+      [
+        'POST /auth/logout',
+        'problem',
+        { method: 'POST', url: '/auth/logout', payload: { bad: true } },
+      ],
+      [
+        'POST /auth/verify',
+        'problem',
+        { method: 'POST', url: '/auth/verify', payload: { bad: true } },
+      ],
       [
         'POST /auth/resend-verification',
+        'problem',
         { method: 'POST', url: '/auth/resend-verification', payload: { bad: true } },
       ],
-      ['GET /api/clients', { method: 'GET', url: '/api/clients' }],
+      ['GET /api/clients', 'problem', { method: 'GET', url: '/api/clients' }],
+      ['GET /api/consents', 'problem', { method: 'GET', url: '/api/consents' }],
+      ['DELETE /consents/:id', 'problem', { method: 'DELETE', url: '/consents/not-a-uuid' }],
+      ['GET /no-such-route', 'problem', { method: 'GET', url: '/no-such-route' }],
     ];
 
-    for (const [label, options] of probes) {
+    for (const [label, format, options] of probes) {
       const res = await server.inject(options);
-      const body = res.json() as Record<string, unknown>;
 
       // Every probe is a deliberate failure; a 2xx means the probe stopped
       // testing what it was written to test.
       expect(res.statusCode, label).toBeGreaterThanOrEqual(400);
-      // The custom handler always emits a numeric `statusCode` mirroring the
-      // HTTP status, and an `error` that is the DOMAIN message.
-      expect(body['statusCode'], label).toBe(res.statusCode);
-      expect(typeof body['error'], label).toBe('string');
-      expect(body, label).not.toHaveProperty('message');
-      expect(String(body['code'] ?? ''), label).not.toMatch(/^FST_ERR/);
+      if (format === 'oauth') expectOAuthError(res, label);
+      else expectProblem(res, label);
     }
   });
 });
@@ -451,12 +517,21 @@ describe('assembled app — realm resolution by host (#486)', () => {
     });
 
     expect(res.statusCode).toBe(421);
-    expect(res.json()).toEqual({
-      error: 'This server does not answer for the requested host',
-      statusCode: 421,
-      code: 'MISDIRECTED_REQUEST',
-    });
+    // An OAuth protocol endpoint, so the RFC body (#513).
+    expect(expectOAuthError(res)).toBe('invalid_request');
     expect(res.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('answers a 421 on a route that is not an OAuth endpoint with misdirected_request (#513)', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/.well-known/openid-configuration',
+      headers: { host: 'unknown.example' },
+    });
+
+    expect(res.statusCode).toBe(421);
+    expect(expectProblem(res)).toBe('misdirected_request');
+    expect(res.body).not.toContain('unknown.example');
   });
 
   it('echoes the request id on a 421, so an operator can find its reason in the log', async () => {
@@ -511,7 +586,7 @@ describe('assembled app — problem details on the API families (#506)', () => {
     expect(res.statusCode).toBe(400);
     expect(res.headers['content-type']).toMatch(PROBLEM);
     const body = res.json() as Record<string, unknown>;
-    expect(body).toMatchObject({ type: 'about:blank', status: 400, code: 'validation_error' });
+    expect(expectProblem(res)).toBe('validation_error');
     expect(body['errors']).toEqual([{ pointer: '/limit', message: expect.any(String) }]);
     // `trace_id` is the request id the response header carries and the
     // request logger binds as `reqId` (`plugins/request-id.ts`).
@@ -522,9 +597,15 @@ describe('assembled app — problem details on the API families (#506)', () => {
     const res = await server.inject({ method: 'GET', url: FAMILY_MISSING_ROUTE });
 
     expect(res.statusCode).toBe(404);
-    expect(res.headers['content-type']).toMatch(PROBLEM);
-    expect(res.json()).toMatchObject({ status: 404, code: 'not_found' });
-    expect(typeof res.json().trace_id).toBe('string');
+    expect(expectProblem(res)).toBe('not_found');
+  });
+
+  it('a path no route serves answers a not_found problem document with type, title, status and trace_id (#513)', async () => {
+    const res = await server.inject({ method: 'GET', url: '/no-such-route/at-all?x=1' });
+
+    expect(res.statusCode).toBe(404);
+    expect(expectProblem(res)).toBe('not_found');
+    expect(res.json()).toMatchObject({ status: 404, instance: '/no-such-route/at-all' });
   });
 
   it('GET /oauth/userinfo keeps the RFC 6750 §3 challenge and is not a problem document', async () => {
@@ -532,6 +613,7 @@ describe('assembled app — problem details on the API families (#506)', () => {
 
     expect(res.statusCode).toBe(401);
     expect(res.headers['content-type']).not.toMatch(PROBLEM);
+    expect(expectOAuthError(res)).toBe('invalid_token');
     expect(res.headers['www-authenticate']).toContain('error="invalid_token"');
   });
 });
@@ -560,14 +642,10 @@ describe('assembled app — password bound in UTF-16 code units', () => {
     const res = await server.inject({ method: 'POST', url, payload });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({
-      error: 'Validation error',
-      code: 'VALIDATION_ERROR',
-      statusCode: 400,
-      details: [
-        { path: '/password', message: 'Too big: expected string to have <=256 characters' },
-      ],
-    });
+    expect(expectProblem(res)).toBe('validation_error');
+    expect((res.json() as { errors: unknown }).errors).toEqual([
+      { pointer: '/password', message: expect.any(String) },
+    ]);
   });
 });
 
@@ -577,17 +655,33 @@ describe('assembled app — an oversized request array is one issue, not one per
   // answer and hundreds of MB of log per unauthenticated request. The
   // management guard is a preHandler, so `/api/clients` validates first too.
   it.each([
-    ['/oauth/register', { grant_types: Array(50_000).fill(1) }, '/grant_types'],
-    ['/oauth/token', { grant_type: 'client_credentials', resource: Array(50_000).fill('') }, ''],
-    ['/api/clients', { name: 'n', grantTypes: Array(50_000).fill(1) }, '/grantTypes'],
-  ])('POST %s answers with a single small issue', async (url, payload, path) => {
+    ['/oauth/register', { grant_types: Array(50_000).fill(1) }, 'invalid_client_metadata'],
+    [
+      '/oauth/token',
+      { grant_type: 'client_credentials', resource: Array(50_000).fill('') },
+      'invalid_request',
+    ],
+  ])('POST %s answers with a small OAuth error', async (url, payload, error) => {
     const res = await server.inject({ method: 'POST', url, payload });
 
     expect(res.statusCode).toBe(400);
     expect(res.body.length).toBeLessThan(1024);
-    const details = (res.json() as { details: Array<{ path: string }> }).details;
-    expect(details).toHaveLength(1);
-    if (path) expect(details[0]?.path).toBe(path);
+    expect(expectOAuthError(res)).toBe(error);
+  });
+
+  it('POST /api/clients answers with a single small issue', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/clients',
+      payload: { name: 'n', grantTypes: Array(50_000).fill(1) },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.length).toBeLessThan(1024);
+    expect(expectProblem(res)).toBe('validation_error');
+    const errors = (res.json() as { errors: Array<{ pointer: string }> }).errors;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.pointer).toBe('/grantTypes');
   });
 });
 
@@ -604,10 +698,10 @@ describe('assembled app — an over-long email is refused before any handler sto
     const res = await server.inject({ method: 'POST', url, payload });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({
-      code: 'VALIDATION_ERROR',
-      details: [{ path: '/email', message: 'Too big: expected string to have <=254 characters' }],
-    });
+    expect(expectProblem(res)).toBe('validation_error');
+    expect((res.json() as { errors: unknown }).errors).toEqual([
+      { pointer: '/email', message: expect.any(String) },
+    ]);
   });
 });
 

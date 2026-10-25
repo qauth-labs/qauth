@@ -272,6 +272,10 @@ export async function bootAuthServer(
   });
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
+  // As in `main.ts`: a path no route serves is answered before its body is
+  // read, with the `not_found` problem document (#513).
+  const { answerUnknownRouteBeforeBody } = await import('../app/helpers/request-bounds');
+  server.addHook('onRequest', answerUnknownRouteBeforeBody);
   // `fp()` only lifts ENCAPSULATION: the same plugins register in the same order
   // and every route is identical, but `db`/`dbPool`/`redis` land on the root
   // instance instead of inside the app's own scope, which is what lets
