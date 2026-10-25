@@ -396,6 +396,62 @@
       }
     },
 
+    // Realm by host (ADR-019 Decision 1, #487). A request belongs to the realm
+    // whose host it names, and every handler takes that realm from
+    // `request.realm` (`requestRealm()`). Nothing picks a realm by name at
+    // request time any more:
+    //
+    // - `getOrCreateDefaultRealm`, which sent every request to the realm
+    //   `DEFAULT_REALM_NAME` names, is gone, and `id-denylist` refuses the name
+    //   anywhere (a declaration, an import, a mock, an object key);
+    // - `DEFAULT_REALM_NAME` only names the default realm at boot, so reading it
+    //   is refused outside the boot step: `app.ts`, which hands it to the
+    //   default realm's and the realm keys' boot steps, and `keys-create.ts`,
+    //   the operator command whose `--realm` defaults to it. A key of that name
+    //   in an object literal (a configuration schema, a test's environment) is
+    //   not a read and passes.
+    //
+    // Two blocks, since only the second has exceptions.
+    // apps/auth-server/src/app/default-realm-rule.test.ts lints samples with
+    // them.
+    {
+      "files": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.cts",
+        "**/*.mts",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.cjs",
+        "**/*.mjs"
+      ],
+      "rules": {
+        "id-denylist": ["error", "getOrCreateDefaultRealm"]
+      }
+    },
+    {
+      "files": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.cts",
+        "**/*.mts",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.cjs",
+        "**/*.mjs"
+      ],
+      "excludeFiles": ["apps/auth-server/src/app/app.ts", "apps/auth-server/src/keys-create.ts"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          {
+            "property": "DEFAULT_REALM_NAME",
+            "message": "DEFAULT_REALM_NAME only names the default realm at boot (ADR-019 Decision 1). A request's realm is request.realm: use requestRealm(request)."
+          }
+        ]
+      }
+    },
+
     // Oxlint 1.88's `no-unused-private-class-members` does not count a
     // `#field in value` brand check as a use, so it reports `#validated`,
     // which `ValidatedIssuer.isValidated` reads exactly that way. ESLint
