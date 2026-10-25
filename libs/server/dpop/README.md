@@ -7,10 +7,12 @@ API, `resource-guard` and the Authority Tree all check proofs with it; none of t
 
 It is a plain library: it imports `jose` and `node:crypto` and nothing else, no Fastify, no Redis
 client and no other workspace package (`src/lib/fastify-free.test.ts` holds that down). The auth
-server reaches it through a Fastify plugin, and `resource-guard` imports it directly.
+server reaches it through [`@qauth-labs/fastify-plugin-dpop`](../../fastify/plugins/dpop/README.md),
+and `resource-guard` imports it directly.
 
-Nothing uses it yet. `DPOP_ENABLED` (default `false`) is the switch the endpoints that bind tokens
-to a DPoP key will read; until the token endpoint does, the server refuses to start with it on.
+`DPOP_ENABLED` (default `false`) switches it on in the auth server (#480): the token endpoint binds
+access tokens, codes and public clients' refresh tokens to the proof's key, and `userinfo` accepts
+the `DPoP` scheme. With it off, the server reads no `DPoP` header.
 
 ## Verify a proof
 

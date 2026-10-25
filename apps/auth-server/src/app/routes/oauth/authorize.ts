@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
+import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
 import {
   BadRequestError,
   isUniqueConstraintError,
@@ -23,6 +24,7 @@ import { resolveClient } from '../../helpers/client-resolution';
 import { isClientUsable } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
+import { readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
@@ -258,6 +260,26 @@ export default async function (fastify: FastifyInstance) {
       throw new UnauthorizedClientError(unauthorizedReason);
     }
 
+    // RFC 9449 §10 (#480): `dpop_jkt` binds the code to a DPoP key, whose
+    // proof the token request must then carry. Read only while DPoP is on. A
+    // value that is not a SHA-256 thumbprint is refused here, before any user
+    // interaction, rather than turned into an unbound code.
+    const dpopJkt = readAuthorizationDpopJkt(fastify, query.dpop_jkt);
+    if (dpopJkt.kind === 'malformed') {
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_request', reason: 'dpop_jkt_malformed' },
+        clientEvent
+      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'invalid_request',
+        error_description: 'dpop_jkt must be the base64url SHA-256 JWK thumbprint of a DPoP key',
+        state: state ?? undefined,
+        iss,
+      });
+    }
+
     // -----------------------------------------------------------------
     // User authentication. Prefer the session cookie; fall back to
     // Bearer for backwards compat. When both are absent we kick to the
@@ -328,6 +350,9 @@ export default async function (fastify: FastifyInstance) {
         // mints a user token that passes the check above. Pin `client_id`
         // (and refuse delegated tokens) exactly as the management API does.
         await assertManagementToken(fastify, realm, payload);
+        // RFC 9449 §7.2 (#480): this path reads a Bearer token, and a
+        // DPoP-bound token is never one.
+        refuseBoundTokenAsBearer(payload);
         // RFC 7009: `requireJwt` and token exchange consult the per-`jti`
         // denylist; this path issues codes from the same token, so it must
         // too. A Redis failure throws into the catch below (fails closed).
@@ -639,6 +664,8 @@ export default async function (fastify: FastifyInstance) {
             // against above.
             resource: resources,
             state: query.state ?? null,
+            // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+            dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
             expiresAt,
           },
           tx

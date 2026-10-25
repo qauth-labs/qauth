@@ -255,7 +255,12 @@ export default async function (fastify: FastifyInstance) {
           iss: payload.iss,
           aud: payload.aud,
           scope: payload.scope,
-          token_type: 'Bearer' as const,
+          // RFC 9449 §6.2 (#480): a DPoP-bound token is reported as such, with
+          // the key's thumbprint for the resource server to check the request's
+          // proof against. A Bearer token's response is unchanged.
+          ...(payload.cnf === undefined
+            ? { token_type: 'Bearer' as const }
+            : { token_type: 'DPoP' as const, cnf: { jkt: payload.cnf.jkt } }),
         });
       } catch (error) {
         if (error instanceof InvalidClientError) {

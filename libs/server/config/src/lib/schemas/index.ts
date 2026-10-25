@@ -10,7 +10,7 @@ export { type AuthEnv, authEnvSchema, DEV_SESSION_COOKIE_SECRET_DEFAULT } from '
 export { type BaseEnv, baseEnvSchema } from './base';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
-export { DPOP_ENABLED_REFUSAL, type DpopEnv, dpopEnvSchema } from './dpop';
+export { type DpopEnv, dpopEnvSchema } from './dpop';
 export { type EmailEnv, emailEnvSchema } from './email';
 export { type EventDeliveryEnv, eventDeliveryEnvSchema } from './event-delivery';
 export { type EventRetentionEnv, eventRetentionEnvSchema } from './event-retention';

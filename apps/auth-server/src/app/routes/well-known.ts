@@ -42,6 +42,9 @@ export default async function (fastify: FastifyInstance) {
     // else `['EdDSA']`. Sourced from the plugin so discovery never drifts from
     // the JWKS the same plugin serves.
     idTokenSigningAlgValuesSupported: fastify.jwtUtils.getIdTokenSigningAlgValuesSupported(),
+    // RFC 9449 §5.1 (#480): the DPoP proof algorithms, only while DPOP_ENABLED
+    // is on (`fastify.dpop` is null otherwise).
+    ...(fastify.dpop ? { dpopSigningAlgValuesSupported: fastify.dpop.algorithms } : {}),
   });
 
   fastify.get(

@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
+import { DpopProofError } from '@qauth-labs/fastify-plugin-dpop';
 import { PASSWORD_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
 import {
   BadRequestError,
   InvalidClientError,
+  InvalidDpopProofError,
   InvalidGrantError,
   InvalidRequestError,
   InvalidScopeError,
@@ -30,6 +32,7 @@ import {
 import { isAgentClient } from '../../helpers/client-resolution';
 import { isScopeSubset } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
+import { dpopEventReason, verifyTokenRequestProof } from '../../helpers/dpop';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import {
   type EnvironmentPolicy,
@@ -254,6 +257,42 @@ export default async function (fastify: FastifyInstance) {
         // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
         reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
 
+        // RFC 9449 §5 (#480): the request's DPoP proof, while DPoP is on. A
+        // valid proof binds every access token this request is issued to its
+        // key (`cnf.jkt`, `token_type: DPoP`), whatever the grant ("regardless
+        // of grant type"), and a client registered with
+        // `dpop_bound_access_tokens` must send one (§5.2). Checked after client
+        // authentication, so an unauthenticated caller never reaches the
+        // replay store. While DPoP is off no header is read and every access
+        // token is a Bearer token, as before.
+        let dpopThumbprint: string | undefined;
+        try {
+          dpopThumbprint = await verifyTokenRequestProof(
+            fastify,
+            request as FastifyRequest,
+            client
+          );
+        } catch (err) {
+          if (!(err instanceof DpopProofError)) throw err;
+          // Which check failed goes to the operator's log and the event, never
+          // to the wire: it would help tune a forged proof.
+          fastify.log.warn(
+            { reqId: request.id, grantType: body.grant_type, reason: err.reason },
+            'token endpoint: DPoP proof refused'
+          );
+          await emitUserEvent(
+            request as FastifyRequest,
+            TOKEN_REQUEST_FAILED,
+            {
+              grantType: body.grant_type,
+              error: 'invalid_dpop_proof',
+              reason: dpopEventReason(err.reason),
+            },
+            { realmId: realm.id, clientId: client.clientId, actor: 'client' }
+          );
+          throw new InvalidDpopProofError();
+        }
+
         // ADR-008 §5/§7 (#197): resolve the effective environment policy ONCE,
         // here, where both the authenticated client and its realm are in scope.
         // The grant handlers consult this `policy` (token TTL tier, PKCE
@@ -271,6 +310,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            dpopThumbprint,
           });
           return reply.send(responseBody);
         }
@@ -283,6 +323,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            dpopThumbprint,
           });
           return reply.send(responseBody);
         }
@@ -295,6 +336,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            dpopThumbprint,
           });
           return reply.send(responseBody);
         }
@@ -307,6 +349,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            dpopThumbprint,
           });
           return reply.send(responseBody);
         }
@@ -319,6 +362,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            dpopThumbprint,
           });
           return reply.send(responseBody);
         }
@@ -334,7 +378,8 @@ export default async function (fastify: FastifyInstance) {
           error instanceof InvalidRequestError ||
           error instanceof NotFoundError ||
           error instanceof BadRequestError ||
-          error instanceof UnauthorizedClientError
+          error instanceof UnauthorizedClientError ||
+          error instanceof InvalidDpopProofError
         ) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           throw error;
@@ -374,7 +419,76 @@ type HandlerContext<TBody> = {
    * never disagree with the realm the client was authenticated against.
    */
   realmId: string;
+  /**
+   * The RFC 7638 thumbprint of the request's DPoP proof key (RFC 9449 §5,
+   * #480), checked at dispatch; undefined when the request carried no proof or
+   * DPoP is off. Every access token the handler issues is bound to it
+   * ({@link dpopConfirmation}, {@link tokenTypeFor}), and a code or refresh
+   * token bound to a key is compared with it ({@link dpopBindingRefusal}).
+   */
+  dpopThumbprint: string | undefined;
 };
+
+/**
+ * The RFC 9449 §6.1 `cnf` claim of the access token a request is issued:
+ * `{ cnf: { jkt } }` to spread into the claims when the request proved a DPoP
+ * key, nothing otherwise.
+ */
+function dpopConfirmation(ctx: { dpopThumbprint: string | undefined }): {
+  cnf?: { jkt: string };
+} {
+  return ctx.dpopThumbprint === undefined ? {} : { cnf: { jkt: ctx.dpopThumbprint } };
+}
+
+/**
+ * The `token_type` of the response (RFC 9449 §5): `DPoP` for an access token
+ * bound to the request's key, `Bearer` otherwise.
+ */
+function tokenTypeFor(ctx: { dpopThumbprint: string | undefined }): 'DPoP' | 'Bearer' {
+  return ctx.dpopThumbprint === undefined ? 'Bearer' : 'DPoP';
+}
+
+/** A public client: it authenticates with nothing but its `client_id` (RFC 6749 §2.1). */
+function isPublicClient(client: OAuthClientLike): boolean {
+  return client.tokenEndpointAuthMethod === 'none';
+}
+
+/**
+ * The key a newly issued refresh token is bound to (RFC 9449 §5): the
+ * request's proof key for a PUBLIC client, which nothing else binds; none for
+ * a confidential client, whose refresh tokens client authentication already
+ * binds, so it may rotate its DPoP key without losing them.
+ */
+function refreshTokenBinding(ctx: HandlerContext<unknown>): string | null {
+  return isPublicClient(ctx.client) ? (ctx.dpopThumbprint ?? null) : null;
+}
+
+/**
+ * Hold a code or refresh token bound to a DPoP key to that key (RFC 9449 §5,
+ * §10): the request must carry a proof, already checked at dispatch, under the
+ * key with the bound thumbprint. Returns the refusal, or undefined when the
+ * artifact is unbound or the binding holds.
+ *
+ * A bound artifact is refused while DPoP is off (`invalid_grant`): its binding
+ * can no longer be checked, and accepting it would turn it into a bearer
+ * credential. The artifact is left as it is either way, so a party without the
+ * key can neither redeem nor spend it.
+ */
+function dpopBindingRefusal(
+  ctx: HandlerContext<unknown>,
+  boundThumbprint: string | null | undefined
+): { error: 'invalid_grant' | 'invalid_dpop_proof'; reason: string } | undefined {
+  if (boundThumbprint === null || boundThumbprint === undefined) return undefined;
+  if (!ctx.fastify.dpop) return { error: 'invalid_grant', reason: 'dpop_disabled' };
+  if (ctx.dpopThumbprint === undefined) {
+    return { error: 'invalid_dpop_proof', reason: 'dpop_missing_proof' };
+  }
+  // Thumbprints of public keys: nothing secret to compare in constant time.
+  if (ctx.dpopThumbprint !== boundThumbprint) {
+    return { error: 'invalid_dpop_proof', reason: 'dpop_key_mismatch' };
+  }
+  return undefined;
+}
 
 /**
  * Map the policy's access-token lifespan TIER to a concrete number of seconds,
@@ -493,6 +607,18 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
+  // RFC 9449 §10 (#480): a code the authorization request bound to a DPoP key
+  // (`dpop_jkt`) is redeemed only with a proof under that key. It is not
+  // burned on a refusal: whoever lacks the key cannot spend the code the
+  // client is about to redeem.
+  const codeBinding = dpopBindingRefusal(ctx, authCode.dpopJkt);
+  if (codeBinding) {
+    await emitRequestFailed(ctx, codeBinding.error, codeBinding.reason, authCode.userId);
+    throw codeBinding.error === 'invalid_grant'
+      ? new InvalidGrantError('Invalid or expired authorization code')
+      : new InvalidDpopProofError();
+  }
+
   // RFC 8707 §2.2: if the token request also includes `resource`, it MUST
   // be a subset of the one bound to the auth code. Empty request resource
   // carries forward the code's resource unchanged.
@@ -602,6 +728,9 @@ async function handleAuthorizationCode(
           // RFC 8707: carry the resource set onto the refresh token so subsequent
           // refreshes produce access tokens with the same `aud`.
           resource: effectiveResource,
+          // RFC 9449 §5 (#480): a public client's refresh token is bound to
+          // the proof key; a confidential client's is not.
+          cnfJkt: refreshTokenBinding(ctx),
         },
         tx
       );
@@ -615,6 +744,7 @@ async function handleAuthorizationCode(
       clientId: client.clientId,
       scope: scopeString,
       aud,
+      ...dpopConfirmation(ctx),
       expiresInOverride: accessTokenExpiresIn,
     });
 
@@ -705,7 +835,7 @@ async function handleAuthorizationCode(
     access_token: accessToken,
     ...(refresh ? { refresh_token: refresh.token } : {}),
     expires_in: accessTokenExpiresIn,
-    token_type: 'Bearer' as const,
+    token_type: tokenTypeFor(ctx),
     ...(scopeString ? { scope: scopeString } : {}),
     ...(idToken ? { id_token: idToken } : {}),
   };
@@ -782,6 +912,7 @@ async function handleClientCredentials(
     clientId: client.clientId,
     scope: scopeString,
     aud,
+    ...dpopConfirmation(ctx),
     expiresInOverride: accessTokenExpiresIn,
   });
 
@@ -811,7 +942,7 @@ async function handleClientCredentials(
   return {
     access_token: accessToken,
     expires_in: accessTokenExpiresIn,
-    token_type: 'Bearer' as const,
+    token_type: tokenTypeFor(ctx),
     ...(scopeString ? { scope: scopeString } : {}),
   };
 }
@@ -898,6 +1029,17 @@ async function handleRefreshToken(
   if (storedToken.oauthClientId !== client.id) {
     await emitRequestFailed(ctx, 'invalid_grant', 'client_mismatch', storedToken.userId);
     throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  // RFC 9449 §5 (#480): a refresh token bound to a DPoP key is used only with
+  // a proof under that key. Checked before replay detection, so a party that
+  // holds a rotated copy but not the key cannot revoke the client's family.
+  const refreshBinding = dpopBindingRefusal(ctx, storedToken.cnfJkt);
+  if (refreshBinding) {
+    await emitRequestFailed(ctx, refreshBinding.error, refreshBinding.reason, storedToken.userId);
+    throw refreshBinding.error === 'invalid_grant'
+      ? new InvalidGrantError('Invalid or expired refresh token')
+      : new InvalidDpopProofError();
   }
 
   // Replay detection — a revoked token in the correct family MUST trigger
@@ -1029,6 +1171,9 @@ async function handleRefreshToken(
         // narrowed) resource binding — NOT the request's — so we never
         // widen the binding across a rotation.
         resource: effectiveResource,
+        // RFC 9449 §5 (#480): every rotation keeps the family's DPoP key; a
+        // public client's unbound token is bound to the key it proves now.
+        cnfJkt: storedToken.cnfJkt ?? refreshTokenBinding(ctx),
       },
       tx
     );
@@ -1042,6 +1187,7 @@ async function handleRefreshToken(
       clientId: client.clientId,
       scope: scopeString,
       aud,
+      ...dpopConfirmation(ctx),
       expiresInOverride: accessTokenExpiresIn,
     });
     await emitUserEvent(
@@ -1072,7 +1218,7 @@ async function handleRefreshToken(
     access_token: accessToken,
     refresh_token: newRefreshToken,
     expires_in: accessTokenExpiresIn,
-    token_type: 'Bearer' as const,
+    token_type: tokenTypeFor(ctx),
     ...(scopeString ? { scope: scopeString } : {}),
   };
 }
@@ -1449,6 +1595,11 @@ async function handleTokenExchange(
     scope: scopeString,
     aud,
     act,
+    // RFC 9449 §5 (#480): the delegated token is bound to the AGENT's proof
+    // key. A subject token's own `cnf` is not carried over: it names the key
+    // of whoever holds the subject token, which ADR-014 P1b ties to the
+    // agent's key with a spawn assertion.
+    ...dpopConfirmation(ctx),
     expiresInOverride: accessTokenExpiresIn,
   });
 
@@ -1481,7 +1632,7 @@ async function handleTokenExchange(
     access_token: accessToken,
     issued_token_type: TOKEN_TYPE_ACCESS_TOKEN,
     expires_in: accessTokenExpiresIn,
-    token_type: 'Bearer' as const,
+    token_type: tokenTypeFor(ctx),
     ...(scopeString ? { scope: scopeString } : {}),
   };
 }
@@ -1907,6 +2058,7 @@ async function handleJwtBearer(
     clientId: client.clientId,
     scope: scopeString,
     aud,
+    ...dpopConfirmation(ctx),
     expiresInOverride: accessTokenExpiresIn,
   });
 
@@ -1936,7 +2088,7 @@ async function handleJwtBearer(
   return {
     access_token: accessToken,
     expires_in: accessTokenExpiresIn,
-    token_type: 'Bearer' as const,
+    token_type: tokenTypeFor(ctx),
     ...(scopeString ? { scope: scopeString } : {}),
   };
 }

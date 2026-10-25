@@ -225,7 +225,11 @@ async function resolveUserinfoTokenPreHandler(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  const headerToken = fastify.jwtUtils.extractFromHeader(request.headers.authorization);
+  // A `DPoP` header counts as a header token only while DPoP is on (RFC 9449
+  // §7.1); off, it is no credential, as before.
+  const headerToken = fastify.jwtUtils.extractCredentialFromHeader(
+    request.headers.authorization
+  )?.token;
 
   // RFC 6750 §2.2: the body method is valid ONLY for a form-encoded entity body.
   const contentType = String(request.headers['content-type'] ?? '');
@@ -251,7 +255,9 @@ async function resolveUserinfoTokenPreHandler(
   // Normalise the body token to a Bearer credential so the shared `requireJwt`
   // verification path handles it exactly as the header method. With neither a
   // header nor a body token, `requireJwt` throws the same JWTInvalidError a
-  // header-less request would, yielding an identical 401 challenge.
+  // header-less request would, yielding an identical 401 challenge. A
+  // DPoP-bound token is refused there: the body method is a Bearer method
+  // (RFC 6750 §2.2), and RFC 9449 §7.2 forbids accepting such a token as one.
   if (bodyToken) {
     request.headers.authorization = `Bearer ${bodyToken}`;
   }
@@ -284,7 +290,7 @@ export default async function (fastify: FastifyInstance) {
       preHandler: fastify.requireJwt,
       schema: {
         description:
-          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
+          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.",
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
@@ -311,7 +317,7 @@ export default async function (fastify: FastifyInstance) {
         resolveUserinfoTokenPreHandler(fastify, request, reply),
       schema: {
         description:
-          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
+          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.",
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],

@@ -248,6 +248,11 @@ export const authorizeQuerySchema = z.object({
   prompt: z.enum(['none', 'login', 'consent']).optional(),
   max_age: maxAgeParamSchema,
   resource: resourceParamSchema,
+  // RFC 9449 §10 (#480): the thumbprint of the DPoP key to bind the code to.
+  // Read only while DPOP_ENABLED is on, and its form checked there, so with
+  // DPoP off a request carrying it goes on exactly as before. Bounded like the
+  // other parameters that reach the pending-authorization stash.
+  dpop_jkt: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;
@@ -436,12 +441,16 @@ export type TokenExchangeBody = z.infer<typeof tokenExchangeBodySchema>;
  * `id_token` (OIDC Core §3.1.3.3) is present only on an authorization_code
  * exchange whose granted scope includes `openid`. It is a signed JWT (EdDSA)
  * asserting the end-user's authentication to the client; absent otherwise.
+ *
+ * `token_type` is `DPoP` when the access token is bound to the key of the
+ * request's DPoP proof (RFC 9449 §5, #480), which only happens while
+ * `DPOP_ENABLED` is on; `Bearer` otherwise.
  */
 export const tokenExchangeResponseSchema = z.object({
   access_token: z.string(),
   refresh_token: z.string().optional(),
   expires_in: z.number(),
-  token_type: z.literal('Bearer'),
+  token_type: z.enum(['Bearer', 'DPoP']),
   scope: z.string().optional(),
   issued_token_type: z.string().optional(),
   id_token: z.string().optional(),
@@ -543,7 +552,15 @@ export const introspectResponseSchema = z.object({
   iss: z.string().optional(),
   aud: z.union([z.string(), z.array(z.string())]).optional(),
   scope: z.string().optional(),
-  token_type: z.literal('Bearer').optional(),
+  /** `DPoP` for a DPoP-bound token (RFC 9449 §6.2), `Bearer` otherwise. */
+  token_type: z.enum(['Bearer', 'DPoP']).optional(),
+  /**
+   * RFC 9449 §6.2: the key a DPoP-bound token is confirmed by, as a top-level
+   * `cnf` with the `jkt` thumbprint. The resource server checks the request's
+   * DPoP proof against it; introspection itself checks no proof. Absent for a
+   * Bearer token.
+   */
+  cnf: z.object({ jkt: z.string() }).optional(),
   /**
    * ADR-005 / #275 — reference delivery of the post-quantum component.
    *

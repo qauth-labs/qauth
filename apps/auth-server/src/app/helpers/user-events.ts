@@ -4,6 +4,7 @@ import {
   ForbiddenError,
   InvalidClientError,
   InvalidCredentialsError,
+  InvalidDpopProofError,
   InvalidGrantError,
   InvalidRequestError,
   InvalidScopeError,
@@ -185,6 +186,7 @@ export async function emitUserEvent<Type extends RegisteredEventType>(
 /** The OAuth error classes whose `message` is the registered `error` code. */
 const OAUTH_CODE_ERRORS = [
   InvalidClientError,
+  InvalidDpopProofError,
   InvalidGrantError,
   InvalidRequestError,
   InvalidScopeError,

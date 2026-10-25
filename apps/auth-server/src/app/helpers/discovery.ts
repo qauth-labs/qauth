@@ -75,6 +75,13 @@ export interface DiscoveryMetadataInput {
    * which issuers an AS trusts is deployment policy and is not published.
    */
   idJagEnabled?: boolean;
+  /**
+   * The JWS algorithms the token endpoint accepts in a DPoP proof (RFC 9449
+   * §5.1), published as `dpop_signing_alg_values_supported`. The route passes
+   * the verifier's allowlist while `DPOP_ENABLED` is on and nothing while it is
+   * off, so the member is absent exactly when no `DPoP` header is read (#480).
+   */
+  dpopSigningAlgValuesSupported?: readonly string[];
 }
 
 /**
@@ -199,6 +206,14 @@ export function buildAuthorizationServerMetadata(
     // true precisely because no deployment switch can turn it off.
     ...(input.idJagEnabled
       ? { authorization_grant_profiles_supported: [ID_JAG_GRANT_PROFILE] }
+      : {}),
+    // RFC 9449 §5.1 (#480): announces DPoP and the proof algorithms the token
+    // endpoint accepts. Emitted only while `DPOP_ENABLED` is on, from the same
+    // allowlist the verifier enforces, so the advertised set and the accepted
+    // set cannot drift. With DPoP off no `DPoP` header is read, so the member
+    // is absent and the document is the one served before DPoP.
+    ...(input.dpopSigningAlgValuesSupported !== undefined
+      ? { dpop_signing_alg_values_supported: [...input.dpopSigningAlgValuesSupported] }
       : {}),
   };
 }

@@ -205,9 +205,9 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Tokens
 
-| Key            | Role       | Default | Since | Description                                                                                                                   |
-| -------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `DPOP_ENABLED` | deployment | `false` | 0.2.0 | Turn DPoP-bound tokens on (RFC 9449); refused at boot until the token endpoint binds tokens to a DPoP key (ADR-017 phase F3). |
+| Key            | Role       | Default | Since | Description                                                                                                                                                               |
+| -------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DPOP_ENABLED` | deployment | `false` | 0.2.0 | Turn DPoP-bound tokens on (RFC 9449): the token endpoint binds tokens to the key of a DPoP proof, and refuses a client marked `dpop_bound_access_tokens` that sends none. |
 
 ### Signing
 
