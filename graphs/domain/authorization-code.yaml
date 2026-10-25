@@ -8,7 +8,7 @@ id: qauth
 actions:
   AuthorizationCode.invalidateForUser:
     # internal: invoked by core.logout, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:104
+    source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:131
     body:
       type: object
       required: [userId]
