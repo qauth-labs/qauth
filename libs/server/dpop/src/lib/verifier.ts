@@ -262,6 +262,8 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
     } catch (error) {
       refuse('malformed', error);
     }
+    // No extension is understood here, so any crit is refused (RFC 7515 §4.1.11),
+    // as jose would; and no unencoded payload (RFC 7797).
     if (!isObject(header) || 'crit' in header || 'b64' in header) refuse('malformed');
     if (header['typ'] !== DPOP_PROOF_TYP) refuse('typ');
 
@@ -273,6 +275,8 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
     if (jwk['kty'] === 'oct' || PRIVATE_KEY_MEMBERS.some((member) => member in jwk)) {
       refuse('private-key');
     }
+    // jose's import refuses such a key too; checked here so the rule does not
+    // depend on the crypto library.
     if (!keyFitsAlgorithm(alg, jwk)) refuse('jwk');
 
     let key: Awaited<ReturnType<typeof importJWK>>;
