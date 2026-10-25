@@ -4,9 +4,9 @@
  * The admin API's scopes are `admin:read`, `admin:write` and `admin:security`.
  * Every scope that starts with `admin:` is reserved for them, so no client can
  * obtain a scope that reads like an admin grant through a path that grants it
- * without an operator: dynamic registration and Client ID Metadata Documents
- * refuse it, a realm's dynamic registration allowlist cannot hold it, and
- * discovery never lists it.
+ * without an operator: dynamic registration, Client ID Metadata Documents and
+ * the developer API refuse it, a realm's dynamic registration allowlist cannot
+ * hold it, and discovery never lists it.
  *
  * The prefix is matched without regard to the case of its ASCII letters. An
  * OAuth scope is case-sensitive (RFC 6749 §3.3), so `Admin:security` would

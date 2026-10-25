@@ -119,8 +119,8 @@ ${scopeTable()}
 - Scopes are matched exactly and case-sensitively (RFC 6749 §3.3).
 - Every scope that starts with \`admin:\`, in any case, is reserved for the admin API. Dynamic
   registration refuses one with \`invalid_client_metadata\`, a Client ID Metadata Document that
-  asks for one is refused, a realm's dynamic registration allowlist cannot hold one, and
-  discovery never lists one.
+  asks for one is refused, the developer API refuses one, a realm's dynamic registration
+  allowlist cannot hold one, and discovery never lists one.
 
 ## How a request is authorized
 

@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 
 import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
+import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -268,8 +269,19 @@ async function resolveRealmAllowedScopes(
  * Cap requested `scopes` against the realm allowlist, rejecting anything
  * outside it (RFC 7591 `invalid_client_metadata` equivalent). Empty allowlist
  * means no custom scopes are permitted. Throws `BadRequestError` → HTTP 400.
+ *
+ * A scope with the reserved `admin:` prefix is refused whatever the allowlist
+ * says (#507), as dynamic registration refuses it: the allowlist cannot hold
+ * one, but this list may come from the environment when the realm's seed
+ * write failed.
  */
 function assertScopesAllowed(requested: string[], realmAllowedScopes: string[]): void {
+  const reserved = reservedAdminScopesIn(requested);
+  if (reserved.length > 0) {
+    throw new BadRequestError(
+      `scope not permitted: ${reserved.join(' ')} (the admin: prefix is reserved for the admin API)`
+    );
+  }
   const disallowed = requested.filter((s) => !realmAllowedScopes.includes(s));
   if (disallowed.length > 0) {
     throw new BadRequestError(`scope not permitted: ${disallowed.join(' ')}`);

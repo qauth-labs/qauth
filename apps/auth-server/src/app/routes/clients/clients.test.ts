@@ -1038,6 +1038,30 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
+  // #507: the admin: prefix is reserved for the admin API.
+  it('rejects an admin: scope even when the realm allowlist lists it', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({ id: 'realm-1', dynamicRegistrationAllowedScopes: ['openid', 'admin:read'] })
+    );
+    await clientsRoute(fastify);
+
+    const request = authedRequest({
+      body: {
+        name: 'Admin-scoped',
+        redirectUris: ['https://app.example.com/cb'],
+        scopes: ['openid', 'admin:read'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      /^scope not permitted: admin:read \(the admin: prefix is reserved for the admin API\)$/
+    );
+    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+  });
+
   it('allows create when every requested scope is within the realm allowlist', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);

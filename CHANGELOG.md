@@ -642,16 +642,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid_client_metadata`, where before it dropped any scope outside the
   realm's allowlist; a Client ID Metadata Document whose `scope` holds one is
   refused (`invalid_client`); discovery never lists one in `scopes_supported`;
-  and the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it names one.
-  Migration 0039 removes such entries from every realm's
+  the developer API (`POST /api/clients`, and `PATCH /api/clients/{id}` when it
+  changes the scopes) refuses one with `400`; and the boot refuses
+  `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it names one. Migration 0039
+  removes such entries from every realm's
   `dynamic_registration_allowed_scopes`, keeping the others in their order,
   then adds the CHECK `realms_dynamic_registration_scopes_not_admin`; the
   realms repository refuses the same with `400`. Clients that already hold such
   a scope keep it.
 
   **Action for operators**: none unless an application scope of yours starts
-  with `admin:`. Such a scope can no longer be dynamically registered: rename it,
-  or provision its clients through the seed manifest.
+  with `admin:`. Such a scope can no longer be registered by a client or a
+  developer: rename it, or provision its clients through the seed manifest.
+  Remove it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` before the upgrade, or
+  the new release does not boot.
 
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
   a person or a client did as events in the event store ([#458], ADR-019
