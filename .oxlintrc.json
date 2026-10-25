@@ -308,6 +308,15 @@
               {
                 "sourceTag": "scope:sdk",
                 "onlyDependOnLibsWithTags": []
+              },
+              // Reference proxy test (#482, ADR-019 Decision 5): drives the
+              // shipped nginx configuration over HTTP in front of stub
+              // upstreams, with Docker and Node's own modules only. It imports
+              // no workspace project, so it tests the configuration and nothing
+              // else.
+              {
+                "sourceTag": "scope:reference-proxy",
+                "onlyDependOnLibsWithTags": []
               }
             ]
           }
