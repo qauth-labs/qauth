@@ -1949,6 +1949,15 @@
             "in": "query",
             "name": "resource",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "in": "query",
+            "name": "dpop_jkt",
+            "required": false
           }
         ],
         "x-qauth-stability": "stable",
@@ -2042,6 +2051,10 @@
                         }
                       }
                     ]
+                  },
+                  "dpop_jkt": {
+                    "type": "string",
+                    "maxLength": 2048
                   }
                 },
                 "required": [
@@ -2149,8 +2162,21 @@
                     "token_type": {
                       "type": "string",
                       "enum": [
-                        "Bearer"
+                        "Bearer",
+                        "DPoP"
                       ]
+                    },
+                    "cnf": {
+                      "type": "object",
+                      "properties": {
+                        "jkt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "jkt"
+                      ],
+                      "additionalProperties": false
                     },
                     "pqc_signature": {
                       "type": "string"
@@ -2850,7 +2876,8 @@
                         "token_type": {
                           "type": "string",
                           "enum": [
-                            "Bearer"
+                            "Bearer",
+                            "DPoP"
                           ]
                         },
                         "scope": {
@@ -2884,7 +2911,7 @@
           "OAuth",
           "Userinfo"
         ],
-        "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
+        "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.",
         "security": [
           {
             "bearerAuth": []
@@ -2930,7 +2957,7 @@
           "OAuth",
           "Userinfo"
         ],
-        "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
+        "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.",
         "security": [
           {
             "bearerAuth": []
@@ -3105,6 +3132,15 @@
             "in": "query",
             "name": "resource",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "in": "query",
+            "name": "dpop_jkt",
+            "required": false
           }
         ],
         "x-qauth-stability": "stable",
@@ -3210,6 +3246,10 @@
                         }
                       }
                     ]
+                  },
+                  "dpop_jkt": {
+                    "type": "string",
+                    "maxLength": 2048
                   }
                 },
                 "required": [

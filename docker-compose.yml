@@ -300,6 +300,9 @@ services:
       JWT_MLDSA_PRIVATE_KEY:
       JWT_MLDSA_PRIVATE_KEY_PATH:
 
+      # DPoP-bound tokens (RFC 9449, #480). Off unless set.
+      DPOP_ENABLED:
+
       # Which proxies may report the client address (X-Forwarded-For). List
       # only the developer portal's fixed address (172.30.80.10 by default; see
       # `networks:` at the end of this file) and any reverse proxy in front of

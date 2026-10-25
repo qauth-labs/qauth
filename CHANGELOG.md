@@ -295,9 +295,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded in Redis for the window; with Redis unavailable, every proof is
   refused. The library imports only `jose` and `node:crypto`, no Fastify.
   `test-vectors/dpop/proof.json` holds the RFC's example proofs and one
-  failing case per check. Nothing calls the verifier yet: `DPOP_ENABLED`
-  (default `false`) is refused at boot until the token endpoint binds tokens to
-  a DPoP key.
+  failing case per check. The token endpoint uses it from [#480] (below).
+
+- **DPoP-bound tokens at the token endpoint** ([#480], RFC 9449, ADR-014 §3,
+  ADR-017 phase F3), behind `DPOP_ENABLED` (default `false`), which is no longer
+  refused at boot. With it on:
+  - a token request's `DPoP` proof binds the access token to the proof's key,
+    whatever the grant: `cnf.jkt` in the token and `token_type: DPoP` in the
+    response. The ID-JAG mint stays `N_A` and unbound.
+  - `oauth_clients.dpop_bound_access_tokens` (migration 0037) marks a client
+    that always uses DPoP; its token requests without a proof are refused with
+    `invalid_dpop_proof`. Only the `db:seed-oauth-clients` manifest sets it
+    (`dpop_bound_access_tokens: true`); dynamic registration, CIMD documents
+    and `/api/clients` cannot.
+  - `/oauth/authorize` reads `dpop_jkt` and binds the code to that key
+    (`authorization_codes.dpop_jkt`), so the code is redeemed only with a proof
+    under it. A public client's refresh token is bound to its proof key
+    (`refresh_tokens.cnf_jkt`) and every rotation keeps it; a confidential
+    client's refresh token is not bound. While DPoP is off, a code or refresh
+    token bound while it was on is refused with `invalid_grant`.
+  - discovery publishes `dpop_signing_alg_values_supported`, and introspection
+    returns `cnf` and `token_type: DPoP` for a bound token.
+  - `userinfo` and the other routes that read an access token from the
+    `Authorization` header accept the `DPoP` scheme with a valid proof (its
+    `ath` the token's hash), and refuse a DPoP-bound token sent as Bearer,
+    with a `WWW-Authenticate: DPoP` challenge.
+
+  With `DPOP_ENABLED` off the server reads no `DPoP` header and no `dpop_jkt`,
+  and every response is the one it gave before. `token_type` in the token and
+  introspection responses gains the value `DPoP`, an approved break of the
+  stable surface.
 
 - **The signer** ([#464], ADR-019 Decision 9). `@qauth-labs/server-keys`
   defines `Signer`, the one interface for private-key work: sign a JWS, sign
@@ -800,6 +827,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#476]: https://github.com/qauth-labs/qauth/issues/476
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#479]: https://github.com/qauth-labs/qauth/issues/479
+[#480]: https://github.com/qauth-labs/qauth/issues/480
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 [#485]: https://github.com/qauth-labs/qauth/issues/485
 [#486]: https://github.com/qauth-labs/qauth/issues/486
