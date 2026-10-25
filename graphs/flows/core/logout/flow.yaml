@@ -62,7 +62,7 @@ context:
     initial: any
     say:
       valid: 'QAuth signed the token, for this issuer'
-      invalid: 'the token is no JWT, or its signature, issuer, typ or claims do not verify'
+      invalid: 'the token is no JWT, its signature or issuer does not verify, or it is live and its typ or claims do not verify'
   expired:
     values: [false, true]
     initial: any
