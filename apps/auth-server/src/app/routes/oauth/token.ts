@@ -702,12 +702,13 @@ async function handleAuthorizationCode(
     consent && isScopeSubset(authCode.scopes, consent.scopes)
       ? {
           ...fastify.jwtUtils.generateRefreshToken(),
-          // The realm's `sso_max_lifespan` caps the family from its start
+          // The realm's `sso_max_lifespan` caps the family from its start,
+          // and never past the browser session that backed the code
           // (ADR-019 Decision 3, #552).
           expiresAt: refreshTokenExpiresAt(
             familyCreatedAt,
             fastify.jwtUtils.getRefreshTokenLifespan(),
-            refreshFamilyEnd(familyCreatedAt, ctx.ssoMaxLifespan)
+            refreshFamilyEnd(familyCreatedAt, ctx.ssoMaxLifespan, authCode.sessionExpiresAt ?? null)
           ),
           // Start a fresh refresh-token family. Every rotation (see
           // `handleRefreshToken`) inherits this `familyId` so replay of a
@@ -715,6 +716,8 @@ async function handleAuthorizationCode(
           // and this start time, so the family's age counts from here.
           familyId: randomUUID(),
           familyCreatedAt,
+          // The session's end as of the code's mint; every rotation copies it.
+          familySessionExpiresAt: authCode.sessionExpiresAt ?? null,
         }
       : undefined;
 
@@ -755,6 +758,7 @@ async function handleAuthorizationCode(
           tokenHash: refresh.tokenHash,
           familyId: refresh.familyId,
           familyCreatedAt: refresh.familyCreatedAt,
+          familySessionExpiresAt: refresh.familySessionExpiresAt,
           expiresAt: refresh.expiresAt,
           scopes: authCode.scopes,
           // RFC 8707: carry the resource set onto the refresh token so subsequent
@@ -1058,12 +1062,17 @@ async function handleRefreshToken(
   }
 
   // The family's end under the realm's CURRENT `sso_max_lifespan` (ADR-019
-  // Decision 3, #552), counted from the family's start. Checked before the
-  // token's own expiry, which the end also caps: past it the whole family is
-  // revoked, not only this token. A realm that lowered the limit since the
-  // token was issued ends the family here, at its next use.
+  // Decision 3, #552), counted from the family's start and never past the
+  // browser session that started it. Checked before the token's own expiry,
+  // which the end also caps: past it the whole family is revoked, not only
+  // this token. A realm that lowered the limit since the token was issued ends
+  // the family here, at its next use.
   const now = Date.now();
-  const familyEnd = refreshFamilyEnd(storedToken.familyCreatedAt, ctx.ssoMaxLifespan);
+  const familyEnd = refreshFamilyEnd(
+    storedToken.familyCreatedAt,
+    ctx.ssoMaxLifespan,
+    storedToken.familySessionExpiresAt ?? null
+  );
   if (refreshFamilyEnded(familyEnd, now)) {
     await fastify.repositories.refreshTokens.revokeFamily(storedToken.familyId, 'family_expired');
     await emitRequestFailed(ctx, 'invalid_grant', 'refresh_family_expired', storedToken.userId);
@@ -1191,8 +1200,10 @@ async function handleRefreshToken(
         oauthClientId: client.id,
         tokenHash: newRefreshTokenHash,
         familyId: storedToken.familyId,
-        // The family's start, unchanged: a rotation never restarts its clock.
+        // The family's start and its session's end, unchanged: a rotation
+        // never restarts its clock or lifts the session's cap.
         familyCreatedAt: storedToken.familyCreatedAt,
+        familySessionExpiresAt: storedToken.familySessionExpiresAt ?? null,
         previousTokenHash: presentedHash,
         expiresAt: newRefreshTokenExpiresAt,
         scopes: grantedScopes,

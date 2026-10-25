@@ -689,6 +689,8 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
     expect(createArg.authTime).toBe(session.authTime);
+    // #552: and the session's absolute end, which caps the refresh family.
+    expect(createArg.sessionExpiresAt).toBe(session.expiresAt);
   });
 
   it.each([

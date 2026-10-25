@@ -182,12 +182,13 @@ export default async function (fastify: FastifyInstance) {
 
         // Calculate expiration times. The realm's `sso_max_lifespan` caps
         // the refresh-token family from its start (ADR-019 Decision 3, #552).
+        // No browser session backs this sign-in, so no session end caps it.
         const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
         const familyCreatedAt = Date.now();
         const refreshExpiresAt = refreshTokenExpiresAt(
           familyCreatedAt,
           fastify.jwtUtils.getRefreshTokenLifespan(),
-          refreshFamilyEnd(familyCreatedAt, realm.ssoMaxLifespan)
+          refreshFamilyEnd(familyCreatedAt, realm.ssoMaxLifespan, null)
         );
 
         // Store refresh token in database (hashed). Each login starts a
@@ -200,6 +201,7 @@ export default async function (fastify: FastifyInstance) {
           tokenHash: refreshTokenHash,
           familyId: randomUUID(),
           familyCreatedAt,
+          familySessionExpiresAt: null,
           expiresAt: refreshExpiresAt,
           scopes: [],
         });

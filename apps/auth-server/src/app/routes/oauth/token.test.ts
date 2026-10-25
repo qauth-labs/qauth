@@ -1382,6 +1382,47 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(stored.expiresAt).toBe(stored.familyCreatedAt + 3_600_000);
   });
 
+  it('caps the new family at the end of the browser session behind the code (#552)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    // A silent re-authorization one minute before the session's end.
+    const sessionExpiresAt = Date.now() + 60_000;
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      sessionExpiresAt,
+    });
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await ctx.handler(
+      { ...baseRequest(), realm: testRealm({ id: 'realm-1', ssoMaxLifespan: 3600 }) },
+      createReply()
+    );
+
+    const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0][0] as { familySessionExpiresAt: number | null; expiresAt: number };
+    expect(stored.familySessionExpiresAt).toBe(sessionExpiresAt);
+    expect(stored.expiresAt).toBe(sessionExpiresAt);
+  });
+
+  it('leaves a family uncapped by its session when the realm sets no limit (#552)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const sessionExpiresAt = Date.now() + 60_000;
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      sessionExpiresAt,
+    });
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await ctx.handler({ ...baseRequest(), realm: testRealm({ id: 'realm-1' }) }, createReply());
+
+    // The session's end is still recorded, for a limit the realm sets later.
+    const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0][0] as { familySessionExpiresAt: number | null; expiresAt: number };
+    expect(stored.familySessionExpiresAt).toBe(sessionExpiresAt);
+    expect(stored.expiresAt).toBeGreaterThan(sessionExpiresAt + 60_000);
+  });
+
   it('creates no browser session on a successful exchange (#488)', async () => {
     // The session this grant once wrote was never returned or read: the
     // browser's session is the one its sign-in created before /oauth/authorize.
@@ -2582,6 +2623,32 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       if (!setup.ctx.handler) throw new Error('Handler missing');
       return setup.ctx.handler({ ...refreshRequest(), realm }, createReply());
     }
+
+    it('copies the session end on rotation, and ends the family with the session', async () => {
+      // The family started five minutes ago, one minute before its session
+      // was due to end: the session's end, not start plus one hour, caps it.
+      const sessionEnd = Date.now() + 1 * MINUTE;
+      const setup = setupFamily(5 * MINUTE, { familySessionExpiresAt: sessionEnd });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).resolves.toMatchObject({
+        refresh_token: 'new-refresh-token',
+      });
+      const created = (setup.fastify.repositories.refreshTokens.create as unknown as Mock).mock
+        .calls[0][0] as { familySessionExpiresAt: number | null; expiresAt: number };
+      expect(created.familySessionExpiresAt).toBe(sessionEnd);
+      expect(created.expiresAt).toBe(sessionEnd);
+    });
+
+    it('refuses once the session that started the family has ended', async () => {
+      const setup = setupFamily(5 * MINUTE, { familySessionExpiresAt: Date.now() - 1 });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).rejects.toThrow(InvalidGrantError);
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+        setup.storedToken.familyId,
+        'family_expired'
+      );
+      expect(setup.fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    });
 
     it('rotates before the end, and the new token expires no later than the end', async () => {
       const setup = setupFamily(59 * MINUTE);

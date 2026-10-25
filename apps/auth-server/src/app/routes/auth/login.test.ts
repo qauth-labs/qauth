@@ -382,10 +382,16 @@ describe('POST /auth/login', () => {
       );
 
       const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
-        .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+        .calls[0][0] as {
+        familyCreatedAt: number;
+        familySessionExpiresAt: number | null;
+        expiresAt: number;
+      };
       expect(stored.familyCreatedAt).toBeGreaterThanOrEqual(before);
       expect(stored.familyCreatedAt).toBeLessThanOrEqual(Date.now());
       expect(stored.expiresAt).toBe(stored.familyCreatedAt + lifetimeMs);
+      // No browser session backs this sign-in, so none caps the family.
+      expect(stored.familySessionExpiresAt).toBeNull();
     }
   );
 

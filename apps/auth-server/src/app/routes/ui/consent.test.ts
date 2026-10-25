@@ -1588,6 +1588,8 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
     expect(createArg.authTime).toBe(session.authTime);
+    // #552: the session's absolute end caps the refresh family the code starts.
+    expect(createArg.sessionExpiresAt).toBe(session.expiresAt);
     expect(emittedTypes()).toEqual([
       'urn:qauth:event:step_up.elevated:v1-rc.0',
       'urn:qauth:event:consent.granted:v1-rc.0',

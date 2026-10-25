@@ -876,6 +876,9 @@ export default async function (fastify: FastifyInstance) {
             // the code so /oauth/token can assert `acr`. NULL for a password
             // login (`'low'`), which is the "omit the claim" outcome.
             assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
+            // ADR-019 Decision 3 (#552): the session's absolute end, so the
+            // refresh family this code starts never outlives the session.
+            sessionExpiresAt: session.expiresAt,
             scopes,
             // RFC 8707: bind the resource(s) the screen named to this code so
             // /oauth/token can set the issued access token's `aud` claim.

@@ -6,6 +6,7 @@ import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
+  E2E_PASSWORD,
   E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
@@ -21,11 +22,13 @@ import {
  * Decision 3, issue #552), end to end against real Postgres and Redis.
  *
  * A family starts at the code exchange. With a limit set, no token of the
- * family expires after the family's start plus the limit, and a refresh at or
- * past that end revokes the whole family and answers `invalid_grant`. The
- * limit is read from the realm at each refresh, so lowering it ends an older
- * family at its next refresh. Without a limit every refresh slides the expiry
- * forward, as before.
+ * family expires after the family's start plus the limit, nor after the end of
+ * the browser session that backed the code, and a refresh at or past that end
+ * revokes the whole family and answers `invalid_grant`. A silent
+ * re-authorization just before the session's end therefore starts a family
+ * that ends with the session. The limit is read from the realm at each
+ * refresh, so lowering it ends an older family at its next refresh. Without a
+ * limit every refresh slides the expiry forward, as before.
  *
  * The suite moves the clock the server reads (`Date` only; timers stay real)
  * to reach minute 59 or 61 of a family without waiting.
@@ -43,6 +46,7 @@ const SCOPES = ['openid', 'email'];
 
 interface RefreshRow {
   readonly family_created_at: string;
+  readonly family_session_expires_at: string | null;
   readonly expires_at: string;
   readonly revoked: boolean;
   readonly revoked_reason: string | null;
@@ -104,9 +108,13 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
    *
    * @returns the refresh token, its family and the family's start (epoch ms)
    */
-  async function startFamily(
-    app: FastifyInstance
-  ): Promise<{ refreshToken: string; familyId: string; familyCreatedAt: number }> {
+  async function startFamily(app: FastifyInstance): Promise<{
+    refreshToken: string;
+    familyId: string;
+    familyCreatedAt: number;
+    sessionEnd: number;
+    cookie: string;
+  }> {
     const email = 'family-owner@example.test';
     const userId = await registerPasswordAccount(app, email);
     const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
@@ -125,8 +133,30 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     });
     await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, SCOPES);
     const jar = await signInWithPassword(app, email);
-    const pkce = pkcePair();
+    const cookie = jar.header() as string;
+    const { refreshToken, familyId, familyCreatedAt, sessionEnd } = await codeFamily(app, cookie);
+    return { refreshToken, familyId, familyCreatedAt, sessionEnd, cookie };
+  }
 
+  /**
+   * Authorize with the browser session's cookie and exchange the code: a new
+   * refresh-token family. `prompt=none` makes it the silent re-authorization a
+   * client runs to refresh a sign-in.
+   *
+   * @returns the family's refresh token, id and start, and the end of the
+   *   browser session the code recorded
+   */
+  async function codeFamily(
+    app: FastifyInstance,
+    cookie: string,
+    extra: Record<string, string> = {}
+  ): Promise<{
+    refreshToken: string;
+    familyId: string;
+    familyCreatedAt: number;
+    sessionEnd: number;
+  }> {
+    const pkce = pkcePair();
     const authorize = await app.inject({
       method: 'GET',
       url: `/oauth/authorize?${new URLSearchParams({
@@ -137,8 +167,9 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
         code_challenge: pkce.challenge,
         code_challenge_method: 'S256',
         state: 'family-state',
+        ...extra,
       }).toString()}`,
-      headers: { cookie: jar.header() as string },
+      headers: { cookie },
     });
     expect(authorize.statusCode).toBe(302);
     const code = new URL(authorize.headers['location'] as string).searchParams.get('code');
@@ -156,14 +187,22 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     const refreshToken = (exchange.json() as { refresh_token?: string }).refresh_token;
     if (refreshToken === undefined) throw new Error('the exchange issued no refresh token');
 
-    const { rows } = await app.dbPool.query<{ family_id: string; family_created_at: string }>(
-      'SELECT family_id, family_created_at FROM refresh_tokens'
+    const {
+      rows: [row],
+    } = await app.dbPool.query<{
+      family_id: string;
+      family_created_at: string;
+      family_session_expires_at: string | null;
+    }>(
+      `SELECT family_id, family_created_at, family_session_expires_at FROM refresh_tokens
+       WHERE previous_token_hash IS NULL ORDER BY created_at DESC, id DESC LIMIT 1`
     );
-    expect(rows).toHaveLength(1);
+    if (row.family_session_expires_at === null) throw new Error('the family has no session end');
     return {
       refreshToken,
-      familyId: rows[0].family_id,
-      familyCreatedAt: Number(rows[0].family_created_at),
+      familyId: row.family_id,
+      familyCreatedAt: Number(row.family_created_at),
+      sessionEnd: Number(row.family_session_expires_at),
     };
   }
 
@@ -195,7 +234,7 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
 
   async function familyRows(app: FastifyInstance, familyId: string): Promise<RefreshRow[]> {
     const { rows } = await app.dbPool.query<RefreshRow>(
-      `SELECT family_created_at, expires_at, revoked, revoked_reason
+      `SELECT family_created_at, family_session_expires_at, expires_at, revoked, revoked_reason
        FROM refresh_tokens WHERE family_id = $1 ORDER BY created_at, id`,
       [familyId]
     );
@@ -213,7 +252,10 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     const app = server();
     await setRealmLimit(app, 3600);
     const family = await startFamily(app);
-    const familyEnd = family.familyCreatedAt + 60 * MINUTE;
+    // The session began a moment before the exchange, under the same limit,
+    // so its end is the family's end.
+    const familyEnd = Math.min(family.familyCreatedAt + 60 * MINUTE, family.sessionEnd);
+    expect(family.familyCreatedAt + 60 * MINUTE - familyEnd).toBeLessThan(MINUTE);
 
     // The exchange's own token already ends with the family.
     expect(await familyRows(app, family.familyId)).toEqual([
@@ -230,9 +272,11 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
 
     const rows = await familyRows(app, family.familyId);
     expect(rows).toHaveLength(2);
-    // The rotation copied the family's start and capped the new token there.
+    // The rotation copied the family's start and session end, and capped the
+    // new token there.
     expect(rows[1]).toEqual({
       family_created_at: String(family.familyCreatedAt),
+      family_session_expires_at: String(family.sessionEnd),
       expires_at: String(familyEnd),
       revoked: false,
       revoked_reason: null,
@@ -327,6 +371,71 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
     expect(rows).toEqual([
       expect.objectContaining({ revoked: true, revoked_reason: 'rotated' }),
       expect.objectContaining({ revoked: true, revoked_reason: 'family_expired' }),
+    ]);
+  });
+  it("ends a family started one minute before its session's end with that session", async () => {
+    const app = server();
+    await setRealmLimit(app, 3600);
+    const first = await startFamily(app);
+
+    // One minute before the session's end the client re-authorizes silently.
+    // The family it starts ends with the session, not an hour later.
+    vi.setSystemTime(first.sessionEnd - MINUTE);
+    const late = await codeFamily(app, first.cookie, { prompt: 'none' });
+    expect(late.familyId).not.toBe(first.familyId);
+    expect(late.sessionEnd).toBe(first.sessionEnd);
+    expect(await familyRows(app, late.familyId)).toEqual([
+      expect.objectContaining({
+        family_created_at: String(first.sessionEnd - MINUTE),
+        family_session_expires_at: String(first.sessionEnd),
+        expires_at: String(first.sessionEnd),
+      }),
+    ]);
+
+    // Thirty seconds before the end it still rotates, capped at the end.
+    const atHalf = await refreshAt(app, late.refreshToken, first.sessionEnd - MINUTE / 2);
+    expect(atHalf.statusCode).toBe(200);
+    const current = (atHalf.json() as { refresh_token: string }).refresh_token;
+    expect((await familyRows(app, late.familyId))[1]).toMatchObject({
+      expires_at: String(first.sessionEnd),
+    });
+
+    // Past the session's end the family is over, however young it is.
+    const after = await refreshAt(app, current, first.sessionEnd + 1000);
+    expect(after.statusCode).toBe(400);
+    expect(after.json()).toMatchObject({ error: 'invalid_grant' });
+    expect(await familyRows(app, late.familyId)).toEqual([
+      expect.objectContaining({ revoked: true, revoked_reason: 'rotated' }),
+      expect.objectContaining({ revoked: true, revoked_reason: 'family_expired' }),
+    ]);
+    expect(await tokenFailureReasons(app)).toEqual(['refresh_family_expired']);
+  });
+
+  it('caps a /auth/login family at its start plus the limit, with no session end', async () => {
+    const app = server();
+    await setRealmLimit(app, 3600);
+    const email = 'first-party@example.test';
+    await registerPasswordAccount(app, email);
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email, password: E2E_PASSWORD },
+    });
+    expect(login.statusCode).toBe(200);
+
+    const { rows } = await app.dbPool.query<RefreshRow>(
+      `SELECT family_created_at, family_session_expires_at, expires_at, revoked, revoked_reason
+       FROM refresh_tokens`
+    );
+    expect(rows).toEqual([
+      {
+        family_created_at: rows[0].family_created_at,
+        family_session_expires_at: null,
+        expires_at: String(Number(rows[0].family_created_at) + 60 * MINUTE),
+        revoked: false,
+        revoked_reason: null,
+      },
     ]);
   });
 });

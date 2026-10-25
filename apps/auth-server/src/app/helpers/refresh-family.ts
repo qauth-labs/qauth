@@ -9,26 +9,39 @@
  * seconds after its start (`refresh_tokens.family_created_at`), and no token of
  * it expires later than that. A realm that sets none keeps the sliding expiry.
  *
+ * The family also ends no later than the browser session that started it
+ * (`refresh_tokens.family_session_expires_at`, the authorization code's
+ * session end), so no token outlives the SSO session that granted it, as with
+ * an SSO session maximum: a silent re-authorization just before the session's
+ * end starts a family that ends with the session. A family no browser session
+ * started (`/auth/login`, the legacy Bearer path) has only its start plus the
+ * limit. Both caps apply only when the realm sets `sso_max_lifespan`.
+ *
  * The limit is read from the request's realm row at each use (the realm
  * resolver's, at most its cache time old), never stored on the token, so a
  * realm that lowers it ends its older families at their next use.
  */
 
 /**
- * When a family ends, in epoch milliseconds: its start plus the realm's
- * `sso_max_lifespan`, or `null` when the realm sets none.
+ * When a family ends, in epoch milliseconds: the earlier of its start plus the
+ * realm's `sso_max_lifespan` and the end of the browser session that started
+ * it, or `null` when the realm sets no `sso_max_lifespan`.
  *
- * A limit of zero or less ends the family at its start, as it ends a browser
- * session at its creation.
+ * The realm refuses a limit of zero or less (`realms_sso_max_lifespan_positive`).
  *
  * @param familyCreatedAt - the family's start, in epoch milliseconds
  * @param ssoMaxLifespanSeconds - the realm's `sso_max_lifespan`
+ * @param familySessionExpiresAt - the absolute end of the browser session that
+ *   started the family, in epoch milliseconds; `null` when none did
  */
 export function refreshFamilyEnd(
   familyCreatedAt: number,
-  ssoMaxLifespanSeconds: number | null
+  ssoMaxLifespanSeconds: number | null,
+  familySessionExpiresAt: number | null
 ): number | null {
-  return ssoMaxLifespanSeconds === null ? null : familyCreatedAt + ssoMaxLifespanSeconds * 1000;
+  if (ssoMaxLifespanSeconds === null) return null;
+  const byLimit = familyCreatedAt + ssoMaxLifespanSeconds * 1000;
+  return familySessionExpiresAt === null ? byLimit : Math.min(byLimit, familySessionExpiresAt);
 }
 
 /**
