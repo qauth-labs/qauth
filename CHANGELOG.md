@@ -580,7 +580,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers 404 for an encoded slash or a backslash and for any `/ui` look-alike
   that is not `/ui/` (`/UI/`, `/ui;x`, `/ui`), 421 for a host that is not a
   realm host (only `/health` and `/ready` pass), and 404 for `/metrics` and
-  `/internal/*`. On `/ui/*` it strips the `Cookie` header and replaces the CSP,
+  `/internal/*`. On `/ui/*` it strips the `Cookie` header, drops any
+  `Set-Cookie` the app sends, and replaces the CSP,
   `Referrer-Policy` and `Cache-Control` the app sends; `Cache-Control` is
   `no-store` except on content-hashed assets. It overwrites `X-Forwarded-For`,
   `X-Forwarded-Host` and `X-Forwarded-Proto`, removes `Forwarded` and the other

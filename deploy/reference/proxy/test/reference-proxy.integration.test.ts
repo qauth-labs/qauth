@@ -572,6 +572,29 @@ describe('the reference proxy (#482)', () => {
       expect(response.headers['x-stub-upstream']).toBe('ceremony-app');
       expect(headerValues(response, 'cache-control')).toEqual(['no-store']);
     });
+
+    it.each(['/ui/login', '/ui/assets/index-BxY2abcd.js'])(
+      'drops a Set-Cookie the ceremony app sends on %s, so it cannot set a realm cookie',
+      async (path) => {
+        if (!prerequisites) return;
+        const response = await send(path, {
+          headers: { 'x-stub-set-cookie': '__Host-qauth_session=minted; Path=/; Secure; HttpOnly' },
+        });
+
+        expect(response.headers['x-stub-upstream']).toBe('ceremony-app');
+        expect(headerValues(response, 'set-cookie')).toEqual([]);
+        expect(headerValues(response, 'cache-control')).toEqual(['no-store']);
+      }
+    );
+
+    it("passes the auth server's Set-Cookie through", async () => {
+      if (!prerequisites) return;
+      const cookie = '__Host-qauth_session=s3ss10n; Path=/; Secure; HttpOnly';
+      const response = await send('/oauth/authorize', { headers: { 'x-stub-set-cookie': cookie } });
+
+      expect(response.headers['x-stub-upstream']).toBe('auth-server');
+      expect(headerValues(response, 'set-cookie')).toEqual([cookie]);
+    });
   });
 
   describe('forwarded headers', () => {

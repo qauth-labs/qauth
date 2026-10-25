@@ -40,9 +40,10 @@ split.
      `^/ui(?:$|[^a-z0-9_-])`. Examples: `/ui` itself, a case variant such as `/UI/login`, a path
      parameter such as `/ui;x/login` or `/ui%3Bx/login`.
 4. **Split by path.** `/ui/*` goes to the ceremony app. Every other path goes to the auth server.
-5. **Strip cookies from `/ui/*`.** Remove the `Cookie` header from every request to `/ui/*`,
-   including every separate `cookie` field of an HTTP/2 request. The ceremony app never sees
-   QAuth's cookies, so it can neither read nor mint a session-bound value.
+5. **Strip cookies from `/ui/*`, both ways.** Remove the `Cookie` header from every request to
+   `/ui/*`, including every separate `cookie` field of an HTTP/2 request, and drop every
+   `Set-Cookie` from the answers. The ceremony app never sees QAuth's cookies and cannot set or
+   overwrite one on the realm origin, so it can neither read nor mint a session-bound value.
 6. **Set the ceremony headers.** On every `/ui/*` answer, replace whatever the app sent. This
    includes error answers and answers the proxy makes itself, such as a `502`.
    - `Content-Security-Policy: default-src 'self'; base-uri 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'`
@@ -53,18 +54,31 @@ split.
      `^/ui/assets/(?:[A-Za-z0-9._-]+-)?[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2|woff|svg|png|jpg|jpeg|gif|webp|avif|ico)\z`.
      The pattern ends in `\z`, not `$`, because in most regular-expression engines `$` also
      matches before a final newline, which `%0A` decodes to.
+
+     The pattern alone cannot tell a hashed name from a name such as `logo-standard.svg`. The
+     ceremony app must therefore put nothing under `/ui/assets/` but files named by a hash of their
+     content. Serve any other file outside that prefix, where it gets `no-store`. The reference
+     app's build already does this.
 7. **Let no upstream steer the proxy.** Ignore every response header that asks the proxy to fetch
    another location or file internally: nginx's `X-Accel-Redirect` and the other `X-Accel-*`
    headers, or their equivalent in another proxy. Otherwise the ceremony app could have the proxy
    fetch an auth server page, with the client's cookies, and serve it under `/ui/*` without the
    ceremony headers.
-8. **Overwrite the forwarded headers.** Set `X-Forwarded-For` to the address the proxy accepted the
-   connection from, `X-Forwarded-Host` to the realm host and `X-Forwarded-Proto` to the scheme the
-   client used, which is `https` on the only listener. Never pass on, or append to, what the
-   client sent. Remove `Forwarded`, `X-Real-IP`, `X-Forwarded-Port`, `X-Forwarded-Prefix`,
-   `X-Original-URL` and `X-Rewrite-URL`: QAuth reads none of them, and a web framework behind the
-   proxy might. Then set the auth server's `TRUST_PROXY` to the proxy's address, so the auth server
-   believes these headers from the proxy and from no one else.
+8. **At the first hop, overwrite the forwarded headers.** This proxy is the one clients connect to.
+   Set `X-Forwarded-For` to the address the proxy accepted the connection from, `X-Forwarded-Host`
+   to the realm host and `X-Forwarded-Proto` to the scheme the client used, which is `https` on the
+   only listener. Never pass on, or append to, what the client sent. Remove `Forwarded`,
+   `X-Real-IP`, `X-Forwarded-Port`, `X-Forwarded-Prefix`, `X-Original-URL` and `X-Rewrite-URL`:
+   QAuth reads none of them, and a web framework behind the proxy might. Then set the auth server's
+   `TRUST_PROXY` to the proxy's address, so the auth server believes these headers from the proxy
+   and from no one else.
+
+   With another trusted hop in front, such as a load balancer, this proxy is no longer the first
+   hop. It must then append the address it accepted the connection from to `X-Forwarded-For`
+   (nginx: `$proxy_add_x_forwarded_for`), as [Docker](/operate/docker/#production-considerations)
+   describes, and `TRUST_PROXY` must list every trusted hop. Overwriting there would make every
+   client look like the hop in front of it. The first hop of the chain still overwrites.
+
 9. **Keep internal paths internal.** Answer `404` on the public side for `/metrics`, `/internal/*`
    and their variants: every path which, with every percent-escape decoded and compared
    case-insensitively, matches `^/(?:metrics|internal)(?:$|[^a-z0-9_-])`.
@@ -114,6 +128,20 @@ services:
 
 Then set `TRUST_PROXY=172.30.80.10,172.30.80.20` on the auth server: the developer portal's address
 and the proxy's.
+
+The auth server must then be reachable only through the proxy. `docker-compose.yml` publishes it on
+host port `3000`; take that mapping away when you add the proxy, for example in your override file:
+
+```yaml
+services:
+  auth-server:
+    ports: !reset []
+```
+
+`!reset` needs Docker Compose 2.24 or later; with an older Compose, delete the `ports` entry of
+`auth-server` instead. Otherwise a client can send a realm `Host` straight to port `3000` and skip
+every rule above: the path refusals, the cookie stripping, the ceremony headers and the `404` on
+`/metrics` and `/internal/*`.
 
 The reference configuration leaves out a plain-HTTP listener and its redirect, IPv6 listeners, and
 a hosted bot-challenge provider's script hosts. ADR-019 Decision 5 lets an operator add those
