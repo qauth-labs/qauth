@@ -230,7 +230,6 @@ function createTokenStub(persistedClient: {
       authorizationCodes: { findByCode: vi.fn(), markUsed: vi.fn() },
       users: { findById: vi.fn().mockResolvedValue(user) },
       userCredentials: {
-        findByUserIdAndType: vi.fn().mockResolvedValue(undefined),
         findByRealmProviderSub: vi.fn().mockResolvedValue(undefined),
       },
       userAttributes: { findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([]) },
@@ -255,7 +254,6 @@ function createTokenStub(persistedClient: {
       getIssuer: vi.fn().mockReturnValue(ISSUER),
     },
     pkceUtils: { verifyCodeChallenge: vi.fn() },
-    sessionUtils: { setSession: vi.fn() },
     redis: {
       get: vi.fn().mockResolvedValue(null),
       set: vi.fn().mockResolvedValue('OK'),

@@ -17,8 +17,11 @@ vi.mock('../../helpers/oauth-client', () => ({
   getOrCreateSystemClient: vi.fn(async () => ({ clientId: 'system', audience: null })),
 }));
 
+import {
+  type BrowserSessionFixture,
+  createBrowserSessionFixture,
+} from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
-import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
 import logoutRoute from './logout';
 
@@ -75,8 +78,29 @@ function loginClaims(overrides: Record<string, unknown> = {}) {
   return { sub: VALID_USER.id, clientId: 'system', aud: 'system', ...overrides };
 }
 
+/** The per-user index of hosted browser sessions that logout ends. */
+const SESSION_INDEX = `user-browser-sessions:${VALID_USER.id}`;
+
+/**
+ * A live hosted session of {@link VALID_USER}, recorded in the per-user index
+ * as a sign-in records it.
+ */
+async function signedIn(sessions: BrowserSessionFixture, sid: string) {
+  const signed = await sessions.signIn({
+    sid,
+    realmId: REALM.id,
+    userId: VALID_USER.id,
+    side: { identifier: VALID_USER.email },
+  });
+  await sessions.redis.sadd(SESSION_INDEX, sid);
+  return signed;
+}
+
 function createFastifyStub() {
   const ctx: TestContext = {};
+  // The session service (#488) and the Redis of the per-user index (none by
+  // default) and the sessions' side records.
+  const sessions = createBrowserSessionFixture();
 
   const fastify: any = {
     withTypeProvider: () => ({
@@ -107,19 +131,15 @@ function createFastifyStub() {
       decodeTokenUnsafe: vi.fn(),
       getIssuer: vi.fn().mockReturnValue('https://auth.example.com'),
     },
+    sessionService: sessions.service,
     redis: {
+      ...sessions.redis,
       setex: vi.fn().mockResolvedValue('OK'),
-      // The per-user index of hosted browser sessions (none by default).
-      smembers: vi.fn().mockResolvedValue([]),
-      del: vi.fn().mockResolvedValue(1),
-    },
-    sessionUtils: {
-      deleteSession: vi.fn().mockResolvedValue(undefined),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
 
 function logoutRequest(
@@ -209,35 +229,56 @@ describe('POST /auth/logout', () => {
     it('ends every hosted session of the user, with or without a cookie on the request', async () => {
       // The portal calls /auth/logout from its server, so no browser cookie
       // comes along: the sessions are found through the per-user index.
-      const { fastify, ctx } = createFastifyStub();
-      (fastify.redis.smembers as unknown as Mock).mockResolvedValue(['sess-a', 'sess-b']);
+      const { fastify, ctx, sessions } = createFastifyStub();
+      await signedIn(sessions, 'sess-a');
+      await signedIn(sessions, 'sess-b');
 
       await logOut(fastify, ctx);
 
-      expect(fastify.redis.smembers).toHaveBeenCalledWith(`user-browser-sessions:${VALID_USER.id}`);
-      expect(fastify.sessionUtils.deleteSession).toHaveBeenCalledWith('sess-a');
-      expect(fastify.sessionUtils.deleteSession).toHaveBeenCalledWith('sess-b');
-      expect(fastify.redis.del).toHaveBeenCalledWith(`user-browser-sessions:${VALID_USER.id}`);
+      expect(sessions.redis.smembers).toHaveBeenCalledWith(SESSION_INDEX);
+      // Revoked through the session service, in the user's realm (#488).
+      expect(sessions.service.revoke).toHaveBeenCalledTimes(2);
+      expect(sessions.service.revoke).toHaveBeenCalledWith({
+        realmId: REALM.id,
+        sid: 'sess-a',
+        reason: 'sign_out_everywhere',
+      });
+      expect(sessions.service.revoke).toHaveBeenCalledWith({
+        realmId: REALM.id,
+        sid: 'sess-b',
+        reason: 'sign_out_everywhere',
+      });
+      expect(sessions.service.sessions.size).toBe(0);
+      // Their side records and the index go with them.
+      expect(sessions.redis.hashes.size).toBe(0);
+      expect(sessions.redis.del).toHaveBeenCalledWith(SESSION_INDEX);
+      expect(sessions.redis.sets.has(SESSION_INDEX)).toBe(false);
     });
 
     it('clears the session cookie the request carries when it was one of them', async () => {
-      const { fastify, ctx } = createFastifyStub();
-      (fastify.redis.smembers as unknown as Mock).mockResolvedValue(['sess-a']);
+      const { fastify, ctx, sessions } = createFastifyStub();
+      const { cookie } = await signedIn(sessions, 'sess-a');
 
-      const reply = await logOut(fastify, ctx, `__Host-qauth_session=${signSessionId('sess-a')}`);
+      const reply = await logOut(fastify, ctx, cookie);
 
+      expect(sessions.service.sessions.has('sess-a')).toBe(false);
       expect(reply.headers['Set-Cookie']).toContain('__Host-qauth_session=');
       expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
     });
 
     it("leaves the cookie of a session that is not the user's alone", async () => {
-      const { fastify, ctx } = createFastifyStub();
-      (fastify.redis.smembers as unknown as Mock).mockResolvedValue(['sess-a']);
+      const { fastify, ctx, sessions } = createFastifyStub();
+      await signedIn(sessions, 'sess-a');
+      // A live session of another user, in this browser.
+      const other = await sessions.signIn({ sid: 'other', realmId: REALM.id, userId: 'user-2' });
 
-      const reply = await logOut(fastify, ctx, `__Host-qauth_session=${signSessionId('other')}`);
+      const reply = await logOut(fastify, ctx, other.cookie);
 
       expect(reply.headers['Set-Cookie']).toBeUndefined();
-      expect(fastify.sessionUtils.deleteSession).not.toHaveBeenCalledWith('other');
+      expect(sessions.service.revoke).not.toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'other' })
+      );
+      expect(sessions.service.sessions.has('other')).toBe(true);
     });
   });
 
@@ -467,7 +508,7 @@ describe('POST /auth/logout', () => {
     async (_name, expired) => {
       // RFC 9449 §7.2 (#480): the route reads a Bearer token, and a token bound
       // to a DPoP key is never one, expired or not.
-      const { fastify, ctx } = createFastifyStub();
+      const { fastify, ctx, sessions } = createFastifyStub();
       const claims = loginClaims({ cnf: { jkt: 'dpop-key-thumbprint' } });
       (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bound.access.jwt');
       if (expired) {
@@ -486,7 +527,8 @@ describe('POST /auth/logout', () => {
       await expect(
         handler(logoutRequest('Bearer bound.access.jwt'), createReply())
       ).rejects.toThrow('A DPoP-bound access token cannot be used as a Bearer token');
-      expect(fastify.sessionUtils.deleteSession).not.toHaveBeenCalled();
+      expect(sessions.redis.smembers).not.toHaveBeenCalled();
+      expect(sessions.service.revoke).not.toHaveBeenCalled();
       expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
       expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
     }

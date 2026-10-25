@@ -32,6 +32,7 @@ vi.mock('../../helpers/failed-login', () => ({
 }));
 
 import { env } from '../../../config/env';
+import { createBrowserSessionFixture, sessionCookie } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import {
@@ -112,6 +113,9 @@ function withRealm(handler: RouteHandler): RouteHandler {
 
 function makeFastify() {
   const ctx: TestContext = {};
+  // The session service (#488) and the Redis that holds the per-user index of
+  // browser sessions `/auth/logout` ends and the session's side record.
+  const sessions = createBrowserSessionFixture();
   const fastify: any = {
     withTypeProvider: () => ({
       get: (_url: string, _opts: unknown, handler: any) => {
@@ -143,21 +147,11 @@ function makeFastify() {
       has: vi.fn().mockReturnValue(true),
       register: vi.fn(),
     },
-    sessionUtils: {
-      setSession: vi.fn().mockResolvedValue(undefined),
-    },
-    // The per-user index of browser sessions that `/auth/logout` ends.
-    redis: (() => {
-      const chain = {
-        sadd: vi.fn(() => chain),
-        expire: vi.fn(() => chain),
-        exec: vi.fn().mockResolvedValue([]),
-      };
-      return { chain, multi: vi.fn(() => chain) };
-    })(),
+    sessionService: sessions.service,
+    redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
 
 /** The #228 credential-row fixture the login lookup returns. */
@@ -178,6 +172,11 @@ function csrfCookieValue(setCookies: string[]): string {
   const cookie = setCookies.find((c) => c.startsWith('__Host-qauth_login_csrf='));
   if (!cookie) throw new Error('login CSRF cookie was not set');
   return cookie.split('=')[1].split(';')[0];
+}
+
+/** The `name=value` pair of the session cookie the reply set, if it set one. */
+function sessionCookieSet(setCookies: string[]): string | undefined {
+  return setCookies.find((c) => c.startsWith('__Host-qauth_session='))?.split(';')[0];
 }
 
 describe('UI /ui/login — CSRF defence', () => {
@@ -243,7 +242,7 @@ describe('UI /ui/login — CSRF defence', () => {
   });
 
   it('POST succeeds when the submitted token matches the signed cookie', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await loginRoute(fastify);
 
     // First GET to obtain a valid signed cookie + matching token.
@@ -263,11 +262,15 @@ describe('UI /ui/login — CSRF defence', () => {
     });
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
 
+    const before = Date.now();
     const { reply, state } = createReply();
     await ctx.post!(
       {
-        body: { email: 'user@example.com', password: 'correct', csrf_token: rawToken },
-        headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+        body: { email: 'User@Example.com', password: 'correct', csrf_token: rawToken },
+        headers: {
+          cookie: `__Host-qauth_login_csrf=${cookieValue}`,
+          'user-agent': 'TestBrowser/1.0',
+        },
         ip: '127.0.0.1',
       },
       reply
@@ -275,26 +278,42 @@ describe('UI /ui/login — CSRF defence', () => {
 
     expect(state.redirected).toBe('/');
     expect(state.statusCode).toBe(302);
-    expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
     // The login-CSRF cookie is burned on success (Max-Age=0).
     const cleared = state.setCookies.find(
       (c) => c.startsWith('__Host-qauth_login_csrf=') && c.includes('Max-Age=0')
     );
     expect(cleared).toBeDefined();
 
-    // #237/#240: a password credential is `assuranceLevel: 'low'` (ADR-003), so
-    // the session records NO assurance at all. This is the ORIGIN of the
-    // invariant that password-authenticated ID tokens carry no `acr` claim:
-    // /oauth/authorize copies this field onto the authorization code, and
-    // /oauth/token renders `acr` only from a level that is present.
-    const sessionPayload = (fastify.sessionUtils.setSession as unknown as Mock).mock
-      .calls[0][1] as Record<string, unknown>;
-    expect('assuranceLevel' in sessionPayload).toBe(false);
+    // One new session through the session service (#488), in the user's
+    // realm, with the request's address and User-Agent.
+    expect(sessions.service.create).toHaveBeenCalledOnce();
+    const input = sessions.service.create.mock.calls[0][0];
+    expect(input).toEqual({
+      realmId: 'realm-1',
+      userId: 'user-1',
+      authTime: expect.any(Number),
+      // #237/#240: a password credential is `assuranceLevel: 'low'` (ADR-003),
+      // so the session records NO assurance level. This is the ORIGIN of the
+      // invariant that password-authenticated ID tokens carry no `acr` claim:
+      // /oauth/authorize copies this field onto the authorization code, and
+      // /oauth/token renders `acr` only from a level that is present.
+      assuranceLevel: null,
+      ipAddress: '127.0.0.1',
+      userAgent: 'TestBrowser/1.0',
+    });
+    expect(input.authTime).toBeGreaterThanOrEqual(before);
+    expect(input.authTime).toBeLessThanOrEqual(Date.now());
+    const session = await sessions.service.create.mock.results[0].value;
 
+    // #230: the consent screen shows the credential's external_sub, not the
+    // address as typed. It lives in the side record, not in the session.
+    await expect(sessions.sideRecord(session)).resolves.toMatchObject({
+      identifier: 'user@example.com',
+    });
+    // The cookie names the new session.
+    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(session.sid));
     // The new session is recorded under its user, so `/auth/logout` can end it.
-    const sessionId = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][0];
-    const redis = (fastify as unknown as { redis: { chain: { sadd: Mock } } }).redis;
-    expect(redis.chain.sadd).toHaveBeenCalledWith('user-browser-sessions:user-1', sessionId);
+    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([session.sid]));
 
     // The sign-in is recorded for its user, without the session id or the
     // return path.
@@ -304,6 +323,52 @@ describe('UI /ui/login — CSRF defence', () => {
       { method: 'password' },
       { realmId: 'realm-1', userId: 'user-1', actor: 'user' }
     );
+  });
+
+  it('POST signs in to a NEW session even when the browser already carries one (session fixation)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await loginRoute(fastify);
+    if (!ctx.get || !ctx.post) throw new Error('Handlers missing');
+
+    const getReply = createReply();
+    await ctx.get({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[0];
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      passwordHash: 'hash',
+      enabled: true,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    // A live session cookie the browser already holds: planted by an
+    // attacker, or left from an earlier sign-in.
+    const planted = await sessions.signIn({
+      sid: 'planted-sid',
+      realmId: REALM.id,
+      userId: 'user-1',
+    });
+
+    const { reply, state } = createReply();
+    await ctx.post(
+      {
+        body: { email: 'user@example.com', password: 'correct', csrf_token: rawToken },
+        headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}; ${planted.cookie}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(302);
+    expect(sessions.service.create).toHaveBeenCalledOnce();
+    const session = await sessions.service.create.mock.results[0].value;
+    expect(session.sid).not.toBe('planted-sid');
+    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(session.sid));
   });
 
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
@@ -316,7 +381,7 @@ describe('UI /ui/login — CSRF defence', () => {
       /** The realm of the host the request named; {@link REALM} when absent. */
       realm?: RealmRow;
     }) {
-      const { fastify, ctx } = makeFastify();
+      const { fastify, ctx, sessions } = makeFastify();
       await loginRoute(fastify);
       const getReply = createReply();
       await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
@@ -350,7 +415,7 @@ describe('UI /ui/login — CSRF defence', () => {
         },
         reply
       );
-      return { fastify, state };
+      return { fastify, state, sessions };
     }
 
     beforeEach(() => {
@@ -363,13 +428,13 @@ describe('UI /ui/login — CSRF defence', () => {
     it('refuses a locked-out identifier (429) before any credential check', async () => {
       vi.mocked(registerLoginAttempt).mockResolvedValue({ locked: true, retryAfterSeconds: 120 });
 
-      const { fastify, state } = await postLogin({ verifies: true });
+      const { fastify, state, sessions } = await postLogin({ verifies: true });
 
       expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
       expect(state.statusCode).toBe(429);
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
-      expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      expect(sessions.service.create).not.toHaveBeenCalled();
       // No subject and never the typed address: a locked-out attempt names no user.
       expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
@@ -463,7 +528,7 @@ describe('UI /ui/login — CSRF defence', () => {
       );
       expect(freshFloorFirst).toBe(true);
       expect(floorFirst()).toBe(true);
-      expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      expect(fresh.sessions.service.create).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
       expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
       expect(recordSuccessfulLogin).not.toHaveBeenCalled();
@@ -488,10 +553,10 @@ describe('UI /ui/login — CSRF defence', () => {
     });
 
     it('still signs in an unverified credential when an operator turns REQUIRE_VERIFIED_ACCOUNT off', async () => {
-      const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
+      const { state, sessions } = await postLogin({ verifies: true, emailVerified: false });
 
       expect(state.statusCode).toBe(302);
-      expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
+      expect(sessions.service.create).toHaveBeenCalledOnce();
     });
   });
 
@@ -530,7 +595,7 @@ describe('UI /ui/login — CSRF defence', () => {
   });
 
   it('POST rejects a disabled user (401 re-render) even with valid credentials', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await loginRoute(fastify);
 
     const getReply = createReply();
@@ -561,7 +626,7 @@ describe('UI /ui/login — CSRF defence', () => {
     );
 
     expect(state.statusCode).toBe(401);
-    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+    expect(sessions.service.create).not.toHaveBeenCalled();
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       'urn:qauth:event:user.sign_in_failed:v1-rc.0',

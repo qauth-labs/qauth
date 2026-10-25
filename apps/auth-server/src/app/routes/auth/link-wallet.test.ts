@@ -53,9 +53,12 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import {
+  type BrowserSessionFixture,
+  createBrowserSessionFixture,
+} from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
-import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
 import {
   WALLET_LINK_CONFLICT,
@@ -98,6 +101,11 @@ function createReply() {
   return { reply, state };
 }
 
+/**
+ * The wallet flow's stashes (`wallet-login:<handle>`, its signal and its
+ * done-marker). Not the browser session: that lives in the session service
+ * (#488), faked by `createBrowserSessionFixture`.
+ */
 function createSessionUtils() {
   const store = new Map<string, unknown>();
   return {
@@ -131,6 +139,7 @@ function createRedis() {
 function makeFastify() {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
+  const sessions = createBrowserSessionFixture();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
     routes.set(`${method} ${url}`, (request, reply) => {
       // The realm resolver's decoration (#486): a request reaches its handler
@@ -148,21 +157,29 @@ function makeFastify() {
       users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
     },
     sessionUtils,
-    redis: createRedis(),
+    sessionService: sessions.service,
+    redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, routes, sessionUtils };
+  return { fastify: fastify as FastifyInstance, routes, sessionUtils, sessions };
 }
 
-/** Mint a live browser session and return the cookie header value for it. */
-function signIn(
-  sessionUtils: ReturnType<typeof createSessionUtils>,
+/**
+ * Mint a live browser session in the request's realm, with the consent API's
+ * `apiCsrfToken` in its side record, and return the cookie header value for it.
+ */
+async function signIn(
+  sessions: BrowserSessionFixture,
   userId: string,
   apiCsrfToken = 'api-csrf-token'
 ) {
-  const sessionId = `session-${userId}`;
-  sessionUtils.store.set(sessionId, { userId, sessionId, createdAt: Date.now(), apiCsrfToken });
-  return { cookie: `__Host-qauth_session=${signSessionId(sessionId)}`, apiCsrfToken };
+  const { cookie } = await sessions.signIn({
+    sid: `session-${userId}`,
+    realmId: REALM.id,
+    userId,
+    side: { apiCsrfToken },
+  });
+  return { cookie, apiCsrfToken };
 }
 
 function cookieValue(setCookies: string[], name: string): string {
@@ -182,7 +199,7 @@ function cookieValue(setCookies: string[], name: string): string {
 async function startLink(userId = 'user-1', body?: { device?: 'this' | 'other' }) {
   const context = makeFastify();
   await linkWalletRoute(context.fastify);
-  const session = signIn(context.sessionUtils, userId);
+  const session = await signIn(context.sessions, userId);
 
   const postReply = createReply();
   await context.routes.get('POST /link/wallet')!(
@@ -253,9 +270,9 @@ describe('wallet linking API — fail-closed registration (#232/#299)', () => {
 
   it('answers 404 when no VerifierProfile is selected', async () => {
     envMock.OID4VP_VERIFIER_PROFILE = undefined;
-    const { fastify, routes, sessionUtils } = makeFastify();
+    const { fastify, routes, sessions } = makeFastify();
     await linkWalletRoute(fastify);
-    const session = signIn(sessionUtils, 'user-1');
+    const session = await signIn(sessions, 'user-1');
 
     const { reply, state } = createReply();
     await routes.get('POST /link/wallet')!(
@@ -293,9 +310,9 @@ describe('wallet linking API — a session is the whole authority (ADR-009 §5)'
   });
 
   it('refuses a POST with no or wrong X-CSRF-Token', async () => {
-    const { fastify, routes, sessionUtils } = makeFastify();
+    const { fastify, routes, sessions } = makeFastify();
     await linkWalletRoute(fastify);
-    const session = signIn(sessionUtils, 'user-1');
+    const session = await signIn(sessions, 'user-1');
 
     const { reply } = createReply();
     await expect(
@@ -415,9 +432,10 @@ describe('wallet linking API — completion gates (#238)', () => {
     // A handle harvested from a shared screen must not be finishable by someone
     // else's session — that would attach the attacker's wallet to the victim's
     // flow, or the victim's account to the attacker's session.
-    const { routes, sessionUtils, handle, flow, binderCookie } = await startLink('user-1');
+    const { routes, sessionUtils, sessions, handle, flow, binderCookie } =
+      await startLink('user-1');
     publishSignal(sessionUtils, flow['stateHash']);
-    const attacker = signIn(sessionUtils, 'user-2', 'other-csrf');
+    const attacker = await signIn(sessions, 'user-2', 'other-csrf');
 
     const { reply, state } = createReply();
     await routes.get('GET /link/wallet/:handle')!(
@@ -506,9 +524,9 @@ describe('wallet linking API — completion gates (#238)', () => {
   });
 
   it('treats a malformed handle as expired without touching the store', async () => {
-    const { fastify, routes, sessionUtils } = makeFastify();
+    const { fastify, routes, sessions } = makeFastify();
     await linkWalletRoute(fastify);
-    const session = signIn(sessionUtils, 'user-1');
+    const session = await signIn(sessions, 'user-1');
 
     const { reply, state } = createReply();
     await routes.get('GET /link/wallet/:handle')!(
@@ -794,11 +812,12 @@ describe('wallet linking API — the done-marker the return leg leaves (#405)', 
   });
 
   it('refuses the marker to a different signed-in user, without burning it', async () => {
-    const { routes, sessionUtils, handle, flow, binderCookie } = await startLink('user-1', {
-      device: 'this',
-    });
+    const { routes, sessionUtils, sessions, handle, flow, binderCookie } = await startLink(
+      'user-1',
+      { device: 'this' }
+    );
     completeOnReturnLeg(sessionUtils, handle, flow, 'linked');
-    const other = signIn(sessionUtils, 'user-2', 'other-csrf');
+    const other = await signIn(sessions, 'user-2', 'other-csrf');
 
     const polled = await pollStatus(
       routes,

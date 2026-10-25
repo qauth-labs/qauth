@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import {
   hashOid4vpResponseCode,
   isOid4vpResponseCode,
@@ -17,7 +15,7 @@ import {
   WALLET_LOGIN_STATUS_RATE_LIMIT,
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
-import { resolveBrowserSession, trackBrowserSession } from '../../helpers/browser-session';
+import { createBrowserSession, resolveBrowserSession } from '../../helpers/browser-session';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -678,33 +676,27 @@ async function advanceWalletLoginFlow(
     return { status: 'rejected' };
   }
 
-  // Session-fixation defence: a fresh session id on every successful
-  // authentication, even if the browser already had one.
-  const sessionId = randomUUID();
-  await fastify.sessionUtils.setSession(
-    sessionId,
-    {
-      userId: user.id,
-      // The value stored as this credential's `external_sub` — the asserted,
-      // normalized identifier (ADR-009 §1), mirroring what the password login
-      // puts here.
-      email: resolution.externalSub,
-      sessionId,
-      createdAt: Date.now(),
-      // #237: the eIDAS LoA the presented credential and its issuer established,
-      // carried on the session so `/oauth/authorize` can bind it to the
-      // authorization code and `/oauth/token` can assert `acr` in the ID token.
-      // Spread conditionally so a resolution that established nothing leaves the
-      // field ABSENT rather than storing `'low'` — the password login stores
-      // nothing here either, and "no assurance" must have one representation.
-      ...(resolution.assuranceLevel !== undefined && resolution.assuranceLevel !== 'low'
-        ? { assuranceLevel: resolution.assuranceLevel }
-        : {}),
-    },
-    env.SESSION_COOKIE_TTL
-  );
-  // Recorded under the user so `/auth/logout` can end it.
-  await trackBrowserSession(fastify, user.id, sessionId);
+  // Session-fixation defence: a new session, with a new `sid`, on every
+  // successful authentication, even if the browser already had one. The
+  // session service stores it in Postgres, in the flow's realm (#488).
+  const session = await createBrowserSession(fastify, request, {
+    realmId: flow.realmId,
+    userId: user.id,
+    // The value stored as this credential's `external_sub` — the asserted,
+    // normalized identifier (ADR-009 §1), mirroring what the password login
+    // shows.
+    identifier: resolution.externalSub,
+    // #237: the eIDAS LoA the presented credential and its issuer established,
+    // carried on the session so `/oauth/authorize` can bind it to the
+    // authorization code and `/oauth/token` can assert `acr` in the ID token.
+    // A resolution that established nothing above `low` stores NULL — the
+    // password login stores nothing here either, and "no assurance" must have
+    // one representation.
+    assuranceLevel:
+      resolution.assuranceLevel === 'substantial' || resolution.assuranceLevel === 'high'
+        ? resolution.assuranceLevel
+        : null,
+  });
 
   await fastify.repositories.users.updateLastLogin(user.id);
   await emitUserEvent(
@@ -714,7 +706,7 @@ async function advanceWalletLoginFlow(
     { realmId: flow.realmId, userId: user.id, actor: 'user' }
   );
 
-  setSessionCookie(reply, sessionId);
+  setSessionCookie(reply, session.sid);
 
   if (via === 'return') {
     // The wallet opened this leg in a NEW tab. The binding stays in the shared
@@ -729,7 +721,7 @@ async function advanceWalletLoginFlow(
       binder: flow.binder,
       mode: 'login',
       redirectTo: flow.returnTo,
-      sessionId,
+      sessionId: session.sid,
     });
     return { status: 'complete', redirectTo: flow.returnTo };
   }

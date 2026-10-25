@@ -1,3 +1,4 @@
+import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -21,6 +22,12 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
 });
 
 import { env } from '../../../config/env';
+import {
+  type BrowserSessionFixture,
+  createBrowserSessionFixture,
+  type FakeSessionSeed,
+  type FakeSideRecordSeed,
+} from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
@@ -119,6 +126,8 @@ function withRealm(handler: RouteHandler): RouteHandler {
 
 function makeFastify() {
   const ctx: TestContext = {};
+  // The browser session (the session service) and its side record (#488).
+  const sessions = createBrowserSessionFixture();
   const fastify: any = {
     withTypeProvider: () => ({
       get: (_url: string, _opts: unknown, handler: any) => {
@@ -151,13 +160,34 @@ function makeFastify() {
       // RFC 9207 issuer sourced from here, the same as /oauth/authorize.
       getIssuer: () => ISSUER,
     },
+    sessionService: sessions.service,
+    redis: sessions.redis,
+    // Only the pending-authorization stash (`pending-authz:` keys, #316
+    // follow-up) that a redirect to /ui/login writes still goes through
+    // `sessionUtils`; the browser session does not.
     sessionUtils: {
-      getSession: vi.fn(),
       setSession: vi.fn().mockResolvedValue(undefined),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, sessions };
+}
+
+/** What {@link signIn} seeds besides the realm and the user. */
+type SignInSeed = Omit<FakeSessionSeed, 'realmId' | 'userId'> & { side?: FakeSideRecordSeed };
+
+/**
+ * `user-1` signed in to {@link REALM} on this browser (#488): a live session
+ * in the session service, its side record (the identifier `a@b.com` unless
+ * `side` names another) and the cookie that names it.
+ */
+function signIn(sessions: BrowserSessionFixture, { side, ...seed }: SignInSeed) {
+  return sessions.signIn({
+    realmId: REALM.id,
+    userId: 'user-1',
+    ...seed,
+    side: { identifier: 'a@b.com', ...side },
+  });
 }
 
 const CLIENT = {
@@ -194,7 +224,6 @@ describe('UI /ui/consent GET — rendering', () => {
   it('redirects to /ui/login when no session cookie present', async () => {
     const { fastify, ctx } = makeFastify();
     await consentRoute(fastify);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.get!(
@@ -211,16 +240,9 @@ describe('UI /ui/consent GET — rendering', () => {
   });
 
   it('renders consent HTML with CSRF token hidden input when session is valid', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-g1');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-g1',
-      createdAt: Date.now(),
-    });
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-g1' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const { reply, state } = createReply();
@@ -228,7 +250,7 @@ describe('UI /ui/consent GET — rendering', () => {
       {
         query: BASE_QUERY,
         url: '/ui/consent?...',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -237,26 +259,98 @@ describe('UI /ui/consent GET — rendering', () => {
     const html = state.body as string;
     expect(typeof html).toBe('string');
     expect(html).toContain('Test App wants to access your account');
-    expect(html).toContain('csrf_token');
     expect(state.headers['Content-Type']).toContain('text/html');
     // Clickjacking/MIME/Referrer/CSP hardening moved to the global
     // security-headers plugin (#113) — covered in security-headers.test.ts.
     // The page stamps the per-request CSP nonce onto its inline <style>.
     expect(html).toContain('nonce="test-style-nonce"');
-    expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
+    // The render minted the CSRF token and bound the scopes and resources it
+    // lists in the session's side record (#488), which the POST checks.
+    const side = await sessions.sideRecord(session);
+    expect(side.csrfToken).toEqual(expect.any(String));
+    expect(html).toContain(`name="csrf_token" value="${side.csrfToken}"`);
+    expect(side.consentScopes).toEqual({ 'app-123': ['email'] });
+    expect(side.consentResources).toEqual({ 'app-123': [] });
+  });
+
+  it('shows the identifier the user signed in with (#230)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-g-id',
+      side: { identifier: 'alice@example.com' },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.body as string).toContain('Signed in as alice@example.com');
+  });
+
+  it('shows the user id when the side record holds no identifier', async () => {
+    // A sign-in without an identifier, or a side record lost from Redis: the
+    // screen still names the account, by its stable subject id.
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-g-noid',
+      realmId: REALM.id,
+      userId: 'user-1',
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.body as string).toContain('Signed in as user-1');
+  });
+
+  it('keeps the consent CSRF values out of the session service: they live in the side record only', async () => {
+    // The token and the bindings change on every consent step; a Postgres
+    // write for each would cost more than they are worth (#488). Rendering
+    // the screen creates no session and puts nothing on the one it resolved.
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-g-side' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['https://api.example.com/v1'] },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(sessions.service.create).not.toHaveBeenCalled();
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    const stored = sessions.service.sessions.get(session.sid);
+    expect(stored).toBeDefined();
+    for (const field of ['csrfToken', 'apiCsrfToken', 'consentScopes', 'consentResources']) {
+      expect(stored).not.toHaveProperty(field);
+    }
+    const side = await sessions.sideRecord(session);
+    expect(side.csrfToken).toEqual(expect.any(String));
+    expect(JSON.stringify(stored)).not.toContain(side.csrfToken);
+    expect(JSON.stringify(stored)).not.toContain('https://api.example.com/v1');
+    expect(side.consentScopes).toEqual({ 'app-123': ['email'] });
+    expect(side.consentResources).toEqual({ 'app-123': ['https://api.example.com/v1'] });
   });
 
   it('renders RFC 8707 resource fields from the validated query, never from request.url', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-g2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-g2',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await signIn(sessions, { sid: 'sid-g2' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const { reply, state } = createReply();
@@ -266,7 +360,7 @@ describe('UI /ui/consent GET — rendering', () => {
         // `?resource` to Fastify's parser (unknown key, stripped unvalidated),
         // `resource` to `URLSearchParams`. See oauth/authorize.ts.
         url: '/ui/consent??resource=system&resource=https%3A%2F%2Fapi.example.com%2Fv1',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -281,16 +375,9 @@ describe('UI /ui/consent GET — rendering', () => {
     // The `resource` overrides `client.audience` in the token's `aud`
     // (`resolveAudience`), so the screen must name it: the grant the user
     // approves is for the resource server they were shown.
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-g3');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-g3',
-      createdAt: Date.now(),
-    });
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-g3' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...CLIENT,
       audience: ['https://default.example.com'],
@@ -301,7 +388,7 @@ describe('UI /ui/consent GET — rendering', () => {
       {
         query: { ...BASE_QUERY, resource: ['https://api.example.com/v1'] },
         url: '/ui/consent?client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -310,23 +397,18 @@ describe('UI /ui/consent GET — rendering', () => {
     const html = state.body as string;
     expect(html).toContain('Tokens will be valid for:</strong> https://api.example.com/v1');
     expect(html).not.toContain('https://default.example.com');
-    // The rendered resources are bound to the session, like the scopes, so
-    // the POST records what the user saw rather than what the form carries.
-    const written = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][1];
-    expect(written.consentResources).toEqual({ 'app-123': ['https://api.example.com/v1'] });
+    // The rendered resources are bound to the session's side record, like the
+    // scopes, so the POST records what the user saw rather than what the form
+    // carries.
+    expect((await sessions.sideRecord(session)).consentResources).toEqual({
+      'app-123': ['https://api.example.com/v1'],
+    });
   });
 
   it('keeps naming the client default audience when the request has no resource', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-g4');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-g4',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await signIn(sessions, { sid: 'sid-g4' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...CLIENT,
       audience: ['https://default.example.com'],
@@ -337,7 +419,7 @@ describe('UI /ui/consent GET — rendering', () => {
       {
         query: BASE_QUERY,
         url: '/ui/consent?client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -347,18 +429,15 @@ describe('UI /ui/consent GET — rendering', () => {
       'Tokens will be valid for:</strong> https://default.example.com'
     );
   });
-  it('rendering does not extend the session: it is stored for what is left of its lifetime', async () => {
-    // SESSION_COOKIE_TTL is 3600 s here; the session is 45 minutes old.
-    const { fastify, ctx } = makeFastify();
+  it("rendering does not extend the session: the side record expires with the session's end", async () => {
+    // The session lasts an hour (FAKE_SESSION_LIFETIME_MS) and is 45 minutes old.
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-g2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-g2',
-      createdAt: Date.now() - 45 * 60 * 1000,
+    const { session, cookie } = await signIn(sessions, {
+      sid: 'sid-g5',
+      authTime: Date.now() - 45 * 60 * 1000,
     });
+    const end = session.expiresAt;
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const handler = ctx.get;
@@ -368,15 +447,18 @@ describe('UI /ui/consent GET — rendering', () => {
       {
         query: BASE_QUERY,
         url: '/ui/consent?...',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
     );
 
-    const ttl = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][2];
-    expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(15 * 60);
+    // The render wrote the token and the bindings, and set the record's
+    // deadline to the session's absolute end: at most the 15 minutes left.
+    expect((await sessions.sideRecord(session)).csrfToken).toEqual(expect.any(String));
+    expect(sessions.redis.expiries.get(`browser-session-side:${REALM.id}:sid-g5`)).toBe(end);
+    expect(end - Date.now()).toBeGreaterThan(0);
+    expect(end - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000);
   });
 });
 
@@ -386,18 +468,10 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 
   it('deny path redirects to redirect_uri with error=access_denied and preserves state', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-d');
     const csrf = 'csrf-token-value-deny';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-d',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-    });
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-d', side: { csrfToken: csrf } });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const { reply, state } = createReply();
@@ -414,7 +488,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -433,19 +507,16 @@ describe('UI /ui/consent POST — allow/deny', () => {
       { error: 'access_denied' },
       { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' }
     );
+    // A decided form cannot be submitted again: the token is burned on Deny too.
+    expect((await sessions.sideRecord(session)).csrfToken).toBeUndefined();
   });
 
   it('rejects when CSRF token does not match', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-bad');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-bad',
-      csrfToken: 'expected-csrf-token',
-      createdAt: Date.now(),
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-bad',
+      side: { csrfToken: 'expected-csrf-token' },
     });
 
     const { reply } = createReply();
@@ -461,7 +532,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
             code_challenge_method: 'S256',
             response_type: 'code',
           },
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -477,18 +548,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 
   it('allow + allow_forever persists consent and issues an authorization code', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-a');
     const csrf = 'csrf-token-allow';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-a',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
+    const { session, cookie } = await signIn(sessions, {
+      sid: 'sid-a',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -507,7 +572,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -526,21 +591,22 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(state.redirected).toContain('state=xyz');
     // #282: consent Allow is the authorization success response.
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
+    // The token is burned so the form cannot be replayed; the next render
+    // mints a fresh one.
+    expect((await sessions.sideRecord(session)).csrfToken).toBeUndefined();
   });
 
   it("resolves the client and records the grant in the request's realm (#487)", async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-r');
     const csrf = 'csrf-token-realm';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    // The session lives in the realm the request carries: a session of
+    // another realm is no sign-in here.
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-r',
+      realmId: 'realm-2',
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-r',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
+      side: { identifier: 'a@b.com', csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -548,7 +614,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
     await ctx.post!(
       {
         body: { ...BASE_QUERY, decision: 'allow', allow_forever: '1', csrf_token: csrf },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
         realm: testRealm({ id: 'realm-2' }),
       },
@@ -569,19 +635,16 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 
   it('persists RFC 8707 resource on the code when POST body carries resource field(s)', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-res');
     const csrf = 'csrf-res';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-res',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
-      consentResources: { 'app-123': ['https://api.example.com/v1'] },
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-res',
+      side: {
+        csrfToken: csrf,
+        consentScopes: { 'app-123': ['email'] },
+        consentResources: { 'app-123': ['https://api.example.com/v1'] },
+      },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -603,7 +666,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
           // (Fastify parses multi-value form bodies as an array).
           resource: ['https://api.example.com/v1'],
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -641,19 +704,16 @@ describe('UI /ui/consent POST — allow/deny', () => {
     ['a resource when the page named none', [], ['https://payroll.example.com/v1']],
     ['no resource when the page named one', ['https://api.example.com/v1'], undefined],
   ])('refuses %s with invalid_target', async (_label, bound, posted) => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-res-bind');
     const csrf = 'csrf-res-bind';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-res-bind',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
-      consentResources: { 'app-123': bound },
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-res-bind',
+      side: {
+        csrfToken: csrf,
+        consentScopes: { 'app-123': ['email'] },
+        consentResources: { 'app-123': bound },
+      },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -673,7 +733,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
           response_type: 'code',
           resource: posted,
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -693,29 +753,25 @@ describe('UI /ui/consent POST — allow/deny', () => {
     );
   });
 
-  it.each([
+  it.each<[string, SessionAssuranceLevel | null, string | null]>([
     ['a wallet session at high assurance', 'high', 'high'],
-    // The password path writes no `assuranceLevel` (ADR-003: `'low'`), so the
-    // code records NULL and the ID token carries no `acr` — the #237/#240
-    // invariant, asserted on the consent-screen code-mint path too.
-    ['a password session', undefined, null],
-    ['a session that somehow carries low', 'low', null],
+    // The password path stores no assurance level (`null`, ADR-003: `'low'`),
+    // so the code records NULL and the ID token carries no `acr` — the
+    // #237/#240 invariant, asserted on the consent-screen code-mint path too.
+    ['a password session', null, null],
+    // Neither the session service's type nor the `sessions` table's CHECK
+    // admits `low`; the mint path collapses it to NULL all the same.
+    ['a session that somehow carries low', 'low' as unknown as SessionAssuranceLevel, null],
   ])(
     'binds the assurance level of %s onto the authorization code (#237)',
     async (_label, sessionLevel, expected) => {
-      const { fastify, ctx } = makeFastify();
+      const { fastify, ctx, sessions } = makeFastify();
       await consentRoute(fastify);
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      const signed = signSessionId('sid-acr');
       const csrf = 'csrf-acr';
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-        userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: 'sid-acr',
-        csrfToken: csrf,
-        createdAt: Date.now(),
-        consentScopes: { 'app-123': ['email'] },
-        ...(sessionLevel === undefined ? {} : { assuranceLevel: sessionLevel }),
+      const { cookie } = await signIn(sessions, {
+        sid: 'sid-acr',
+        assuranceLevel: sessionLevel,
+        side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
       });
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
         CLIENT
@@ -736,7 +792,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
             code_challenge_method: 'S256',
             response_type: 'code',
           },
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -749,18 +805,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
   );
 
   it('allow without allow_forever issues code but does NOT persist consent', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-once');
     const csrf = 'csrf-once';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-once',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-once',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -777,7 +827,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -789,22 +839,16 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 
   it('refuses to grant scopes the hidden field tampered beyond what was rendered (#150 binding)', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-tamper');
     const csrf = 'csrf-tamper';
     // The GET render bound only `email` (what the user saw). Both `email` and
     // `read:foo` are in the client allowlist, so a tampered `scope=email
     // read:foo` survives the allowlist filter — the binding check is what stops
     // the grant of the unseen `read:foo`.
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-tamper',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-tamper',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -824,7 +868,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -846,25 +890,11 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 
   it('refuses a page rendered before the allowlist grew, even after a later render re-bound the session', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const cookie = `__Host-qauth_session=${signSessionId('sid-stale-page')}`;
-
-    // A session store that keeps what the route writes, so the second GET
-    // below really overwrites the per-client scope binding of the first.
-    let session: Record<string, unknown> = {
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-stale-page',
-      createdAt: Date.now(),
-    };
-    (fastify.sessionUtils.getSession as unknown as Mock).mockImplementation(async () => session);
-    (fastify.sessionUtils.setSession as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) => {
-        session = data;
-      }
-    );
+    // The side record keeps what the route writes, so the second GET below
+    // really overwrites the per-client scope binding of the first.
+    const { cookie } = await signIn(sessions, { sid: 'sid-stale-page' });
 
     const renderPage = async () => {
       const { reply, state } = createReply();
@@ -943,15 +973,9 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
   });
 
   it('GET refuses a registered javascript: redirect URI before rendering', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-js',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await signIn(sessions, { sid: 'sid-js' });
     const uri = 'javascript:alert(document.domain)//';
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...CLIENT,
@@ -964,7 +988,7 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
         {
           query: { ...BASE_QUERY, redirect_uri: uri },
           url: '/ui/consent?...',
-          headers: { cookie: `__Host-qauth_session=${signSessionId('sid-js')}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -981,23 +1005,21 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
     });
 
     async function withCursorClient(sid: string, csrfToken: string) {
-      const { fastify, ctx } = makeFastify();
+      const { fastify, ctx, sessions } = makeFastify();
       await consentRoute(fastify);
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-        userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: sid,
-        csrfToken,
-        createdAt: Date.now(),
-        // The scopes the rendered screen presented, which the POST must match.
-        consentScopes: { 'app-123': ['email'] },
+      const { cookie } = await signIn(sessions, {
+        sid,
+        side: {
+          csrfToken,
+          // The scopes the rendered screen presented, which the POST must match.
+          consentScopes: { 'app-123': ['email'] },
+        },
       });
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
         ...CLIENT,
         redirectUris: [cursorCallback],
       });
-      return { fastify, ctx, cookie: `__Host-qauth_session=${signSessionId(sid)}` };
+      return { fastify, ctx, cookie };
     }
 
     function allowBody(csrfToken: string) {
@@ -1072,25 +1094,10 @@ describe('UI /ui/consent — operator-suspended client', () => {
 
   const SUSPENDED = { ...CLIENT, enabled: true, suspended: true };
 
-  async function sessionCookie(sid: string, csrfToken?: string) {
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    return {
-      cookie: `__Host-qauth_session=${signSessionId(sid)}`,
-      session: {
-        userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: sid,
-        csrfToken,
-        createdAt: Date.now(),
-      },
-    };
-  }
-
   it('GET refuses with invalid_client and renders nothing', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { cookie, session } = await sessionCookie('sid-susp-g');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(session);
+    const { cookie } = await signIn(sessions, { sid: 'sid-susp-g' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       SUSPENDED
     );
@@ -1106,11 +1113,10 @@ describe('UI /ui/consent — operator-suspended client', () => {
   });
 
   it('POST allow refuses with invalid_client and mints no code', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
     const csrf = 'csrf-token-suspended';
-    const { cookie, session } = await sessionCookie('sid-susp-p', csrf);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(session);
+    const { cookie } = await signIn(sessions, { sid: 'sid-susp-p', side: { csrfToken: csrf } });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       SUSPENDED
     );
@@ -1147,24 +1153,18 @@ describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414
   const REGISTERED = 'http://127.0.0.1/callback';
 
   async function setup(registered: string[]) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-loop');
     const csrf = 'csrf-loop';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-loop',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-loop',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...CLIENT,
       redirectUris: registered,
     });
-    const headers = { cookie: `__Host-qauth_session=${signed}` };
+    const headers = { cookie };
     const { reply, state } = createReply();
     return {
       fastify,
@@ -1286,29 +1286,24 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     maxAgentMode: 'readonly' as const,
   };
 
-  function agentSession(sid: string, csrf: string) {
-    return {
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: sid,
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      // The over-cap / non-agent tests reject at the agent-cap gate BEFORE the
-      // scope-presentation binding check; the in-cap success test POSTs
-      // `agent:readonly`, so bind that so its grant matches what was rendered.
-      consentScopes: { 'app-123': ['agent:readonly'] },
-    };
+  function agentSignIn(sessions: BrowserSessionFixture, sid: string, csrf: string) {
+    return signIn(sessions, {
+      sid,
+      side: {
+        csrfToken: csrf,
+        // The over-cap / non-agent tests reject at the agent-cap gate BEFORE the
+        // scope-presentation binding check; the in-cap success test POSTs
+        // `agent:readonly`, so bind that so its grant matches what was rendered.
+        consentScopes: { 'app-123': ['agent:readonly'] },
+      },
+    });
   }
 
   it('POST rejects an over-cap scope with invalid_scope and issues NO code (blocker regression)', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-cap-1');
     const csrf = 'csrf-cap-1';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      agentSession('sid-cap-1', csrf)
-    );
+    const { cookie } = await agentSignIn(sessions, 'sid-cap-1', csrf);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       READONLY_AGENT
     );
@@ -1329,7 +1324,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1351,14 +1346,10 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
   });
 
   it('POST allows an in-cap scope and issues a code', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-cap-2');
     const csrf = 'csrf-cap-2';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      agentSession('sid-cap-2', csrf)
-    );
+    const { cookie } = await agentSignIn(sessions, 'sid-cap-2', csrf);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       READONLY_AGENT
     );
@@ -1377,7 +1368,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1390,14 +1381,10 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
 
   it('POST rejects ANY agent scope for a non-agent client even if allowlisted (untrusted is_agent)', async () => {
     const nonAgent = { ...READONLY_AGENT, isAgent: false };
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-cap-3');
     const csrf = 'csrf-cap-3';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      agentSession('sid-cap-3', csrf)
-    );
+    const { cookie } = await agentSignIn(sessions, 'sid-cap-3', csrf);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       nonAgent
     );
@@ -1416,7 +1403,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1428,16 +1415,9 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
   });
 
   it('GET fails fast with invalid_scope for an over-cap scope (no consent screen rendered)', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-cap-4');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-cap-4',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await signIn(sessions, { sid: 'sid-cap-4' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       READONLY_AGENT
     );
@@ -1447,7 +1427,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
       {
         query: { ...BASE_QUERY, scope: 'agent:exec' },
         url: '/ui/consent?scope=agent:exec',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1465,16 +1445,9 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     // This refusal fires before the user sees the consent screen (and the
     // destination host on it), so for a client that registered its own
     // redirect URI it must not be an automatic redirect off the issuer.
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-cap-5');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-cap-5',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await signIn(sessions, { sid: 'sid-cap-5' });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...READONLY_AGENT,
       provisionedByOperator: false,
@@ -1487,7 +1460,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
       {
         query: { ...BASE_QUERY, scope: 'agent:exec' },
         url: '/ui/consent?scope=agent:exec',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1531,29 +1504,26 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   }
 
   // Scope-presentation binding (#150 hardening): the consent GET render binds the
-  // visible scope set to the session; the POST grants ONLY that set. The bound
-  // set must equal what the test POSTs, so callers pass the scope they submit
-  // (default `write:foo`, the dangerous scope these step-up tests exercise).
-  function session(createdAt: number, boundScope = 'write:foo') {
-    return {
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-su',
-      csrfToken: 'csrf-su',
-      createdAt,
-      consentScopes: { 'app-123': boundScope.split(/\s+/).filter((s) => s.length > 0) },
-    };
+  // visible scope set to the session's side record; the POST grants ONLY that
+  // set. The bound set must equal what the test POSTs, so callers pass the scope
+  // they submit (default `write:foo`, the dangerous scope these step-up tests
+  // exercise).
+  function signInAt(sessions: BrowserSessionFixture, authTime: number, boundScope = 'write:foo') {
+    return signIn(sessions, {
+      sid: 'sid-su',
+      authTime,
+      side: {
+        csrfToken: 'csrf-su',
+        consentScopes: { 'app-123': boundScope.split(/\s+/).filter((s) => s.length > 0) },
+      },
+    });
   }
 
   it('refuses to mint a code for a dangerous scope on a STALE session and bounces to /ui/login', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-su');
     // Session authenticated 10 minutes ago — outside the 2-minute fresh window.
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 10 * MINUTE)
-    );
+    const { cookie } = await signInAt(sessions, Date.now() - 10 * MINUTE);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
     );
@@ -1562,7 +1532,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     await ctx.post!(
       {
         body: postBody(),
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1591,14 +1561,10 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   });
 
   it('mints a dangerous-scope code on a FRESH session and audits the elevation', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-su');
     // Authenticated 5 seconds ago — within the fresh-auth window.
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 5000)
-    );
+    const { session, cookie } = await signInAt(sessions, Date.now() - 5000);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
     );
@@ -1607,7 +1573,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     await ctx.post!(
       {
         body: postBody(),
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1617,10 +1583,18 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     expect(state.redirected).toContain('code=');
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    // The code and the elevation carry the session's authentication time
+    // (OIDC `auth_time`), not the time of this consent.
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.authTime).toBe(session.authTime);
     expect(emittedTypes()).toEqual([
       'urn:qauth:event:step_up.elevated:v1-rc.0',
       'urn:qauth:event:consent.granted:v1-rc.0',
     ]);
+    expect(emitted('urn:qauth:event:step_up.elevated:v1-rc.0')?.data).toMatchObject({
+      authenticatedAt: new Date(session.authTime).toISOString(),
+    });
     expect(emitted('urn:qauth:event:consent.granted:v1-rc.0')).toEqual({
       data: { scopes: ['write:foo'], remembered: true, dangerousScopes: ['write:foo'] },
       options: { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' },
@@ -1628,13 +1602,9 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   });
 
   it('per-agent audit (#186): elevation by an agent client attributes actor + scope mode', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-su');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 5000, 'agent:exec')
-    );
+    const { cookie } = await signInAt(sessions, Date.now() - 5000, 'agent:exec');
     // An EXEC-capped agent elevating to the dangerous `agent:exec` scope.
     const EXEC_AGENT = {
       ...DANGEROUS_CLIENT,
@@ -1650,7 +1620,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     await ctx.post!(
       {
         body: postBody({ scope: 'agent:exec' }),
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1674,18 +1644,14 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     const serialized = JSON.stringify(elevation);
     expect(serialized).not.toContain('csrf-su');
     expect(serialized).not.toContain('sid-su');
-    expect(serialized).not.toContain(signed);
+    expect(serialized).not.toContain(cookie.slice(cookie.indexOf('=') + 1));
     expect(serialized).not.toContain('code=');
   });
 
   it('per-agent audit (#186): elevation by a NON-agent client records no agent attribution', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-su');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 5000)
-    );
+    const { cookie } = await signInAt(sessions, Date.now() - 5000);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
     );
@@ -1694,7 +1660,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     await ctx.post!(
       {
         body: postBody(),
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1714,20 +1680,16 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   });
 
   it('forces fresh auth for prompt=login on a stale session even with a non-dangerous scope', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-su');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 10 * MINUTE, 'email')
-    );
+    const { cookie } = await signInAt(sessions, Date.now() - 10 * MINUTE, 'email');
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const { reply, state } = createReply();
     await ctx.post!(
       {
         body: postBody({ scope: 'email', prompt: 'login' }),
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1745,20 +1707,16 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   });
 
   it('mints a non-dangerous scope without step-up on a stale session (no over-gating)', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-su');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 10 * MINUTE, 'email')
-    );
+    const { cookie } = await signInAt(sessions, Date.now() - 10 * MINUTE, 'email');
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const { reply, state } = createReply();
     await ctx.post!(
       {
         body: postBody({ scope: 'email' }),
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1857,18 +1815,12 @@ describe('UI /ui/consent — long opaque state/nonce (#316)', () => {
   });
 
   it('Allow mints a code with the FULL state/nonce and round-trips state verbatim', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-316');
     const csrf = 'csrf-316';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-316',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-      consentScopes: { 'app-123': ['email'] },
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-316',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -1887,7 +1839,7 @@ describe('UI /ui/consent — long opaque state/nonce (#316)', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1907,18 +1859,10 @@ describe('UI /ui/consent — long opaque state/nonce (#316)', () => {
   });
 
   it('Deny also round-trips the full state verbatim', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-316d');
     const csrf = 'csrf-316d';
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-316d',
-      csrfToken: csrf,
-      createdAt: Date.now(),
-    });
+    const { cookie } = await signIn(sessions, { sid: 'sid-316d', side: { csrfToken: csrf } });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
     const { reply, state } = createReply();
@@ -1935,7 +1879,7 @@ describe('UI /ui/consent — long opaque state/nonce (#316)', () => {
           code_challenge_method: 'S256',
           response_type: 'code',
         },
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply

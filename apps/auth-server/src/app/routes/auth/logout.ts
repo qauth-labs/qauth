@@ -133,7 +133,7 @@ export default async function (fastify: FastifyInstance) {
         // below. The portal calls this route from its server, so they are
         // found through the per-user index, not a cookie; the request's own
         // cookie is cleared when it names one of them.
-        const endedSessions = await endBrowserSessions(fastify, userId);
+        const endedSessions = await endBrowserSessions(fastify, user.realmId, userId);
         const requestSessionId = verifySignedSessionId(readCookie(request, SESSION_COOKIE_NAME));
         if (requestSessionId && endedSessions.includes(requestSessionId)) {
           clearSessionCookie(reply);

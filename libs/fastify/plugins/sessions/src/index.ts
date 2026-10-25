@@ -4,6 +4,7 @@ export {
   type BrowserSession,
   type CreateSessionInput,
   type RevokeSessionInput,
+  type SessionAssuranceLevel,
   sessionCacheKey,
   type SessionMetrics,
   type SessionQuery,

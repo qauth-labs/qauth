@@ -4,8 +4,9 @@ The browser session service: it creates, reads, touches and ends browser session
 ([ADR-019 Decision 3](../../../docs/adr/019-deployment-topology-and-trust-boundaries.md)). Postgres
 holds the truth, Redis caches reads, and last-seen writes are throttled.
 
-> **Status:** the service is built and the auth-server decorates it as `fastify.sessionService`,
-> but no route uses it yet. #488 moves the browser sign-in and the session lookup onto it.
+> **Status:** the auth-server decorates it as `fastify.sessionService`. The password and wallet
+> sign-ins create sessions through it, and every route that reads the session cookie resolves the
+> session through it (#488).
 
 ## Usage
 

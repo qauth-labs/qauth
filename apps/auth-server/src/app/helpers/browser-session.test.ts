@@ -10,33 +10,28 @@ vi.mock('../../config/env', () => ({
 }));
 
 import {
-  endBrowserSessions,
-  resolveBrowserSession,
-  saveBrowserSession,
-  trackBrowserSession,
-} from './browser-session';
-import { type BrowserSessionData, SESSION_COOKIE_NAME, signSessionId } from './session-cookie';
+  type BrowserSessionFixture,
+  createBrowserSessionFixture,
+  sessionCookie,
+} from '../../testing/browser-sessions';
+import { testRealm } from '../../testing/request-realm';
+import { createBrowserSession, endBrowserSessions, resolveBrowserSession } from './browser-session';
+import { SESSION_COOKIE_NAME } from './session-cookie';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
-const SESSION_ID = 'sess-1';
-const SESSION = { userId: USER_ID, sessionId: SESSION_ID, createdAt: Date.now() };
-/** `SESSION_COOKIE_TTL` above, in milliseconds. */
-const TTL_MS = 3600 * 1000;
-
-function sessionAged(ageMs: number): BrowserSessionData {
-  return { userId: USER_ID, sessionId: SESSION_ID, createdAt: Date.now() - ageMs };
-}
+const REALM = testRealm({ id: '22222222-2222-4222-8222-222222222222' });
+const OTHER_REALM = testRealm({ id: '33333333-3333-4333-8333-333333333333' });
 
 const users = { findById: vi.fn() };
-const sessionUtils = {
-  getSession: vi.fn(),
-  setSession: vi.fn().mockResolvedValue(undefined),
-  deleteSession: vi.fn().mockResolvedValue(undefined),
-};
-const fastify = { repositories: { users }, sessionUtils } as unknown as FastifyInstance;
+let sessions: BrowserSessionFixture;
+let fastify: FastifyInstance;
 
-function makeRequest(cookie?: string): FastifyRequest {
-  return { headers: cookie ? { cookie } : {} } as FastifyRequest;
+function makeRequest(cookie?: string, realm = REALM): FastifyRequest {
+  return {
+    headers: cookie ? { cookie, 'user-agent': 'TestAgent/1.0' } : { 'user-agent': 'TestAgent/1.0' },
+    ip: '203.0.113.7',
+    realm,
+  } as unknown as FastifyRequest;
 }
 
 function makeReply() {
@@ -50,21 +45,126 @@ function makeReply() {
   return { reply, headers };
 }
 
-const liveCookie = `${SESSION_COOKIE_NAME}=${signSessionId(SESSION_ID)}`;
-
 beforeEach(() => {
   vi.clearAllMocks();
-  sessionUtils.getSession.mockResolvedValue(SESSION);
+  sessions = createBrowserSessionFixture();
+  fastify = {
+    repositories: { users },
+    sessionService: sessions.service,
+    redis: sessions.redis,
+  } as unknown as FastifyInstance;
   users.findById.mockResolvedValue({ id: USER_ID, enabled: true });
 });
 
+describe('createBrowserSession', () => {
+  it('creates a session through the service with the request address and user agent', async () => {
+    const before = Date.now();
+    const session = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      identifier: 'alice@example.com',
+    });
+
+    expect(sessions.service.create).toHaveBeenCalledOnce();
+    const input = sessions.service.create.mock.calls[0][0];
+    expect(input).toMatchObject({
+      realmId: REALM.id,
+      userId: USER_ID,
+      assuranceLevel: null,
+      ipAddress: '203.0.113.7',
+      userAgent: 'TestAgent/1.0',
+    });
+    expect(input.authTime).toBeGreaterThanOrEqual(before);
+    expect(input.authTime).toBeLessThanOrEqual(Date.now());
+    // The identifier is not a session column: it stays in the side record.
+    expect(input).not.toHaveProperty('identifier');
+    await expect(sessions.sideRecord(session)).resolves.toMatchObject({
+      identifier: 'alice@example.com',
+    });
+  });
+
+  it('carries the assurance level the authentication established', async () => {
+    await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      assuranceLevel: 'high',
+    });
+
+    expect(sessions.service.create.mock.calls[0][0].assuranceLevel).toBe('high');
+  });
+
+  it('stores no address that is not one, and cuts the user agent as events do', async () => {
+    const request = {
+      headers: { 'user-agent': 'x'.repeat(5000) },
+      ip: 'fe80::1%eth0-with-a-zone-id-that-is-far-too-long',
+      realm: REALM,
+    } as unknown as FastifyRequest;
+
+    await createBrowserSession(fastify, request, { realmId: REALM.id, userId: USER_ID });
+
+    const input = sessions.service.create.mock.calls[0][0];
+    expect(input.ipAddress).toBeNull();
+    expect(input.userAgent).toHaveLength(1024);
+  });
+
+  it('records the new session under its user, expiring with its absolute end', async () => {
+    const session = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
+
+    const key = `user-browser-sessions:${USER_ID}`;
+    expect(sessions.redis.sets.get(key)).toEqual(new Set([session.sid]));
+    expect(sessions.redis.expiries.get(key)).toBe(session.expiresAt);
+  });
+
+  it('writes no side record for a sign-in without an identifier', async () => {
+    await createBrowserSession(fastify, makeRequest(), { realmId: REALM.id, userId: USER_ID });
+
+    expect(sessions.redis.hashes.size).toBe(0);
+  });
+
+  it('always makes a new session, whatever cookie the browser sent', async () => {
+    const { cookie, session: old } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+
+    const fresh = await createBrowserSession(fastify, makeRequest(cookie), {
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
+
+    expect(fresh.sid).not.toBe(old.sid);
+  });
+
+  it('fails when the index cannot be written, so no untracked session reaches a cookie', async () => {
+    sessions.redis.multi.mockReturnValueOnce({
+      hset: vi.fn(),
+      sadd() {
+        return this;
+      },
+      pexpireat() {
+        return this;
+      },
+      exec: vi.fn().mockResolvedValue([
+        [null, 1],
+        [new Error('OOM command not allowed'), null],
+      ]),
+    } as never);
+
+    await expect(
+      createBrowserSession(fastify, makeRequest(), { realmId: REALM.id, userId: USER_ID })
+    ).rejects.toThrow('OOM');
+  });
+});
+
 describe('resolveBrowserSession', () => {
-  it('returns the session of an enabled user', async () => {
+  it('returns the session of an enabled user, looked up in the request realm', async () => {
+    const { session, cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
     const { reply, headers } = makeReply();
 
-    await expect(resolveBrowserSession(fastify, makeRequest(liveCookie), reply)).resolves.toEqual(
-      SESSION
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toEqual(
+      session
     );
+    expect(sessions.service.get).toHaveBeenCalledWith({ realmId: REALM.id, sid: session.sid });
     expect(users.findById).toHaveBeenCalledWith(USER_ID);
     expect(headers['Set-Cookie']).toBeUndefined();
   });
@@ -74,140 +174,104 @@ describe('resolveBrowserSession', () => {
 
     await expect(resolveBrowserSession(fastify, makeRequest(), reply)).resolves.toBeNull();
     await expect(
-      resolveBrowserSession(fastify, makeRequest(`${SESSION_COOKIE_NAME}=${SESSION_ID}.bad`), reply)
+      resolveBrowserSession(fastify, makeRequest(`${SESSION_COOKIE_NAME}=sess-1.bad`), reply)
     ).resolves.toBeNull();
-    expect(sessionUtils.getSession).not.toHaveBeenCalled();
+    expect(sessions.service.get).not.toHaveBeenCalled();
   });
 
-  it('clears a stale cookie whose session is gone from Redis', async () => {
-    sessionUtils.getSession.mockResolvedValue(null);
+  it('clears a stale cookie whose session the service does not hold', async () => {
     const { reply, headers } = makeReply();
 
     await expect(
-      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
+      resolveBrowserSession(fastify, makeRequest(sessionCookie('gone')), reply)
     ).resolves.toBeNull();
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
     expect(users.findById).not.toHaveBeenCalled();
   });
 
-  it('ends the session of a user disabled after signing in', async () => {
-    users.findById.mockResolvedValue({ id: USER_ID, enabled: false });
+  it('finds no session for a cookie of another realm (ADR-019 Decision 1)', async () => {
+    const { cookie } = await sessions.signIn({ realmId: OTHER_REALM.id, userId: USER_ID });
     const { reply, headers } = makeReply();
 
     await expect(
-      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
-    ).resolves.toBeNull();
-    expect(sessionUtils.deleteSession).toHaveBeenCalledWith(SESSION_ID);
-    expect(headers['Set-Cookie']).toContain('Max-Age=0');
-  });
-
-  it('ends the session of a user that no longer exists', async () => {
-    users.findById.mockResolvedValue(undefined);
-    const { reply, headers } = makeReply();
-
-    await expect(
-      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
-    ).resolves.toBeNull();
-    expect(sessionUtils.deleteSession).toHaveBeenCalledWith(SESSION_ID);
-    expect(headers['Set-Cookie']).toContain('Max-Age=0');
-  });
-});
-
-describe('absolute session lifetime (SESSION_COOKIE_TTL from createdAt)', () => {
-  it('returns a session younger than SESSION_COOKIE_TTL', async () => {
-    const stored = sessionAged(TTL_MS - 60_000);
-    sessionUtils.getSession.mockResolvedValue(stored);
-    const { reply, headers } = makeReply();
-
-    await expect(resolveBrowserSession(fastify, makeRequest(liveCookie), reply)).resolves.toEqual(
-      stored
-    );
-    expect(headers['Set-Cookie']).toBeUndefined();
-  });
-
-  it('refuses and ends a session older than SESSION_COOKIE_TTL even though Redis still holds it', async () => {
-    // A replayed cookie whose record kept being rewritten must not outlive the
-    // lifetime the browser's own cookie was given at sign-in.
-    sessionUtils.getSession.mockResolvedValue(sessionAged(TTL_MS + 1000));
-    const { reply, headers } = makeReply();
-
-    await expect(
-      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
+      resolveBrowserSession(fastify, makeRequest(cookie, REALM), reply)
     ).resolves.toBeNull();
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
-    expect(sessionUtils.deleteSession).toHaveBeenCalledWith(SESSION_ID);
     expect(users.findById).not.toHaveBeenCalled();
   });
 
-  it('refuses a record with no usable createdAt', async () => {
-    sessionUtils.getSession.mockResolvedValue({ userId: USER_ID, sessionId: SESSION_ID });
+  it('finds no session past its absolute end', async () => {
+    const { cookie } = await sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_ID,
+      expiresAt: Date.now() - 1,
+    });
     const { reply } = makeReply();
 
-    await expect(
-      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
-    ).resolves.toBeNull();
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toBeNull();
+  });
+
+  it('revokes the session of a user disabled after signing in', async () => {
+    users.findById.mockResolvedValue({ id: USER_ID, enabled: false });
+    const { session, cookie } = await sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_ID,
+      side: { csrfToken: 'tok' },
+    });
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toBeNull();
+    expect(sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: session.sid,
+      reason: 'admin',
+    });
+    expect(sessions.service.sessions.has(session.sid)).toBe(false);
+    expect(sessions.redis.hashes.size).toBe(0);
+    expect(headers['Set-Cookie']).toContain('Max-Age=0');
+  });
+
+  it('revokes the session of a user that no longer exists', async () => {
+    users.findById.mockResolvedValue(undefined);
+    const { session, cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toBeNull();
+    expect(sessions.service.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({ sid: session.sid })
+    );
+    expect(headers['Set-Cookie']).toContain('Max-Age=0');
   });
 });
 
-describe('saveBrowserSession', () => {
-  it('stores the record for the remainder of its lifetime, not a fresh SESSION_COOKIE_TTL', async () => {
-    const session = { ...sessionAged(TTL_MS - 900_000), csrfToken: 'token' };
+describe('endBrowserSessions (logout ends every session)', () => {
+  it('revokes every recorded session of the user, drops their side records and the index', async () => {
+    const a = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      identifier: 'alice@example.com',
+    });
+    const b = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
 
-    await saveBrowserSession(fastify, session);
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([a.sid, b.sid]);
 
-    expect(sessionUtils.setSession).toHaveBeenCalledOnce();
-    const [sessionId, data, ttl] = sessionUtils.setSession.mock.calls[0];
-    expect(sessionId).toBe(SESSION_ID);
-    expect(data).toEqual(session);
-    expect(ttl).toBeGreaterThan(890);
-    expect(ttl).toBeLessThanOrEqual(900);
+    for (const sid of [a.sid, b.sid]) {
+      expect(sessions.service.revoke).toHaveBeenCalledWith({
+        realmId: REALM.id,
+        sid,
+        reason: 'sign_out_everywhere',
+      });
+    }
+    expect(sessions.service.sessions.size).toBe(0);
+    expect(sessions.redis.hashes.size).toBe(0);
+    expect(sessions.redis.sets.has(`user-browser-sessions:${USER_ID}`)).toBe(false);
   });
 
-  it('never hands Redis a non-positive TTL', async () => {
-    await saveBrowserSession(fastify, sessionAged(TTL_MS + 5000));
-
-    expect(sessionUtils.setSession.mock.calls[0][2]).toBe(1);
-  });
-});
-
-describe('per-user browser-session index (logout ends every session)', () => {
-  function makeRedis(members: string[] = []) {
-    const chain = {
-      sadd: vi.fn(() => chain),
-      expire: vi.fn(() => chain),
-      exec: vi.fn().mockResolvedValue([]),
-    };
-    return {
-      chain,
-      multi: vi.fn(() => chain),
-      smembers: vi.fn().mockResolvedValue(members),
-      del: vi.fn().mockResolvedValue(1),
-    };
-  }
-
-  it('records a new session under its user, expiring with the longest-lived session', async () => {
-    const redis = makeRedis();
-    const withRedis = { ...fastify, redis } as unknown as FastifyInstance;
-
-    await trackBrowserSession(withRedis, USER_ID, 'sess-new');
-
-    const key = `user-browser-sessions:${USER_ID}`;
-    expect(redis.chain.sadd).toHaveBeenCalledWith(key, 'sess-new');
-    // A session never outlives SESSION_COOKIE_TTL from its creation, so the
-    // index set at the newest creation outlives every session in it.
-    expect(redis.chain.expire).toHaveBeenCalledWith(key, 3600);
-    expect(redis.chain.exec).toHaveBeenCalledOnce();
-  });
-
-  it('ends every recorded session of the user and drops the index', async () => {
-    const redis = makeRedis(['sess-a', 'sess-b']);
-    const withRedis = { ...fastify, redis } as unknown as FastifyInstance;
-
-    await expect(endBrowserSessions(withRedis, USER_ID)).resolves.toEqual(['sess-a', 'sess-b']);
-
-    expect(redis.smembers).toHaveBeenCalledWith(`user-browser-sessions:${USER_ID}`);
-    expect(sessionUtils.deleteSession).toHaveBeenCalledWith('sess-a');
-    expect(sessionUtils.deleteSession).toHaveBeenCalledWith('sess-b');
-    expect(redis.del).toHaveBeenCalledWith(`user-browser-sessions:${USER_ID}`);
+  it('ends nothing for a user with no recorded session', async () => {
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([]);
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
   });
 });

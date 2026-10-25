@@ -514,7 +514,7 @@ export default async function (fastify: FastifyInstance) {
           existingConsent && existingConsent.revokedAt === null ? existingConsent.scopes : [],
         prompt,
         maxAgeSeconds: query.max_age ?? null,
-        authTimeMs: browserSession.createdAt,
+        authTimeMs: browserSession.authTime,
         nowMs: Date.now(),
         freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
         // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login
@@ -644,11 +644,11 @@ export default async function (fastify: FastifyInstance) {
             codeChallengeMethod: 'S256',
             nonce: query.nonce ?? null,
             // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
-            // time (browser-session establishment, epoch MS) — never the code-mint
+            // time (the browser session's `auth_time`, epoch MS) — never the code-mint
             // time — so /oauth/token can assert it in the ID token and a `max_age`
             // check evaluates the actual session age. Null on the legacy Bearer
             // path (no interactive session) → the claim is simply omitted there.
-            authTime: browserSession?.createdAt ?? null,
+            authTime: browserSession?.authTime ?? null,
             // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
             // code so /oauth/token can assert `acr` in the ID token. NULL on the
             // password path (`'low'`, no claim) and on the legacy Bearer path (no

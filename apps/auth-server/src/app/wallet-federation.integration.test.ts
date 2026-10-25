@@ -196,6 +196,25 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
     return userId;
   }
 
+  /**
+   * The `sessions` rows of `userId`, oldest first (#488): what the sign-ins of
+   * that account stored through the session service.
+   */
+  async function sessionRowsOf(
+    app: FastifyInstance,
+    userId: string
+  ): Promise<{ id: string; realm_id: string; assurance_level: string | null }[]> {
+    const { rows } = await app.dbPool.query<{
+      id: string;
+      realm_id: string;
+      assurance_level: string | null;
+    }>(
+      'SELECT id, realm_id, assurance_level FROM sessions WHERE user_id = $1 ORDER BY created_at, id',
+      [userId]
+    );
+    return rows;
+  }
+
   /** The `provider_type` of every credential row on `email`, sorted. */
   async function providerTypesOn(
     app: FastifyInstance,
@@ -877,8 +896,16 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         async ({ app, ids }) => {
           const asserted = 'assured@example.com';
           const userId = await linkedAccount(app, wallet, asserted);
+          // Linking signed the account in with its password first.
+          const before = await sessionRowsOf(app, userId);
           const outcome = await signInWithWallet(app, wallet, asserted);
           expect(outcome.status).toBe('complete');
+
+          // The wallet sign-in stored one session, with the level the issuer
+          // established (#488).
+          const after = await sessionRowsOf(app, userId);
+          expect(after).toHaveLength(before.length + 1);
+          expect(after.at(-1)).toMatchObject({ realm_id: ids.realmId, assurance_level: 'high' });
 
           const claims = await idTokenFor(app, outcome.jar, ids, userId);
           expect(claims['acr']).toBe('http://eidas.europa.eu/LoA/high');
@@ -901,8 +928,14 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         async ({ app, ids }) => {
           const asserted = 'unassured@example.com';
           const userId = await linkedAccount(app, wallet, asserted);
+          const before = await sessionRowsOf(app, userId);
           const outcome = await signInWithWallet(app, wallet, asserted);
           expect(outcome.status).toBe('complete');
+
+          // One session, with no level: `'low'` is stored as NULL (#488).
+          const after = await sessionRowsOf(app, userId);
+          expect(after).toHaveLength(before.length + 1);
+          expect(after.at(-1)).toMatchObject({ realm_id: ids.realmId, assurance_level: null });
 
           const claims = await idTokenFor(app, outcome.jar, ids, userId);
           expect('acr' in claims).toBe(false);

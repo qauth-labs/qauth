@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-25'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -35,10 +35,14 @@ same `401` page while `REQUIRE_VERIFIED_ACCOUNT` is on (the default), so the
 page cannot be used to tell a just-registered free address from a registered
 one; its message mentions confirming the address for that reason.
 
-The session lasts `SESSION_COOKIE_TTL` from sign-in and is not extended by
-use. [`POST /auth/logout`](/integrate/api-reference/#post-authlogout) ends
-every hosted session of the user, so the next `/oauth/authorize` shows this
-page again.
+The session is stored in Postgres, with Redis as a cache in front of it, in
+the realm of the host the browser signed in on: the cookie names no session at
+another realm's host. The cookie lasts `SESSION_COOKIE_TTL` from sign-in and is
+not extended by use. The session behind it can end sooner, when the realm sets
+`sso_max_lifespan` or `sso_idle_timeout`.
+[`POST /auth/logout`](/integrate/api-reference/#post-authlogout) ends every
+hosted session of the user, so the next `/oauth/authorize` shows this page
+again.
 
 ## `/ui/consent`
 

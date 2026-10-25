@@ -108,6 +108,25 @@ server logs a warning with the number of newer migrations and starts.
 Read the release's `CHANGELOG.md` entry before you upgrade. One migration in
 QAuth's history needs more: migration 0011, below.
 
+### Users sign in once more after the upgrade to v0.2
+
+From v0.2 the auth server keeps browser sessions in Postgres, with Redis as a
+cache in front of them
+([ADR-019 Decision 3](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
+The upgrade does not move the sessions an earlier version kept in Redis. A user
+who was signed in to the hosted pages (`/ui/login`, the consent screen, wallet
+sign-in) is asked to sign in once more. A consent screen open during the
+upgrade is refused when it is submitted and shown again after that sign-in.
+
+Nothing else is lost. Access tokens, refresh tokens and stored consents are
+untouched, so an application that already holds tokens keeps working without
+the user. The old Redis session keys (`session:<id>`) are no longer read and
+expire on their own within `SESSION_COOKIE_TTL`; there is nothing to delete.
+
+During a rolling upgrade, a sign-in served by a node of the old version is not
+seen by a node of the new version, so a user can be asked to sign in twice
+until the last old node is gone.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

@@ -30,6 +30,7 @@ vi.mock('../../../config/env', () => ({
 }));
 
 import { env } from '../../../config/env';
+import { createFakeSessionService } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -78,6 +79,8 @@ function createReply(): ReplyStub {
 
 function createFastifyStub() {
   const ctx: TestContext = {};
+  // The browser-session service (#488): this route must never reach it.
+  const sessionService = createFakeSessionService();
 
   const fastify: any = {
     withTypeProvider: () => ({
@@ -150,9 +153,7 @@ function createFastifyStub() {
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
       getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
     },
-    sessionUtils: {
-      setSession: vi.fn().mockResolvedValue(undefined),
-    },
+    sessionService,
     redis: {
       ttl: vi.fn().mockResolvedValue(-2),
       incr: vi.fn().mockResolvedValue(1),
@@ -167,7 +168,7 @@ function createFastifyStub() {
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, sessionService };
 }
 
 /** A request-scoped logger stub for the structured auth-event helper. */
@@ -305,6 +306,45 @@ describe('POST /auth/login', () => {
       { method: 'password' },
       { realmId: 'realm-1', userId: 'user-1', clientId: 'system', actor: 'user' }
     );
+  });
+
+  it('creates no browser session: a sign-in here answers with tokens only (#488)', async () => {
+    // The session this route once wrote was never returned or read. Only the
+    // hosted UI's sign-ins create one.
+    const { fastify, ctx, sessionService } = createFastifyStub();
+    // The Redis store a session was once written to, to show none is now.
+    const sessionUtils = { setSession: vi.fn() };
+    Object.assign(fastify, { sessionUtils });
+    await loginRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'sc-uuid',
+      clientId: 'system',
+      audience: ['https://auth.example.com'],
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    const reply = createReply();
+    const result = await ctx.handler(
+      {
+        body: { email: 'user@example.com', password: 'p' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        log: requestLog(),
+      },
+      reply
+    );
+
+    expect(result).toMatchObject({ access_token: 'jwt', refresh_token: 'rt' });
+    expect(sessionService.create).not.toHaveBeenCalled();
+    expect(sessionUtils.setSession).not.toHaveBeenCalled();
+    expect(reply.headers['Set-Cookie']).toBeUndefined();
   });
 
   it('mints the first-party token with no email claims, even for a verified address — ANT-2026-2O0T72HY', async () => {
@@ -605,7 +645,7 @@ describe('POST /auth/login', () => {
      * before the event.
      */
     async function refusal(setup: (fastify: FastifyInstance) => void) {
-      const { fastify, ctx } = createFastifyStub();
+      const { fastify, ctx, sessionService } = createFastifyStub();
       await loginRoute(fastify);
       if (!ctx.handler) throw new Error('Handler missing');
       setup(fastify);
@@ -632,6 +672,7 @@ describe('POST /auth/login', () => {
       const eventOrder = emitUserEventMock.mock.invocationCallOrder[0];
       return {
         fastify,
+        sessionService,
         observed: {
           error: error && {
             name: error.name,
@@ -683,7 +724,7 @@ describe('POST /auth/login', () => {
       expect(fresh.observed).toEqual(taken.observed);
       expect(fresh.observed.floorBeforeEvent).toBe(true);
       expect(fresh.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-      expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      expect(fresh.sessionService.create).not.toHaveBeenCalled();
     });
 
     it('reads credential_data.email_verified, before the users row is looked up', async () => {
