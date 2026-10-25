@@ -57,10 +57,13 @@ import {
   hashOid4vpResponseCode,
 } from '@qauth-labs/fastify-plugin-federation';
 
+import {
+  type BrowserSessionFixture,
+  createBrowserSessionFixture,
+} from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
 import type { RealmRow } from '../../helpers/request-realm';
-import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
 import { WALLET_LINK_CONFLICT, WALLET_LINK_REFUSAL } from '../../helpers/wallet-link-flow';
 import { WALLET_LOGIN_RETURN_PATH } from '../../helpers/wallet-login-request';
@@ -126,6 +129,11 @@ function createReply() {
   return { reply, state };
 }
 
+/**
+ * The wallet flows' stashes (`wallet-login:<handle>`, signals, parked
+ * presentations, done-markers). Not the browser session: that lives in the
+ * session service (#488), faked by `createBrowserSessionFixture`.
+ */
 function createSessionUtils() {
   const store = new Map<string, unknown>();
   return {
@@ -179,6 +187,7 @@ function createRedis() {
 function makeFastify(realm: RealmRow = REALM) {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
+  const sessions = createBrowserSessionFixture();
   const responseCodes = createResponseCodes();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
     routes.set(`${method} ${url}`, (request, reply) => {
@@ -202,16 +211,27 @@ function makeFastify(realm: RealmRow = REALM) {
       },
     },
     sessionUtils,
-    redis: createRedis(),
+    sessionService: sessions.service,
+    redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, routes, sessionUtils, responseCodes };
+  return {
+    fastify: fastify as FastifyInstance,
+    routes,
+    sessionUtils,
+    sessions,
+    responseCodes,
+    realm,
+  };
 }
 
-function signIn(sessionUtils: ReturnType<typeof createSessionUtils>, userId = 'user-1') {
-  const sessionId = `session-${userId}`;
-  sessionUtils.store.set(sessionId, { userId, sessionId, createdAt: Date.now() });
-  return `__Host-qauth_session=${signSessionId(sessionId)}`;
+/**
+ * Mint a live browser session for `userId` in `realm` (the realm the
+ * requests carry) and return the cookie header value for it.
+ */
+async function signIn(sessions: BrowserSessionFixture, userId = 'user-1', realm = REALM) {
+  const { cookie } = await sessions.signIn({ sid: `session-${userId}`, realmId: realm.id, userId });
+  return cookie;
 }
 
 function cookieValue(setCookies: string[], name: string): string {
@@ -245,7 +265,7 @@ async function startLink(
     await walletLinkRoute(context.fastify);
     await walletLoginRoute(context.fastify);
   }
-  const sessionCookie = signIn(context.sessionUtils, userId);
+  const sessionCookie = await signIn(context.sessions, userId, context.realm);
 
   const getReply = createReply();
   await context.routes.get('GET /wallet-link')!(
@@ -378,11 +398,9 @@ function linkAs(resolution: WalletLinked): void {
   );
 }
 
-/** Session-store writes that are browser SESSIONS, not flow/marker records. */
-function sessionMints(fastify: FastifyInstance): string[] {
-  return (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
-    .map((c) => c[0] as string)
-    .filter((key) => !key.startsWith('wallet-'));
+/** The users browser sessions were created for: a wallet LOGIN mints one, a link never does. */
+function sessionMints(sessions: BrowserSessionFixture): string[] {
+  return sessions.service.create.mock.calls.map(([input]) => input.userId);
 }
 
 /** The event types emitted so far in this test, in order. */
@@ -409,9 +427,9 @@ describe('wallet-link UI — registration and availability (#232/#296)', () => {
 
   it('renders a 404 screen when no VerifierProfile is selected', async () => {
     envMock.OID4VP_VERIFIER_PROFILE = undefined;
-    const { fastify, routes, sessionUtils } = makeFastify();
+    const { fastify, routes, sessions } = makeFastify();
     await walletLinkRoute(fastify);
-    const cookie = signIn(sessionUtils);
+    const cookie = await signIn(sessions);
 
     const { reply, state } = createReply();
     await routes.get('GET /wallet-link')!({ headers: { cookie }, ip: '1.2.3.4' }, reply);
@@ -447,9 +465,9 @@ describe('wallet-link UI — signed in, or nothing (ADR-009 §5)', () => {
   });
 
   it('refuses a POST whose login-CSRF token does not match the cookie', async () => {
-    const { fastify, routes, sessionUtils } = makeFastify();
+    const { fastify, routes, sessions } = makeFastify();
     await walletLinkRoute(fastify);
-    const cookie = signIn(sessionUtils);
+    const cookie = await signIn(sessions);
 
     const getReply = createReply();
     await routes.get('GET /wallet-link')!({ headers: { cookie }, ip: '1.2.3.4' }, getReply.reply);
@@ -648,6 +666,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       fastify,
       routes,
       sessionUtils,
+      sessions,
       responseCodes,
       handle,
       flow,
@@ -691,7 +710,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
 
     // No session was minted — the user already had one — and the login
     // machine was never entered.
-    expect(sessionMints(fastify)).toEqual([]);
+    expect(sessionMints(sessions)).toEqual([]);
     expect(resolveWalletPresentation).not.toHaveBeenCalled();
 
     // The done-marker was written for the original tab, and the binding was
@@ -721,6 +740,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         fastify,
         routes,
         sessionUtils,
+        sessions,
         responseCodes,
         handle,
         flow,
@@ -746,7 +766,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       );
       expect(linkWalletPresentation).not.toHaveBeenCalled();
       expect(emittedTypes()).toHaveLength(eventsAtStart);
-      expect(sessionMints(fastify)).toEqual([]);
+      expect(sessionMints(sessions)).toEqual([]);
 
       // Spent, and discarded: the parked bytes are gone and the signal says
       // why, so the original tab's poll (once it has a session again) is told.
@@ -777,6 +797,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       fastify,
       routes,
       sessionUtils,
+      sessions,
       responseCodes,
       handle,
       flow,
@@ -790,7 +811,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     });
     const code = issueResponseCode(responseCodes, flow['stateHash']);
     linkAs(LINKED);
-    const other = signIn(sessionUtils, 'user-2');
+    const other = await signIn(sessions, 'user-2');
     const eventsAtStart = emittedTypes().length;
 
     const landed = await followReturn(
@@ -807,7 +828,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     );
     expect(linkWalletPresentation).not.toHaveBeenCalled();
     expect(emittedTypes()).toHaveLength(eventsAtStart);
-    expect(sessionMints(fastify)).toEqual([]);
+    expect(sessionMints(sessions)).toEqual([]);
     expect(landed.setCookies).toEqual([]);
 
     // Spent, and discarded: the parked bytes are gone, the signal says why,
@@ -933,7 +954,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
     // (1) A code minted for the LINK row: the link machine runs, the login
     // machine does not, and the login flow is still waiting.
     {
-      const { fastify, routes, sessionUtils, responseCodes, login, link, cookie } =
+      const { routes, sessionUtils, sessions, responseCodes, login, link, cookie } =
         await startBoth();
       publishSignal(sessionUtils, link.flow['stateHash'], 'received');
       publishSignal(sessionUtils, login.flow['stateHash'], 'received');
@@ -953,7 +974,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect(landed.body as string).toContain(WALLET_LINKED);
       expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
       expect(resolveWalletPresentation).not.toHaveBeenCalled();
-      expect(sessionMints(fastify)).toEqual([]);
+      expect(sessionMints(sessions)).toEqual([]);
       expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
       expect(emittedTypes()).not.toContain(SIGNED_IN_EVENT);
       // The login flow is untouched: same-device, so still pending by poll.
@@ -1006,9 +1027,9 @@ describe('wallet-link UI — the return leg (#405)', () => {
     // that declined still brings the browser here.
     {
       const {
-        fastify,
         routes,
         sessionUtils,
+        sessions,
         responseCodes,
         handle,
         flow,
@@ -1031,7 +1052,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         })
       );
       expect(linkWalletPresentation).not.toHaveBeenCalled();
-      expect(sessionMints(fastify)).toEqual([]);
+      expect(sessionMints(sessions)).toEqual([]);
       expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
       // The word is left for the original tab, which renders the SAME page
       // — once — rather than "expired".

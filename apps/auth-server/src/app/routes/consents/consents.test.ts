@@ -16,10 +16,16 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
+import { testRealm } from '../../../testing/request-realm';
+import { REDIS_KEYS } from '../../constants/redis-keys';
 import { emitUserEvent } from '../../helpers/user-events';
 import consentsRoute from './index';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
@@ -58,18 +64,30 @@ function createReply() {
   return { reply, state };
 }
 
+/**
+ * The realm resolver's decoration (#486): a request reaches its handler with
+ * the realm of its host.
+ */
+function inRealm(handler: NonNullable<TestContext['get']>): NonNullable<TestContext['get']> {
+  return (request, reply) => {
+    request.realm ??= REALM;
+    return handler(request, reply);
+  };
+}
+
 function makeFastify() {
   const ctx: TestContext = { urls: [] };
+  const sessions = createBrowserSessionFixture();
   const fastify: any = {
     withTypeProvider: () => ({
       get: (u: string, _o: unknown, h: any) => {
         ctx.urls.push({ method: 'GET', url: u });
-        ctx.get = h;
+        ctx.get = inRealm(h);
         return fastify;
       },
       delete: (u: string, _o: unknown, h: any) => {
         ctx.urls.push({ method: 'DELETE', url: u });
-        ctx.delete = h;
+        ctx.delete = inRealm(h);
         return fastify;
       },
     }),
@@ -87,21 +105,29 @@ function makeFastify() {
       users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
-    sessionUtils: { getSession: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
+    sessionService: sessions.service,
+    redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
 
-/** Session with the CSRF token already minted — for GET tests that don't care about minting. */
-function sessionWith(userId: string, sessionId: string, apiCsrfToken?: string) {
-  return {
+/**
+ * A live browser session in the request's realm, with its side record's
+ * `apiCsrfToken` already minted when one is given.
+ */
+function signIn(
+  sessions: ReturnType<typeof createBrowserSessionFixture>,
+  userId: string,
+  sid: string,
+  apiCsrfToken?: string
+) {
+  return sessions.signIn({
+    sid,
+    realmId: REALM.id,
     userId,
-    email: 'a@b.com',
-    sessionId,
-    createdAt: Date.now(),
-    ...(apiCsrfToken ? { apiCsrfToken } : {}),
-  };
+    side: { identifier: 'a@b.com', ...(apiCsrfToken ? { apiCsrfToken } : {}) },
+  });
 }
 
 describe('/consents JSON API', () => {
@@ -127,7 +153,6 @@ describe('/consents JSON API', () => {
   it('GET /consents returns 401 when no session', async () => {
     const { fastify, ctx } = makeFastify();
     await consentsRoute(fastify);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.get!({ headers: {} }, reply);
@@ -135,11 +160,9 @@ describe('/consents JSON API', () => {
   });
 
   it('GET /consents lists active consents and returns a CSRF token', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s1');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(sessionWith('u1', 's1'));
+    const { session, cookie } = await signIn(sessions, 'u1', 's1');
     (
       fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
     ).mockResolvedValue([
@@ -155,26 +178,29 @@ describe('/consents JSON API', () => {
     ]);
 
     const { reply, state } = createReply();
-    await ctx.get!({ headers: { cookie: `__Host-qauth_session=${signed}` } }, reply);
+    await ctx.get!({ headers: { cookie } }, reply);
     expect(state.body).toMatchObject({
       consents: [{ id: 'c1', clientId: 'app-123', clientName: 'Cool App', scopes: ['email'] }],
     });
     // The response MUST include a CSRF token for the caller to echo back.
     expect((state.body as any).csrfToken).toEqual(expect.any(String));
     expect((state.body as any).csrfToken.length).toBeGreaterThan(0);
-    // The minted token MUST have been persisted to the session.
-    expect(fastify.sessionUtils.setSession).toHaveBeenCalled();
+    // The minted token MUST have been persisted to the session's side record.
+    expect((await sessions.sideRecord(session)).apiCsrfToken).toBe(
+      (state.body as { csrfToken: string }).csrfToken
+    );
   });
 
-  it('GET /consents mints its CSRF token without extending the session', async () => {
-    // SESSION_COOKIE_TTL is 3600 s here; the session is 50 minutes old.
-    const { fastify, ctx } = makeFastify();
+  it('GET /consents mints its CSRF token into a side record that expires at the session’s end', async () => {
+    // The session is 50 minutes into its hour: the side record the token is
+    // minted into must expire when the session does, not an hour from now.
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s1');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      ...sessionWith('u1', 's1'),
-      createdAt: Date.now() - 50 * 60 * 1000,
+    const { session, cookie } = await sessions.signIn({
+      sid: 's1',
+      realmId: REALM.id,
+      userId: 'u1',
+      authTime: Date.now() - 50 * 60 * 1000,
     });
     (
       fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
@@ -182,47 +208,44 @@ describe('/consents JSON API', () => {
 
     const handler = ctx.get;
     if (!handler) throw new Error('Handler missing');
-    const { reply } = createReply();
-    await handler({ headers: { cookie: `__Host-qauth_session=${signed}` } }, reply);
+    const { reply, state } = createReply();
+    await handler({ headers: { cookie } }, reply);
 
-    const ttl = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][2];
-    expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(10 * 60);
+    expect((await sessions.sideRecord(session)).apiCsrfToken).toBe(
+      (state.body as { csrfToken: string }).csrfToken
+    );
+    expect(
+      sessions.redis.expiries.get(REDIS_KEYS.BROWSER_SESSION_SIDE_RECORD(REALM.id, 's1'))
+    ).toBe(session.expiresAt);
   });
 
   it('GET /consents reuses the existing apiCsrfToken without re-minting', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s1');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      sessionWith('u1', 's1', 'pre-existing-token')
-    );
+    const { session, cookie } = await signIn(sessions, 'u1', 's1', 'pre-existing-token');
+    sessions.redis.multi.mockClear();
     (
       fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
     ).mockResolvedValue([]);
 
     const { reply, state } = createReply();
-    await ctx.get!({ headers: { cookie: `__Host-qauth_session=${signed}` } }, reply);
-    // Existing token is reused — no re-mint / no session write.
+    await ctx.get!({ headers: { cookie } }, reply);
+    // Existing token is reused — no re-mint / no side-record write.
     expect((state.body as any).csrfToken).toBe('pre-existing-token');
-    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+    expect(sessions.redis.multi).not.toHaveBeenCalled();
+    expect((await sessions.sideRecord(session)).apiCsrfToken).toBe('pre-existing-token');
   });
 
   it('DELETE /consents/:id rejects when the X-CSRF-Token header is missing', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      sessionWith('u1', 's2', 'valid-token')
-    );
+    const { cookie } = await signIn(sessions, 'u1', 's2', 'valid-token');
 
     const { reply } = createReply();
     await expect(
       ctx.delete!(
         {
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           params: { id: CONSENT_ID },
           ip: '1.1.1.1',
         },
@@ -240,19 +263,15 @@ describe('/consents JSON API', () => {
   });
 
   it('DELETE /consents/:id rejects when the X-CSRF-Token header mismatches', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      sessionWith('u1', 's2', 'valid-token')
-    );
+    const { cookie } = await signIn(sessions, 'u1', 's2', 'valid-token');
 
     const { reply } = createReply();
     await expect(
       ctx.delete!(
         {
-          headers: { cookie: `__Host-qauth_session=${signed}`, 'x-csrf-token': 'wrong-token' },
+          headers: { cookie, 'x-csrf-token': 'wrong-token' },
           params: { id: CONSENT_ID },
           ip: '1.1.1.1',
         },
@@ -263,13 +282,9 @@ describe('/consents JSON API', () => {
   });
 
   it('DELETE /consents/:id revokes when the CSRF token matches and the consent belongs to the user', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      sessionWith('u1', 's2', 'valid-token')
-    );
+    const { cookie } = await signIn(sessions, 'u1', 's2', 'valid-token');
     (
       fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
     ).mockResolvedValue([
@@ -292,7 +307,7 @@ describe('/consents JSON API', () => {
     const { reply, state } = createReply();
     await ctx.delete!(
       {
-        headers: { cookie: `__Host-qauth_session=${signed}`, 'x-csrf-token': 'valid-token' },
+        headers: { cookie, 'x-csrf-token': 'valid-token' },
         params: { id: CONSENT_ID },
         ip: '1.1.1.1',
       },
@@ -321,13 +336,9 @@ describe('/consents JSON API', () => {
   });
 
   it('DELETE /consents/:id rejects revocation for a different user', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentsRoute(fastify);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('s3');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      sessionWith('u-other', 's3', 'valid-token')
-    );
+    const { cookie } = await signIn(sessions, 'u-other', 's3', 'valid-token');
     (
       fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
     ).mockResolvedValue([]);
@@ -336,7 +347,7 @@ describe('/consents JSON API', () => {
     await expect(
       ctx.delete!(
         {
-          headers: { cookie: `__Host-qauth_session=${signed}`, 'x-csrf-token': 'valid-token' },
+          headers: { cookie, 'x-csrf-token': 'valid-token' },
           params: { id: CONSENT_ID },
           ip: '1.1.1.1',
         },
