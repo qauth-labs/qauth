@@ -1,4 +1,4 @@
-import { BadRequestError, NotFoundError } from '@qauth-labs/shared-errors';
+import { InvalidCsrfTokenError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -251,7 +251,7 @@ describe('/consents JSON API', () => {
         },
         reply
       )
-    ).rejects.toThrow(BadRequestError);
+    ).rejects.toBeInstanceOf(InvalidCsrfTokenError);
     expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
     // The CSRF refusal is recorded.
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
@@ -277,7 +277,7 @@ describe('/consents JSON API', () => {
         },
         reply
       )
-    ).rejects.toThrow(BadRequestError);
+    ).rejects.toBeInstanceOf(InvalidCsrfTokenError);
     expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
   });
 

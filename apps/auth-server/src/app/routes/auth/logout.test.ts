@@ -526,7 +526,7 @@ describe('POST /auth/logout', () => {
 
       await expect(
         handler(logoutRequest('Bearer bound.access.jwt'), createReply())
-      ).rejects.toThrow('A DPoP-bound access token cannot be used as a Bearer token');
+      ).rejects.toBeInstanceOf(JWTInvalidError);
       expect(sessions.redis.smembers).not.toHaveBeenCalled();
       expect(sessions.service.revoke).not.toHaveBeenCalled();
       expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
@@ -607,9 +607,7 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await expect(handler(logoutRequest(), createReply())).rejects.toThrow(
-      'Access token was not issued in this realm'
-    );
+    await expect(handler(logoutRequest(), createReply())).rejects.toBeInstanceOf(JWTInvalidError);
     expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });

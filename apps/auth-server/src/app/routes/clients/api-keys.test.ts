@@ -1,4 +1,4 @@
-import { NotFoundError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -218,7 +218,7 @@ describe('POST create — environment gate (refused with 403)', () => {
 
     await expect(
       route(ctx, 'POST /:clientId/api-keys').handler(authedRequest(), reply)
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toBeInstanceOf(ForbiddenError);
 
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.repositories.apiKeys.create).not.toHaveBeenCalled();
@@ -240,7 +240,7 @@ describe('POST create — environment gate (refused with 403)', () => {
 
     await expect(
       route(ctx, 'POST /:clientId/api-keys').handler(authedRequest(), reply)
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toBeInstanceOf(ForbiddenError);
     expect(fastify.repositories.apiKeys.create).not.toHaveBeenCalled();
   });
 
@@ -254,7 +254,7 @@ describe('POST create — environment gate (refused with 403)', () => {
 
     await expect(
       route(ctx, 'POST /:clientId/api-keys').handler(authedRequest(), reply)
-    ).rejects.toMatchObject({ statusCode: 403 });
+    ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
 
