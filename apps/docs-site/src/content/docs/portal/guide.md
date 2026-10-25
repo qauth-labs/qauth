@@ -277,7 +277,7 @@ none: a Bearer token has to be put on the request by code that already holds it.
 > it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:153`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`
-> (`apps/auth-server/src/app/app.ts:283-284`). The shipped topology is cross-origin to begin with —
+> (`apps/auth-server/src/app/app.ts:289-290`). The shipped topology is cross-origin to begin with —
 > [Docker](/operate/docker/#developer-portal) runs `auth-server` and `developer-portal` as separate
 > Compose services on different ports. A fourth blocker was waiting behind those: the page never
 > read the CSRF token out of the list response, so its `DELETE` would have been refused even had

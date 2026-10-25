@@ -33,7 +33,7 @@ request-scoped logger as `reqId`), and `routerOptions.ignoreTrailingSlash`.
 What is **not** in that options object is the point — see
 [HTTP/1.1 only](#security-invariant-1--http11-only) below.
 
-### 2. The global Zod validator and serializer compilers (`apps/auth-server/src/main.ts:53`)
+### 2. The global Zod validator and serializer compilers (`apps/auth-server/src/main.ts:54`)
 
 `setValidatorCompiler(validatorCompiler)` and `setSerializerCompiler(serializerCompiler)` from
 `fastify-type-provider-zod`, applied to the root instance so they are inherited by every route
@@ -41,10 +41,10 @@ in every plugin below. This is what makes `schema: { body: someZodSchema }` work
 a security control — see
 [the global Zod compiler](#security-invariant-2--the-global-zod-validator-compiler) below.
 
-### 3. OpenAPI, before the app (`apps/auth-server/src/main.ts:80`)
+### 3. OpenAPI, before the app (`apps/auth-server/src/main.ts:81`)
 
 `@fastify/swagger` is registered **before** `server.register(app)` at
-`apps/auth-server/src/main.ts:89`, and the comment there says why: routes must be added after
+`apps/auth-server/src/main.ts:90`, and the comment there says why: routes must be added after
 swagger so they are collected into the generated spec. The Swagger **UI** at `/docs` is gated on
 `ENABLE_SWAGGER`, which defaults to `true` outside production and `false` in production
 (resolved at the bottom of `apps/auth-server/src/config/env.ts`). The spec itself is registered
@@ -65,20 +65,20 @@ Every line below is `await`ed except where noted, so the order in the file is th
 
 | #   | Registration                                                        | What it contributes                                   |
 | --- | ------------------------------------------------------------------- | ----------------------------------------------------- |
-| 1   | `databasePlugin`, `apps/auth-server/src/app/app.ts:53`              | Postgres pool + the `repositories` decorator          |
-| 2   | `cachePlugin`, `apps/auth-server/src/app/app.ts:65`                 | Redis (`lazyConnect: true`) as `fastify.redis`        |
-| 3   | `passwordPlugin`, `apps/auth-server/src/app/app.ts:79`              | argon2id hasher + strength scoring                    |
-| 4   | `pkcePlugin`, `apps/auth-server/src/app/app.ts:90`                  | PKCE challenge verification helpers                   |
-| 5   | `assertTrustedIssuersUsable`, `apps/auth-server/src/app/app.ts:122` | **Boot check** — not a plugin                         |
-| 6   | `federationPlugin`, `apps/auth-server/src/app/app.ts:124`           | The ADR-003 `providerRegistry` decorator              |
-| 7   | `emailPlugin`, `apps/auth-server/src/app/app.ts:169`                | Resend / SMTP / mock provider                         |
-| 8   | `jwtPlugin`, `apps/auth-server/src/app/app.ts:181`                  | Signing keys, JWKS, revocation callback               |
-| 9   | `rateLimitPlugin`, `apps/auth-server/src/app/app.ts:226`            | `@fastify/rate-limit` wiring                          |
-| 10  | `securityHeadersPlugin`, `apps/auth-server/src/app/app.ts:231`      | Helmet: CSP, HSTS, frame options                      |
-| 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:235`            | Echoes the request id back on the response            |
-| 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:236`              | Prometheus registry                                   |
-| 13  | `cors`, `apps/auth-server/src/app/app.ts:254`                       | Fail-closed in production when `CORS_ORIGIN` is unset |
-| 14  | `formbody`, `apps/auth-server/src/app/app.ts:263`                   | Form-encoded body parsing                             |
+| 1   | `databasePlugin`, `apps/auth-server/src/app/app.ts:55`              | Postgres pool + the `repositories` decorator          |
+| 2   | `cachePlugin`, `apps/auth-server/src/app/app.ts:67`                 | Redis (`lazyConnect: true`) as `fastify.redis`        |
+| 3   | `passwordPlugin`, `apps/auth-server/src/app/app.ts:81`              | argon2id hasher + strength scoring                    |
+| 4   | `pkcePlugin`, `apps/auth-server/src/app/app.ts:92`                  | PKCE challenge verification helpers                   |
+| 5   | `assertTrustedIssuersUsable`, `apps/auth-server/src/app/app.ts:124` | **Boot check** — not a plugin                         |
+| 6   | `federationPlugin`, `apps/auth-server/src/app/app.ts:126`           | The ADR-003 `providerRegistry` decorator              |
+| 7   | `emailPlugin`, `apps/auth-server/src/app/app.ts:171`                | Resend / SMTP / mock provider                         |
+| 8   | `jwtPlugin`, `apps/auth-server/src/app/app.ts:183`                  | Signing keys, JWKS, revocation callback               |
+| 9   | `rateLimitPlugin`, `apps/auth-server/src/app/app.ts:228`            | `@fastify/rate-limit` wiring                          |
+| 10  | `securityHeadersPlugin`, `apps/auth-server/src/app/app.ts:233`      | Helmet: CSP, HSTS, frame options                      |
+| 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:237`            | Echoes the request id back on the response            |
+| 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:238`              | Prometheus registry                                   |
+| 13  | `cors`, `apps/auth-server/src/app/app.ts:256`                       | Fail-closed in production when `CORS_ORIGIN` is unset |
+| 14  | `formbody`, `apps/auth-server/src/app/app.ts:710`                   | Form-encoded body parsing                             |
 
 Then three registrations whose **relative** order is the subject of the rest of this page, so this
 table deliberately does not pin them to line numbers:
@@ -114,7 +114,7 @@ the missing plugin.
 
 ### `formbody` must precede routes — verified
 
-`@fastify/formbody` at `apps/auth-server/src/app/app.ts:263`, with its own comment:
+`@fastify/formbody` at `apps/auth-server/src/app/app.ts:710`, with its own comment:
 
 > RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection) both mandate
 > `application/x-www-form-urlencoded` for request bodies. Fastify ships with a JSON parser by
@@ -169,13 +169,13 @@ so.
 
 ### Security headers, request-id, metrics, CORS — the comments overstate this
 
-`securityHeadersPlugin` at `apps/auth-server/src/app/app.ts:231` carries a comment saying to
+`securityHeadersPlugin` at `apps/auth-server/src/app/app.ts:233` carries a comment saying to
 register before routes
 
 > so every response — including the server-rendered login/consent pages and error responses —
 > carries the CSP, HSTS, frame-options and related hardening headers.
 
-and `apps/auth-server/src/app/app.ts:234` says request-id propagation and the metrics registry
+and `apps/auth-server/src/app/app.ts:236` says request-id propagation and the metrics registry
 "must be available before routes are loaded".
 
 **Fastify does not require this.** `onRequest` / `onSend` hooks are collected at `preReady`, after
@@ -330,7 +330,7 @@ time. They are not symmetrical, and the difference is worth getting right.
 ### `assertTrustedIssuersUsable` — refuses the boot, ungated
 
 `assertTrustedIssuersUsable(env.OID4VP_TRUSTED_ISSUERS)` at
-`apps/auth-server/src/app/app.ts:122`, implemented at
+`apps/auth-server/src/app/app.ts:124`, implemented at
 `libs/server/federation/src/trust/assert-trusted-issuers.ts:63`, throws
 `InvalidConfigurationError` on an `OID4VP_TRUSTED_ISSUERS` map the runtime could not use.
 
@@ -368,7 +368,7 @@ gate #5 below consults.
 
 ### `createConfiguredProviders` — refuses the boot, but only when the flag is on
 
-`createConfiguredProviders`, `apps/auth-server/src/app/app.ts:125`, implemented at
+`createConfiguredProviders`, `apps/auth-server/src/app/app.ts:127`, implemented at
 `libs/fastify/plugins/federation/src/lib/configured-providers.ts:302`, is a **pure function of
 config** — no I/O, no Fastify, no database — that returns the provider list the registry is seeded
 with. `PasswordProvider` is unconditional
@@ -503,7 +503,7 @@ The upper bound is deliberate: a bare `>=3.1.8` resolves to 4.x, turning a secur
 unreviewed major bump. Treat the floor as defence in depth, not as permission to remove the
 compiler.
 
-`apps/auth-server/src/main.ts:50` names **the second leg of the same invariant**, and it lives
+`apps/auth-server/src/main.ts:51` names **the second leg of the same invariant**, and it lives
 somewhere a contributor would not think to look: `redirect_uri` matching is an exact string
 comparison (`client.redirectUris.includes(...)`, per RFC 9700) with **no URI parser in the
 security decision** — see `apps/auth-server/src/app/helpers/oauth-redirect.ts`. Introducing a
