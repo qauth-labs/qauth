@@ -13,7 +13,7 @@ export const EXPERIMENTAL_FEATURES_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/experimental-features.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const EXPERIMENTAL_FEATURES_PAGE_LAST_VERIFIED = '2026-10-24';
+export const EXPERIMENTAL_FEATURES_PAGE_LAST_VERIFIED = '2026-10-25';
 
 /** This repository, where an issue number and a path evidence point. */
 const REPOSITORY_URL = 'https://github.com/qauth-labs/qauth';
@@ -71,6 +71,12 @@ function switchCell(item: ExperimentalItem): string {
     : `${code(setting)}, with ${item.requires.map(code).join(', ')}`;
 }
 
+function discoveryCell(item: ExperimentalItem): string {
+  return item.discoveryMembers.length === 0
+    ? 'none'
+    : `${item.discoveryMembers.map(code).join(', ')}, only while the item is on`;
+}
+
 function itemSection(item: ExperimentalItem): string {
   const facts = [
     `- Decided in ${adrLink(item.adr)}.`,
@@ -80,8 +86,10 @@ function itemSection(item: ExperimentalItem): string {
         ? '. A decision record names it; nothing reads it until the item is built'
         : ''
     }.`,
+    ...(item.surface === 'server' ? [`- Discovery members: ${discoveryCell(item)}.`] : []),
     `- Spec: [${item.spec.name}](${item.spec.url}), status ${code(item.spec.status)}.`,
     `- Built: ${item.built ? 'yes' : 'no'}. Stable: ${item.stable ? 'yes' : 'no'}.`,
+    `- Documented in: ${item.docsPage === null ? 'no page yet' : `[${code(item.docsPage)}](${item.docsPage})`}.`,
   ];
   const conditions = ['| Condition | Holds | Evidence and notes |', '| --- | --- | --- |'];
   PROMOTION_CONDITIONS.forEach((condition, index) => {
@@ -118,8 +126,10 @@ registry in the pull request that adds its switch; an item that a decision recor
 is built is listed with **Built: no**.`,
     `## ${PAGE_HEADINGS[0]}`,
     `- The item sits behind a switch, and the switch is off by default.
-- Discovery does not mention the item unless the switch is on.
+- Discovery does not mention the item unless the switch is on. The members an item adds are
+  absent while it is off, never \`null\` or \`false\`, and its routes answer \`404\`.
 - The server logs a warning at boot for each item that is on.
+- The page that documents the item shows an "Experimental" banner.
 - The item may change in a minor release, without a deprecation window. Read the release notes
   before you upgrade a deployment that turns one on.`,
     `The boot warning is one \`warn\` line per item, with the item's id and a link to its section

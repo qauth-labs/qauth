@@ -49,6 +49,11 @@
  * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, and the passkey app lists
  * `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
  * the caller's shell cannot change which operations an export contains.
+ * The maximal surface also turns on every built experimental item of the
+ * registry (`@qauth-labs/shared-stability`), and the default surface none, or
+ * the export refuses to write (ADR-018 §5, #477): an experimental item's
+ * routes would otherwise be missing from both documents, and the
+ * stable-surface check could not require their tag.
  * `oid4vp-1.0-base` is used because it is the profile that actually starts on
  * this deployment's crypto (EdDSA-only) — `haip-1.0` requires ES256 signing
  * and an unprovisioned certificate chain and refuses to boot; see
@@ -83,8 +88,7 @@ import { dirname, resolve } from 'node:path';
 
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
-/** Which feature switches the exported app boots with (see the module doc comment). */
-type FlagSurface = 'default' | 'maximal';
+import { experimentalSurfaceProblem, type FlagSurface } from './openapi-export-surface';
 
 const FLAG_SURFACES: readonly FlagSurface[] = ['default', 'maximal'];
 
@@ -266,15 +270,33 @@ async function main(): Promise<void> {
   // ordering in the module doc comment true. `./app/openapi-options` itself
   // has no such dependency (it only imports `fastify-type-provider-zod`),
   // but it's grouped here anyway to keep every import in one place.
-  const [{ default: Fastify }, { default: swagger }, typeProviderZod, { app }, { openapiOptions }] =
-    await Promise.all([
-      import('fastify'),
-      import('@fastify/swagger'),
-      import('fastify-type-provider-zod'),
-      import('./app/app'),
-      import('./app/openapi-options'),
-    ]);
+  const [
+    { default: Fastify },
+    { default: swagger },
+    typeProviderZod,
+    { app },
+    { openapiOptions },
+    { EXPERIMENTAL_SWITCHES, listEnabledExperimental },
+  ] = await Promise.all([
+    import('fastify'),
+    import('@fastify/swagger'),
+    import('fastify-type-provider-zod'),
+    import('./app/app'),
+    import('./app/openapi-options'),
+    import('./config/experimental-features'),
+  ]);
   const { serializerCompiler, validatorCompiler } = typeProviderZod;
+
+  // `EXPERIMENTAL_SWITCHES` has one reader per built server item, so its keys
+  // are the items the server can turn on.
+  const experimentalProblem = experimentalSurfaceProblem(
+    surface,
+    listEnabledExperimental().map((item) => item.id),
+    Object.keys(EXPERIMENTAL_SWITCHES)
+  );
+  if (experimentalProblem !== null) {
+    throw new Error(`openapi-export: ${experimentalProblem}`);
+  }
 
   // No logger, no request-id/router options — this process never accepts a
   // request, so `main.ts`'s production Fastify constructor options do not

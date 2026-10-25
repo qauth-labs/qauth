@@ -42,6 +42,30 @@ describe('the experimental-feature registry', () => {
     });
   });
 
+  // #477: the members ADR-017 §11 plans for its experimental items. Each is
+  // the name its spec registers.
+  it.each([
+    ['fipa-challenge-endpoint', ['authorization_challenge_endpoint']],
+    [
+      'attestation-client-auth',
+      [
+        'client_attestation_signing_alg_values_supported',
+        'client_attestation_pop_signing_alg_values_supported',
+      ],
+    ],
+  ])('lists the discovery members of %s', (id, members) => {
+    const item = EXPERIMENTAL_ITEMS.find((candidate) => candidate.id === id);
+    expect(item?.discoveryMembers).toEqual(members);
+  });
+
+  it('documents the pilot on the wallet sign-in page', () => {
+    const pilot = EXPERIMENTAL_ITEMS.find((item) => item.id === 'oid4vp-1.0-base');
+    expect(pilot?.docsPage).toBe('/integrate/wallet-login/');
+    expect(
+      existsSync(join(REPO_ROOT, 'apps/docs-site/src/content/docs/integrate/wallet-login.md'))
+    ).toBe(true);
+  });
+
   // Where a decision record already names an item's switch, the registry uses
   // that name, so the area that builds the item does not invent another.
   it.each([

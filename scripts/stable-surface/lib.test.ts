@@ -204,6 +204,27 @@ describe('x-qauth-stability on every operation', () => {
       expect(checkStabilityTags(withMaximal, docs).problems).toEqual([]);
     });
 
+    // #477: the default export carries no experimental operation.
+    it('fails an experimental operation in the default export', () => {
+      const docs = new Map([
+        ['openapi', api({ '/a': { get: op('stable') }, '/wallet': { post: op('experimental') } })],
+        ['max', api({ '/a': { get: op('stable') }, '/wallet': { post: op('experimental') } })],
+      ]);
+      expect(checkStabilityTags(withMaximal, docs).problems).toEqual([
+        {
+          surface: 'openapi',
+          file: 'stable-surface/openapi.json',
+          message:
+            'POST /wallet is x-qauth-stability: experimental, but openapi is the default-flag export of max; an experimental operation is registered only while its switch is on',
+        },
+      ]);
+    });
+
+    it('accepts an experimental operation in an OpenAPI surface no maximal export names', () => {
+      const docs = new Map([['openapi', api({ '/wallet': { post: op('experimental') } })]]);
+      expect(checkStabilityTags([surface()], docs).problems).toEqual([]);
+    });
+
     it('requires an operation both exports have to carry the same tag', () => {
       const docs = new Map([
         ['openapi', defaults],
@@ -221,6 +242,10 @@ describe('x-qauth-stability on every operation', () => {
     const { problems, counts } = checkStabilityTags(surfaces, docs);
     expect(problems).toEqual([]);
     expect(counts.get('openapi')?.stable).toBeGreaterThan(0);
+    // #477: the default export has no experimental operation, and the
+    // maximal export has the ones the switches add.
+    expect(counts.get('openapi')?.experimental).toBe(0);
+    expect(counts.get('openapi-maximal')?.experimental).toBeGreaterThan(0);
   });
 });
 

@@ -353,10 +353,12 @@ export function stabilityIndex(doc) {
 
 /**
  * The tag check. Every operation of every OpenAPI surface must carry a valid
- * `x-qauth-stability`. A maximal export (`maximalOf`) adds one rule: an
+ * `x-qauth-stability`. A maximal export (`maximalOf`) adds two rules: an
  * operation it has and its default export lacks is registered only behind a
  * switch, and must be `experimental`; an operation both have carries the same
- * tag in both.
+ * tag in both. And the default export it names has no `experimental`
+ * operation at all: an experimental route is registered only while its switch
+ * is on, and every switch is off there (ADR-018 §5, #477).
  *
  * @param {ReturnType<typeof parseRegistry>} surfaces
  * @param {Map<string, object>} docs surface name → parsed current document
@@ -366,6 +368,9 @@ export function stabilityIndex(doc) {
 export function checkStabilityTags(surfaces, docs) {
   const problems = [];
   const counts = new Map();
+  const maximalOf = new Map(
+    surfaces.filter((surface) => surface.maximalOf).map((surface) => [surface.maximalOf, surface])
+  );
   for (const surface of surfaces) {
     if (surface.format !== 'openapi' || !docs.has(surface.name)) continue;
     const doc = docs.get(surface.name);
@@ -384,6 +389,11 @@ export function checkStabilityTags(surfaces, docs) {
         );
       } else {
         count[value]++;
+        if (value === 'experimental' && maximalOf.has(surface.name)) {
+          report(
+            `${key} is ${STABILITY_EXTENSION}: experimental, but ${surface.name} is the default-flag export of ${maximalOf.get(surface.name).name}; an experimental operation is registered only while its switch is on`
+          );
+        }
       }
     }
 

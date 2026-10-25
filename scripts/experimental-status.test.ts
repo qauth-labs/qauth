@@ -62,6 +62,8 @@ const stableItem = (conditions: Record<string, { evidence: string[] }> = {}) => 
   switchKey: 'SAMPLE_FEATURE_ENABLED',
   switchValue: 'true',
   requires: [],
+  discoveryMembers: [],
+  docsPage: '/integrate/sample-feature/',
   spec: { name: 'A sample RFC', url: 'https://www.rfc-editor.org/rfc/rfc9449', status: 'rfc' },
   built: true,
   stable: true,

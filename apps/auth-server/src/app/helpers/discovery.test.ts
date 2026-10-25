@@ -1,3 +1,4 @@
+import { type BuiltServerItemId, EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -9,6 +10,11 @@ import {
   buildAuthorizationServerMetadata,
   buildOpenIdConfiguration,
   DEFAULT_SCOPES_SUPPORTED,
+  type DiscoveryMetadataInput,
+  EXPERIMENTAL_MEMBER_VALUES,
+  type ExperimentalDiscoveryItem,
+  experimentalDiscoveryMembers,
+  type ExperimentalMemberValues,
   resolveIssuerIdentifier,
 } from './discovery';
 
@@ -305,6 +311,154 @@ describe('buildOpenIdConfiguration', () => {
     const oidc = buildOpenIdConfiguration({ issuer: ISSUER });
 
     expect(oidc['authorization_response_iss_parameter_supported']).toBe(true);
+  });
+});
+
+/**
+ * ADR-018 §5 (#477): discovery does not mention an experimental item unless
+ * its switch is on. Each registry item lists the members it adds.
+ */
+describe('experimental items', () => {
+  /** Every member a registry item adds, with the item that lists it. */
+  const REGISTRY_MEMBERS = EXPERIMENTAL_ITEMS.flatMap((item) =>
+    item.discoveryMembers.map((member) => [member, item.id] as const)
+  );
+
+  /** Every stable option of the builders turned on. */
+  const EVERY_STABLE_OPTION: DiscoveryMetadataInput = {
+    issuer: ISSUER,
+    scopesSupported: ['openid', 'profile', 'email', 'offline_access', 'agent:act'],
+    clientIdMetadataDocumentSupported: true,
+    idTokenSigningAlgValuesSupported: ['RS256', 'EdDSA'],
+    idJagEnabled: true,
+    dpopSigningAlgValuesSupported: ['ES256', 'EdDSA'],
+  };
+
+  const BUILDERS = [
+    ['the authorization server metadata', buildAuthorizationServerMetadata],
+    ['the OpenID configuration', buildOpenIdConfiguration],
+  ] as const;
+
+  it('has members to check', () => {
+    expect(REGISTRY_MEMBERS.map(([member]) => member)).toContain(
+      'authorization_challenge_endpoint'
+    );
+  });
+
+  describe.each(BUILDERS)('%s', (_label, build) => {
+    // The first acceptance criterion of #477, over the whole registry.
+    it.each(REGISTRY_MEMBERS)('omits %s (from %s) under the default configuration', (member) => {
+      expect(Object.keys(build({ issuer: ISSUER }))).not.toContain(member);
+    });
+
+    // A registry member that shared a stable member's name would replace it
+    // while its item is on; with every stable option on, none is present.
+    it.each(REGISTRY_MEMBERS)('has no stable member named %s (from %s)', (member) => {
+      expect(Object.keys(build(EVERY_STABLE_OPTION))).not.toContain(member);
+    });
+  });
+
+  describe('each built server item', () => {
+    const builtServerItems = EXPERIMENTAL_ITEMS.filter(
+      (item) => item.built && item.surface === 'server'
+    );
+
+    it.each(builtServerItems.map((item) => [item.id, item] as const))(
+      '%s adds exactly the members its registry entry lists',
+      (id, item) => {
+        const added = EXPERIMENTAL_MEMBER_VALUES[id as BuiltServerItemId](ISSUER);
+        expect(Object.keys(added).sort()).toEqual([...item.discoveryMembers].sort());
+        expect(Object.values(added)).not.toContain(null);
+        expect(Object.values(added)).not.toContain(false);
+      }
+    );
+
+    it.each(builtServerItems.map((item) => [item.id, item] as const))(
+      '%s puts its members into both documents while it is on',
+      (_id, item) => {
+        for (const [, build] of BUILDERS) {
+          const document = build({ issuer: ISSUER, experimentalItems: [item] });
+          for (const member of item.discoveryMembers) expect(document).toHaveProperty(member);
+        }
+      }
+    );
+  });
+
+  // The registry's only built item adds no member today, so the mechanism is
+  // checked with an item made up for the test.
+  describe('an item that adds members', () => {
+    const ITEM: ExperimentalDiscoveryItem = {
+      id: 'sample-feature',
+      discoveryMembers: ['sample_endpoint', 'sample_values_supported'],
+    };
+    const VALUES: ExperimentalMemberValues = {
+      'sample-feature': (issuer) => ({
+        sample_endpoint: `${issuer}/oauth/sample`,
+        sample_values_supported: ['one', 'two'],
+        sample_unlisted: true,
+      }),
+    };
+    const on = (issuer = ISSUER) =>
+      buildAuthorizationServerMetadata({
+        issuer,
+        experimentalItems: [ITEM],
+        experimentalMemberValues: VALUES,
+      });
+    const off = buildAuthorizationServerMetadata({
+      issuer: ISSUER,
+      experimentalMemberValues: VALUES,
+    });
+
+    it('adds the members it lists while it is on', () => {
+      expect(on()).toMatchObject({
+        sample_endpoint: `${ISSUER}/oauth/sample`,
+        sample_values_supported: ['one', 'two'],
+      });
+    });
+
+    it('adds nothing while it is off: its members are absent, not null or false', () => {
+      expect(Object.keys(off)).not.toContain('sample_endpoint');
+      expect(Object.keys(off)).not.toContain('sample_values_supported');
+      expect(JSON.stringify(off)).toBe(
+        JSON.stringify(buildAuthorizationServerMetadata({ issuer: ISSUER }))
+      );
+    });
+
+    it('leaves every other member as it is, key order included', () => {
+      const rest = Object.fromEntries(
+        Object.entries(on()).filter(([member]) => !ITEM.discoveryMembers.includes(member))
+      );
+      expect(JSON.stringify(rest)).toBe(JSON.stringify(off));
+    });
+
+    it('drops a value whose name its registry entry does not list', () => {
+      expect(Object.keys(on())).not.toContain('sample_unlisted');
+    });
+
+    it('builds its values from the issuer identifier, without a trailing slash', () => {
+      expect(on(`${ISSUER}/`)['sample_endpoint']).toBe(`${ISSUER}/oauth/sample`);
+    });
+
+    it('reaches the OpenID configuration too', () => {
+      const oidc = buildOpenIdConfiguration({
+        issuer: ISSUER,
+        experimentalItems: [ITEM],
+        experimentalMemberValues: VALUES,
+      });
+      expect(oidc['sample_endpoint']).toBe(`${ISSUER}/oauth/sample`);
+    });
+
+    it('adds nothing for an item the server has no values for', () => {
+      expect(experimentalDiscoveryMembers(ISSUER, [ITEM], {})).toEqual({});
+    });
+
+    it('skips a listed member whose value is undefined', () => {
+      expect(
+        experimentalDiscoveryMembers(ISSUER, [ITEM], {
+          'sample-feature': () => ({ sample_endpoint: undefined, sample_values_supported: [] }),
+        })
+      ).toEqual({ sample_values_supported: [] });
+    });
   });
 });
 

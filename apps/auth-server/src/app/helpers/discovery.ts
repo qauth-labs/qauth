@@ -8,6 +8,8 @@
  * the route layer controls caching and the tests can exercise shape directly.
  */
 
+import type { BuiltServerItemId, ExperimentalItem } from '@qauth-labs/shared-stability';
+
 import {
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
   ID_JAG_GRANT_PROFILE,
@@ -82,6 +84,72 @@ export interface DiscoveryMetadataInput {
    * off, so the member is absent exactly when no `DPoP` header is read (#480).
    */
   dpopSigningAlgValuesSupported?: readonly string[];
+  /**
+   * The experimental items this deployment turns on (ADR-018 §5), as
+   * `listEnabledExperimental()` (`config/experimental-features.ts`) lists
+   * them. Each adds the discovery members its registry entry lists, and only
+   * those; see {@link experimentalDiscoveryMembers}. Defaults to none, so an
+   * item that is off adds nothing.
+   */
+  experimentalItems?: readonly ExperimentalDiscoveryItem[];
+  /**
+   * What the members of each experimental item hold. Defaults to
+   * {@link EXPERIMENTAL_MEMBER_VALUES}; a test passes the values of an
+   * item it makes up.
+   */
+  experimentalMemberValues?: ExperimentalMemberValues;
+}
+
+/** What discovery reads of an experimental item: its id and the members it adds. */
+export type ExperimentalDiscoveryItem = Pick<ExperimentalItem, 'id' | 'discoveryMembers'>;
+
+/** The members one experimental item adds, from the issuer identifier. */
+export type ExperimentalMembersOf = (issuer: string) => Readonly<Record<string, unknown>>;
+
+/** What the members of each experimental item hold, by item id. */
+export type ExperimentalMemberValues = Readonly<Record<string, ExperimentalMembersOf | undefined>>;
+
+/**
+ * What each built server item of the experimental-feature registry
+ * (`@qauth-labs/shared-stability`) adds to discovery. The type names every
+ * built server item, so building one without saying what it adds fails to
+ * compile; an item that adds nothing returns `{}`. Each must return exactly
+ * the members its registry entry lists, which the tests check.
+ */
+export const EXPERIMENTAL_MEMBER_VALUES: {
+  readonly [Id in BuiltServerItemId]: ExperimentalMembersOf;
+} = {
+  // A verifier profile changes how a wallet presentation is requested and
+  // checked. No discovery member describes it.
+  'oid4vp-1.0-base': () => ({}),
+};
+
+/**
+ * The discovery members of the experimental items that are on (ADR-018 §5).
+ *
+ * A registry item lists the members it adds (`discoveryMembers`), and this
+ * publishes those names only: a value whose name the item does not list is
+ * dropped, so the registry is the whole list of what an experimental item can
+ * put into discovery. An item that is not passed in adds nothing. Its members
+ * are then absent, never `null` or `false`: RFC 8414 §2 has no "supported but
+ * off" state, the same reason `client_id_metadata_document_supported` is
+ * emitted only while CIMD is on.
+ */
+export function experimentalDiscoveryMembers(
+  issuer: string,
+  enabledItems: readonly ExperimentalDiscoveryItem[],
+  values: ExperimentalMemberValues = EXPERIMENTAL_MEMBER_VALUES
+): Record<string, unknown> {
+  const members: Record<string, unknown> = {};
+  for (const item of enabledItems) {
+    const produced = values[item.id]?.(issuer) ?? {};
+    for (const member of item.discoveryMembers) {
+      if (Object.hasOwn(produced, member) && produced[member] !== undefined) {
+        members[member] = produced[member];
+      }
+    }
+  }
+  return members;
 }
 
 /**
@@ -215,6 +283,15 @@ export function buildAuthorizationServerMetadata(
     ...(input.dpopSigningAlgValuesSupported !== undefined
       ? { dpop_signing_alg_values_supported: [...input.dpopSigningAlgValuesSupported] }
       : {}),
+    // ADR-018 §5 (#477): an experimental item adds its members only while its
+    // switch is on, and only the ones its registry entry lists. Spread last,
+    // after every stable member; the tests check no registry member shares a
+    // stable member's name.
+    ...experimentalDiscoveryMembers(
+      base,
+      input.experimentalItems ?? [],
+      input.experimentalMemberValues
+    ),
   };
 }
 

@@ -19,6 +19,7 @@ library).
 | `lib/enabled.ts`   | `enabledExperimentalItems`, the boot warning of an item that is on, and its docs link                  |
 | `lib/status.ts`    | The promotion status that `scripts/experimental-status.mjs` prints, and what `--check-stable` fails on |
 | `lib/docs-page.ts` | The docs page, rendered from the registry                                                              |
+| `lib/docs-flag.ts` | The docs pages flagged `experimental: true` against the registry: one page per item, one item per page |
 | `lib/fixtures.ts`  | Entries for this library's tests; not exported                                                         |
 
 ```ts
@@ -45,15 +46,23 @@ decision record names before it is built is listed with `built: false`; building
 `built: true` in the pull request that adds the switch.
 
 1. Add the entry to `EXPERIMENTAL_ITEMS` in `src/lib/items.ts`: an `id`, the `adr` that decided it,
-   the `switchKey` and `switchValue` (and any `requires`), the `spec` with its status, and the four
-   conditions, each with no evidence until it holds.
+   the `switchKey` and `switchValue` (and any `requires`), the `discoveryMembers` it adds to the
+   discovery documents, the `docsPage` that documents it (`null` until it is built), the `spec`
+   with its status, and the four conditions, each with no evidence until it holds.
 2. For a `server` item, register its switch in the configuration key registry
    (`libs/server/config/src/lib/registry/keys/`) as `tier: 'experimental'`, or list its value in
    `experimentalValues`. The auth server's tests check both registries agree.
 3. For a built `server` item, tell the auth server how its switch reads, in
-   `apps/auth-server/src/config/experimental-features.ts`. The `ExperimentalSwitches` type names
-   every built server item, so a missing entry fails to compile.
-4. Run `pnpm nx test shared-stability -- -u` to regenerate the docs page, and commit it.
+   `apps/auth-server/src/config/experimental-features.ts`, and what its discovery members hold, in
+   `EXPERIMENTAL_MEMBER_VALUES` (`apps/auth-server/src/app/helpers/discovery.ts`). Both types
+   name every built server item, so a missing entry fails to compile. Register its routes only
+   while its switch is on, and tag each `x-qauth-stability: experimental`.
+4. For a built item, set `experimental: true` in the frontmatter of its docs page, which then
+   shows the Experimental banner, and name the item on the page. The tests of this library fail
+   while a flagged page and a registry item do not match one to one.
+5. Run `pnpm nx test shared-stability -- -u` to regenerate the docs page, and
+   `pnpm nx test auth-server -- -u` to regenerate the wire suite's list of experimental routes and
+   discovery members. Commit both.
 
 ## Becoming stable
 

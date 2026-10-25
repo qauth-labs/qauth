@@ -304,8 +304,8 @@ the code and with the last release. It regenerates every surface registered in
 default flags and once with every route switch on — and fails when:
 
 - a committed copy differs from what its generator writes;
-- an OpenAPI operation has no `x-qauth-stability`, or an operation only a switch registers is not
-  `experimental`;
+- an OpenAPI operation has no `x-qauth-stability`, an operation only a switch registers is not
+  `experimental`, or the default-flag export has an `experimental` operation at all;
 - a stable surface breaks since the latest release tag — a removed operation or response field, a
   new required request field, a narrowed enum, a changed type, a new required scope — and
   `stable-surface/approved-breaks.json` does not approve that exact change.

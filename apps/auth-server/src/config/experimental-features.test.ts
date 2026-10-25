@@ -2,7 +2,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { CONFIG_KEY_REGISTRY } from '@qauth-labs/server-config';
-import { EXPERIMENTAL_ITEMS, type ExperimentalItem } from '@qauth-labs/shared-stability';
+import {
+  enabledExperimentalItems,
+  EXPERIMENTAL_ITEMS,
+  experimentalBootWarning,
+  type ExperimentalItem,
+  type ExperimentalSwitches,
+} from '@qauth-labs/shared-stability';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ExperimentalSwitchConfig } from './experimental-features';
@@ -182,6 +188,107 @@ describe('listEnabledExperimental', () => {
         expect(listEnabledExperimental().map((enabled) => enabled.id)).not.toContain(id);
       }
     );
+  });
+});
+
+/**
+ * #477: an item whose switch is on is in discovery, by the members its
+ * registry entry lists, and warns at boot (ADR-018 §5). Off, it is neither.
+ */
+describe('an experimental item whose switch is on', () => {
+  const ISSUER = 'https://auth.example.com';
+
+  /** Both discovery documents, as the well-known routes build them for `experimentalItems`. */
+  async function discoveryDocuments(experimentalItems: readonly ExperimentalItem[]) {
+    const { buildAuthorizationServerMetadata, buildOpenIdConfiguration } =
+      await import('../app/helpers/discovery');
+    return [
+      buildAuthorizationServerMetadata({ issuer: ISSUER, experimentalItems }),
+      buildOpenIdConfiguration({ issuer: ISSUER, experimentalItems }),
+    ];
+  }
+
+  describe.each(BUILT_SERVER_ITEMS.map((item) => [item.id, item] as const))('%s', (id, item) => {
+    const switchSetting = `${item.switchKey}=${item.switchValue}`;
+
+    it('adds its discovery members and logs its boot warning', async () => {
+      const { listEnabledExperimental, logExperimentalFeatures } = await loadWith([
+        switchSetting,
+        ...item.requires,
+      ]);
+      const log = recordingLog();
+
+      for (const document of await discoveryDocuments(listEnabledExperimental())) {
+        for (const member of item.discoveryMembers) expect(document).toHaveProperty(member);
+      }
+      logExperimentalFeatures(log);
+      expect(log.lines).toContainEqual({
+        object: { experimentalFeature: id, docs: experimentalBootWarning(item).docs },
+        message: experimentalBootWarning(item).message,
+      });
+    });
+
+    it('adds neither without its switch', async () => {
+      const { listEnabledExperimental, logExperimentalFeatures } = await loadWith(item.requires);
+      const log = recordingLog();
+
+      for (const document of await discoveryDocuments(listEnabledExperimental())) {
+        for (const member of item.discoveryMembers) {
+          expect(Object.keys(document)).not.toContain(member);
+        }
+      }
+      logExperimentalFeatures(log);
+      expect(log.lines.map((line) => line.object)).not.toContainEqual(
+        expect.objectContaining({ experimentalFeature: id })
+      );
+    });
+  });
+
+  // The registry's only built item adds no discovery member, so the whole
+  // path, from the switch to the members and the warning, is also run for an
+  // item made up for the test, through the functions the server uses.
+  describe('for an item that adds members', () => {
+    const SAMPLE: ExperimentalItem = {
+      ...BUILT_SERVER_ITEMS[0],
+      id: 'sample-feature',
+      switchKey: 'SAMPLE_FEATURE_ENABLED',
+      switchValue: 'true',
+      requires: [],
+      discoveryMembers: ['sample_endpoint'],
+      docsPage: '/integrate/sample-feature/',
+    };
+    const switches = {
+      'sample-feature': (config: { SAMPLE_FEATURE_ENABLED: boolean }) =>
+        config.SAMPLE_FEATURE_ENABLED,
+    } as unknown as ExperimentalSwitches<{ SAMPLE_FEATURE_ENABLED: boolean }>;
+    const values = {
+      'sample-feature': (issuer: string) => ({ sample_endpoint: `${issuer}/sample` }),
+    };
+
+    async function boot(on: boolean) {
+      const { buildAuthorizationServerMetadata } = await import('../app/helpers/discovery');
+      const enabled = enabledExperimentalItems({ SAMPLE_FEATURE_ENABLED: on }, switches, [SAMPLE]);
+      return {
+        document: buildAuthorizationServerMetadata({
+          issuer: ISSUER,
+          experimentalItems: enabled,
+          experimentalMemberValues: values,
+        }),
+        warnings: enabled.map((item) => experimentalBootWarning(item).id),
+      };
+    }
+
+    it('adds its members and warns once its switch is on', async () => {
+      const { document, warnings } = await boot(true);
+      expect(document['sample_endpoint']).toBe(`${ISSUER}/sample`);
+      expect(warnings).toEqual(['sample-feature']);
+    });
+
+    it('adds no member, not even as null or false, and does not warn while it is off', async () => {
+      const { document, warnings } = await boot(false);
+      expect(Object.keys(document)).not.toContain('sample_endpoint');
+      expect(warnings).toEqual([]);
+    });
   });
 });
 

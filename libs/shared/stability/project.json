@@ -14,13 +14,13 @@
         { "env": "CI" },
         { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
         "{workspaceRoot}/.oxfmtrc.json",
-        "{workspaceRoot}/apps/docs-site/src/content/docs/reference/experimental-features.md",
+        "{workspaceRoot}/apps/docs-site/src/content/docs/**/*",
         "{workspaceRoot}/docs/**/*",
         "{workspaceRoot}/apps/**/*.ts",
         "{workspaceRoot}/libs/**/*.ts"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The registry tests read files outside it: the generated docs page `reference/experimental-features.md` (it must match the registry; `pnpm nx test shared-stability -- -u` rewrites it, formatted with the repo's Oxfmt config), the decision records under docs/adr, and every `path` evidence, which may name any file in the repository, such as a test file or an audit report under docs/. Without them, editing or moving one would replay a stale pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `oxfmt` added to the external dependencies."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The registry tests read files outside it: every page of the docs collection under apps/docs-site/src/content/docs, which holds the generated page `reference/experimental-features.md` (it must match the registry; `pnpm nx test shared-stability -- -u` rewrites it, formatted with the repo's Oxfmt config) and the pages flagged `experimental: true` (they must match the registry's items one to one, #477), the decision records under docs/adr, and every `path` evidence, which may name any file in the repository, such as a test file or an audit report under docs/. Without them, editing or moving one would replay a stale pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `oxfmt` added to the external dependencies."
       }
     }
   },

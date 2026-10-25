@@ -3,7 +3,7 @@ title: Experimental features
 description: Every experimental item of QAuth, its switch, and the four conditions it must meet to become stable, generated from the registry in libs/shared/stability.
 sidebar:
   order: 5
-lastVerified: '2026-10-24'
+lastVerified: '2026-10-25'
 ---
 
 <!-- Generated from libs/shared/stability by its tests. Do not edit by hand: change the registry and run `pnpm nx test shared-stability -- -u`. -->
@@ -17,8 +17,10 @@ is built is listed with **Built: no**.
 ## What experimental means
 
 - The item sits behind a switch, and the switch is off by default.
-- Discovery does not mention the item unless the switch is on.
+- Discovery does not mention the item unless the switch is on. The members an item adds are
+  absent while it is off, never `null` or `false`, and its routes answer `404`.
 - The server logs a warning at boot for each item that is on.
+- The page that documents the item shows an "Experimental" banner.
 - The item may change in a minor release, without a deprecation window. Read the release notes
   before you upgrade a deployment that turns one on.
 
@@ -66,8 +68,10 @@ evidence for a condition.
 - Decided in [ADR-017](/reference/records/adr/017-first-party-login/).
 - Runs in: the auth server.
 - Switch: `FIRST_PARTY_LOGIN_ENABLED=true`. A decision record names it; nothing reads it until the item is built.
+- Discovery members: `authorization_challenge_endpoint`, only while the item is on.
 - Spec: [OAuth 2.0 for First-Party Applications](https://datatracker.ietf.org/doc/draft-ietf-oauth-first-party-apps/), status `draft`.
 - Built: no. Stable: no.
+- Documented in: no page yet.
 
 | Condition                                                     | Holds | Evidence and notes                                    |
 | ------------------------------------------------------------- | ----- | ----------------------------------------------------- |
@@ -85,6 +89,7 @@ evidence for a condition.
 - Switch: `@qauth-labs/node/first-party`. A decision record names it; nothing reads it until the item is built.
 - Spec: [OAuth 2.0 for First-Party Applications](https://datatracker.ietf.org/doc/draft-ietf-oauth-first-party-apps/), status `draft`.
 - Built: no. Stable: no.
+- Documented in: no page yet.
 
 | Condition                                                     | Holds | Evidence and notes                                    |
 | ------------------------------------------------------------- | ----- | ----------------------------------------------------- |
@@ -100,8 +105,10 @@ evidence for a condition.
 - Decided in [ADR-018](/reference/records/adr/018-1-0-scope-and-stability/).
 - Runs in: the auth server.
 - Switch: `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, with `WALLET_FEDERATION_ENABLED=true`.
+- Discovery members: none.
 - Spec: [OpenID for Verifiable Presentations 1.0](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html), status `final`.
 - Built: yes. Stable: no.
+- Documented in: [`/integrate/wallet-login/`](/integrate/wallet-login/).
 
 | Condition                                                     | Holds | Evidence and notes                                                                                                                             |
 | ------------------------------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -117,8 +124,10 @@ evidence for a condition.
 - Decided in [ADR-017](/reference/records/adr/017-first-party-login/).
 - Runs in: the auth server.
 - Switch: none named yet.
+- Discovery members: `client_attestation_signing_alg_values_supported`, `client_attestation_pop_signing_alg_values_supported`, only while the item is on.
 - Spec: [OAuth 2.0 Attestation-Based Client Authentication](https://datatracker.ietf.org/doc/draft-ietf-oauth-attestation-based-client-auth/), status `draft`.
 - Built: no. Stable: no.
+- Documented in: no page yet.
 
 | Condition                                                     | Holds | Evidence and notes                                    |
 | ------------------------------------------------------------- | ----- | ----------------------------------------------------- |
@@ -134,8 +143,10 @@ evidence for a condition.
 - Decided in [ADR-016](/reference/records/adr/016-agent-platform-bindings/).
 - Runs in: the auth server.
 - Switch: `PASS_THROUGH_LEG_ENABLED=true`, with `AUTHORITY_TREE_ENABLED=true`. A decision record names it; nothing reads it until the item is built.
+- Discovery members: none.
 - Spec: [The pass-through leg, ADR-016 §4](https://docs.qauth.dev/reference/records/adr/016-agent-platform-bindings/), status `draft`.
 - Built: no. Stable: no.
+- Documented in: no page yet.
 
 | Condition                                                     | Holds | Evidence and notes                                    |
 | ------------------------------------------------------------- | ----- | ----------------------------------------------------- |
@@ -151,8 +162,10 @@ evidence for a condition.
 - Decided in [ADR-018](/reference/records/adr/018-1-0-scope-and-stability/).
 - Runs in: the auth server.
 - Switch: none named yet.
+- Discovery members: none.
 - Spec: [The AuthMethod contract, ADR-018](https://docs.qauth.dev/reference/records/adr/018-1-0-scope-and-stability/), status `draft`.
 - Built: no. Stable: no.
+- Documented in: no page yet.
 
 | Condition                                                     | Holds | Evidence and notes                                                    |
 | ------------------------------------------------------------- | ----- | --------------------------------------------------------------------- |
