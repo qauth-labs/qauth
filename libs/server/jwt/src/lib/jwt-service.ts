@@ -99,6 +99,12 @@ export function buildAccessTokenClaims(payload: SignAccessTokenPayload): {
   if (payload.act !== undefined) {
     claims['act'] = payload.act;
   }
+  // RFC 9449 §6.1: a DPoP-bound token carries the key's thumbprint as
+  // `cnf.jkt`. Only `jkt` is copied, so the claim names one key and nothing
+  // else; a Bearer token has no `cnf` at all.
+  if (payload.cnf !== undefined) {
+    claims['cnf'] = { jkt: payload.cnf.jkt };
+  }
 
   // `aud` claim: array → multi-audience, string → single, otherwise fall back
   // to the client_id (OAuth 2.1 RFC 8707 light-mode default).
@@ -409,6 +415,9 @@ export async function verifyAccessToken(
     // RFC 8693 §4.1: surface any existing `act` chain so a subject token already
     // carrying a delegation can be nested under the new actor.
     act: claims.act,
+    // RFC 9449 §6.1: the DPoP key a bound token is confirmed by. A protected
+    // resource refuses such a token without a proof under that key.
+    ...(claims.cnf === undefined ? {} : { cnf: { jkt: claims.cnf.jkt } }),
     iat: claims.iat,
     exp: claims.exp,
     iss: claims.iss,

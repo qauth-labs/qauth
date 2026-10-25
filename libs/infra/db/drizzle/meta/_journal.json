@@ -260,6 +260,13 @@
       "when": 1792883928275,
       "tag": "0036_event_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792895671613,
+      "tag": "0037_dpop_binding",
+      "breakpoints": true
     }
   ]
 }

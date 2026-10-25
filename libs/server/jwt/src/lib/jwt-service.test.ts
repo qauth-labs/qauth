@@ -1,5 +1,5 @@
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
-import { jwtVerify, SignJWT } from 'jose';
+import { decodeJwt, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { signAccessToken, signIdToken, verifyAccessToken } from './jwt-service';
@@ -93,6 +93,35 @@ describe('signAccessToken', () => {
     const decoded = await verifyAccessToken(token, publicKey);
 
     expect(decoded.act).toBeUndefined();
+  });
+
+  it('emits and round-trips an RFC 9449 cnf.jkt claim on a DPoP-bound token (#480)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const jkt = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
+    const token = await signAccessToken(
+      // A member beside `jkt` is not copied: the claim names one key only.
+      { sub: 'user-bound', clientId: 'app-client', cnf: { jkt, x5t: 'other' } as { jkt: string } },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const decoded = await verifyAccessToken(token, publicKey);
+    expect(decoded.cnf).toEqual({ jkt });
+    expect(decodeJwt(token)['cnf']).toEqual({ jkt });
+  });
+
+  it('omits cnf on a Bearer token', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-plain', clientId: 'app-client' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect('cnf' in (await verifyAccessToken(token, publicKey))).toBe(false);
+    expect('cnf' in decodeJwt(token)).toBe(false);
   });
 });
 
@@ -420,6 +449,24 @@ describe('verifyAccessToken runtime claim-shape validation (F-10)', () => {
 
     await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
   });
+
+  it.each([
+    ['a string', 'bound'],
+    ['no jkt', {}],
+    ['a jkt that is not a thumbprint', { jkt: 'short' }],
+    ['a padded jkt', { jkt: '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4=' }],
+  ])(
+    'rejects a correctly-signed token whose cnf is %s, never reading it as unbound (#480)',
+    async (_name, cnf) => {
+      const { privateKey, publicKey } = await generateEdDSAKeyPair();
+      const token = await signRawClaims(
+        { sub: 'user-mal', client_id: 'client-mal', cnf },
+        privateKey
+      );
+
+      await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+    }
+  );
 
   it('rejects a correctly-signed token whose email_verified is not a boolean', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();

@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import {
   ForbiddenError,
   InvalidClientError,
+  InvalidDpopProofError,
   InvalidRequestError,
   JWTExpiredError,
   JWTInvalidError,
@@ -636,6 +637,92 @@ describe('error-handler plugin', () => {
         statusCode: 400,
       });
 
+      await app.close();
+    });
+  });
+
+  /**
+   * DPoP (RFC 9449, #480). The handler reads `fastify.dpop`: null while
+   * DPOP_ENABLED is off, the verifier's service while it is on.
+   */
+  describe('DPoP challenges (RFC 9449 §5, §7.1)', () => {
+    async function buildDpopApp(dpopOn: boolean): Promise<FastifyInstance> {
+      const app = Fastify({ logger: false });
+      app.decorate('dpop', dpopOn ? ({ algorithms: ['ES256', 'EdDSA'] } as never) : null);
+      await app.register(errorHandler);
+      app.post('/token', async () => {
+        throw new InvalidDpopProofError();
+      });
+      app.get('/resource-proof', async () => {
+        throw new InvalidDpopProofError(undefined, { atResource: true });
+      });
+      app.get('/resource-token', async () => {
+        throw new JWTInvalidError('Invalid DPoP key binding');
+      });
+      return app;
+    }
+
+    it('answers invalid_dpop_proof at the token endpoint with a 400 OAuth body and no challenge', async () => {
+      const app = await buildDpopApp(true);
+      const response = await app.inject({ method: 'POST', url: '/token' });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: 'invalid_dpop_proof',
+        code: 'INVALID_DPOP_PROOF',
+        statusCode: 400,
+      });
+      expect(response.headers['www-authenticate']).toBeUndefined();
+      await app.close();
+    });
+
+    it('answers a refused proof at a resource with 401 and a DPoP challenge naming the algorithms', async () => {
+      const app = await buildDpopApp(true);
+      const response = await app.inject({ method: 'GET', url: '/resource-proof' });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+      expect(response.headers['www-authenticate']).toBe(
+        'DPoP error="invalid_dpop_proof", algs="ES256 EdDSA"'
+      );
+      await app.close();
+    });
+
+    it('answers a token refused under the DPoP scheme with a DPoP invalid_token challenge', async () => {
+      const app = await buildDpopApp(true);
+      const response = await app.inject({
+        method: 'GET',
+        url: '/resource-token',
+        headers: { authorization: 'DPoP some.token.value' },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['www-authenticate']).toBe(
+        'DPoP error="invalid_token", error_description="Invalid DPoP key binding", algs="ES256 EdDSA"'
+      );
+      await app.close();
+    });
+
+    it('keeps the Bearer challenge for a Bearer request, with DPoP on or off', async () => {
+      for (const dpopOn of [true, false]) {
+        const app = await buildDpopApp(dpopOn);
+        const response = await app.inject({
+          method: 'GET',
+          url: '/resource-token',
+          headers: { authorization: 'Bearer some.token.value' },
+        });
+        expect(response.headers['www-authenticate']).toBe(
+          'Bearer realm="OAuth", error="invalid_token", error_description="Invalid DPoP key binding"'
+        );
+        await app.close();
+      }
+    });
+
+    it('keeps the Bearer challenge for a DPoP-scheme request while DPoP is off', async () => {
+      const app = await buildDpopApp(false);
+      const response = await app.inject({
+        method: 'GET',
+        url: '/resource-token',
+        headers: { authorization: 'DPoP some.token.value' },
+      });
+      expect(response.headers['www-authenticate']).toMatch(/^Bearer realm="OAuth"/);
       await app.close();
     });
   });

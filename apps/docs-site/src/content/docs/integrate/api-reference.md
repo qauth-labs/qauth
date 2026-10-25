@@ -322,6 +322,15 @@ Key contract facts:
   default-deny; scope/audience are preserved or narrowed, never widened. See the
   [Token Exchange](/integrate/oauth-flow/#token-exchange--agent-on-behalf-of-delegation-rfc-8693)
   section and the [Agent Authorization guide](/integrate/agent-authorization/).
+- DPoP (RFC 9449), when the operator sets `DPOP_ENABLED=true`: a token request
+  that carries a `DPoP` proof gets an access token bound to the proof's key
+  (`cnf.jkt` in the token, `token_type: "DPoP"` in the response), whatever the
+  grant. Send `dpop_jkt` on the authorization request to bind the code to the
+  key too. A public client's refresh token is bound to the key and needs a
+  proof under it on every refresh; a confidential client's is not. A client the
+  operator marked `dpop_bound_access_tokens` in the seed manifest must send a
+  proof on every token request, or gets `400 invalid_dpop_proof`. Discovery
+  then lists the accepted proof algorithms in `dpop_signing_alg_values_supported`.
 - Dynamic Client Registration (`POST /oauth/register`) accepts the optional
   QAuth extension field `is_agent` (boolean, default `false`) marking the client
   as an AI agent; it is echoed back in the response. The flag is self-asserted
@@ -369,7 +378,10 @@ list.
 ```
 
 An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`,
-and so does a user's token once that user is disabled or deleted.
+and so does a user's token once that user is disabled or deleted. A DPoP-bound
+token is reported with `"token_type": "DPoP"` and `"cnf": { "jkt": "…" }`, the
+thumbprint of its key (RFC 9449 §6.2): the resource server checks the request's
+DPoP proof against it.
 
 ### UserInfo response (`GET|POST /oauth/userinfo`, `200 OK`)
 
@@ -387,6 +399,11 @@ since it was issued gets `401`. So does a token that is not addressed to
 UserInfo: its `aud` must contain the token's own `client_id` (the default when
 the grant named no `resource`) or the `userinfo_endpoint` URL from discovery.
 See [UserInfo](/integrate/oauth-flow/#userinfo-oidc).
+
+A DPoP-bound token is accepted only as `Authorization: DPoP <token>` with a
+`DPoP` proof for the request whose `ath` is the token's hash (RFC 9449 §7.1).
+Sent as a Bearer token, in the header or the form body, it gets `401`
+(RFC 9449 §7.2).
 
 ### `POST /oauth/revoke`
 

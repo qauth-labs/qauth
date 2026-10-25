@@ -127,9 +127,8 @@ export const envSchema = z
     // with its parent-domain opt-in, and the app identifiers of the association
     // files. Spread like the others: a plain z.object with per-field rules.
     ...webauthnEnvSchema.shape,
-    // DPoP (RFC 9449; ADR-014 §3, ADR-017 Decision 14, #479): DPOP_ENABLED, the
-    // one switch for DPoP-bound tokens, refused when true until the token
-    // endpoint binds tokens to a DPoP key.
+    // DPoP (RFC 9449; ADR-014 §3, ADR-017 Decision 14, #479, #480):
+    // DPOP_ENABLED, the one switch for DPoP-bound tokens.
     ...dpopEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the

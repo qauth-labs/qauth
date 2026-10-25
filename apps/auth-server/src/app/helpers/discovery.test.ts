@@ -122,6 +122,39 @@ describe('buildAuthorizationServerMetadata', () => {
     });
   });
 
+  describe('DPoP (RFC 9449 §5.1, #480) — advertised only while DPOP_ENABLED is on', () => {
+    it('omits dpop_signing_alg_values_supported when no algorithms are passed', () => {
+      const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+      expect('dpop_signing_alg_values_supported' in meta).toBe(false);
+      expect(
+        'dpop_signing_alg_values_supported' in buildOpenIdConfiguration({ issuer: ISSUER })
+      ).toBe(false);
+    });
+
+    it('leaves every other member as it is with DPoP off, key order included', () => {
+      const off = buildAuthorizationServerMetadata({ issuer: ISSUER });
+      const on = buildAuthorizationServerMetadata({
+        issuer: ISSUER,
+        dpopSigningAlgValuesSupported: ['ES256'],
+      });
+      const rest = Object.fromEntries(
+        Object.entries(on).filter(([member]) => member !== 'dpop_signing_alg_values_supported')
+      );
+      expect(JSON.stringify(rest)).toBe(JSON.stringify(off));
+    });
+
+    it('publishes the algorithms passed in, on both documents', () => {
+      const algorithms = ['ES256', 'EdDSA', 'PS256'];
+      const input = { issuer: ISSUER, dpopSigningAlgValuesSupported: algorithms };
+      expect(buildAuthorizationServerMetadata(input)['dpop_signing_alg_values_supported']).toEqual(
+        algorithms
+      );
+      expect(buildOpenIdConfiguration(input)['dpop_signing_alg_values_supported']).toEqual(
+        algorithms
+      );
+    });
+  });
+
   it('advertises the ID-token signing algorithms passed in (#309 RS256 + EdDSA)', () => {
     const meta = buildAuthorizationServerMetadata({
       issuer: ISSUER,

@@ -216,6 +216,9 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     jwksUri: spec.jwks_uri ?? null,
     // Operator-set passkey origins (#467), normalised by the manifest schema.
     webauthnAllowedOrigins: Array.from(new Set(spec.webauthn_allowed_origins ?? [])),
+    // RFC 9449 §5.2 (#480): refuse this client's token requests without a
+    // DPoP proof while DPOP_ENABLED is on. false = DPoP stays optional.
+    dpopBoundAccessTokens: spec.dpop_bound_access_tokens ?? false,
     enabled: true,
     // The operator wrote this client, redirect URIs included, so it is the one
     // kind that receives authorization errors by automatic redirect
@@ -251,6 +254,7 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     jwks: spec.jwks ?? null,
     jwksUri: spec.jwks_uri ?? null,
     webauthnAllowedOrigins: Array.from(new Set(spec.webauthn_allowed_origins ?? [])),
+    dpopBoundAccessTokens: spec.dpop_bound_access_tokens ?? false,
     // A rotation rewrites every field from the manifest, redirect URIs
     // included, so the operator now vouches for the row as it stands
     // (ANT-2026-O8U3P920). This is also how an operator marks a client the

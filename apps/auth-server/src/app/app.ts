@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import { type DeliveryRoute, eventDeliveryPlugin } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
@@ -35,6 +36,7 @@ import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
+import { verifyResourceRequestProof } from './helpers/dpop';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
 import {
   createEventTelemetry,
@@ -252,6 +254,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       lazyConnect: true,
     },
   });
+
+  // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the
+  // shared verifier over the cache plugin's Redis, which records used proofs.
+  // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
+  // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
+  // included) and the request path, the endpoint URL discovery publishes,
+  // never the `Host` header. A request to one of DEFAULT_REALM_ENDPOINT_HOSTS
+  // must therefore name the published URL in `htu` too.
+  await fastify.register(dpopPlugin, { enabled: env.DPOP_ENABLED, baseUrl: env.JWT_ISSUER });
 
   await fastify.register(passwordPlugin, {
     hashConfig: {
@@ -507,6 +518,16 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     // rejected everywhere it is used as a bearer credential. Resolved lazily
     // via the `fastify.redis` decorator (cache plugin registered above).
     isTokenRevoked: (jti) => isJtiRevoked(fastify, jti),
+    // RFC 9449 §7 (#480): with DPoP on, `requireJwt` also accepts
+    // `Authorization: DPoP <token>` for a DPoP-bound token, and this checks the
+    // request's proof. Off, a `DPoP` header is no credential, as before. A
+    // DPoP-bound token sent as a Bearer token is refused either way (§7.2).
+    ...(fastify.dpop
+      ? {
+          verifyDpopProof: (request, token, claims) =>
+            verifyResourceRequestProof(fastify, request, token, claims),
+        }
+      : {}),
     // ADR-005: when hybrid signing is enabled, publish the ML-DSA public key as
     // an AKP JWK on /.well-known/jwks.json alongside the Ed25519 OKP key
     // (#246), AND mint live hybrid access tokens (#275). The config's fail-fast

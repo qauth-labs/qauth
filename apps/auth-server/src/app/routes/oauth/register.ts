@@ -195,6 +195,10 @@ export default async function (fastify: FastifyInstance) {
         // manifest sets them. Pinned like `environment`; the request schema
         // defines no such field.
         idJagTargets: [],
+        // RFC 9449 §5.2 (#480): whether the client must use DPoP is the
+        // operator's decision, made in the seed manifest. Pinned like
+        // `idJagTargets`; the request schema defines no such field.
+        dpopBoundAccessTokens: false,
         // ANT-2026-O8U3P920: never operator-provisioned. The anonymous (or
         // self-registered) caller chose these redirect URIs, so authorization
         // errors are shown on the issuer rather than redirected to them. Pinned

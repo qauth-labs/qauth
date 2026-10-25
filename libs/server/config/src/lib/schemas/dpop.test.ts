@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { DPOP_ENABLED_REFUSAL, dpopEnvSchema } from './dpop';
+import { dpopEnvSchema } from './dpop';
 
-/** The DPoP switch (ADR-014 §3, ADR-017 phase F3, issue #479). */
+/** The DPoP switch (ADR-014 §3, ADR-017 phase F3, issues #479 and #480). */
 
 /** The boot errors for `env`, as the operator reads them. */
 function bootErrors(env: Record<string, string>): string[] {
@@ -18,10 +18,8 @@ describe('dpopEnvSchema', () => {
     expect(dpopEnvSchema.parse({ DPOP_ENABLED: 'false' }).DPOP_ENABLED).toBe(false);
   });
 
-  it('refuses true at boot until the token endpoint binds tokens, saying what to do', () => {
-    expect(bootErrors({ DPOP_ENABLED: 'true' })).toEqual([`DPOP_ENABLED: ${DPOP_ENABLED_REFUSAL}`]);
-    expect(DPOP_ENABLED_REFUSAL).toContain('ADR-017 phase F3');
-    expect(DPOP_ENABLED_REFUSAL).toContain('Unset DPOP_ENABLED or set it to false');
+  it('turns on with true, now that the token endpoint binds tokens (#480)', () => {
+    expect(dpopEnvSchema.parse({ DPOP_ENABLED: 'true' }).DPOP_ENABLED).toBe(true);
   });
 
   it('refuses a value that is not true or false', () => {

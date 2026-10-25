@@ -332,6 +332,150 @@ describe('requireJwt middleware', () => {
   });
 });
 
+/**
+ * DPoP at `requireJwt` (RFC 9449 §7, #480). The plugin parses the scheme and
+ * applies the two rules that need no verifier: a DPoP-bound token is never a
+ * Bearer token (§7.2), and the DPoP scheme needs a bound token. The proof
+ * itself is the host app's `verifyDpopProof`, stubbed here.
+ */
+describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
+  const JKT = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
+
+  async function buildDpopApp(
+    verifyDpopProof?: (request: unknown, token: string, claims: { cnf?: unknown }) => Promise<void>
+  ) {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    const privateKeyPem = await exportPKCS8(privateKey);
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      privateKey: privateKeyPem,
+      publicKey: await exportSPKI(publicKey),
+      issuer: 'https://auth.test.example.com',
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 86400,
+      ...(verifyDpopProof === undefined ? {} : { verifyDpopProof }),
+    });
+    await registerTestErrorHandler(app);
+    app.get('/protected', { preHandler: app.requireJwt }, async (request) => ({
+      sub: request.jwtPayload?.sub,
+      cnf: request.jwtPayload?.cnf ?? null,
+    }));
+    const sign = async (bound: boolean) =>
+      app.jwtUtils.signAccessToken({
+        sub: 'user-1',
+        clientId: 'client-1',
+        ...(bound ? { cnf: { jkt: JKT } } : {}),
+      });
+    return { app, sign };
+  }
+
+  it('refuses a DPoP-bound token sent as Bearer, with DPoP on or off (§7.2)', async () => {
+    for (const verify of [undefined, async () => undefined]) {
+      const { app, sign } = await buildDpopApp(verify);
+      try {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/protected',
+          headers: { authorization: `Bearer ${await sign(true)}` },
+        });
+        expect(response.statusCode).toBe(401);
+        expect(response.json().error).toBe(
+          'A DPoP-bound access token cannot be used as a Bearer token'
+        );
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  it('reads the DPoP scheme as no credential when the app verifies no proofs', async () => {
+    const { app, sign } = await buildDpopApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `DPoP ${await sign(true)}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error).toBe('Missing or malformed Authorization header');
+      expect(app.jwtUtils.extractCredentialFromHeader('DPoP abc')).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('accepts a bound token under the DPoP scheme once the proof check passes', async () => {
+    const calls: Array<{ token: string; cnf: unknown }> = [];
+    const { app, sign } = await buildDpopApp(async (_request, token, claims) => {
+      calls.push({ token, cnf: claims.cnf });
+    });
+    try {
+      const token = await sign(true);
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `DPoP ${token}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ sub: 'user-1', cnf: { jkt: JKT } });
+      expect(calls).toEqual([{ token, cnf: { jkt: JKT } }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses the request when the proof check throws', async () => {
+    const { app, sign } = await buildDpopApp(async () => {
+      throw new JWTInvalidError('proof refused');
+    });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `DPoP ${await sign(true)}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error).toBe('proof refused');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an unbound token under the DPoP scheme without checking a proof', async () => {
+    let called = false;
+    const { app, sign } = await buildDpopApp(async () => {
+      called = true;
+    });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `DPoP ${await sign(false)}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error).toBe('The access token is not bound to a DPoP key');
+      expect(called).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('still accepts an unbound Bearer token with DPoP on', async () => {
+    const { app, sign } = await buildDpopApp(async () => undefined);
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${await sign(false)}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ sub: 'user-1', cnf: null });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('jwtPlugin — PQC backend gating, rotation, and seed hygiene (#248 F7/F9/F10)', () => {
   const mlDsaBackend = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
 

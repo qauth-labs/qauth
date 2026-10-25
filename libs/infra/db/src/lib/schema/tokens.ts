@@ -127,6 +127,13 @@ export const authorizationCodes = pgTable(
      * had already accepted the request. See qauth-labs/qauth#316.
      */
     state: text('state'),
+    /**
+     * RFC 9449 §10 `dpop_jkt` (issue #480): the RFC 7638 SHA-256 thumbprint
+     * of the DPoP key the authorization request bound this code to. The code
+     * is redeemed only with a DPoP proof under that key. NULL for a code not
+     * bound to a key, which is every code minted while `DPOP_ENABLED` is off.
+     */
+    dpopJkt: varchar('dpop_jkt', { length: 43 }),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     used: boolean('used').notNull().default(false),
     usedAt: bigint('used_at', { mode: 'number' }),
@@ -149,6 +156,11 @@ export const authorizationCodes = pgTable(
     check(
       'authorization_codes_assurance_level_valid',
       sql`${t.assuranceLevel} IS NULL OR ${t.assuranceLevel} IN ('substantial', 'high')`
+    ),
+    /** A SHA-256 thumbprint in base64url is 43 characters of its alphabet, nothing else. */
+    check(
+      'authorization_codes_dpop_jkt_format',
+      sql`${t.dpopJkt} IS NULL OR ${t.dpopJkt} ~ '^[A-Za-z0-9_-]{43}$'`
     ),
   ]
 );
@@ -192,6 +204,15 @@ export const refreshTokens = pgTable(
     revokedReason: varchar('revoked_reason', { length: 255 }),
     /** SHA-256 hash of the previous token for rotation tracking (64 hex characters) */
     previousTokenHash: varchar('previous_token_hash', { length: 64 }),
+    /**
+     * The RFC 7638 SHA-256 thumbprint of the DPoP key this refresh token is
+     * bound to (RFC 9449 §5, issue #480). Set for a PUBLIC client that sent a
+     * DPoP proof when the token was issued; each use then needs a proof under
+     * the same key, and every rotation keeps it. NULL for a confidential
+     * client, whose refresh tokens client authentication already binds
+     * (RFC 9449 §5), and for every token issued without a proof.
+     */
+    cnfJkt: varchar('cnf_jkt', { length: 43 }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     lastUsedAt: bigint('last_used_at', { mode: 'number' }),
   },
@@ -207,6 +228,10 @@ export const refreshTokens = pgTable(
       .where(sql`${t.revoked} = false`),
     // Fast family-wide revocation lookups for replay detection.
     index('idx_refresh_tokens_family_id').on(t.familyId),
+    check(
+      'refresh_tokens_cnf_jkt_format',
+      sql`${t.cnfJkt} IS NULL OR ${t.cnfJkt} ~ '^[A-Za-z0-9_-]{43}$'`
+    ),
   ]
 );
 

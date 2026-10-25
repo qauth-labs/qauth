@@ -223,6 +223,41 @@ describe('POST /oauth/introspect route', () => {
     );
   });
 
+  it('reports a DPoP-bound token as DPoP with its cnf.jkt (RFC 9449 §6.2, #480)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    const jkt = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: '019dbc24-7a2d-724d-bf26-1923f21f2234',
+      clientId: client.clientId,
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+      cnf: { jkt },
+    });
+
+    const result = await ctx.handler!(
+      {
+        body: { token: 'bound-token', client_id: client.clientId, client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      { send: (body: unknown) => body }
+    );
+
+    // The resource server checks the request's proof against it; introspection
+    // itself checks none (RFC 9449 §6.2).
+    expect(result).toMatchObject({ active: true, token_type: 'DPoP', cnf: { jkt } });
+  });
+
   describe('disabled users', () => {
     const client = {
       id: 'client-1',

@@ -530,6 +530,20 @@ export const oauthClients = pgTable(
       .notNull()
       .default(JSONB_EMPTY_ARRAY)
       .$type<string[]>(),
+    /**
+     * RFC 9449 §5.2 `dpop_bound_access_tokens` (ADR-014 §3, ADR-017 phase F3,
+     * issue #480): the client always uses DPoP at the token endpoint. While
+     * `DPOP_ENABLED` is on, a token request from such a client without a
+     * `DPoP` proof is refused with `invalid_dpop_proof`, whatever the grant.
+     * While it is off, no client is DPoP-bound and the column is not read.
+     *
+     * OPERATOR-SET, NOT SELF-ASSERTED, like `max_agent_mode`: only the
+     * `db:seed-oauth-clients` manifest writes it. Dynamic registration, CIMD
+     * materialisation and `/api/clients` never name it, so their clients keep
+     * the `false` default, and `UpdateOAuthClient` excludes it. A client that
+     * could clear it could ask for bearer tokens its operator meant to refuse.
+     */
+    dpopBoundAccessTokens: boolean('dpop_bound_access_tokens').notNull().default(false),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

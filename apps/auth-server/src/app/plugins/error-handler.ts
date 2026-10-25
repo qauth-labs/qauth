@@ -5,6 +5,7 @@ import {
   ForbiddenError,
   InvalidClientError,
   InvalidCredentialsError,
+  InvalidDpopProofError,
   InvalidGrantError,
   InvalidRequestError,
   InvalidScopeError,
@@ -205,15 +206,25 @@ function isOAuthTokenError(
   | InvalidRequestError
   | InvalidTargetError
   | InvalidClientError
-  | UnauthorizedClientError {
+  | UnauthorizedClientError
+  | InvalidDpopProofError {
   return (
     error instanceof InvalidScopeError ||
     error instanceof InvalidGrantError ||
     error instanceof InvalidRequestError ||
     error instanceof InvalidTargetError ||
     error instanceof InvalidClientError ||
-    error instanceof UnauthorizedClientError
+    error instanceof UnauthorizedClientError ||
+    error instanceof InvalidDpopProofError
   );
+}
+
+/**
+ * Whether the request presented its access token under the `DPoP` scheme
+ * (RFC 9449 §7.1), matched exactly as `requireJwt` reads it.
+ */
+function usedDpopScheme(request: FastifyRequest): boolean {
+  return (request.headers.authorization ?? '').startsWith('DPoP ');
 }
 
 /**
@@ -356,12 +367,26 @@ export default fp(async function (fastify: FastifyInstance) {
       // NOT included: it is not a bearer resource failure. We only set the
       // header here and fall through so the normal body/status handling runs,
       // in either error format: an API family route is bearer-protected too.
+      //
+      // RFC 9449 §7.1 (#480): with DPoP on, a token refused under the `DPoP`
+      // scheme gets a `DPoP` challenge instead, with the proof algorithms in
+      // `algs`, and a refused proof gets `error="invalid_dpop_proof"`. While
+      // DPoP is off (`fastify.dpop` null) the `DPoP` scheme is no credential and
+      // every challenge stays the Bearer one above.
+      const dpopAlgs = fastify.dpop ? fastify.dpop.algorithms.join(' ') : undefined;
       if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) {
+        const description = sanitizeChallengeDescription(error.message);
         reply.header(
           'WWW-Authenticate',
-          `Bearer realm="OAuth", error="invalid_token", error_description="${sanitizeChallengeDescription(
-            error.message
-          )}"`
+          dpopAlgs !== undefined && usedDpopScheme(request)
+            ? `DPoP error="invalid_token", error_description="${description}", algs="${dpopAlgs}"`
+            : `Bearer realm="OAuth", error="invalid_token", error_description="${description}"`
+        );
+      }
+      if (error instanceof InvalidDpopProofError && error.statusCode === 401) {
+        reply.header(
+          'WWW-Authenticate',
+          `DPoP error="invalid_dpop_proof"${dpopAlgs === undefined ? '' : `, algs="${dpopAlgs}"`}`
         );
       }
 

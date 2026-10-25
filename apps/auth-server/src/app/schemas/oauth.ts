@@ -213,6 +213,24 @@ const clientAuthenticationFields = {
 } as const;
 
 /**
+ * RFC 9449 §10 `dpop_jkt` (#480): the base64url SHA-256 thumbprint of the DPoP
+ * key the authorization request binds its code to.
+ *
+ * Accepted in ANY shape here and read only while `DPOP_ENABLED` is on, where
+ * `readAuthorizationDpopJkt` refuses anything but a thumbprint. Before DPoP the
+ * schema stripped the unknown parameter, so a request carrying it, repeated or
+ * of any length, went on; with DPoP off it still does, and the response is the
+ * one it was. The published schema says what a valid value is.
+ *
+ * Shared by `authorizeQuerySchema` and the `/ui/consent` form mirror.
+ */
+export const dpopJktParamSchema = z.unknown().optional().meta({
+  type: 'string',
+  description:
+    'RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on.',
+});
+
+/**
  * OAuth 2.1 authorize query parameters (GET /oauth/authorize).
  * RFC 6749 4.1.1, RFC 7636 PKCE, RFC 8707 Resource Indicators.
  */
@@ -248,6 +266,8 @@ export const authorizeQuerySchema = z.object({
   prompt: z.enum(['none', 'login', 'consent']).optional(),
   max_age: maxAgeParamSchema,
   resource: resourceParamSchema,
+  // RFC 9449 §10 (#480): the thumbprint of the DPoP key to bind the code to.
+  dpop_jkt: dpopJktParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;
@@ -436,12 +456,16 @@ export type TokenExchangeBody = z.infer<typeof tokenExchangeBodySchema>;
  * `id_token` (OIDC Core §3.1.3.3) is present only on an authorization_code
  * exchange whose granted scope includes `openid`. It is a signed JWT (EdDSA)
  * asserting the end-user's authentication to the client; absent otherwise.
+ *
+ * `token_type` is `DPoP` when the access token is bound to the key of the
+ * request's DPoP proof (RFC 9449 §5, #480), which only happens while
+ * `DPOP_ENABLED` is on; `Bearer` otherwise.
  */
 export const tokenExchangeResponseSchema = z.object({
   access_token: z.string(),
   refresh_token: z.string().optional(),
   expires_in: z.number(),
-  token_type: z.literal('Bearer'),
+  token_type: z.enum(['Bearer', 'DPoP']),
   scope: z.string().optional(),
   issued_token_type: z.string().optional(),
   id_token: z.string().optional(),
@@ -543,7 +567,15 @@ export const introspectResponseSchema = z.object({
   iss: z.string().optional(),
   aud: z.union([z.string(), z.array(z.string())]).optional(),
   scope: z.string().optional(),
-  token_type: z.literal('Bearer').optional(),
+  /** `DPoP` for a DPoP-bound token (RFC 9449 §6.2), `Bearer` otherwise. */
+  token_type: z.enum(['Bearer', 'DPoP']).optional(),
+  /**
+   * RFC 9449 §6.2: the key a DPoP-bound token is confirmed by, as a top-level
+   * `cnf` with the `jkt` thumbprint. The resource server checks the request's
+   * DPoP proof against it; introspection itself checks no proof. Absent for a
+   * Bearer token.
+   */
+  cnf: z.object({ jkt: z.string() }).optional(),
   /**
    * ADR-005 / #275 — reference delivery of the post-quantum component.
    *

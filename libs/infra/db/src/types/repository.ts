@@ -48,7 +48,8 @@ export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
  * left out for the same reason (#434): only the `db:seed-oauth-clients`
  * manifest writes a client's ID-JAG targets. `webauthnAllowedOrigins` is left
  * out too (#467): the operator sets a client's passkey origins through the
- * same manifest.
+ * same manifest. So is `dpopBoundAccessTokens` (#480): a client that could
+ * clear it could obtain the bearer tokens its operator meant to refuse.
  */
 export type UpdateOAuthClient = Partial<
   Omit<
@@ -60,6 +61,7 @@ export type UpdateOAuthClient = Partial<
     | 'suspendedAt'
     | 'idJagTargets'
     | 'webauthnAllowedOrigins'
+    | 'dpopBoundAccessTokens'
   >
 > & {
   updatedAt?: number;

@@ -217,6 +217,7 @@ Table "oauth_clients" {
   "response_types" jsonb [not null, default: `'["code"]'::jsonb`, note: "Array of response_type enum values"]
   "developer_id" uuid [ref: > users.id, note: "Nullable for system clients"]
   "webauthn_allowed_origins" jsonb [not null, default: `'[]'::jsonb`, note: "Operator-set passkey origins of a native app, such as android:apk-key-hash:...; set only through the seed manifest"]
+  "dpop_bound_access_tokens" boolean [not null, default: false, note: "RFC 9449 §5.2: refuse token requests without a DPoP proof while DPOP_ENABLED is on; set only through the seed manifest (#480)"]
   "metadata" jsonb [note: "Additional client configuration"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
@@ -245,6 +246,7 @@ Table "authorization_codes" {
   "assurance_level" text [note: "eIDAS LoA of that authentication: 'substantial' | 'high' | NULL (no acr claim) — #237"]
   "scopes" jsonb [not null, default: `'[]'::jsonb`]
   "state" text [note: "CSRF protection state parameter — opaque, client-owned, no spec length limit (#316)"]
+  "dpop_jkt" varchar(43) [note: "RFC 9449 §10: thumbprint of the DPoP key the code is bound to; redeemed only with a proof under it (#480)"]
   "expires_at" bigint [not null, note: "TTL: 5 minutes"]
   "used" boolean [not null, default: false, note: "Single-use codes"]
   "used_at" bigint
@@ -269,6 +271,7 @@ Table "refresh_tokens" {
   "revoked_at" bigint
   "revoked_reason" varchar(255) [note: "e.g., 'user_logout', 'security_breach'"]
   "previous_token_hash" text [note: "Hash of previous token if rotated"]
+  "cnf_jkt" varchar(43) [note: "RFC 9449 §5: thumbprint of the DPoP key a public client's refresh token is bound to; kept across rotations (#480)"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "last_used_at" bigint
 

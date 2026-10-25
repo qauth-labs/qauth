@@ -21,6 +21,7 @@
     "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/fastify-plugin-cache": "workspace:*",
     "@qauth-labs/fastify-plugin-db": "workspace:*",
+    "@qauth-labs/fastify-plugin-dpop": "workspace:*",
     "@qauth-labs/fastify-plugin-email": "workspace:*",
     "@qauth-labs/fastify-plugin-event-delivery": "workspace:*",
     "@qauth-labs/fastify-plugin-federation": "workspace:*",

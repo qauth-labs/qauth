@@ -1,4 +1,4 @@
-import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
+import { type JWTPayload, refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -106,6 +106,9 @@ export default async function (fastify: FastifyInstance) {
         await assertManagementToken(fastify, requestRealm(request), claims, {
           requireActiveUser: false,
         });
+        // RFC 9449 §7.2 (#480): this route reads a Bearer token, and a
+        // DPoP-bound token is never one.
+        refuseBoundTokenAsBearer(claims);
         const tokenSub = claims.sub;
 
         if (!tokenSub) {

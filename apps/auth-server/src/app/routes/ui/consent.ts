@@ -27,6 +27,7 @@ import {
   redirectHost,
 } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
+import { readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
 import {
@@ -43,7 +44,12 @@ import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers
 import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
 import { clientIdParamSchema, exactUrl } from '../../schemas/common';
-import { authorizeQuerySchema, maxAgeParamSchema, resourceParamSchema } from '../../schemas/oauth';
+import {
+  authorizeQuerySchema,
+  dpopJktParamSchema,
+  maxAgeParamSchema,
+  resourceParamSchema,
+} from '../../schemas/oauth';
 
 /**
  * Order-independent equality of two scope sets. Used by the consent POST to
@@ -109,6 +115,10 @@ const consentFormSchema = z.object({
   // RFC 8707: carried through as hidden form field(s). `resourceParamSchema`
   // populates an array on `body.resource`.
   resource: resourceParamSchema,
+  // RFC 9449 §10 (#480): the DPoP key the code is bound to, as
+  // `authorizeQuerySchema` takes it. Rendered, and read, only while DPoP is
+  // on.
+  dpop_jkt: dpopJktParamSchema,
 });
 
 type ConsentForm = z.infer<typeof consentFormSchema>;
@@ -372,7 +382,16 @@ export default async function (fastify: FastifyInstance) {
         // #316 follow-up: the rebuilt authorize URL is parked server-side and
         // the browser only carries a short handle, so a 2048-char `state` can
         // no longer inflate this Location header past a proxy's header buffer.
-        return redirectToLoginWithPendingAuthorization(fastify, reply, buildAuthorizeUrl(query));
+        return redirectToLoginWithPendingAuthorization(
+          fastify,
+          reply,
+          // `dpop_jkt` is taken in any shape (`dpopJktParamSchema`); only a
+          // single value goes back to /oauth/authorize, which checks it again.
+          buildAuthorizeUrl({
+            ...query,
+            dpop_jkt: typeof query.dpop_jkt === 'string' ? query.dpop_jkt : undefined,
+          })
+        );
       }
 
       const realm = requestRealm(request);
@@ -400,6 +419,14 @@ export default async function (fastify: FastifyInstance) {
         !isRedirectUriAllowedForPolicy(query.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
       ) {
         throw new BadRequestError('redirect_uri not permitted for this environment');
+      }
+
+      // RFC 9449 §10 (#480): the DPoP key the code will be bound to, carried
+      // to the POST as a hidden field while DPoP is on. /oauth/authorize
+      // refused a malformed value before redirecting here.
+      const dpopJkt = readAuthorizationDpopJkt(fastify, query.dpop_jkt);
+      if (dpopJkt.kind === 'malformed') {
+        throw new BadRequestError('dpop_jkt is not a DPoP key thumbprint');
       }
 
       // ADR-007 §2 (#184): fail fast on the render path too — don't show a
@@ -514,6 +541,9 @@ export default async function (fastify: FastifyInstance) {
             // path re-evaluates them server-side.
             prompt: query.prompt,
             max_age: query.max_age !== undefined ? String(query.max_age) : undefined,
+            // RFC 9449 §10 (#480): absent, so no hidden field, while DPoP is
+            // off or the request bound no key.
+            dpop_jkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : undefined,
           },
           // Rendered as one hidden <input name="resource" value="<uri>" />
           // per entry so the POST body carries every requested resource URI
@@ -582,6 +612,8 @@ export default async function (fastify: FastifyInstance) {
           // re-applies them after the login round-trip.
           prompt: body.prompt,
           max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
+          // RFC 9449 §10 (#480): /oauth/authorize reads and checks it again.
+          dpop_jkt: typeof body.dpop_jkt === 'string' ? body.dpop_jkt : undefined,
         });
         // #316 follow-up: short handle in the URL, full authorize URL in Redis.
         return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
@@ -619,6 +651,13 @@ export default async function (fastify: FastifyInstance) {
         !isRedirectUriAllowedForPolicy(body.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
       ) {
         throw new BadRequestError('redirect_uri not permitted for this environment');
+      }
+
+      // RFC 9449 §10 (#480): the DPoP key the code is bound to, from the
+      // rendered form. A malformed value was never rendered, so it is refused.
+      const dpopJkt = readAuthorizationDpopJkt(fastify, body.dpop_jkt);
+      if (dpopJkt.kind === 'malformed') {
+        throw new BadRequestError('dpop_jkt is not a DPoP key thumbprint');
       }
 
       // Deny path: redirect with error=access_denied, state preserved
@@ -782,6 +821,7 @@ export default async function (fastify: FastifyInstance) {
           prompt: body.prompt,
           max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
           resource: resources,
+          dpop_jkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : undefined,
         });
         // #316 follow-up: short handle in the URL, full authorize URL in Redis.
         return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
@@ -831,6 +871,8 @@ export default async function (fastify: FastifyInstance) {
             // /oauth/token can set the issued access token's `aud` claim.
             resource: resources,
             state: body.state ?? null,
+            // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+            dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
             expiresAt,
           });
           code = candidate;

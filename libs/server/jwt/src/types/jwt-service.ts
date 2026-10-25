@@ -20,6 +20,19 @@ export interface ActClaim {
 }
 
 /**
+ * RFC 7800 `cnf` (confirmation) claim of a sender-constrained access token.
+ *
+ * QAuth sets only the RFC 9449 §6.1 `jkt` member: the base64url RFC 7638
+ * SHA-256 thumbprint of the DPoP key the token is bound to. A resource server
+ * accepts such a token only with a DPoP proof signed by that key, and never
+ * as a Bearer token (RFC 9449 §7.2).
+ */
+export interface ConfirmationClaim {
+  /** RFC 9449 §6.1 JWK SHA-256 thumbprint of the DPoP key. */
+  jkt: string;
+}
+
+/**
  * Payload for signing access tokens
  *
  * `email` / `email_verified` are optional. QAuth's auth-server passes them
@@ -53,6 +66,11 @@ export interface SignAccessTokenPayload {
    * all non-delegated tokens.
    */
   act?: ActClaim;
+  /**
+   * RFC 9449 §6.1 `cnf` claim — present only on a DPoP-bound token, which the
+   * token endpoint issues with `token_type: DPoP`. Omitted for a Bearer token.
+   */
+  cnf?: ConfirmationClaim;
 }
 
 /**

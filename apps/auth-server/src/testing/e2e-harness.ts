@@ -239,6 +239,7 @@ export async function bootAuthServer(
       key.startsWith('DEFAULT_REALM_') ||
       key.startsWith('OTEL_') ||
       key.startsWith('EVENT_RETENTION_') ||
+      key.startsWith('DPOP_') ||
       key === 'TRUST_PROXY'
     ) {
       delete process.env[key];

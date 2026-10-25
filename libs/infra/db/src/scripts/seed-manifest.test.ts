@@ -178,4 +178,38 @@ describe('isCimdClientIdShape', () => {
       ).toBe(false);
     });
   });
+
+  describe('dpop_bound_access_tokens (#480)', () => {
+    const dpopClient = (value: unknown) => ({
+      realm: 'master',
+      clients: [
+        {
+          client_id: 'agent-root',
+          name: 'Agent root',
+          grant_types: ['authorization_code', 'refresh_token'],
+          ...(value === undefined ? {} : { dpop_bound_access_tokens: value }),
+        },
+      ],
+    });
+
+    it('accepts true and false, and leaves it out when omitted', () => {
+      expect(manifestSchema.parse(dpopClient(true)).clients?.[0].dpop_bound_access_tokens).toBe(
+        true
+      );
+      expect(manifestSchema.parse(dpopClient(false)).clients?.[0].dpop_bound_access_tokens).toBe(
+        false
+      );
+      expect(
+        manifestSchema.parse(dpopClient(undefined)).clients?.[0].dpop_bound_access_tokens
+      ).toBeUndefined();
+    });
+
+    it.each([
+      ['the string "true"', 'true'],
+      ['a number', 1],
+      ['null', null],
+    ])('refuses %s', (_name, value) => {
+      expect(manifestSchema.safeParse(dpopClient(value)).success).toBe(false);
+    });
+  });
 });
