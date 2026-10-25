@@ -11,6 +11,7 @@ import {
   type BootedAuthServer,
   type CookieJar,
   decodeJwtClaims,
+  E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
@@ -46,7 +47,7 @@ import {
  */
 
 const ISSUER = REQUIRED_TEST_ENVIRONMENT['JWT_ISSUER'] as string;
-const REALM = REQUIRED_TEST_ENVIRONMENT['DEFAULT_REALM_NAME'] as string;
+const REALM = E2E_REALM_NAME;
 const PUBLIC_CLIENT_ID = 'dpop-native-app';
 const AGENT_CLIENT_ID = 'dpop-agent';
 const AGENT_SECRET = 'agent-client-secret-of-sufficient-length-42';
