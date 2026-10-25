@@ -754,6 +754,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   more after the upgrade; tokens and consents are unaffected (see the upgrade
   guide).
 
+- **BREAKING (realms that set `sso_max_lifespan`)**: the realm's
+  `sso_max_lifespan` now caps its refresh-token families too ([#552], ADR-019
+  Decision 3). A family is every refresh token descended from one code
+  exchange or `POST /auth/login`; the new `refresh_tokens.family_created_at`
+  (migration 0038) records when it started, and every rotation keeps it. A
+  token issued in the family expires no later than that start plus the limit,
+  and a refresh at or past that end revokes the whole family and answers
+  `invalid_grant` (the `token.request_failed` event's reason is
+  `refresh_family_expired`). Replay detection runs first, as before. The limit
+  is read from the realm at each refresh, within the host cache time, so
+  lowering it ends older families at their next refresh. A realm with no
+  `sso_max_lifespan` keeps the sliding `REFRESH_TOKEN_LIFESPAN`. The migration
+  gives each existing token the creation time of the earliest token of its
+  family.
+
+  **Action for operators**: none for a realm without `sso_max_lifespan`. In a
+  realm that sets it, a family already older than the limit ends at its next
+  refresh after the upgrade, and its client sends the user through
+  `/oauth/authorize` again.
+
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
   so a pool of one would leave requests waiting until the job ends. The error
@@ -887,6 +907,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#488]: https://github.com/qauth-labs/qauth/issues/488
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#595]: https://github.com/qauth-labs/qauth/issues/595
