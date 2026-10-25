@@ -6,15 +6,17 @@ import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
+  E2E_PASSWORD,
   type E2eInfrastructure,
   generateJwtPem,
+  registerPasswordAccount,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
 
 /**
- * THE OAUTH PROTOCOL ENDPOINTS KEEP THE ERROR SHAPE THEIR RFC DEFINES
- * (ADR-019 Decision 7, #506).
+ * THE OAUTH PROTOCOL ENDPOINTS KEEP THE ERROR SHAPE THEIR RFC DEFINES, AND
+ * EVERY OTHER ROUTE ANSWERS A PROBLEM DOCUMENT (ADR-019 Decision 7, #506, #513).
  *
  * The admin, account and developer APIs answer an error with an RFC 9457
  * problem document. An OAuth protocol endpoint does not: the clients and
@@ -35,6 +37,19 @@ const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 
 /** Problem-document members that must never appear in an RFC 6749 §5.2 body. */
 const PROBLEM_MEMBERS = ['type', 'title', 'status', 'trace_id'];
+
+/** The members of the body every route answered before #513. */
+const LEGACY_MEMBERS = ['error', 'statusCode', 'message', 'details', 'feedback'];
+
+type InjectResponse = Awaited<ReturnType<FastifyInstance['inject']>>;
+
+/** Headers that differ between any two requests: the id, the date, the rate-limit counters. */
+const PER_REQUEST_HEADERS = new Set([
+  'date',
+  'x-request-id',
+  'x-ratelimit-remaining',
+  'x-ratelimit-reset',
+]);
 
 describe('OAuth protocol endpoints keep their RFC error shape (real containers, #506)', () => {
   let infra: E2eInfrastructure | undefined;
@@ -63,17 +78,66 @@ describe('OAuth protocol endpoints keep their RFC error shape (real containers, 
     return booted.app;
   }
 
-  /** RFC 6749 §5.2: a JSON object whose `error` is the registered token. */
-  function expectOAuthError(
-    response: Awaited<ReturnType<FastifyInstance['inject']>>,
-    status: number,
-    error: string
-  ): void {
+  /**
+   * RFC 6749 §5.2: a JSON object whose `error` is the registered token, and no
+   * member QAuth used to add (#513).
+   */
+  function expectOAuthError(response: InjectResponse, status: number, error: string): void {
     expect(response.statusCode).toBe(status);
     expect(response.headers['content-type']).toMatch(/^application\/json(?:;|$)/);
     const body = response.json() as Record<string, unknown>;
     expect(body['error']).toBe(error);
     for (const member of PROBLEM_MEMBERS) expect(body).not.toHaveProperty(member);
+    for (const member of ['code', 'statusCode', 'feedback', 'retryAfter']) {
+      expect(body).not.toHaveProperty(member);
+    }
+  }
+
+  /** RFC 9457: a problem document with its `code`, and none of the old members (#513). */
+  function expectProblem(response: InjectResponse, status: number, code: string) {
+    expect(response.statusCode).toBe(status);
+    expect(response.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+    const body = response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ status, code });
+    expect(String(body['type'])).toMatch(
+      /^https:\/\/docs\.qauth\.dev\/reference\/problem-types\/#/
+    );
+    expect(typeof body['title']).toBe('string');
+    // The request id the response header carries, where the app's request-id
+    // plugin ran; the root's answer for a path no route serves has no header.
+    expect(typeof body['trace_id']).toBe('string');
+    const echoed = response.headers['x-request-id'];
+    if (echoed !== undefined) expect(body['trace_id']).toBe(echoed);
+    for (const member of LEGACY_MEMBERS) expect(body).not.toHaveProperty(member);
+    return body;
+  }
+
+  /** A problem document without its `trace_id`, the one member that differs per request. */
+  function withoutTraceId(response: InjectResponse): Record<string, unknown> {
+    const { trace_id: traceId, ...rest } = response.json() as Record<string, unknown>;
+    expect(typeof traceId).toBe('string');
+    return rest;
+  }
+
+  /**
+   * The headers that may not tell two refusals apart: all but the per-request
+   * ones (the rate-limit counters count every request), with the CSP's
+   * per-response nonces masked.
+   */
+  function stableHeaders(response: InjectResponse): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(response.headers)
+        .filter(([name]) => !PER_REQUEST_HEADERS.has(name))
+        .map(([name, value]) =>
+          name === 'content-security-policy' && typeof value === 'string'
+            ? [name, value.replace(/'nonce-[^']+'/g, "'nonce-*'")]
+            : [name, value]
+        )
+    );
+  }
+
+  function login(email: string, password: string): Promise<InjectResponse> {
+    return app().inject({ method: 'POST', url: '/auth/login', payload: { email, password } });
   }
 
   it('POST /oauth/token answers invalid_client for an unknown client (RFC 6749 §5.2)', async () => {
@@ -112,5 +176,99 @@ describe('OAuth protocol endpoints keep their RFC error shape (real containers, 
     });
 
     expectOAuthError(response, 401, 'invalid_client');
+  });
+
+  it('POST /oauth/token answers an unknown grant_type with unsupported_grant_type and no code or statusCode (RFC 6749 §5.2)', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: FORM,
+      payload: 'grant_type=password&username=u&password=p',
+    });
+
+    expectOAuthError(response, 400, 'unsupported_grant_type');
+  });
+
+  it('POST /oauth/register answers invalid client metadata with invalid_client_metadata (RFC 7591 §3.2.2)', async () => {
+    // A value the schema refuses...
+    const refusedBySchema = await app().inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: {
+        redirect_uris: ['https://app.example.com/cb'],
+        token_endpoint_auth_method: 'not-a-method',
+      },
+    });
+    expectOAuthError(refusedBySchema, 400, 'invalid_client_metadata');
+
+    // ...and a redirect URI the registration policy refuses.
+    const refusedByPolicy = await app().inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { redirect_uris: ['http://app.example.com/cb'] },
+    });
+    expectOAuthError(refusedByPolicy, 400, 'invalid_redirect_uri');
+  });
+
+  it('answers a 404 on a route that is not an OAuth endpoint with a problem document (RFC 9457 §3)', async () => {
+    // A path no route serves...
+    const unknown = await app().inject({ method: 'GET', url: '/no-such-route?x=1' });
+    expectProblem(unknown, 404, 'not_found');
+
+    // ...and a resource a route does not find, for the portal's own token.
+    await registerPasswordAccount(app(), 'portal-dev@example.com');
+    const signedIn = await login('portal-dev@example.com', E2E_PASSWORD);
+    expect(signedIn.statusCode).toBe(200);
+    const { access_token: token } = signedIn.json() as { access_token: string };
+    const missing = await app().inject({
+      method: 'GET',
+      url: '/api/clients/7f0d6a4e-2c1b-4e8f-9a3d-5b6c7d8e9f01',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const body = expectProblem(missing, 404, 'not_found');
+    expect(body['instance']).toBe('/api/clients/7f0d6a4e-2c1b-4e8f-9a3d-5b6c7d8e9f01');
+  });
+
+  it('answers a validation failure with errors[] that point at each field and carry no schema internals (RFC 9457 §3)', async () => {
+    const response = await app().inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'not-an-address' },
+    });
+
+    const body = expectProblem(response, 400, 'validation_error');
+    const errors = body['errors'] as { pointer: string; message: string }[];
+    expect(errors.map(({ pointer }) => pointer).sort()).toEqual(['/email', '/password']);
+    for (const entry of errors) {
+      expect(Object.keys(entry).sort()).toEqual(['message', 'pointer']);
+      expect(typeof entry.message).toBe('string');
+    }
+    for (const internal of ['schemaPath', 'keyword', 'params', 'instancePath', 'FST_ERR']) {
+      expect(response.body).not.toContain(internal);
+    }
+  });
+
+  it('answers an unknown address, a wrong password and an unverified account alike, apart from trace_id', async () => {
+    // A verified account, signed in with the wrong password.
+    await registerPasswordAccount(app(), 'known@example.com');
+    // An account that never verified its address, signed in with its own
+    // password: REQUIRE_VERIFIED_ACCOUNT is on by default.
+    const registered = await app().inject({
+      method: 'POST',
+      url: '/auth/register',
+      payload: { email: 'unverified@example.com', password: E2E_PASSWORD },
+    });
+    expect(registered.statusCode).toBe(202);
+
+    const unknown = await login('nobody@example.com', E2E_PASSWORD);
+    const wrongPassword = await login('known@example.com', `${E2E_PASSWORD}-wrong`);
+    const unverified = await login('unverified@example.com', E2E_PASSWORD);
+
+    expectProblem(unknown, 401, 'invalid_credentials');
+    for (const response of [wrongPassword, unverified]) {
+      expect(response.statusCode).toBe(unknown.statusCode);
+      expect(withoutTraceId(response)).toEqual(withoutTraceId(unknown));
+      expect(stableHeaders(response)).toEqual(stableHeaders(unknown));
+    }
   });
 });
