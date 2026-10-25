@@ -162,7 +162,6 @@ function makeAuthCodeStub(opts: {
     pkceUtils: {
       verifyCodeChallenge: vi.fn().mockReturnValue(true),
     },
-    sessionUtils: { setSession: vi.fn().mockResolvedValue(undefined) },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     metrics: { tokensIssued: { inc: vi.fn() } },

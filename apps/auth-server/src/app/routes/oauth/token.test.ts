@@ -95,6 +95,7 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+import { createFakeSessionService } from '../../../testing/browser-sessions';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
 import { emitUserEvent, userEventFor } from '../../helpers/user-events';
@@ -146,6 +147,8 @@ function createReply(onSend?: (body: unknown) => void): {
 function createFastifyStub() {
   const ctx: TestContext = {};
   const redisStore = new Map<string, string>();
+  // The browser-session service (#488): no grant may reach it.
+  const sessionService = createFakeSessionService();
 
   const fastify: any = {
     withTypeProvider: () => ({
@@ -175,16 +178,6 @@ function createFastifyStub() {
         findById: vi.fn(),
       },
       userCredentials: {
-        // #230: the authorization_code session block fetches the password
-        // credential for the session display address.
-        findByUserIdAndType: vi.fn().mockResolvedValue({
-          id: 'cred-1',
-          userId: 'user-1',
-          realmId: 'realm-1',
-          providerType: 'password',
-          externalSub: 'user@example.com',
-          credentialData: { password_hash: 'hash', email_verified: true },
-        }),
         // ADR-011 subject resolution: an ID-JAG `sub` is linked to a QAuth user
         // through `(realm, oidc_<issuer>, external_sub)`. Deny-by-default here —
         // an unlinked subject is rejected, never provisioned — so the ID-JAG
@@ -243,9 +236,7 @@ function createFastifyStub() {
     pkceUtils: {
       verifyCodeChallenge: vi.fn(),
     },
-    sessionUtils: {
-      setSession: vi.fn().mockResolvedValue(undefined),
-    },
+    sessionService,
     // In-memory `fastify.redis` with real SET NX semantics — the ID-JAG replay
     // store depends on NX returning null for an already-present key, so a stub
     // that always says 'OK' would make every replay test pass vacuously.
@@ -274,7 +265,7 @@ function createFastifyStub() {
     },
   };
 
-  return { fastify: fastify as FastifyInstance, ctx, redisStore };
+  return { fastify: fastify as FastifyInstance, ctx, redisStore, sessionService };
 }
 
 describe('POST /oauth/token route — client_credentials grant', () => {
@@ -1240,7 +1231,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
 describe('POST /oauth/token route — authorization_code grant', () => {
   function setupAuthCodeStub() {
-    const { fastify, ctx } = createFastifyStub();
+    const { fastify, ctx, sessionService } = createFastifyStub();
 
     const client = {
       id: 'client-uuid-ac-1',
@@ -1296,7 +1287,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       tokenHash: 'refresh-token-hash',
     });
 
-    return { fastify, ctx, client, user, authCode };
+    return { fastify, ctx, client, user, authCode, sessionService };
   }
 
   function baseRequest(overrides: Partial<Record<string, unknown>> = {}) {
@@ -1365,6 +1356,29 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // No `openid` scope was granted → no ID token issued (OIDC Core §3.1.3.3).
     expect(fastify.jwtUtils.signIdToken).not.toHaveBeenCalled();
     expect(result).not.toHaveProperty('id_token');
+  });
+
+  it('creates no browser session on a successful exchange (#488)', async () => {
+    // The session this grant once wrote was never returned or read: the
+    // browser's session is the one its sign-in created before /oauth/authorize.
+    const { fastify, ctx, sessionService } = setupAuthCodeStub();
+    // The Redis store a session was once written to, to show none is now.
+    const sessionUtils = { setSession: vi.fn() };
+    Object.assign(fastify, { sessionUtils });
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const result = await ctx.handler(baseRequest(), createReply());
+
+    expect(result).toMatchObject({
+      access_token: 'signed.jwt.token',
+      refresh_token: 'refresh-token-plain',
+    });
+    expect(sessionService.create).not.toHaveBeenCalled();
+    expect(sessionUtils.setSession).not.toHaveBeenCalled();
+    // Nothing failed quietly on the way either: the removed write logged its
+    // failures as a warning and answered anyway.
+    expect(fastify.log.warn).not.toHaveBeenCalled();
   });
 
   // The consent row is what `/consents` lists and what revocation reaches the

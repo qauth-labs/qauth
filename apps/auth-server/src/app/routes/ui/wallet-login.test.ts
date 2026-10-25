@@ -62,6 +62,11 @@ import {
   hashOid4vpResponseCode,
 } from '@qauth-labs/fastify-plugin-federation';
 
+import {
+  createBrowserSessionFixture,
+  type FakeSessionService,
+  sessionCookie,
+} from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
 import type { RealmRow } from '../../helpers/request-realm';
@@ -137,7 +142,11 @@ function createReply() {
   return { reply, state };
 }
 
-/** In-memory stand-in for the Redis-backed session store. */
+/**
+ * In-memory stand-in for `fastify.sessionUtils`, the Redis store of the wallet
+ * flow records: the flow, its signal, its done-marker, the parked
+ * presentation. Browser sessions are the session service's (#488).
+ */
 function createSessionUtils() {
   const store = new Map<string, unknown>();
   return {
@@ -194,6 +203,9 @@ function makeFastify(realm: RealmRow = REALM) {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
   const responseCodes = createResponseCodes();
+  // The session service (#488) and the Redis of the per-user index of browser
+  // sessions that `/auth/logout` ends and of the session's side record.
+  const sessions = createBrowserSessionFixture();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
     routes.set(`${method} ${url}`, (request, reply) => {
       // The realm resolver's decoration (#486): a request reaches its handler
@@ -222,25 +234,23 @@ function makeFastify(realm: RealmRow = REALM) {
     passwordHasher: { verifyPassword: vi.fn() },
     providerRegistry: { resolve: vi.fn(), has: vi.fn().mockReturnValue(true), register: vi.fn() },
     sessionUtils,
-    // `set` (with NX) claims a parked presentation; the multi chain is the
-    // per-user index of browser sessions that `/auth/logout` ends.
-    redis: (() => {
-      const chain = {
-        sadd: vi.fn(() => chain),
-        expire: vi.fn(() => chain),
-        exec: vi.fn().mockResolvedValue([]),
-      };
-      return { ...createRedis(), chain, multi: vi.fn(() => chain) };
-    })(),
+    sessionService: sessions.service,
+    // `set` (with NX) claims a parked presentation.
+    redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, routes, sessionUtils, responseCodes };
+  return { fastify: fastify as FastifyInstance, routes, sessionUtils, responseCodes, sessions };
 }
 
 function cookieValue(setCookies: string[], name: string): string {
   const cookie = setCookies.find((c) => c.startsWith(`${name}=`));
   if (!cookie) throw new Error(`${name} was not set`);
   return cookie.split('=').slice(1).join('=').split(';')[0];
+}
+
+/** The `name=value` pair of the session cookie a reply set. */
+function sessionCookieSet(setCookies: string[]): string {
+  return `__Host-qauth_session=${cookieValue(setCookies, '__Host-qauth_session')}`;
 }
 
 /** Drive GET then POST to obtain a started flow, and return everything about it. */
@@ -257,7 +267,7 @@ async function startFlow(
   } = {}
 ) {
   const context = overrides.context ?? makeFastify();
-  const { fastify, routes, sessionUtils, responseCodes } = context;
+  const { fastify, routes, sessionUtils, responseCodes, sessions } = context;
   if (overrides.context === undefined) await walletLoginRoute(fastify);
 
   const getReply = createReply();
@@ -303,6 +313,7 @@ async function startFlow(
     routes,
     sessionUtils,
     responseCodes,
+    sessions,
     postReply,
     handle,
     flow,
@@ -376,11 +387,11 @@ const AUTHENTICATED = {
   externalSub: 'user@example.com',
 };
 
-/** Session-store writes that are browser SESSIONS, not flow/marker records. */
+/** The `sid`s of the browser sessions the session service created (#488), in order. */
 function sessionMints(fastify: FastifyInstance): string[] {
-  return (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
-    .map((c) => c[0] as string)
-    .filter((key) => !key.startsWith('wallet-'));
+  return (fastify.sessionService as FakeSessionService).create.mock.settledResults.flatMap(
+    (result) => (result.type === 'fulfilled' ? [result.value.sid] : [])
+  );
 }
 
 beforeEach(() => {
@@ -690,9 +701,9 @@ describe('wallet login — concurrent polls validate a presentation once (ANT-20
 
 describe('wallet login — completion', () => {
   it('completes the sign-in when the presentation resolves to an enabled user', async () => {
-    const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
-      returnTo: '/ui/consent?client_id=abc',
-    });
+    const { fastify, routes, sessionUtils, sessions, handle, flow, binderCookie } = await startFlow(
+      { returnTo: '/ui/consent?client_id=abc' }
+    );
     publishSignal(sessionUtils, flow.stateHash, 'received');
     (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
       status: 'authenticated',
@@ -700,11 +711,15 @@ describe('wallet login — completion', () => {
       externalSub: 'user@example.com',
     });
 
+    const before = Date.now();
     const { reply, state } = createReply();
     await routes.get('GET /wallet-login/:handle/status')!(
       {
         params: { handle },
-        headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+        headers: {
+          cookie: `__Host-qauth_wallet_flow=${binderCookie}`,
+          'user-agent': 'TestWallet/1.0',
+        },
         ip: '127.0.0.1',
       },
       reply
@@ -712,7 +727,21 @@ describe('wallet login — completion', () => {
 
     expect(state.body.status).toBe('complete');
     expect(state.body.redirect_to).toBe('/ui/consent?client_id=abc');
-    expect(state.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
+    // One new session through the session service (#488), in the flow's
+    // realm, with the request's address and User-Agent; the cookie names it.
+    expect(sessions.service.create).toHaveBeenCalledOnce();
+    const input = sessions.service.create.mock.calls[0][0];
+    expect(input).toEqual({
+      realmId: 'realm-1',
+      userId: 'user-1',
+      authTime: expect.any(Number),
+      assuranceLevel: null,
+      ipAddress: '127.0.0.1',
+      userAgent: 'TestWallet/1.0',
+    });
+    expect(input.authTime).toBeGreaterThanOrEqual(before);
+    expect(input.authTime).toBeLessThanOrEqual(Date.now());
+    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
     expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
 
     // Without the session id or the return path.
@@ -726,49 +755,60 @@ describe('wallet login — completion', () => {
   });
 
   it('mints a FRESH session id rather than reusing anything the browser had', async () => {
-    const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+    const { fastify, routes, sessionUtils, sessions, handle, flow, binderCookie } =
+      await startFlow();
     publishSignal(sessionUtils, flow.stateHash, 'received');
     (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
       status: 'authenticated',
       userId: 'user-1',
       externalSub: 'user@example.com',
     });
+    // A live session cookie fixed in the browser beforehand.
+    const fixed = await sessions.signIn({
+      sid: 'attacker-fixed',
+      realmId: REALM.id,
+      userId: 'user-1',
+    });
 
-    const { reply } = createReply();
+    const { reply, state } = createReply();
     await routes.get('GET /wallet-login/:handle/status')!(
       {
         params: { handle },
-        headers: {
-          cookie: `__Host-qauth_wallet_flow=${binderCookie}; __Host-qauth_session=attacker-fixed.sig`,
-        },
+        headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}; ${fixed.cookie}` },
         ip: '127.0.0.1',
       },
       reply
     );
 
-    const [sessionId, payload] = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
-      .map((c) => [c[0], c[1]] as [string, any])
-      .find(([key]) => !key.startsWith('wallet-login'))!;
-    expect(sessionId).not.toBe('attacker-fixed');
-    expect(payload.userId).toBe('user-1');
-    expect(payload.email).toBe('user@example.com');
+    expect(sessions.service.create).toHaveBeenCalledOnce();
+    expect(sessions.service.create.mock.calls[0][0]).toMatchObject({
+      realmId: 'realm-1',
+      userId: 'user-1',
+    });
+    const [sid] = sessionMints(fastify);
+    expect(sid).not.toBe('attacker-fixed');
+    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(sid));
+    // The credential's `external_sub`, shown on the consent screen, is kept in
+    // the side record.
+    await expect(sessions.sideRecord({ realmId: 'realm-1', sid })).resolves.toMatchObject({
+      identifier: 'user@example.com',
+    });
     // Recorded under its user, so `/auth/logout` can end it.
-    const redis = (fastify as unknown as { redis: { chain: { sadd: Mock } } }).redis;
-    expect(redis.chain.sadd).toHaveBeenCalledWith('user-browser-sessions:user-1', sessionId);
+    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([sid]));
   });
 
   it.each([
     ['high', 'high', 'high'],
     ['substantial', 'substantial', 'substantial'],
-    // Nothing established → the field must be ABSENT, so the session is
-    // indistinguishable from a password login and /oauth/authorize records
-    // NULL. Storing `'low'` would give "no assurance" two representations.
-    ['low', 'low', undefined],
-    ['no level at all', undefined, undefined],
+    // Nothing established → NULL, as for a password login, so the session is
+    // indistinguishable from one and /oauth/authorize records NULL. Storing
+    // `'low'` would give "no assurance" two representations.
+    ['low', 'low', null],
+    ['no level at all', undefined, null],
   ])(
     'carries an assurance level of %s from the presentation onto the browser session (#237)',
     async (_label, resolved, expected) => {
-      const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+      const { routes, sessionUtils, sessions, handle, flow, binderCookie } = await startFlow();
       publishSignal(sessionUtils, flow.stateHash, 'received');
       (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
         status: 'authenticated',
@@ -787,10 +827,8 @@ describe('wallet login — completion', () => {
         reply
       );
 
-      const [, payload] = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
-        .map((c) => [c[0], c[1]] as [string, any])
-        .find(([key]) => !key.startsWith('wallet-login'))!;
-      expect(payload.assuranceLevel).toBe(expected);
+      expect(sessions.service.create).toHaveBeenCalledOnce();
+      expect(sessions.service.create.mock.calls[0][0].assuranceLevel).toBe(expected);
     }
   );
 
@@ -1360,8 +1398,8 @@ describe('wallet login — the return leg (#405)', () => {
 
     // The session was minted exactly as by polling.
     expect(landed.statusCode).toBe(200);
-    expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
     expect(sessionMints(fastify)).toHaveLength(1);
+    expect(sessionCookieSet(landed.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
     expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(...WALLET_SIGNED_IN);
 
@@ -1418,9 +1456,8 @@ describe('wallet login — the return leg (#405)', () => {
     const first = await pollStatus(routes, handle, cookie);
     expect(first.body).toEqual({ status: 'complete', redirect_to: '/after' });
     expect(sessionMints(fastify)).toHaveLength(1);
-    expect(cookieValue(first.setCookies, '__Host-qauth_session')).toBe(
-      cookieValue(landed.setCookies, '__Host-qauth_session')
-    );
+    expect(sessionCookieSet(first.setCookies)).toBe(sessionCookieSet(landed.setCookies));
+    expect(sessionCookieSet(first.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
     expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
     expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
 
