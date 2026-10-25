@@ -298,6 +298,8 @@ describe('job runner on a real Postgres', () => {
         await repositories.refreshTokens.create({
           tokenHash,
           familyId,
+          familyCreatedAt: past - 120_000,
+          familySessionExpiresAt: null,
           userId: user.id,
           oauthClientId: client.id,
           expiresAt,

@@ -226,6 +226,20 @@ export const realms = pgTable(
       'realms_admin_event_retention_days_range',
       sql`${t.adminEventRetentionDays} between ${sql.raw(String(ADMIN_EVENT_RETENTION_MIN_DAYS))} and ${sql.raw(String(EVENT_RETENTION_MAX_DAYS))}`
     ),
+    // A maximum session length of zero or less would end every session and
+    // every refresh-token family at its start (#552): none or a positive
+    // number of seconds. The realms repository refuses the same before the
+    // row is written.
+    check(
+      'realms_sso_max_lifespan_positive',
+      sql`${t.ssoMaxLifespan} IS NULL OR ${t.ssoMaxLifespan} > 0`
+    ),
+    // The same for the idle timeout: zero or less would end every session at
+    // its first request after sign-in.
+    check(
+      'realms_sso_idle_timeout_positive',
+      sql`${t.ssoIdleTimeout} IS NULL OR ${t.ssoIdleTimeout} > 0`
+    ),
   ]
 );
 

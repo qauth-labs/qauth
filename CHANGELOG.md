@@ -754,6 +754,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   more after the upgrade; tokens and consents are unaffected (see the upgrade
   guide).
 
+- **BREAKING (realms that set `sso_max_lifespan`)**: the realm's
+  `sso_max_lifespan` now caps its refresh-token families too ([#552], ADR-019
+  Decision 3). A family is every refresh token descended from one code
+  exchange or `POST /auth/login`; the new `refresh_tokens.family_created_at`
+  (migration 0038) records when it started, and every rotation keeps it. A
+  family also ends no later than the browser session that backed its code: the
+  code records the session's absolute end (`authorization_codes.session_expires_at`)
+  and the family keeps it (`refresh_tokens.family_session_expires_at`), so a
+  silent re-authorization just before the session's end starts a family that
+  ends with the session. A family no browser session started (`POST /auth/login`)
+  has only its start plus the limit. A token issued in the family expires no
+  later than that end, and a refresh at or past it revokes the whole family and
+  answers `invalid_grant` (the `token.request_failed` event's reason is
+  `refresh_family_expired`). Replay detection runs first, as before. The limit
+  is read from the realm at each refresh, within the host cache time, so
+  lowering it ends older families at their next refresh. A realm with no
+  `sso_max_lifespan` keeps the sliding `REFRESH_TOKEN_LIFESPAN`, and the
+  session's end does not cap its families either. Families that exist at the
+  upgrade have no recorded session end, so their start plus the limit caps them
+  alone. During a rolling upgrade the previous release does not write the new
+  columns: a trigger gives its insert the start and session end of the family
+  the token joins, or the current time and no session end for a new family.
+- **BREAKING (realms with `sso_max_lifespan` or `sso_idle_timeout` of zero or
+  less)**: a realm's `sso_max_lifespan` and `sso_idle_timeout` must now each be
+  null (no limit) or a positive number of seconds ([#552]). Migration 0038
+  turns a value of zero or less into null, then adds the CHECKs
+  `realms_sso_max_lifespan_positive` and `realms_sso_idle_timeout_positive`;
+  the realms repository refuses such a value with `400` before it reaches the
+  database. Before, a maximum of zero ended every session and every
+  refresh-token family at its start, and an idle timeout of zero ended every
+  session at its first request after sign-in.
+- **Migration 0038 pauses refresh-token traffic** ([#552]). It fills
+  `family_created_at` for every row of `refresh_tokens` in one statement,
+  inside the runner's transaction, with the table locked until it commits.
+  Measured on a 12-vCPU virtual machine against a default `postgres:18-alpine`
+  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. See the upgrade
+  guide (`operate/upgrades`) before upgrading a large deployment.
+
+  **Action for operators**: none for a realm without `sso_max_lifespan`. In a
+  realm that sets it, a family already older than the limit ends at its next
+  refresh after the upgrade, and its client sends the user through
+  `/oauth/authorize` again. Nodes of the previous release do not enforce the
+  limit, so it applies once the last of them is gone.
+
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
   so a pool of one would leave requests waiting until the job ends. The error
@@ -887,6 +931,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#488]: https://github.com/qauth-labs/qauth/issues/488
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#595]: https://github.com/qauth-labs/qauth/issues/595

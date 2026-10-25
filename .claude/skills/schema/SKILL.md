@@ -117,8 +117,8 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `api_keys`                    | `core.ts`        | Static developer API keys (ADR-008 §6, env-gated)                                                              |
 | `oauth_consents`              | `consents.ts`    | User consent grants; unique per `(user_id, client_id) WHERE revoked_at IS NULL`                                |
 | `email_verification_tokens`   | `tokens.ts`      | Token hash + `credential_id` (NOT NULL → `user_credentials.id`; `user_id` dropped in #230)                     |
-| `authorization_codes`         | `tokens.ts`      | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`                                             |
-| `refresh_tokens`              | `tokens.ts`      | Opaque refresh tokens with `family_id` (RFC 9700 rotation family) + `resource`                                 |
+| `authorization_codes`         | `tokens.ts`      | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`, the session end `session_expires_at`       |
+| `refresh_tokens`              | `tokens.ts`      | Refresh tokens: `family_id`, `family_created_at`, `family_session_expires_at` (RFC 9700 family), `resource`    |
 | `audit_logs`                  | `audit.ts`       | Read-only since #458 (rows copied into `events` by 0031); nothing may write it — `emitUserEvent` instead       |
 | `events`                      | `events.ts`      | Event store: outbox + log (ADR-019 D8); write via `emitUserEvent(request, type, data, { tx })` in auth-server  |
 | `admin_audit_log`             | `admin-audit.ts` | Admin operations, append-only (triggers), one hash chain per target realm; write via `appendAdminAudit(tx, …)` |

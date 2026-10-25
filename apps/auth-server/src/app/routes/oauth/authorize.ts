@@ -654,6 +654,10 @@ export default async function (fastify: FastifyInstance) {
             // password path (`'low'`, no claim) and on the legacy Bearer path (no
             // interactive session), which is the same "omit the claim" outcome.
             assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
+            // ADR-019 Decision 3 (#552): the session's absolute end, so the
+            // refresh family this code starts never outlives the session. Null
+            // on the legacy Bearer path (no interactive session).
+            sessionExpiresAt: browserSession?.expiresAt ?? null,
             scopes,
             // RFC 8707: bind the resource indicator(s) to the authorization
             // code so /oauth/token can set the access token's `aud` claim to

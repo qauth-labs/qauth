@@ -8,8 +8,9 @@ import type { RealmRow } from '../app/helpers/request-realm';
  * handler takes its realm from there (#487), so a unit test that calls a
  * handler or injects into a bare Fastify instance supplies one.
  *
- * Only the columns handlers read are filled; `overrides` sets any other, such
- * as a `maxEnvironmentLaxity` ceiling.
+ * Only the columns handlers read are filled, with the defaults a new realm
+ * gets; `overrides` sets any other, such as a `maxEnvironmentLaxity` ceiling
+ * or an `ssoMaxLifespan`.
  */
 export function testRealm(overrides: Partial<RealmRow> & { id: string }): RealmRow {
   return {
@@ -18,6 +19,7 @@ export function testRealm(overrides: Partial<RealmRow> & { id: string }): RealmR
     issuer: 'https://auth.example.com',
     maxEnvironmentLaxity: 'production',
     dynamicRegistrationAllowedScopes: [],
+    ssoMaxLifespan: null,
     ...overrides,
   } as RealmRow;
 }

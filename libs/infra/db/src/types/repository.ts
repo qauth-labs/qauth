@@ -197,7 +197,15 @@ export interface UserAttributesRepository {
  * Refresh token types inferred from schema
  */
 export type RefreshToken = InferSelectModel<typeof refreshTokens>;
-export type NewRefreshToken = InferInsertModel<typeof refreshTokens>;
+/**
+ * A new refresh token. `familySessionExpiresAt` is required (null when no
+ * browser session started the family), so a rotation that forgets to copy the
+ * family's session end fails to compile rather than dropping the session's cap
+ * (#552).
+ */
+export type NewRefreshToken = InferInsertModel<typeof refreshTokens> & {
+  familySessionExpiresAt: number | null;
+};
 
 /**
  * Authorization code types inferred from schema

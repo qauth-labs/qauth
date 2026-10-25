@@ -14,6 +14,7 @@ import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/faile
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { refreshFamilyEnd, refreshTokenExpiresAt } from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
@@ -179,21 +180,29 @@ export default async function (fastify: FastifyInstance) {
         const { token: refreshToken, tokenHash: refreshTokenHash } =
           fastify.jwtUtils.generateRefreshToken();
 
-        // Calculate expiration times
+        // Calculate expiration times. The realm's `sso_max_lifespan` caps
+        // the refresh-token family from its start (ADR-019 Decision 3, #552).
+        // No browser session backs this sign-in, so no session end caps it.
         const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
-        const refreshTokenExpiresAt = new Date(
-          Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000
+        const familyCreatedAt = Date.now();
+        const refreshExpiresAt = refreshTokenExpiresAt(
+          familyCreatedAt,
+          fastify.jwtUtils.getRefreshTokenLifespan(),
+          refreshFamilyEnd(familyCreatedAt, realm.ssoMaxLifespan, null)
         );
 
         // Store refresh token in database (hashed). Each login starts a
         // new refresh-token family — every rotation at /oauth/token
-        // inherits this `familyId` for replay-detection revocation.
+        // inherits this `familyId` for replay-detection revocation, and
+        // this start time, which the family's age counts from.
         await fastify.repositories.refreshTokens.create({
           userId: user.id,
           oauthClientId: systemClient.id,
           tokenHash: refreshTokenHash,
           familyId: randomUUID(),
-          expiresAt: refreshTokenExpiresAt.getTime(),
+          familyCreatedAt,
+          familySessionExpiresAt: null,
+          expiresAt: refreshExpiresAt,
           scopes: [],
         });
 

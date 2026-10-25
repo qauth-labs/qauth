@@ -49,6 +49,11 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import {
+  refreshFamilyEnd,
+  refreshFamilyEnded,
+  refreshTokenExpiresAt,
+} from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -312,6 +317,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            ssoMaxLifespan: realm.ssoMaxLifespan,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -325,6 +331,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            ssoMaxLifespan: realm.ssoMaxLifespan,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -338,6 +345,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            ssoMaxLifespan: realm.ssoMaxLifespan,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -351,6 +359,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            ssoMaxLifespan: realm.ssoMaxLifespan,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -364,6 +373,7 @@ export default async function (fastify: FastifyInstance) {
             body,
             policy,
             realmId: realm.id,
+            ssoMaxLifespan: realm.ssoMaxLifespan,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -424,6 +434,13 @@ type HandlerContext<TBody> = {
    * never disagree with the realm the client was authenticated against.
    */
   realmId: string;
+  /**
+   * The realm's `sso_max_lifespan` in seconds, or null when it sets none: the
+   * longest a refresh-token family of the realm may live, counted from its
+   * start (ADR-019 Decision 3, #552). Read from the same row as
+   * {@link realmId}, the realm resolver's.
+   */
+  ssoMaxLifespan: number | null;
   /**
    * The RFC 7638 thumbprint of the request's DPoP proof key (RFC 9449 §5,
    * #480), checked at dispatch; undefined when the request carried no proof or
@@ -680,15 +697,27 @@ async function handleAuthorizationCode(
   // stores no consent) yield the access token (and ID token) alone; the client
   // returns through /oauth/authorize when it expires.
   const consent = await fastify.repositories.oauthConsents.findActive(user.id, client.id);
+  const familyCreatedAt = Date.now();
   const refresh =
     consent && isScopeSubset(authCode.scopes, consent.scopes)
       ? {
           ...fastify.jwtUtils.generateRefreshToken(),
-          expiresAt: Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000,
+          // The realm's `sso_max_lifespan` caps the family from its start,
+          // and never past the browser session that backed the code
+          // (ADR-019 Decision 3, #552).
+          expiresAt: refreshTokenExpiresAt(
+            familyCreatedAt,
+            fastify.jwtUtils.getRefreshTokenLifespan(),
+            refreshFamilyEnd(familyCreatedAt, ctx.ssoMaxLifespan, authCode.sessionExpiresAt ?? null)
+          ),
           // Start a fresh refresh-token family. Every rotation (see
           // `handleRefreshToken`) inherits this `familyId` so replay of a
-          // revoked token can be traced to — and revoke — the entire family.
+          // revoked token can be traced to — and revoke — the entire family,
+          // and this start time, so the family's age counts from here.
           familyId: randomUUID(),
+          familyCreatedAt,
+          // The session's end as of the code's mint; every rotation copies it.
+          familySessionExpiresAt: authCode.sessionExpiresAt ?? null,
         }
       : undefined;
 
@@ -728,6 +757,8 @@ async function handleAuthorizationCode(
           oauthClientId: client.id,
           tokenHash: refresh.tokenHash,
           familyId: refresh.familyId,
+          familyCreatedAt: refresh.familyCreatedAt,
+          familySessionExpiresAt: refresh.familySessionExpiresAt,
           expiresAt: refresh.expiresAt,
           scopes: authCode.scopes,
           // RFC 8707: carry the resource set onto the refresh token so subsequent
@@ -959,6 +990,10 @@ async function rejectRefreshTokenReplay(
  * - Replay detection (RFC 9700 §2.2.2): if a revoked token is presented,
  *   revoke the entire family (every rotation sharing `family_id`) so any
  *   still-active descendant cannot be exchanged.
+ * - Family lifetime (ADR-019 Decision 3, #552): when the realm sets
+ *   `sso_max_lifespan`, a family ends that long after its start. Past it the
+ *   family is revoked and the answer is `invalid_grant`; before it, the
+ *   rotated token expires no later than the family's end.
  * - Rotation: the presented token is marked `revoked='rotated'` BEFORE
  *   the new refresh token is persisted, by a compare-and-set that only one
  *   concurrent request can win — never issue two concurrently live tokens
@@ -1026,7 +1061,25 @@ async function handleRefreshToken(
     return rejectRefreshTokenReplay(ctx, storedToken);
   }
 
-  if (storedToken.expiresAt <= Date.now()) {
+  // The family's end under the realm's CURRENT `sso_max_lifespan` (ADR-019
+  // Decision 3, #552), counted from the family's start and never past the
+  // browser session that started it. Checked before the token's own expiry,
+  // which the end also caps: past it the whole family is revoked, not only
+  // this token. A realm that lowered the limit since the token was issued ends
+  // the family here, at its next use.
+  const now = Date.now();
+  const familyEnd = refreshFamilyEnd(
+    storedToken.familyCreatedAt,
+    ctx.ssoMaxLifespan,
+    storedToken.familySessionExpiresAt ?? null
+  );
+  if (refreshFamilyEnded(familyEnd, now)) {
+    await fastify.repositories.refreshTokens.revokeFamily(storedToken.familyId, 'family_expired');
+    await emitRequestFailed(ctx, 'invalid_grant', 'refresh_family_expired', storedToken.userId);
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  if (storedToken.expiresAt <= now) {
     await emitRequestFailed(ctx, 'invalid_grant', 'refresh_token_expired', storedToken.userId);
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
@@ -1117,7 +1170,12 @@ async function handleRefreshToken(
   // neither does. A lost race writes no event here; the replay records its own.
   const { token: newRefreshToken, tokenHash: newRefreshTokenHash } =
     fastify.jwtUtils.generateRefreshToken();
-  const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
+  // Never past the family's end (#552); the refresh lifespan from now otherwise.
+  const newRefreshTokenExpiresAt = refreshTokenExpiresAt(
+    now,
+    fastify.jwtUtils.getRefreshTokenLifespan(),
+    familyEnd
+  );
 
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
@@ -1142,8 +1200,12 @@ async function handleRefreshToken(
         oauthClientId: client.id,
         tokenHash: newRefreshTokenHash,
         familyId: storedToken.familyId,
+        // The family's start and its session's end, unchanged: a rotation
+        // never restarts its clock or lifts the session's cap.
+        familyCreatedAt: storedToken.familyCreatedAt,
+        familySessionExpiresAt: storedToken.familySessionExpiresAt ?? null,
         previousTokenHash: presentedHash,
-        expiresAt: refreshTokenExpiresAt,
+        expiresAt: newRefreshTokenExpiresAt,
         scopes: grantedScopes,
         // RFC 8707: the rotated refresh token carries the (possibly
         // narrowed) resource binding — NOT the request's — so we never
