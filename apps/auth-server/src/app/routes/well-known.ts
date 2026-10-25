@@ -1,8 +1,11 @@
-import type { FastifyInstance } from 'fastify';
+import { buildTransmitterMetadata } from '@qauth-labs/fastify-plugin-ssf';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
+import { requestRealm } from '../helpers/request-realm';
+import { realmRunsTransmitter, SsfNotFoundError } from '../helpers/ssf-receiver';
 
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
@@ -24,7 +27,10 @@ const JWKS_CACHE_CONTROL = 'public, max-age=300';
  * - `GET /.well-known/openid-configuration`       — OIDC Discovery 1.0.
  * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS.
  *
- * All three are unauthenticated and aggressively cacheable. They MUST NOT
+ * - `GET /.well-known/ssf-configuration`          — SSF 1.0 §7 transmitter
+ *   metadata, registered only while SSF_TRANSMITTER_ENABLED is on (#410).
+ *
+ * All are unauthenticated and aggressively cacheable. They MUST NOT
  * be rate-limited as aggressively as auth endpoints: clients hit them
  * during bootstrap and cache responses locally.
  */
@@ -33,6 +39,24 @@ export default async function (fastify: FastifyInstance) {
   // configuration, which does not change while the server runs. Each adds the
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
+
+  /**
+   * The realm's SET verification keys (`event_signing`, ADR-019 Decision 9)
+   * for the JWKS, while the realm runs the SSF transmitter (#410): a receiver
+   * verifies each SET with a key from here. The realm JWKS of the signer will
+   * hold them whatever the switch once tokens move onto it (#491); until
+   * then they join only where SSF is on, so a default deployment's JWKS is
+   * unchanged.
+   */
+  async function setVerificationKeys(request: FastifyRequest) {
+    if (!realmRunsTransmitter(request) || !fastify.hasDecorator('signer')) return [];
+    const keys = await fastify.signer.getVerificationKeys(
+      'api',
+      requestRealm(request).id,
+      'event_signing'
+    );
+    return keys.map((key) => key.publicJwk);
+  }
 
   const buildInput = () => ({
     issuer: fastify.jwtUtils.getIssuer(),
@@ -103,7 +127,7 @@ export default async function (fastify: FastifyInstance) {
       },
       config: { surface: 'meta' },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.
       // `application/jwk-set+json` is the registered media type.
       //
@@ -116,7 +140,40 @@ export default async function (fastify: FastifyInstance) {
         .header('Cache-Control', JWKS_CACHE_CONTROL)
         .header('Content-Type', 'application/jwk-set+json; charset=utf-8');
       const jwks = await fastify.jwtUtils.getJwks();
-      return reply.send(jwks);
+      const published = new Set(jwks.keys.map((key) => key.kid));
+      const eventKeys = (await setVerificationKeys(request)).filter(
+        (key) => !published.has(key.kid)
+      );
+      return reply.send(eventKeys.length === 0 ? jwks : { keys: [...jwks.keys, ...eventKeys] });
     }
   );
+
+  // Shared Signals Framework transmitter metadata (SSF 1.0 §7, #410). No
+  // route at all while SSF_TRANSMITTER_ENABLED is off; 404 for a realm whose
+  // own switch is off. Every URL comes from the realm's issuer, which is the
+  // `iss` of the SETs the realm's signer issues (§7.1).
+  if (fastify.ssf) {
+    fastify.get(
+      '/.well-known/ssf-configuration',
+      {
+        schema: {
+          description:
+            'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the JWKS that verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
+          tags: ['Discovery', 'Shared Signals'],
+          'x-qauth-stability': 'experimental',
+        },
+        config: { surface: 'meta' },
+      },
+      async (request, reply) => {
+        const realm = requestRealm(request);
+        if (!realmRunsTransmitter(request) || realm.issuer === null) {
+          throw new SsfNotFoundError();
+        }
+        reply
+          .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
+          .header('Content-Type', 'application/json; charset=utf-8');
+        return reply.send(buildTransmitterMetadata(realm.issuer));
+      }
+    );
+  }
 }
