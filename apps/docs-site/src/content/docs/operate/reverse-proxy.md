@@ -24,7 +24,8 @@ split.
 
 1. **Realm hosts only.** Every realm's host goes to the auth server. The match is case-insensitive
    and ignores the port. Any other host gets `421 Misdirected Request`, with no realm context. Only
-   `/health` and `/ready` answer on every host; they go to the auth server.
+   `/health` and `/ready` answer on every host. They go to the auth server, which today serves
+   `/health` only.
 2. **Route on the normalised path.** Merge repeated slashes, decode the percent-escapes of
    unreserved characters, and resolve `.` and `..` segments. Then match case-sensitively. Send the
    upstream the normalised path, not the raw request target, so it cannot read the path

@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import type { IncomingHttpHeaders } from 'node:http';
+import { connect as http2Connect } from 'node:http2';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -168,6 +169,48 @@ function send(
     );
     req.on('error', reject);
     req.end();
+  });
+}
+
+/**
+ * Send one GET through the proxy over HTTP/2, as a browser does, with the
+ * cookies as separate `cookie` fields (RFC 9113 §8.2.3 lets a client split
+ * them, and browsers do).
+ */
+function sendHttp2(path: string, cookies: string[]): Promise<ProxyResponse> {
+  if (stack === undefined) throw new Error('the stack is not running');
+  const { port, ca } = stack;
+  const marker = randomUUID();
+  return new Promise((resolve, reject) => {
+    const session = http2Connect(`https://127.0.0.1:${port}`, { servername: REALM_HOST, ca });
+    session.on('error', reject);
+    const stream = session.request({
+      ':method': 'GET',
+      ':path': path,
+      ':authority': REALM_HOST,
+      'x-test-marker': marker,
+      cookie: cookies,
+    });
+    let status = 0;
+    let headers: IncomingHttpHeaders = {};
+    const chunks: Buffer[] = [];
+    stream.on('response', (responseHeaders) => {
+      status = Number(responseHeaders[':status']);
+      headers = responseHeaders as IncomingHttpHeaders;
+    });
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('end', () => {
+      session.close();
+      resolve({
+        status,
+        headers,
+        rawHeaders: [],
+        body: Buffer.concat(chunks).toString('utf8'),
+        marker,
+      });
+    });
+    stream.on('error', reject);
+    stream.end();
   });
 }
 
@@ -342,6 +385,19 @@ describe('the reference proxy (#482)', () => {
         expect(echo.headers).not.toHaveProperty('cookie');
       }
     );
+
+    it('strips cookies sent over HTTP/2 as separate fields, and passes them to the auth server', async () => {
+      if (!prerequisites) return;
+      const cookies = ['__Host-qauth_session=s3ss10n', '__Host-qauth_wallet_flow=fl0w'];
+
+      const ui = echoOf(await sendHttp2('/ui/login', cookies));
+      expect(ui.upstream).toBe('ceremony-app');
+      expect(ui.headers).not.toHaveProperty('cookie');
+
+      const auth = echoOf(await sendHttp2('/oauth/authorize', cookies));
+      expect(auth.upstream).toBe('auth-server');
+      expect(auth.headers.cookie).toBe(cookies.join('; '));
+    });
 
     it('matches a realm host case-insensitively and without its port', async () => {
       if (!prerequisites) return;
