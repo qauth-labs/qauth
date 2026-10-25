@@ -5,6 +5,10 @@ FROM node:26-alpine
 
 WORKDIR /app
 
+# A dev container has no cache token and nothing to cache: serve/dev tasks are
+# never cached.
+ENV NX_NO_CLOUD=true
+
 # pnpm comes from npm at the exact version CI uses. Node 26 no longer ships
 # corepack, and a pinned global install means nothing fetches pnpm later.
 ARG PNPM_VERSION=12.14.0

@@ -203,5 +203,11 @@
   // overrides it for a single run.
   "affected": {
     "legacy": true
-  }
+  },
+  // The remote cache. CI writes to it only on pushes to main (the read-write
+  // token is an environment secret limited to main); pull requests read with
+  // a read-only token, and a run with no token (a fork, a contributor, a local
+  // run) is anonymous and never stores. NX_NO_CLOUD=true turns it off for one
+  // run or one shell; the Dockerfiles and the jobs with nothing to cache set it.
+  "nxCloudId": "68ed5766d0a8584639447f54"
 }
