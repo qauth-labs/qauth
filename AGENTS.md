@@ -28,15 +28,20 @@ QAuth is an open-source **OAuth 2.1 / OIDC identity server** (TypeScript/Fastify
 Its **near-term identity is an authorization server for MCP servers and AI agents**
 (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)) — the MCP/agent-native
 authorization layer (agent client type, RFC 8693 on-behalf-of delegation, scope
-modes, step-up), the T3 production-hardening bundle, and the T5 environment-aware
-posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) all ship
-today. By design it is also a **federation hub**: upstream identity sources
+modes, step-up), production hardening and the environment-aware posture
+([ADR-008](./docs/adr/008-environment-aware-authorization.md)) all ship today. By
+design it is also a **federation hub**: upstream identity sources
 (email/password and — behind a default-off flag — Verifiable Credential wallets;
 external OIDC providers still to come) plug in through the `CredentialProvider`
 interface, and downstream apps receive standard OAuth 2.1 access tokens and OIDC
 ID tokens.
 
-**Track T4 status — 37 issues closed / 3 open** (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31) — do not describe it as "deferred":
+**Status.** QAuth is pre-1.0. The plan is the 0.x → 1.0 path of
+[ADR-018](./docs/adr/018-1-0-scope-and-stability.md), tracked as the milestones
+`v0.2` … `v1.0`; the older `MVP` and `T0`–`T6` tracks are finished. The README's
+"What works today" and `apps/docs-site/src/lib/status.ts` (the source of the
+docs site's status page) say what ships. State these correctly — none of them
+is "deferred":
 
 - The ADR-002 identifier-abstraction migration is **complete** (epic #224;
   migrations 0010–0012). `users` is a pure identity anchor; credential data lives
@@ -49,8 +54,8 @@ ID tokens.
   status-list revocation, the claims pipeline and the browser sign-in flow are
   merged, with an E2E suite covering account linking, returning login, the
   refusal to create an account at wallet sign-in (ADR-009 §1, amended
-  2026-10-19) and `acr`. Validated only on the `oid4vp-1.0-base` profile
-  against a mock wallet so far.
+  2026-10-19) and `acr`. Validated only against a mock wallet so far; the
+  real-wallet interoperability pass (#376) is open.
 - **`WalletProvider.verify()` throws unconditionally and must keep throwing** —
   a deliberate fail-closed property, not a stub. Never "fix" it. Wallet login
   does **not** use it; it runs on the dedicated `/ui/wallet-login` +
@@ -65,8 +70,8 @@ site renders stay in `docs/adr/` and `docs/security/` in this repository.
 
 - **Federation First**: Upstream sources plug in via `CredentialProvider`;
   downstream apps see only standard OAuth 2.1 / OIDC tokens.
-- **Modular First**: Phase 1 is a modular monolith; libs are designed for
-  microservice extraction later. Respect the Nx `apps/` + `libs/` boundaries.
+- **Modular First**: QAuth is a modular monolith; libs are designed for
+  extraction into separate services later. Respect the Nx `apps/` + `libs/` boundaries.
 - **API First**: Design the API (routes, schemas) before implementation.
 - **Security First**: OAuth 2.1, PKCE mandatory (S256), Argon2id, timing-safe
   comparisons. Never weaken these. One PKCE exception exists, defined by
