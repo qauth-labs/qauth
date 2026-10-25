@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 /**
  * Integration test config (#167).
@@ -21,6 +21,10 @@ export default defineConfig({
     // call recorded in beforeAll or at module scope still counts, as in v4.
     clearMocks: false,
     include: ['**/*.integration.test.ts'],
+    // Not the gitignored scratch directory, where the upgrade test (#475)
+    // unpacks the baseline release's tree, its integration suites included
+    // (see vitest.config.ts).
+    exclude: [...configDefaults.exclude, 'tmp/**'],
     server: {
       deps: {
         // `@fastify/autoload` discovers route modules at RUNTIME and imports
