@@ -154,7 +154,7 @@ export const REGISTRATION_KEYS = defineKeys([
     owner: 'id-jag',
     default: '300',
     since: '0.1.0',
-    docs: "How long, in seconds, a trusted issuer's discovery document and JWKS are cached; at most 3600.",
+    docs: "How long, in seconds, a trusted issuer's discovery document and JWKS are cached; at most 3600. `0` turns the cache off, and every assertion then costs the issuer two fetches.",
   },
   {
     name: 'ID_JAG_JWKS_REFRESH_COOLDOWN',

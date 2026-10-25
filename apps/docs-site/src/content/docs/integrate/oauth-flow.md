@@ -504,9 +504,12 @@ and JWKS for `ID_JAG_JWKS_CACHE_TTL`. An assertion whose `kid` is not in the
 cached set makes QAuth fetch both again, but at most once per issuer per
 `ID_JAG_JWKS_REFRESH_COOLDOWN` (30 seconds by default); inside that window the
 assertion is refused. Publish a new key in the JWKS at least one cooldown before
-the IdP signs with it, and no assertion under it is refused. While the IdP cannot
-be reached, QAuth tries it again only every `ID_JAG_JWKS_NEGATIVE_CACHE_TTL`
-(30 seconds by default); keys it has already cached keep working.
+the IdP signs with it, and no assertion under it is refused while the IdP stays
+reachable. This needs a `kid` in every assertion: without one, the JWKS must hold
+exactly one key, so an IdP that signs without `kid` cannot publish two at once.
+While the IdP cannot be reached, QAuth tries it again only every
+`ID_JAG_JWKS_NEGATIVE_CACHE_TTL` (30 seconds by default); keys it has already
+cached keep working, and a key it has not seen waits for that window too.
 
 ### An ID-JAG is not an access token
 

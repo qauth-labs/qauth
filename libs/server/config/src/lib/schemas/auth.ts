@@ -598,6 +598,10 @@ export const authEnvSchema = z.object({
    * fails validation rather than being clamped: it would keep a key the issuer
    * has withdrawn usable for that long, and an operator should learn that at
    * boot, not after a compromise.
+   *
+   * `0` turns the cache off. Every assertion then fetches both documents on its
+   * own, so the refresh cooldown bounds nothing and only the negative cache
+   * still limits how often the issuer is dialled.
    */
   ID_JAG_JWKS_CACHE_TTL: z.coerce
     .number()

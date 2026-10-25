@@ -855,10 +855,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused without a fetch. Before, every such assertion cost the issuer two
   fetches, and the refresh runs before the signature is checked. A failed fetch
   is now remembered for `ID_JAG_JWKS_NEGATIVE_CACHE_TTL` (default 30 seconds),
-  during which nothing is fetched from that issuer, so an outage costs one
-  attempt per window instead of two fetches, each up to
+  during which nothing is fetched from that issuer, and requests that arrive
+  together in one process share the fetch already running, so an outage costs
+  one attempt per window instead of two fetches, each up to
   `ID_JAG_FETCH_TIMEOUT_MS`, on every token request. Both new settings take 1 to
-  300 seconds. `ID_JAG_JWKS_CACHE_TTL` now has a ceiling of 3600 seconds, as
+  300 seconds. The cooldown bounds forced refreshes only: with
+  `ID_JAG_JWKS_CACHE_TTL=0` nothing is cached and every assertion still costs
+  the issuer two fetches. `ID_JAG_JWKS_CACHE_TTL` now has a ceiling of 3600 seconds, as
   `CIMD_CACHE_MAX_TTL` does for CIMD, and the auth-server refuses to start with
   a larger value; the error names the variable.
 

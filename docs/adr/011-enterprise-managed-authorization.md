@@ -358,8 +358,12 @@ The rules that make this a trust model rather than a list:
   (default 30 s). Until that lapses, nothing is fetched from the issuer, and any
   resolution that would need a fetch is refused. A failed fetch is a transport error, a
   timeout, a non-200 or a document that fails validation. A key already in the cache
-  keeps verifying throughout. Both settings take 1 to 300 seconds, so neither can be
-  switched off. If Redis cannot be reached, the cooldown refuses the refresh.
+  keeps verifying throughout. Concurrent requests in one process share a fetch already
+  running, so an issuer that hangs until the fetch timeout still costs one attempt per
+  process. Both settings take 1 to 300 seconds, so neither can be switched off. If
+  Redis cannot be reached, the cooldown refuses the refresh. The cooldown bounds forced
+  refreshes only: with `ID_JAG_JWKS_CACHE_TTL=0` nothing is cached, and every
+  assertion fetches both documents on its own.
 - **One escape hatch exists.** `ID_JAG_ALLOW_PRIVATE_ADDRESSES` (default `false`) turns the
   address check off so tests can use a localhost IdP. The auth-server refuses to start with
   it set to `true` when `NODE_ENV` is `production`, and refuses its CIMD twin,
@@ -510,8 +514,8 @@ through `fastify.repositories.auditLogs.create`.)
   per-fetch timeout, a per-issuer refresh cooldown, a negative cache (#433), and the
   allowlist that bounds which hosts can ever be dialled. They reduce the risk but do not
   remove it. During an outage, a request whose key is not cached still fails. Requests
-  that miss the cache at the same moment each still fetch, because the negative cache
-  only holds failures already recorded.
+  that arrive together share one fetch per process, not across processes, so a
+  deployment of N processes can send an issuer N attempts at once.
 - **Minting makes QAuth a credential source for third parties — a genuinely
   larger blast radius than issuing its own tokens.** Every other token QAuth
   signs is only meaningful to resource servers that validate `aud` against
@@ -532,16 +536,17 @@ through `fastify.repositories.auditLogs.create`.)
 - **A forged `kid` can hold back a key rotation for up to one cooldown.** A `kid` miss
   forces a refresh of discovery and JWKS before any signature is checked. Since #433 an
   issuer is refreshed at most once per `ID_JAG_JWKS_REFRESH_COOLDOWN`, so random `kid`
-  values cost it at most two fetches per cooldown, whatever the request rate. The price
+  values cost it at most two fetches per cooldown, whatever the request rate, while the
+  cache is on (`ID_JAG_JWKS_CACHE_TTL` above 0). The price
   is that a client holding the grant can keep the cooldown spent. An assertion signed
   with a key the issuer has only just published is then refused until the cooldown
   lapses. The next refresh picks the key up, so the delay is at most one cooldown, 30
   seconds by default. An issuer that publishes a key in its JWKS at least one cooldown
   before it signs with it never meets the delay: any refresh inside the cooldown before
   the first such assertion already fetched the key. The negative cache has a matching
-  price: an issuer that comes
-  back inside the window stays refused until the window lapses, for every key not
-  already cached.
+  price: an issuer that comes back inside the window stays refused until the window
+  lapses, for every key not already cached. A refresh that fails therefore holds a new
+  key back for the longer of the two windows.
 - **An ID-JAG client has a second list to keep.** Mint targets and consume resources
   read `oauth_clients.id_jag_targets`, apart from the `audience` that bounds
   `client_credentials` (#434, amended into §3 on 2026-10-22). Until then all three read
