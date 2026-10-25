@@ -79,7 +79,7 @@ export async function signHybridIdToken(
  * Verify a hybrid access token: the classical Ed25519 component always, and the
  * ML-DSA-65 component when `requirePqc` (or when a PQC signature is present).
  * Returns the verified claims. The live verify path stays classical-only for
- * #245; this is the tested capability #249 promotes into introspection/mcp-guard.
+ * #245; this is the tested capability #249 promotes into introspection/resource-guard.
  */
 export async function verifyHybridAccessToken(
   hybrid: HybridSignedToken,

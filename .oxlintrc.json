@@ -301,6 +301,13 @@
               {
                 "sourceTag": "*",
                 "notDependOnLibsWithTags": ["scope:upgrade-test"]
+              },
+              // SDK libraries (#595, ADR-018 §6): published to npm and installed
+              // into other people's projects, so they depend on NO workspace
+              // library. Whatever they need comes from their own package.json.
+              {
+                "sourceTag": "scope:sdk",
+                "onlyDependOnLibsWithTags": []
               }
             ]
           }

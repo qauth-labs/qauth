@@ -3,7 +3,7 @@ import { AGENT_MODE_SCOPES } from './scope-modes';
 /**
  * Step-up authentication before dangerous operations (ADR-007 §2, issue #185).
  *
- * `mcp-guard` already emits the runtime `403 insufficient_scope` +
+ * `resource-guard` already emits the runtime `403 insufficient_scope` +
  * `WWW-Authenticate` challenge when a resource needs a scope the presented
  * token lacks (shipped in T1). THIS module is the **authorization-server**
  * half of that loop: when a client comes back to `/oauth/authorize` asking for

@@ -512,6 +512,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
+  ADR-018 §6). It has never been published, so there is no alias. It moved to
+  `libs/sdk/resource-guard`, and its names follow: `ResourceGuard`,
+  `resourceGuardPlugin`, `ResourceGuardConfig`, `ResourceGuardError`,
+  `ResourceGuardConfigError` and the `resourceGuard` Fastify decorator. The root
+  entry is the framework-agnostic core and never imports Fastify. The plugin
+  moved to `@qauth-labs/resource-guard/fastify`, and `fastify` became an
+  optional peer dependency (`jose` stays a dependency). `api-report.md` lists the
+  public API, and a test keeps it in step with both entry points. A new
+  `scope:sdk` boundary rule lets an SDK library import no workspace library.
+  Behaviour is unchanged.
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
   a person or a client did as events in the event store ([#458], ADR-019
   Decision 8) and writes no `audit_logs` row. One emitter, `emitUserEvent`,
@@ -749,6 +760,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
+[#595]: https://github.com/qauth-labs/qauth/issues/595
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21

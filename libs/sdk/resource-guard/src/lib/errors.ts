@@ -1,5 +1,5 @@
 /**
- * Error model for `mcp-guard`.
+ * Error model for `resource-guard`.
  *
  * These map directly to the Bearer-token error responses defined by
  * RFC 6750 §3.1 and refined by the MCP Authorization profile (2026-07-28):
@@ -19,7 +19,7 @@
 export type BearerErrorCode = 'invalid_token' | 'insufficient_scope';
 
 /** Base class for all guard rejections that should surface a Bearer challenge. */
-export abstract class McpGuardError extends Error {
+export abstract class ResourceGuardError extends Error {
   /** HTTP status the RS should return. */
   abstract readonly statusCode: 401 | 403;
   /**
@@ -48,7 +48,7 @@ export abstract class McpGuardError extends Error {
  * Strategy") says the RS SHOULD do this, letting a client authorize correctly
  * on its first attempt instead of fetching the PRM document and guessing.
  */
-export class MissingTokenError extends McpGuardError {
+export class MissingTokenError extends ResourceGuardError {
   readonly statusCode = 401 as const;
   readonly bearerError = undefined;
   /**
@@ -74,7 +74,7 @@ export class MissingTokenError extends McpGuardError {
  * `error_description` challenge parameter and for logs; it must never echo
  * the token itself.
  */
-export class InvalidTokenError extends McpGuardError {
+export class InvalidTokenError extends ResourceGuardError {
   readonly statusCode = 401 as const;
   readonly bearerError = 'invalid_token' as const;
   /** Short reason for `error_description` / structured logs. */
@@ -98,7 +98,7 @@ export class InvalidTokenError extends McpGuardError {
  * 403 `error="insufficient_scope"`, advertising the scopes that would satisfy
  * the request — the MCP 2026-07-28 incremental-consent step-up signal.
  */
-export class InsufficientScopeError extends McpGuardError {
+export class InsufficientScopeError extends ResourceGuardError {
   readonly statusCode = 403 as const;
   readonly bearerError = 'insufficient_scope' as const;
   /** Full set of scopes the request requires (for the `scope` challenge param). */
@@ -118,13 +118,13 @@ export class InsufficientScopeError extends McpGuardError {
  * client credentials). Not a Bearer challenge — it is a programming error in
  * the host application and should surface as a 500 / startup failure.
  */
-export class McpGuardConfigError extends Error {
+export class ResourceGuardConfigError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'McpGuardConfigError';
-    Object.setPrototypeOf(this, McpGuardConfigError.prototype);
+    this.name = 'ResourceGuardConfigError';
+    Object.setPrototypeOf(this, ResourceGuardConfigError.prototype);
     if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, McpGuardConfigError);
+      Error.captureStackTrace(this, ResourceGuardConfigError);
     }
   }
 }
@@ -135,7 +135,7 @@ export class McpGuardConfigError extends Error {
  * because THIS resource server's introspection credentials are misconfigured),
  * or sent a malformed response.
  *
- * Crucially this is **not** an {@link McpGuardError}, so it does not produce a
+ * Crucially this is **not** an {@link ResourceGuardError}, so it does not produce a
  * 401 `invalid_token` Bearer challenge. Blaming the client's token for an
  * RS/AS-side fault is wrong HTTP semantics (RFC 6750 §3.1) and can drive
  * clients into futile token-refresh loops (OWASP A10, mishandling exceptional

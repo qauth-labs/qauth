@@ -168,7 +168,7 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 - **Client-management API + developer-portal UI** — full `/api/clients` CRUD with one-time secrets
 - **Agent-native authorization (ADR-007 §2)** — agent client type, RFC 8693 on-behalf-of token exchange (`act` claim), scope modes (ReadOnly / Admin / Exec), step-up before dangerous operations, and per-agent audit
 - **Documentation** — [MCP quickstart](./docs/mcp-quickstart.md), [OAuth 2.1 flow](./docs/oauth-flow.md), [API reference](./docs/api-reference.md), and the [agent-authorization guide](./docs/agent-authorization.md)
-- `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
+- `@qauth-labs/resource-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
 - Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2026-07-28, which deprecates RFC 7591 dynamic registration); DCR stays supported as the documented backwards-compatibility fallback
 - Trust floor: real-DB (testcontainers) repository tests + logout endpoint test + CI typecheck/coverage gate
 - **Security hardening (T3)** — `@fastify/helmet` security headers (nonce-based CSP, HSTS, X-Frame-Options, X-Content-Type-Options), CSRF double-submit protection, `__Host-` secure cookies, and XSS-safe HTML output
@@ -273,7 +273,9 @@ qauth/
 │   │                         #       wallet login uses the /ui/wallet-login seam
 │   │                         #     Normalises upstream → VerifiedIdentity
 │   │
-│   ├── fastify/plugins/      ✅ db · cache · email · jwt · password · pkce · mcp-guard · federation
+│   ├── fastify/plugins/      ✅ db · cache · email · jwt · password · pkce · federation
+│   ├── sdk/
+│   │   └── resource-guard/   ✅ resource-server SDK (RFC 9728, token validation)
 │   ├── infra/
 │   │   ├── db/               ✅ PostgreSQL 18 + Drizzle ORM, repository pattern
 │   │   └── cache/            ✅ Redis 7 connection + caching utilities
@@ -550,7 +552,7 @@ docker compose up -d
 > **Near-term direction is MCP-first** ([ADR-007](./docs/adr/007-mcp-first-positioning.md)). The tracks below set near-term priority; the numbered phases that follow remain the long-term plan, resequenced so wallet federation (Phase 4) and post-quantum signing (Phase 5) follow the MCP work.
 >
 > - ✅ **T0 — Trust floor:** real-DB repository tests, logout endpoint test, CI typecheck + coverage gate
-> - ✅ **T1 — MCP productization:** `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation
+> - ✅ **T1 — MCP productization:** `@qauth-labs/resource-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation
 > - ✅ **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
 > - ✅ **T3 — OIDC conformance + hardening (done):** security (CSRF/Helmet/secure cookies/XSS), observability (pino/`/metrics`/request-id/failed-login lockout), ID token/nonce/claims, developer-portal Docker image
 > - ✅ **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) (done):** `environment` as a fail-safe, operator-set policy dimension; `resolveEnvironmentPolicy` driving token TTLs / PKCE / localhost redirects / rate-limit tier / agent step-up / consent-screen style CSP; environment-gated developer API keys (backend + portal UI)
@@ -769,7 +771,7 @@ interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 - [@qauth-labs/server-egress](./libs/server/egress/README.md) — SSRF-safe client for every outbound call
 - [@qauth-labs/core-crypto](./libs/core/crypto/README.md) — algorithm-agnostic sign/verify/JWE and the hybrid PQC layer
 - [@qauth-labs/crypto-native](./libs/core/crypto-native/README.md) — napi-rs binding over `aws-lc-rs`
-- [@qauth-labs/mcp-guard](./libs/fastify/plugins/mcp-guard/README.md) — resource-server SDK for protecting MCP servers
+- [@qauth-labs/resource-guard](./libs/sdk/resource-guard/README.md) — resource-server SDK for protecting MCP servers
 - [@qauth-labs/fastify-plugin-federation](./libs/fastify/plugins/federation/README.md) — federation wiring for Fastify
 - [@qauth-labs/fastify-plugin-signer](./libs/fastify/plugins/signer/README.md) — the signer's wiring: KEK provider, key storage and `fastify.signer`
 - [@qauth-labs/shared-errors](./libs/shared/errors/README.md) — centralized error handling

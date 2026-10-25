@@ -183,7 +183,7 @@ describe('findBrokenLinks — fixtures', () => {
  * site route or sits under `apps/docs-site/public/`, so `/libs/...`,
  * `/package.json`, and any future unpublished prefix are caught the same
  * way, with no per-prefix special case. These fixtures use REAL files under
- * the repo's `docs/adr`, `docs/` root, and `libs/fastify/plugins/mcp-guard`
+ * the repo's `docs/adr`, `docs/` root, and `libs/sdk/resource-guard`
  * (not fixture-local stand-ins) so the "the file genuinely exists" half of
  * the defect is reproduced exactly, not merely simulated.
  */
@@ -249,7 +249,7 @@ describe('findBrokenLinks — repo-root-absolute paths the deployed site never s
     });
     expect(violations).toEqual([
       expect.objectContaining({
-        link: '/libs/fastify/plugins/mcp-guard/README.md',
+        link: '/libs/sdk/resource-guard/README.md',
         reason: expect.stringContaining('GitHub blob URL'),
       }),
     ]);

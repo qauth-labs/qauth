@@ -262,7 +262,7 @@ export function findBrokenLinks(
         // gap between "exists in the repo" and "is served by the site" is
         // exactly the fact that made this whole class of defect invisible to
         // begin with (qauth-labs/qauth#351, and the `/docs/*` and
-        // `/libs/mcp-guard/*` families this rule generalizes over).
+        // `/libs/resource-guard/*` families this rule generalizes over).
         if (existsUnderPublic(pathPart, context.repoRoot)) continue;
         violations.push({
           page: page.id,

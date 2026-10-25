@@ -99,7 +99,7 @@ export const DELIVERY_TRACKS: DeliveryTrack[] = [
     name: 'MCP productization',
     state: 'shipped',
     summary:
-      '`@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation.',
+      '`@qauth-labs/resource-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation.',
   },
   {
     id: 'T2',

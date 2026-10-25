@@ -1,7 +1,7 @@
 /**
- * Public types for `@qauth-labs/mcp-guard`.
+ * Public types for `@qauth-labs/resource-guard`.
  *
- * `mcp-guard` is the resource-server (RS) side of the QAuth OAuth 2.1 stack.
+ * `resource-guard` is the resource-server (RS) side of the QAuth OAuth 2.1 stack.
  * An MCP-server author drops it in to obtain spec-correct OAuth from a
  * self-hosted QAuth authorization server (AS), per the MCP Authorization
  * profile revision 2026-07-28 and the RFCs it references:
@@ -86,7 +86,7 @@ export type FetchLike = (
 /**
  * Configuration shared by the framework-agnostic core and the Fastify plugin.
  */
-export interface McpGuardConfig {
+export interface ResourceGuardConfig {
   /**
    * Identifier of THIS protected resource — the canonical URL clients use to
    * reach it (RFC 9728 `resource`, RFC 8707 resource indicator). Every

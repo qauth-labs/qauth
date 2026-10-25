@@ -2,8 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { type CryptoKey, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { McpGuardConfigError } from './errors';
-import { mcpGuardPlugin } from './fastify-plugin-mcp-guard';
+import { ResourceGuardConfigError } from './errors';
+import { resourceGuardPlugin } from './fastify-plugin';
 
 const ISSUER = 'https://auth.example.com';
 const RESOURCE = 'https://mcp.example.com';
@@ -34,7 +34,7 @@ async function signToken(claims: Record<string, unknown>, audience: string | str
 
 async function buildApp(requiredScopes: string[] = []): Promise<FastifyInstance> {
   const app = Fastify();
-  await app.register(mcpGuardPlugin, {
+  await app.register(resourceGuardPlugin, {
     resource: RESOURCE,
     authorizationServer: ISSUER,
     requiredScopes,
@@ -66,7 +66,7 @@ afterEach(async () => {
   app = undefined;
 });
 
-describe('mcp-guard Fastify plugin — RFC 9728 metadata', () => {
+describe('resource-guard Fastify plugin — RFC 9728 metadata', () => {
   it('serves the Protected Resource Metadata document', async () => {
     app = await buildApp(['mcp:read']);
     const res = await app.inject({
@@ -83,7 +83,7 @@ describe('mcp-guard Fastify plugin — RFC 9728 metadata', () => {
   });
 });
 
-describe('mcp-guard Fastify plugin — 401 challenge', () => {
+describe('resource-guard Fastify plugin — 401 challenge', () => {
   it('returns 401 with a WWW-Authenticate pointing at resource_metadata when no token', async () => {
     app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/data' });
@@ -161,7 +161,7 @@ describe('mcp-guard Fastify plugin — 401 challenge', () => {
   });
 });
 
-describe('mcp-guard Fastify plugin — happy path & step-up', () => {
+describe('resource-guard Fastify plugin — happy path & step-up', () => {
   it('allows access with a valid, audience-bound token', async () => {
     app = await buildApp(['mcp:read']);
     const token = await signToken({ sub: 'user-9', client_id: 'c', scope: 'mcp:read' });
@@ -203,10 +203,10 @@ describe('mcp-guard Fastify plugin — happy path & step-up', () => {
   });
 });
 
-describe('mcp-guard Fastify plugin — path-bearing resource', () => {
+describe('resource-guard Fastify plugin — path-bearing resource', () => {
   it('serves PRM at the nested well-known path AND the bare prefix', async () => {
     const nested = Fastify();
-    await nested.register(mcpGuardPlugin, {
+    await nested.register(resourceGuardPlugin, {
       resource: 'https://host.example.com/mcp/memory',
       authorizationServer: ISSUER,
       fetch: jwksFetch({ keys: [publicJwk] }),
@@ -231,12 +231,12 @@ describe('mcp-guard Fastify plugin — path-bearing resource', () => {
   });
 });
 
-describe('mcp-guard Fastify plugin — multiple resources on one instance', () => {
+describe('resource-guard Fastify plugin — multiple resources on one instance', () => {
   const NOTES = 'https://host.example.com/mcp/notes';
   const ADMIN = 'https://host.example.com/mcp/admin';
 
   function registerNotes(scope: FastifyInstance) {
-    return scope.register(mcpGuardPlugin, {
+    return scope.register(resourceGuardPlugin, {
       resource: NOTES,
       authorizationServer: ISSUER,
       fetch: jwksFetch({ keys: [publicJwk] }),
@@ -246,7 +246,7 @@ describe('mcp-guard Fastify plugin — multiple resources on one instance', () =
   /** The admin resource: its own guard and route, in an encapsulated child scope. */
   function registerAdminScope(parent: FastifyInstance) {
     return parent.register(async (admin) => {
-      await admin.register(mcpGuardPlugin, {
+      await admin.register(resourceGuardPlugin, {
         resource: ADMIN,
         authorizationServer: ISSUER,
         requiredScopes: ['mcp:admin'],
@@ -298,7 +298,7 @@ describe('mcp-guard Fastify plugin — multiple resources on one instance', () =
     await registerAdminScope(app);
     await app.ready();
 
-    expect(app.mcpGuard.resource).toBe(NOTES);
+    expect(app.resourceGuard.resource).toBe(NOTES);
     await expectEachResourceBehindItsOwnGuard(app);
   });
 
@@ -320,7 +320,7 @@ describe('mcp-guard Fastify plugin — multiple resources on one instance', () =
     // The parent scope authenticates every request against the notes resource.
     app.addHook('preHandler', app.requireBearer);
     await app.register(async (admin) => {
-      await admin.register(mcpGuardPlugin, {
+      await admin.register(resourceGuardPlugin, {
         resource: ADMIN,
         authorizationServer: ISSUER,
         fetch: jwksFetch({ keys: [publicJwk] }),
@@ -350,16 +350,16 @@ describe('mcp-guard Fastify plugin — multiple resources on one instance', () =
     app = Fastify();
     await registerNotes(app);
     await expect(
-      app.register(mcpGuardPlugin, {
+      app.register(resourceGuardPlugin, {
         resource: ADMIN,
         authorizationServer: ISSUER,
         fetch: jwksFetch({ keys: [publicJwk] }),
       })
-    ).rejects.toThrow(McpGuardConfigError);
+    ).rejects.toThrow(ResourceGuardConfigError);
   });
 });
 
-describe('mcp-guard Fastify plugin — operational introspection failure', () => {
+describe('resource-guard Fastify plugin — operational introspection failure', () => {
   it('surfaces a misconfigured-introspection (non-2xx) failure as 5xx, not 401 invalid_token', async () => {
     const opApp = Fastify();
     // The AS rejects OUR introspection client credentials with 401 — an
@@ -380,7 +380,7 @@ describe('mcp-guard Fastify plugin — operational introspection failure', () =>
             json: async () => ({ keys: [publicJwk] }),
             text: async () => '',
           }) as unknown as never;
-    await opApp.register(mcpGuardPlugin, {
+    await opApp.register(resourceGuardPlugin, {
       resource: RESOURCE,
       authorizationServer: ISSUER,
       validationMode: 'introspection',

@@ -2,12 +2,12 @@ import { type CryptoKey, exportJWK, generateKeyPair, type JWK, SignJWT } from 'j
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import type { ValidatedToken } from '../types';
-import { extractBearerToken, McpGuard } from './core';
+import { extractBearerToken, ResourceGuard } from './core';
 import {
   InsufficientScopeError,
   InvalidTokenError,
-  McpGuardConfigError,
   MissingTokenError,
+  ResourceGuardConfigError,
 } from './errors';
 
 const ISSUER = 'https://auth.example.com';
@@ -76,21 +76,21 @@ describe('extractBearerToken', () => {
   });
 });
 
-describe('McpGuard config validation', () => {
+describe('ResourceGuard config validation', () => {
   it('throws without a resource', () => {
-    expect(() => new McpGuard({ resource: '', authorizationServer: ISSUER })).toThrow(
-      McpGuardConfigError
+    expect(() => new ResourceGuard({ resource: '', authorizationServer: ISSUER })).toThrow(
+      ResourceGuardConfigError
     );
   });
   it('throws without an authorization server', () => {
-    expect(() => new McpGuard({ resource: RESOURCE, authorizationServer: '' })).toThrow(
-      McpGuardConfigError
+    expect(() => new ResourceGuard({ resource: RESOURCE, authorizationServer: '' })).toThrow(
+      ResourceGuardConfigError
     );
   });
   it('throws when introspection mode lacks client credentials', () => {
     expect(
       () =>
-        new McpGuard({
+        new ResourceGuard({
           resource: RESOURCE,
           authorizationServer: ISSUER,
           validationMode: 'introspection',
@@ -99,8 +99,8 @@ describe('McpGuard config validation', () => {
   });
 });
 
-describe('McpGuard metadata', () => {
-  const guard = new McpGuard({
+describe('ResourceGuard metadata', () => {
+  const guard = new ResourceGuard({
     resource: RESOURCE,
     authorizationServer: ISSUER,
     requiredScopes: ['mcp:read'],
@@ -129,9 +129,9 @@ describe('McpGuard metadata', () => {
   });
 });
 
-describe('McpGuard.authenticate (JWT mode)', () => {
+describe('ResourceGuard.authenticate (JWT mode)', () => {
   function guard(requiredScopes: string[] = []) {
-    return new McpGuard({
+    return new ResourceGuard({
       resource: RESOURCE,
       authorizationServer: ISSUER,
       requiredScopes,
@@ -181,7 +181,7 @@ describe('McpGuard.authenticate (JWT mode)', () => {
   });
 });
 
-describe('McpGuard.authenticate (introspection mode)', () => {
+describe('ResourceGuard.authenticate (introspection mode)', () => {
   const INTROSPECTION_ENDPOINT = `${ISSUER}/oauth/introspect`;
 
   // One fetch for both upstreams: the JWKS, and an introspection endpoint that
@@ -201,7 +201,7 @@ describe('McpGuard.authenticate (introspection mode)', () => {
       const body = isIntrospection ? active : { keys: [publicJwk] };
       return { ok: true, status: 200, json: async () => body, text: async () => '' };
     }) as never;
-    const guard = new McpGuard({
+    const guard = new ResourceGuard({
       resource: RESOURCE,
       authorizationServer: ISSUER,
       validationMode: 'introspection',
@@ -251,13 +251,13 @@ describe('McpGuard.authenticate (introspection mode)', () => {
   });
 });
 
-describe('McpGuard — requireAccessTokenTyp reaches the validator (#283)', () => {
-  // Exercised through `McpGuardConfig`, NOT by constructing `JwtValidator`
+describe('ResourceGuard — requireAccessTokenTyp reaches the validator (#283)', () => {
+  // Exercised through `ResourceGuardConfig`, NOT by constructing `JwtValidator`
   // directly as the validator's own suite does. The flag is inert unless the
   // guard threads it, and a config field that is declared but never forwarded
   // still type-checks — so only an end-to-end assertion proves the wiring.
   function guard(requireAccessTokenTyp?: boolean) {
-    return new McpGuard({
+    return new ResourceGuard({
       resource: RESOURCE,
       authorizationServer: ISSUER,
       ...(requireAccessTokenTyp !== undefined ? { requireAccessTokenTyp } : {}),
@@ -280,8 +280,8 @@ describe('McpGuard — requireAccessTokenTyp reaches the validator (#283)', () =
   });
 });
 
-describe('McpGuard.assertScopes', () => {
-  const guard = new McpGuard({
+describe('ResourceGuard.assertScopes', () => {
+  const guard = new ResourceGuard({
     resource: RESOURCE,
     authorizationServer: ISSUER,
     requiredScopes: ['mcp:read'],

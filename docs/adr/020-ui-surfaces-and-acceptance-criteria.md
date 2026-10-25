@@ -291,7 +291,8 @@ Placement rules that follow from earlier decisions:
   signed-in users only, rate-limited, with the same SSRF-safe fetch as registration.
 - A developer can register an MCP server as a resource server, define its scopes and copy its
   protected-resource metadata and its `mcp-guard` configuration. Admin approval of a new resource
-  is a realm setting.
+  is a realm setting. (Note, #595: the package is now `@qauth-labs/resource-guard`, so the copied
+  configuration is a `resource-guard` configuration.)
 - A flow test console runs a real authorization-code flow with PKCE step by step and decodes the
   token in the browser. It works for development and staging clients. In production it runs only
   in the paired sandbox realm (§4).

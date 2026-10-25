@@ -11,19 +11,19 @@ your machine:
 
 1. Run **QAuth** — the OAuth 2.1 authorization server (AS).
 2. Run a **guarded MCP resource server** — the bundled `memory-mcp` example,
-   protected by [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md).
+   protected by [`@qauth-labs/resource-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md).
 3. Obtain a valid, **audience-bound** access token and call the protected resource.
 
 By the end you will have reproduced the flow from
 [ADR-007](/reference/records/adr/007-mcp-first-positioning/): an MCP client, given only a server
 URL, discovers the authorization server, registers, runs `authorization_code` +
-PKCE, and calls the resource with a token QAuth minted and `mcp-guard` validated.
+PKCE, and calls the resource with a token QAuth minted and `resource-guard` validated.
 
 ```
   ┌──────────────┐        ┌───────────────────────┐        ┌─────────────────────┐
   │  MCP client  │        │  MCP resource server  │        │  QAuth  (AS)        │
-  │ (Claude Code,│        │  memory-mcp + mcp-guard│        │  :3000              │
-  │  curl, …)    │        │  :8088                 │        │                     │
+  │ (Claude Code,│        │  memory-mcp +         │        │  :3000              │
+  │  curl, …)    │        │  resource-guard :8088 │        │                     │
   └──────┬───────┘        └───────────┬───────────┘        └──────────┬──────────┘
          │  GET /mcp/memory (no token)│                               │
          │ ──────────────────────────▶│                               │
@@ -39,7 +39,7 @@ PKCE, and calls the resource with a token QAuth minted and `mcp-guard` validated
          │  access_token (aud = http://localhost:8088, scope mcp:read)│
          │ ◀───────────────────────────────────────────────────────-─│
          │  GET /mcp/memory   Authorization: Bearer <token>           │
-         │ ──────────────────────────▶│  (mcp-guard verifies sig,     │
+         │ ──────────────────────────▶│  (resource-guard checks sig,  │
          │  200 ✅                     │   iss, aud, scope)            │
          │ ◀──────────────────────────│                               │
 ```
@@ -48,7 +48,7 @@ PKCE, and calls the resource with a token QAuth minted and `mcp-guard` validated
 > demonstrates the **authorization** half — the 401 challenge, Protected Resource
 > Metadata, and token validation. It exposes plain HTTP routes (`/mcp/memory`)
 > rather than the full MCP JSON-RPC transport, so you verify it with `curl`. To
-> drive it from a real MCP client, wrap your own MCP server with `mcp-guard` the
+> drive it from a real MCP client, wrap your own MCP server with `resource-guard` the
 > same way (see [Step 3](#step-3--connect-an-mcp-client)); the OAuth handshake is
 > identical.
 
@@ -142,11 +142,11 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 ## Step 2 — Run a guarded MCP resource server
 
 The repo ships a runnable example — a tiny in-memory store protected by
-`mcp-guard` in local-JWT validation mode (it verifies tokens against QAuth's
+`resource-guard` in local-JWT validation mode (it verifies tokens against QAuth's
 JWKS, no per-request call to the AS).
 
 ```bash
-cd libs/fastify/plugins/mcp-guard
+cd libs/sdk/resource-guard
 
 QAUTH_ISSUER=http://localhost:3000 \
 MCP_RESOURCE=http://localhost:8088 \
@@ -179,7 +179,7 @@ in one round instead of guessing.
 
 ### Option A — A real MCP client (e.g. Claude Code)
 
-Wrap your **actual** MCP server with `mcp-guard` exactly as the example does
+Wrap your **actual** MCP server with `resource-guard` exactly as the example does
 (register the plugin, guard routes with `app.requireBearer` /
 `app.requireScopes(...)`), then add it to your MCP client as an HTTP server:
 
@@ -198,7 +198,7 @@ On first use the client will:
 4. run **`authorization_code` + PKCE**, opening a browser for **login + consent**
    at QAuth (you'll register/sign in and approve the `mcp:read` / `mcp:write`
    scopes),
-5. retry the call with the issued token — `mcp-guard` validates it and returns `200`.
+5. retry the call with the issued token — `resource-guard` validates it and returns `200`.
 
 Because the client passes the resource URL as the RFC 8707 `resource` parameter,
 the token's `aud` is bound to `http://localhost:8088` and is useless at any other
@@ -255,7 +255,7 @@ ACCESS_TOKEN=$(curl -s -X POST http://localhost:3000/oauth/token \
   -d 'scope=mcp:read' \
   -d 'resource=http://localhost:8088' | jq -r .access_token)
 
-# Call the protected resource — mcp-guard verifies signature, issuer, aud, scope:
+# Call the protected resource — resource-guard verifies signature, issuer, aud, scope:
 curl -s http://localhost:8088/mcp/memory \
   -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 # → { "subject": "memory-mcp-demo", "client": "memory-mcp-demo", "items": {} }  ✅
@@ -327,7 +327,7 @@ The no-passthrough guarantee rests on **audience binding** (RFC 8707):
 - The client sends `resource=<MCP server URL>` on authorize/token requests.
 - QAuth mints the access token with `aud` set to that resource and refuses to
   widen it on refresh.
-- `mcp-guard` rejects any token whose `aud` does not include its own `resource`,
+- `resource-guard` rejects any token whose `aud` does not include its own `resource`,
   and never forwards the inbound token upstream.
 
 A token minted for resource A therefore cannot be replayed against resource B,
@@ -343,7 +343,7 @@ even if both trust the same QAuth instance.
 | `invalid_scope` at `/oauth/token` | The client's `scopes` (machine client) or the realm allowlist (DCR client) doesn't include the requested scope. Re-check Step 1's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` or the seeded client's `scopes`.         |
 | `unsupported scheme: cursor:`     | The client calls back on a scheme without a period. List it in `REDIRECT_URI_CUSTOM_SCHEMES` (here `cursor`); see [Redirect URI schemes for native apps](/operate/docker/#redirect-uri-schemes-for-native-apps). |
 | Seed script: realm not found      | The auth-server has not booted against this database yet, or the manifest's `realm` is not `DEFAULT_REALM_NAME`. Start the stack (Step 1) and check its log for the `default realm ready` line.                  |
-| `mcp-guard` can't fetch JWKS      | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                                    |
+| `resource-guard` can't fetch JWKS | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                                    |
 | Port already in use               | Override `PORT` for the example, or remap `3000`/`5432`/`6379` in `docker-compose.yml`.                                                                                                                          |
 
 ---
@@ -357,7 +357,7 @@ even if both trust the same QAuth instance.
 - [Agent Authorization](/integrate/agent-authorization/) — when an **AI agent** acts on
   behalf of a user: the `is_agent` client type, RFC 8693 token-exchange
   delegation, agent scope modes, and step-up before dangerous operations.
-- [`@qauth-labs/mcp-guard` README](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) —
+- [`@qauth-labs/resource-guard` README](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md) —
   full configuration, `introspection` mode, and the framework-agnostic core.
 - [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — why this
   is QAuth's near-term product identity.

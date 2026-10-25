@@ -1,27 +1,23 @@
 /**
- * `@qauth-labs/mcp-guard` — the resource-server-side SDK for wiring an MCP
- * server to a self-hosted QAuth OAuth 2.1 authorization server.
+ * `@qauth-labs/resource-guard` — the resource-server-side SDK for wiring an
+ * MCP server (or any OAuth 2.1 resource server) to a self-hosted QAuth
+ * authorization server.
  *
  * Two entry points:
  *
- * - {@link mcpGuardPlugin} — a Fastify 5 plugin (default export) that serves
+ * - this one, the framework-agnostic core: {@link ResourceGuard}, the
+ *   validators, the RFC 9728 metadata and RFC 6750 challenge helpers. It never
+ *   imports Fastify.
+ * - `@qauth-labs/resource-guard/fastify` — the Fastify 5 plugin, which serves
  *   RFC 9728 metadata and decorates the instance with `requireBearer` /
- *   `requireScopes` preHandlers.
- * - {@link McpGuard} — the framework-agnostic core, for non-Fastify hosts.
+ *   `requireScopes` preHandlers. `fastify` is an optional peer dependency,
+ *   needed only for that entry.
  *
  * See the package README and `examples/memory-mcp` for usage.
  */
 
-// Fastify adapter (default + named).
-export {
-  default,
-  mcpGuardPlugin,
-  type McpGuardPluginOptions,
-  sendBearerChallenge,
-} from './lib/fastify-plugin-mcp-guard';
-
 // Framework-agnostic core.
-export { extractBearerToken, McpGuard } from './lib/core';
+export { extractBearerToken, ResourceGuard } from './lib/core';
 
 // Errors (for `instanceof` checks and custom error handling).
 export {
@@ -29,9 +25,9 @@ export {
   InsufficientScopeError,
   IntrospectionError,
   InvalidTokenError,
-  McpGuardConfigError,
-  McpGuardError,
   MissingTokenError,
+  ResourceGuardConfigError,
+  ResourceGuardError,
 } from './lib/errors';
 
 // RFC 9728 metadata helpers.
@@ -60,7 +56,7 @@ export { JwtValidator, type JwtValidatorOptions } from './lib/jwt-validator';
 export type {
   FetchLike,
   IntrospectionClientCredentials,
-  McpGuardConfig,
+  ResourceGuardConfig,
   ValidatedToken,
   ValidationMode,
 } from './types';

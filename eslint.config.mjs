@@ -20,7 +20,7 @@ const NON_SHIPPED_FILES = [
   // Tooling beside src/ that Nx 23's typecheck inputs (the tsconfig includes)
   // left out and Nx 24's `default` input takes in: wire-suite's runner config,
   // infra-db's drizzle-kit config, crypto-native's packaging script and
-  // mcp-guard's runnable example. None of them ships with the package.
+  // resource-guard's runnable example. None of them ships with the package.
   '{projectRoot}/vitest.*.config.ts',
   '{projectRoot}/drizzle.config.ts',
   '{projectRoot}/scripts/**',

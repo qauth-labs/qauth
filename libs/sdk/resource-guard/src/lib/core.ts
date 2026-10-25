@@ -1,7 +1,7 @@
 /**
- * Framework-agnostic core of `mcp-guard`.
+ * Framework-agnostic core of `resource-guard`.
  *
- * `McpGuard` encapsulates everything that does not depend on a web framework:
+ * `ResourceGuard` encapsulates everything that does not depend on a web framework:
  * config resolution, validator selection (JWT vs introspection), bearer
  * extraction, the RFC 9728 metadata document, and scope enforcement / step-up.
  * The Fastify plugin is a thin adapter over this; other frameworks can wrap it
@@ -13,14 +13,14 @@
  * a token minted for another resource cannot be replayed here.
  */
 
-import type { McpGuardConfig, ValidatedToken, ValidationMode } from '../types';
+import type { ResourceGuardConfig, ValidatedToken, ValidationMode } from '../types';
 import { challengeForError } from './challenge';
 import {
   InsufficientScopeError,
   InvalidTokenError,
-  McpGuardConfigError,
-  type McpGuardError,
   MissingTokenError,
+  ResourceGuardConfigError,
+  type ResourceGuardError,
 } from './errors';
 import { IntrospectionValidator } from './introspection-validator';
 import { JwtValidator } from './jwt-validator';
@@ -76,7 +76,7 @@ export function extractBearerToken(authorization: string | undefined | null): st
   return token.length > 0 ? token : null;
 }
 
-export class McpGuard {
+export class ResourceGuard {
   /** Canonical resource identifier (`aud` tokens must carry). */
   readonly resource: string;
   /** Canonical AS issuer identifier. */
@@ -88,12 +88,12 @@ export class McpGuard {
   private readonly validator: TokenValidator;
   private readonly metadata: ProtectedResourceMetadata;
 
-  constructor(config: McpGuardConfig) {
+  constructor(config: ResourceGuardConfig) {
     if (!config.resource) {
-      throw new McpGuardConfigError('`resource` is required');
+      throw new ResourceGuardConfigError('`resource` is required');
     }
     if (!config.authorizationServer) {
-      throw new McpGuardConfigError('`authorizationServer` is required');
+      throw new ResourceGuardConfigError('`authorizationServer` is required');
     }
 
     this.resource = stripTrailingSlash(config.resource);
@@ -110,10 +110,10 @@ export class McpGuard {
     });
   }
 
-  private buildValidator(config: McpGuardConfig): TokenValidator {
+  private buildValidator(config: ResourceGuardConfig): TokenValidator {
     if (this.validationMode === 'introspection') {
       if (!config.introspectionClient) {
-        throw new McpGuardConfigError(
+        throw new ResourceGuardConfigError(
           'introspection mode requires `introspectionClient` credentials (RFC 7662 client auth)'
         );
       }
@@ -160,7 +160,7 @@ export class McpGuard {
     return this.buildJwtValidator(config);
   }
 
-  private buildJwtValidator(config: McpGuardConfig): JwtValidator {
+  private buildJwtValidator(config: ResourceGuardConfig): JwtValidator {
     return new JwtValidator({
       jwksUri: config.jwksUri ?? `${this.authorizationServer}/.well-known/jwks.json`,
       issuer: this.authorizationServer,
@@ -203,7 +203,7 @@ export class McpGuard {
    * `resource_metadata` pointer baked in. The Fastify adapter calls this to
    * set the header on 401 / 403 responses.
    */
-  challengeHeader(error: McpGuardError): string {
+  challengeHeader(error: ResourceGuardError): string {
     return challengeForError(error, this.getMetadataUrl());
   }
 

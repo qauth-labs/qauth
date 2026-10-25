@@ -17,7 +17,7 @@ export const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
  * Tradeoff: a dangerous scope is satisfied by ANY authentication within this
  * window — including an unrelated login that happened ~110s earlier — so the
  * window is a deliberate usability relaxation of the dangerous-op gate, not a
- * guarantee of an immediate prompt. A relying party (e.g. `mcp-guard`) that
+ * guarantee of an immediate prompt. A relying party (e.g. `resource-guard`) that
  * needs *exact* immediacy must send `max_age` (e.g. `max_age=0`), which is
  * enforced against its own value at OIDC second-granularity and is NOT widened
  * by this window. Two minutes balances usability against the "authenticate

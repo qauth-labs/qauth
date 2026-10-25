@@ -1,10 +1,10 @@
-# @qauth-labs/mcp-guard
+# @qauth-labs/resource-guard
 
 > Targets the **MCP Authorization** specification, **revision 2026-07-28**, and
 > **RFC 9728** (OAuth 2.0 Protected Resource Metadata).
 
 The resource-server (RS) side SDK for protecting an **MCP server** with a
-self-hosted **[QAuth](../../../../README.md)** OAuth 2.1 authorization server.
+self-hosted **[QAuth](../../../README.md)** OAuth 2.1 authorization server.
 
 Drop it into an MCP server and you get spec-correct OAuth in minutes:
 
@@ -25,29 +25,34 @@ Drop it into an MCP server and you get spec-correct OAuth in minutes:
 - **Step-up** `403 insufficient_scope` scope challenges for incremental consent
 
 It ships both a **Fastify 5 plugin** and a **framework-agnostic core**
-(`McpGuard`) for non-Fastify hosts.
+(`ResourceGuard`) for non-Fastify hosts.
 
 > Targets the MCP Authorization profile **revision 2026-07-28** and QAuth's AS
 > contract (JWKS at `/.well-known/jwks.json`, discovery at
 > `/.well-known/oauth-authorization-server`, introspection at
-> `/oauth/introspect`). See [ADR-007](../../../../docs/adr/007-mcp-first-positioning.md).
+> `/oauth/introspect`). See [ADR-007](../../../docs/adr/007-mcp-first-positioning.md).
 
 ## Install
 
 ```bash
-pnpm add @qauth-labs/mcp-guard
-# peer deps: fastify@5, jose@6
+pnpm add @qauth-labs/resource-guard
+# The Fastify entry also needs fastify@5 (an optional peer dependency).
+pnpm add fastify
 ```
+
+Two entry points: `@qauth-labs/resource-guard` is the framework-agnostic core
+and never imports Fastify; `@qauth-labs/resource-guard/fastify` is the Fastify 5
+plugin. `jose` comes with the package.
 
 ## Quick start (Fastify)
 
 ```ts
 import Fastify from 'fastify';
-import { mcpGuardPlugin } from '@qauth-labs/mcp-guard';
+import { resourceGuardPlugin } from '@qauth-labs/resource-guard/fastify';
 
 const app = Fastify();
 
-await app.register(mcpGuardPlugin, {
+await app.register(resourceGuardPlugin, {
   // This resource's canonical URL — the `aud` every accepted token must carry.
   resource: 'https://memory.mcp.example.com',
   // Your QAuth instance (the issuer identifier).
@@ -74,7 +79,7 @@ Registering the plugin automatically:
 
 1. serves the RFC 9728 metadata document (`GET /.well-known/oauth-protected-resource`,
    plus the nested path for a path-bearing `resource`),
-2. decorates the instance with `mcpGuard`, `requireBearer`, and `requireScopes(...)`,
+2. decorates the instance with `resourceGuard`, `requireBearer`, and `requireScopes(...)`,
 3. converts guard failures into the correct Bearer challenge responses.
 
 The validated claims are available on `request.tokenClaims`
@@ -85,11 +90,11 @@ The validated claims are available on `request.tokenClaims`
 A Fastify scope carries one guard. Register each further guard, together with the
 routes it protects, in an encapsulated child scope; there the decorators refer to
 that scope's guard. A second registration on the same scope fails at boot with
-`McpGuardConfigError`.
+`ResourceGuardConfigError`.
 
 ```ts
 await app.register(async (admin) => {
-  await admin.register(mcpGuardPlugin, {
+  await admin.register(resourceGuardPlugin, {
     resource: 'https://mcp.example.com/admin',
     authorizationServer: 'https://auth.example.com',
     requiredScopes: ['mcp:admin'],
@@ -109,7 +114,7 @@ server → 200  { resource, authorization_servers: ["https://auth.example.com"],
 client → (discovers AS, runs authorization_code + PKCE against QAuth, gets a
           token with aud=https://memory.mcp.example.com)
 client → GET /mcp/memory   Authorization: Bearer <token>
-server → 200  ✅  (mcp-guard verified signature, issuer, audience, scopes)
+server → 200  ✅  (resource-guard verified signature, issuer, audience, scopes)
 ```
 
 ## Validation modes
@@ -139,7 +144,7 @@ traffic. Requires confidential client credentials (RFC 7662 mandates client
 authentication):
 
 ```ts
-await app.register(mcpGuardPlugin, {
+await app.register(resourceGuardPlugin, {
   resource: 'https://memory.mcp.example.com',
   authorizationServer: 'https://auth.example.com',
   validationMode: 'introspection',
@@ -151,7 +156,7 @@ await app.register(mcpGuardPlugin, {
 ```
 
 Even though QAuth only returns `active: true` to an audience-authoritative
-introspection client, `mcp-guard` re-checks `aud` locally as defence-in-depth,
+introspection client, `resource-guard` re-checks `aud` locally as defence-in-depth,
 so the no-passthrough guarantee never depends solely on AS-side configuration.
 
 ## Configuration
@@ -174,9 +179,9 @@ so the no-passthrough guarantee never depends solely on AS-side configuration.
 ## Framework-agnostic core
 
 ```ts
-import { McpGuard, McpGuardError } from '@qauth-labs/mcp-guard';
+import { ResourceGuard, ResourceGuardError } from '@qauth-labs/resource-guard';
 
-const guard = new McpGuard({
+const guard = new ResourceGuard({
   resource: 'https://memory.mcp.example.com',
   authorizationServer: 'https://auth.example.com',
   requiredScopes: ['mcp:read'],
@@ -186,7 +191,7 @@ try {
   const claims = await guard.authenticate(req.headers.authorization, ['mcp:write']);
   // claims.sub, claims.scopes, claims.audience, …
 } catch (err) {
-  if (err instanceof McpGuardError) {
+  if (err instanceof ResourceGuardError) {
     res.statusCode = err.statusCode; // 401 | 403
     res.setHeader('WWW-Authenticate', guard.challengeHeader(err));
     res.end();
@@ -237,6 +242,6 @@ RFC 8414 (AS Metadata) · MCP Authorization 2026-07-28.
 ## Testing
 
 ```bash
-pnpm nx test mcp-guard
-pnpm nx build mcp-guard
+pnpm nx test resource-guard
+pnpm nx build resource-guard
 ```
