@@ -123,14 +123,22 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     await Promise.all(booted.splice(0).map(async (server) => server.close()));
   });
 
-  /** Boot on an empty state: the default realm on HOST_A and `beta` on HOST_B, DPoP on. */
-  async function boot(): Promise<TwoRealms> {
+  /**
+   * Boot on an empty state: the default realm on HOST_A and `beta` on HOST_B,
+   * DPoP on. `environment` overrides the base settings; `log` collects the
+   * server's warnings.
+   */
+  async function boot(
+    environment: Record<string, string> = {},
+    log?: Record<string, unknown>[]
+  ): Promise<TwoRealms> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
-    const server = await bootAuthServer({
-      ...baseEnvironment(infra, jwt),
-      TRUST_PROXY: PROXY,
-      DPOP_ENABLED: 'true',
-    });
+    const server = await bootAuthServer(
+      { ...baseEnvironment(infra, jwt), TRUST_PROXY: PROXY, DPOP_ENABLED: 'true', ...environment },
+      log === undefined
+        ? {}
+        : { logStream: { write: (line) => log.push(JSON.parse(line) as Record<string, unknown>) } }
+    );
     booted.push(server);
     const { app } = server;
     await resetE2eState(app);
@@ -245,6 +253,65 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     }
     expect(links).toHaveLength(1);
     return links[0] as string;
+  }
+
+  /** A plain (unbound) machine client in `realm`, for introspection. */
+  async function seedIntrospectingClient(
+    app: FastifyInstance,
+    realm: RealmRow,
+    clientId: string
+  ): Promise<void> {
+    await app.repositories.oauthClients.create({
+      realmId: realm.id,
+      clientId,
+      clientSecretHash: await app.passwordHasher.hashPassword(MACHINE_SECRET),
+      tokenEndpointAuthMethod: 'client_secret_post',
+      name: `URL test ${clientId}`,
+      redirectUris: [],
+      scopes: ['reports:read'],
+      grantTypes: ['client_credentials'],
+      enabled: true,
+    });
+  }
+
+  async function clientCredentialsToken(
+    app: FastifyInstance,
+    host: string,
+    clientId: string
+  ): Promise<string> {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: { ...FORM, host },
+      payload: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: clientId,
+        client_secret: MACHINE_SECRET,
+        scope: 'reports:read',
+      }).toString(),
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json<{ access_token: string }>().access_token;
+  }
+
+  async function introspect(
+    app: FastifyInstance,
+    host: string,
+    clientId: string,
+    token: string
+  ): Promise<Record<string, unknown>> {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/oauth/introspect',
+      headers: { ...FORM, host },
+      payload: new URLSearchParams({
+        token,
+        client_id: clientId,
+        client_secret: MACHINE_SECRET,
+      }).toString(),
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json<Record<string, unknown>>();
   }
 
   async function dpopClientCredentials(
@@ -402,6 +469,54 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     );
     expect(forB.statusCode).toBe(200);
     expect(forB.json()).toMatchObject({ token_type: 'DPoP' });
+  }, 120_000);
+
+  it('keeps working with a JWT_ISSUER that ends with a slash: discovery drops it, the token pin keeps it', async () => {
+    const { app, realmA } = await boot({ JWT_ISSUER: `${ISSUER_A}/` });
+    await seedIntrospectingClient(app, realmA, 'urls-a');
+
+    const document = (
+      await discovery(app, '/.well-known/openid-configuration', { host: HOST_A })
+    ).json<Record<string, unknown>>();
+    expect(document['issuer']).toBe(ISSUER_A);
+    expect(document['token_endpoint']).toBe(`${ISSUER_A}/oauth/token`);
+
+    // Tokens still carry JWT_ISSUER as written (until #491), and the realm's
+    // introspection pin accepts them.
+    const token = await clientCredentialsToken(app, HOST_A, 'urls-a');
+    expect(decodeJwtClaims(token)['iss']).toBe(`${ISSUER_A}/`);
+    expect(await introspect(app, HOST_A, 'urls-a', token)).toMatchObject({ active: true });
+  }, 120_000);
+
+  it("refuses at realm B's introspection a token that names realm A's issuer", async () => {
+    const { app, realmA, realmB } = await boot();
+    await seedIntrospectingClient(app, realmA, 'urls-a');
+    await seedIntrospectingClient(app, realmB, 'urls-b');
+
+    const tokenOfA = await clientCredentialsToken(app, HOST_A, 'urls-a');
+    expect(decodeJwtClaims(tokenOfA)['iss']).toBe(ISSUER_A);
+    expect(await introspect(app, HOST_A, 'urls-a', tokenOfA)).toMatchObject({ active: true });
+    expect(await introspect(app, HOST_B, 'urls-b', tokenOfA)).toEqual({ active: false });
+  }, 120_000);
+
+  it('warns at boot when EMAIL_BASE_URL is not the issuer the mailed links now start at', async () => {
+    const log: Record<string, unknown>[] = [];
+    const { app } = await boot({ EMAIL_BASE_URL: 'https://mail.example.org' }, log);
+
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        level: 40,
+        variable: 'EMAIL_BASE_URL',
+        msg: expect.stringContaining('EMAIL_BASE_URL is not read since 0.2.0'),
+      })
+    );
+    expect(
+      await registrationMailLink(app, 'mail@example.com', { host: HOST_A }, UNTRUSTED_PEER)
+    ).toBe(ISSUER_A);
+
+    const quiet: Record<string, unknown>[] = [];
+    await boot({}, quiet);
+    expect(quiet.filter((line) => line['variable'] === 'EMAIL_BASE_URL')).toEqual([]);
   }, 120_000);
 
   it("builds a trusted proxy's request on the row of the realm it names, never on the header's text", async () => {

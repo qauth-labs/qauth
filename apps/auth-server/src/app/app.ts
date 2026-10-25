@@ -35,7 +35,7 @@ import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
-import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
+import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
 import {
@@ -478,6 +478,16 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     };
   }
   // For 'mock' provider, providerConfig is undefined (no config needed)
+
+  // EMAIL_BASE_URL is still required but no longer read (#490). Say so when it
+  // names another base than the default realm's issuer, where the links went.
+  const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
+  if (emailBaseUrlIgnored !== undefined) {
+    fastify.log.warn(
+      { variable: 'EMAIL_BASE_URL', value: env.EMAIL_BASE_URL, issuer: env.JWT_ISSUER },
+      emailBaseUrlIgnored
+    );
+  }
 
   await fastify.register(emailPlugin, {
     provider: emailProvider,
