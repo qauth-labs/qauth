@@ -20,12 +20,46 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 import { authServerClient } from './auth-server-client';
 
-function mockFetch(status: number, body: unknown, ok = status >= 200 && status < 300) {
-  global.fetch = vi.fn().mockResolvedValue({
-    ok,
+function mockFetch(status: number, body: unknown, contentType = 'application/json') {
+  global.fetch = vi.fn().mockResolvedValue(
+    new Response(body === null ? null : JSON.stringify(body), {
+      status,
+      headers: { 'content-type': contentType },
+    })
+  );
+}
+
+/**
+ * An RFC 9457 problem document, as every auth-server route but the OAuth
+ * protocol endpoints answers an error (#513). Fastify appends the charset.
+ */
+function mockProblem(status: number, code: string, extra: Record<string, unknown> = {}) {
+  mockFetch(
     status,
-    json: () => Promise.resolve(body),
-  } as Response);
+    {
+      type: `https://docs.qauth.dev/reference/problem-types/#${code.replaceAll('_', '-')}`,
+      title: 'Problem title',
+      status,
+      detail: 'Problem detail',
+      instance: '/some/path',
+      code,
+      trace_id: 'req-1',
+      ...extra,
+    },
+    'application/problem+json; charset=utf-8'
+  );
+}
+
+/** An OAuth error body (RFC 6749 §5.2), as userinfo answers an error. */
+function mockOAuthError(status: number, error: string, description?: string) {
+  mockFetch(status, { error, ...(description ? { error_description: description } : {}) });
+}
+
+/** An answer whose body is not JSON, as a proxy in front of the auth-server may send. */
+function mockText(status: number, text: string) {
+  global.fetch = vi
+    .fn()
+    .mockResolvedValue(new Response(text, { status, headers: { 'content-type': 'text/html' } }));
 }
 
 afterEach(() => {
@@ -153,34 +187,50 @@ describe('authServerClient.register', () => {
   });
 
   it('returns WEAK_PASSWORD error', async () => {
-    mockFetch(
-      422,
-      { error: 'Weak password', statusCode: 422, code: 'WEAK_PASSWORD', feedback: ['Too short'] },
-      false
-    );
+    // The feedback arrives as `errors` under `/password`; the portal shows it
+    // as the details of the field.
+    mockProblem(422, 'weak_password', {
+      errors: [
+        { pointer: '/password', message: 'Too short' },
+        { pointer: '/password', message: 'Add a symbol' },
+      ],
+    });
     const result = await authServerClient.register('test@example.com', 'pw');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('WEAK_PASSWORD');
-      expect(result.error.details).toEqual(['Too short']);
+      expect(result.error.status).toBe(422);
+      expect(result.error.details).toEqual(['Too short', 'Add a symbol']);
+    }
+  });
+
+  it('returns VALIDATION_ERROR with the message of each field error as details', async () => {
+    mockProblem(400, 'validation_error', {
+      errors: [{ pointer: '/email', message: 'Invalid email address' }],
+    });
+    const result = await authServerClient.register('not-an-address', 'Password1!');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_ERROR');
+      expect(result.error.status).toBe(400);
+      expect(result.error.details).toEqual(['Invalid email address']);
     }
   });
 
   it('maps a unique-constraint conflict to a generic CONFLICT, never EMAIL_TAKEN', async () => {
     // Registration no longer answers 409 (ANT-2026-SPEMY9GU); a conflict from
     // another route must not be read as "this address is registered".
-    mockFetch(
-      409,
-      { error: 'Resource already exists', statusCode: 409, code: 'UNIQUE_CONSTRAINT_VIOLATION' },
-      false
-    );
+    mockProblem(409, 'unique_constraint_violation');
     const result = await authServerClient.register('test@example.com', 'Password1!');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('CONFLICT');
+    if (!result.ok) {
+      expect(result.error.code).toBe('CONFLICT');
+      expect(result.error.status).toBe(409);
+    }
   });
 
   it('returns RATE_LIMITED on 429', async () => {
-    mockFetch(429, { error: 'Too many requests', statusCode: 429 }, false);
+    mockProblem(429, 'too_many_requests');
     const result = await authServerClient.register('test@example.com', 'Password1!');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('RATE_LIMITED');
@@ -215,14 +265,24 @@ describe('authServerClient.login', () => {
   });
 
   it('returns INVALID_CREDENTIALS on 401', async () => {
-    mockFetch(
-      401,
-      { error: 'Invalid email or password', statusCode: 401, code: 'INVALID_CREDENTIALS' },
-      false
-    );
+    mockProblem(401, 'invalid_credentials');
     const result = await authServerClient.login('bad@example.com', 'wrong');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('INVALID_CREDENTIALS');
+    if (!result.ok) {
+      expect(result.error.code).toBe('INVALID_CREDENTIALS');
+      expect(result.error.status).toBe(401);
+    }
+  });
+
+  it('classifies a code it does not know by the status', async () => {
+    // The auth-server may add codes in a minor release (ADR-018 §5).
+    mockProblem(401, 'some_future_code');
+    const result = await authServerClient.login('bad@example.com', 'wrong');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNAUTHENTICATED');
+      expect(result.error.status).toBe(401);
+    }
   });
 
   it('returns NETWORK_ERROR when fetch throws', async () => {
@@ -242,10 +302,20 @@ describe('authServerClient.logout', () => {
   });
 
   it('returns UNKNOWN error on unexpected status', async () => {
-    mockFetch(500, { error: 'Internal server error', statusCode: 500 }, false);
+    mockProblem(500, 'internal_error', { detail: undefined });
     const result = await authServerClient.logout('some-token');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('UNKNOWN');
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNKNOWN');
+      expect(result.error.status).toBe(500);
+    }
+  });
+
+  it('maps a refused access token to UNAUTHENTICATED', async () => {
+    mockProblem(401, 'jwt_invalid');
+    const result = await authServerClient.logout('some-token');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
   });
 });
 
@@ -274,25 +344,30 @@ describe('authServerClient.verifyEmail', () => {
   });
 
   it('returns INVALID_TOKEN on 400 with code', async () => {
-    mockFetch(
-      400,
-      { error: 'Invalid or expired token', statusCode: 400, code: 'INVALID_TOKEN' },
-      false
-    );
+    mockProblem(400, 'invalid_token');
     const result = await authServerClient.verifyEmail(validToken, 'registrant-pw');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('INVALID_TOKEN');
+    if (!result.ok) {
+      expect(result.error.code).toBe('INVALID_TOKEN');
+      expect(result.error.status).toBe(400);
+    }
+  });
+
+  it('returns INVALID_CREDENTIALS for a wrong password', async () => {
+    mockProblem(401, 'invalid_credentials');
+    const result = await authServerClient.verifyEmail(validToken, 'wrong-pw');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('INVALID_CREDENTIALS');
   });
 
   it('returns EMAIL_ALREADY_VERIFIED on 409', async () => {
-    mockFetch(
-      409,
-      { error: 'Email already verified', statusCode: 409, code: 'EMAIL_ALREADY_VERIFIED' },
-      false
-    );
+    mockProblem(409, 'email_already_verified');
     const result = await authServerClient.verifyEmail(validToken, 'registrant-pw');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('EMAIL_ALREADY_VERIFIED');
+    if (!result.ok) {
+      expect(result.error.code).toBe('EMAIL_ALREADY_VERIFIED');
+      expect(result.error.status).toBe(409);
+    }
   });
 });
 
@@ -305,7 +380,7 @@ describe('authServerClient.resendVerification', () => {
   });
 
   it('returns RATE_LIMITED on 429', async () => {
-    mockFetch(429, { error: 'Rate limit exceeded', statusCode: 429 }, false);
+    mockProblem(429, 'too_many_requests');
     const result = await authServerClient.resendVerification('test@example.com');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('RATE_LIMITED');
@@ -323,11 +398,36 @@ describe('authServerClient.userinfo', () => {
     }
   });
 
-  it('returns UNKNOWN error on 401', async () => {
-    mockFetch(401, { error: 'Unauthorized', statusCode: 401 }, false);
+  // Userinfo is an OAuth protocol endpoint: it answers the RFC 6750 §3.1 body,
+  // not a problem document. Its `invalid_token` is the ACCESS token.
+  it('maps an OAuth invalid_token to UNAUTHENTICATED', async () => {
+    mockOAuthError(401, 'invalid_token', 'The access token has expired');
     const result = await authServerClient.userinfo('expired-token');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.status).toBe(401);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNAUTHENTICATED');
+      expect(result.error.status).toBe(401);
+    }
+  });
+
+  it('maps an OAuth invalid_token without a description to UNAUTHENTICATED', async () => {
+    mockOAuthError(401, 'invalid_token');
+    const result = await authServerClient.userinfo('expired-token');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNAUTHENTICATED');
+      expect(result.error.message).not.toBe('');
+    }
+  });
+
+  it('classifies an OAuth error it does not map by the status', async () => {
+    mockOAuthError(503, 'temporarily_unavailable');
+    const result = await authServerClient.userinfo('valid-access-token');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNKNOWN');
+      expect(result.error.status).toBe(503);
+    }
   });
 });
 
@@ -357,10 +457,40 @@ describe('authServerClient.listClients', () => {
   });
 
   it('maps 401 to UNAUTHENTICATED', async () => {
-    mockFetch(401, { error: 'Unauthorized', statusCode: 401 }, false);
+    mockProblem(401, 'jwt_invalid');
     const result = await authServerClient.listClients('bad');
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNAUTHENTICATED');
+      expect(result.error.status).toBe(401);
+    }
+  });
+
+  it('maps an expired access token to UNAUTHENTICATED', async () => {
+    mockProblem(401, 'jwt_expired');
+    const result = await authServerClient.listClients('expired');
+    expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('classifies a body that is not JSON by the status', async () => {
+    mockText(401, '<html>401 Authorization Required</html>');
+    const result = await authServerClient.listClients('bad');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNAUTHENTICATED');
+      expect(result.error.status).toBe(401);
+    }
+  });
+
+  it('classifies a body that is not JSON and has no mapped status as UNKNOWN', async () => {
+    mockText(502, '<html>502 Bad Gateway</html>');
+    const result = await authServerClient.listClients('at');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('UNKNOWN');
+      expect(result.error.status).toBe(502);
+    }
   });
 });
 
@@ -373,7 +503,7 @@ describe('authServerClient.getClient', () => {
   });
 
   it('maps 404 to NOT_FOUND (not owned / missing)', async () => {
-    mockFetch(404, { error: 'Not found', statusCode: 404 }, false);
+    mockProblem(404, 'not_found');
     const result = await authServerClient.getClient('at', 'missing');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('NOT_FOUND');
@@ -388,15 +518,28 @@ describe('authServerClient.createClient', () => {
     if (result.ok) expect(result.data.clientSecret).toHaveLength(64);
   });
 
-  it('maps a 400 without a code to VALIDATION_ERROR', async () => {
-    mockFetch(400, { error: 'Invalid redirect URI', statusCode: 400 }, false);
+  it('maps a bad_request to VALIDATION_ERROR', async () => {
+    mockProblem(400, 'bad_request');
     const result = await authServerClient.createClient('at', { name: 'x' });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_ERROR');
+      expect(result.error.status).toBe(400);
+    }
   });
 
+  it.each(['validation_error', 'invalid_redirect_uri', 'invalid_client_metadata', 'invalid_scope'])(
+    'maps %s to VALIDATION_ERROR',
+    async (code) => {
+      mockProblem(400, code);
+      const result = await authServerClient.createClient('at', { name: 'x' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+    }
+  );
+
   it('maps 429 to RATE_LIMITED', async () => {
-    mockFetch(429, { error: 'Too many requests', statusCode: 429 }, false);
+    mockProblem(429, 'too_many_requests');
     const result = await authServerClient.createClient('at', { name: 'x' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('RATE_LIMITED');
@@ -428,10 +571,30 @@ describe('authServerClient.deleteClient', () => {
   });
 
   it('maps 404 to NOT_FOUND', async () => {
-    mockFetch(404, { error: 'Not found', statusCode: 404 }, false);
+    mockProblem(404, 'not_found');
     const result = await authServerClient.deleteClient('at', 'missing');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('NOT_FOUND');
+    if (!result.ok) {
+      expect(result.error.code).toBe('NOT_FOUND');
+      expect(result.error.status).toBe(404);
+    }
+  });
+
+  it('maps a refused access token to UNAUTHENTICATED', async () => {
+    mockProblem(401, 'jwt_invalid');
+    const result = await authServerClient.deleteClient('expired', 'row-1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('classifies a body that is not JSON by the status', async () => {
+    mockText(429, 'Too Many Requests');
+    const result = await authServerClient.deleteClient('at', 'row-1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('RATE_LIMITED');
+      expect(result.error.status).toBe(429);
+    }
   });
 });
 
@@ -444,9 +607,22 @@ describe('authServerClient.regenerateClientSecret', () => {
   });
 
   it('maps a public-client 400 to VALIDATION_ERROR', async () => {
-    mockFetch(400, { error: 'Public client has no secret', statusCode: 400 }, false);
+    mockProblem(400, 'bad_request');
     const result = await authServerClient.regenerateClientSecret('at', 'row-1');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('authServerClient.createApiKey', () => {
+  it('maps the environment gate (403 forbidden) to FORBIDDEN', async () => {
+    // ADR-008 §6: static API keys are minted for development clients only.
+    mockProblem(403, 'forbidden');
+    const result = await authServerClient.createApiKey('at', 'client-uuid', { name: 'ci' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('FORBIDDEN');
+      expect(result.error.status).toBe(403);
+    }
   });
 });
