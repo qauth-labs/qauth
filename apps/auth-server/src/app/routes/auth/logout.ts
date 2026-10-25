@@ -16,6 +16,7 @@ import {
   verifySignedSessionId,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
+import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
@@ -112,7 +113,7 @@ export default async function (fastify: FastifyInstance) {
         const tokenSub = claims.sub;
 
         if (!tokenSub) {
-          throw withEventReason(new JWTInvalidError('Invalid JWT token'), 'subject_not_a_user');
+          throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
         }
 
         // A subject that names no user, deleted since the token was minted,
@@ -120,10 +121,7 @@ export default async function (fastify: FastifyInstance) {
         // `invalid_token`): there is nothing left to sign out.
         const user = await fastify.repositories.users.findById(tokenSub);
         if (!user) {
-          throw withEventReason(
-            new JWTInvalidError('Access token subject is not a user'),
-            'subject_not_a_user'
-          );
+          throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
         }
         userId = user.id;
         realmId = user.realmId;

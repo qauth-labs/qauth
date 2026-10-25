@@ -1,5 +1,5 @@
 import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -136,7 +136,7 @@ export default async function (fastify: FastifyInstance) {
           { form: 'consent_revocation' },
           { userId: session.userId, actor: 'user' }
         );
-        throw new BadRequestError('invalid_csrf_token');
+        throw new InvalidCsrfTokenError();
       }
 
       const { id } = request.params as { id: string };

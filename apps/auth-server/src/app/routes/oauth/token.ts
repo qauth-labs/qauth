@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { DpopProofError } from '@qauth-labs/fastify-plugin-dpop';
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
 import {
-  BadRequestError,
   InvalidClientError,
   InvalidDpopProofError,
   InvalidGrantError,
@@ -13,6 +12,7 @@ import {
   NotFoundError,
   TemporarilyUnavailableError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -58,11 +58,13 @@ import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { inactiveSubjectTokenError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, oauthErrorCode } from '../../helpers/user-events';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
   TOKEN_EXCHANGE_GRANT_TYPE,
+  TOKEN_GRANT_TYPES,
   TOKEN_TYPE_ACCESS_TOKEN,
   TOKEN_TYPE_ID_JAG,
   type TokenEndpointResponse,
@@ -80,6 +82,25 @@ import {
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 /** The event of a refused token request. */
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
+
+/**
+ * RFC 6749 §5.2: a `grant_type` the endpoint does not serve is answered
+ * `unsupported_grant_type`, not as a malformed request (#513). The body
+ * schema is a union keyed on `grant_type`, so without this hook an unknown
+ * value failed validation and answered `invalid_request`. A missing or
+ * repeated `grant_type` is still the schema's to refuse: that request is
+ * malformed. Runs before validation, so it reads the parsed body as sent.
+ */
+async function rejectUnsupportedGrantType(request: FastifyRequest): Promise<void> {
+  const body = request.body;
+  const grantType =
+    typeof body === 'object' && body !== null
+      ? (body as { grant_type?: unknown }).grant_type
+      : undefined;
+  if (typeof grantType === 'string' && !TOKEN_GRANT_TYPES.includes(grantType)) {
+    throw new UnsupportedGrantTypeError();
+  }
+}
 
 /**
  * POST /oauth/token
@@ -127,8 +148,12 @@ export default async function (fastify: FastifyInstance) {
           200: tokenEndpointResponseSchema,
         },
       },
+      preValidation: rejectUnsupportedGrantType,
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body
+        // (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit: {
           // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
           // forces the strict cap; a development/staging ceiling permits the
@@ -177,7 +202,7 @@ export default async function (fastify: FastifyInstance) {
             },
             { actor: 'client' }
           );
-          throw new BadRequestError('unsupported_grant_type');
+          throw new UnsupportedGrantTypeError();
         }
 
         const realm = requestRealm(request);
@@ -379,8 +404,9 @@ export default async function (fastify: FastifyInstance) {
           return reply.send(responseBody);
         }
 
-        // Schema validation should have rejected this already, but guard anyway.
-        throw new BadRequestError('unsupported_grant_type');
+        // `rejectUnsupportedGrantType` should have refused this already, but
+        // guard anyway.
+        throw new UnsupportedGrantTypeError();
       } catch (error) {
         // A client-secret check shed under load (#751) is thrown only by
         // client authentication, whose catch above already recorded it.
@@ -391,7 +417,7 @@ export default async function (fastify: FastifyInstance) {
           error instanceof InvalidScopeError ||
           error instanceof InvalidRequestError ||
           error instanceof NotFoundError ||
-          error instanceof BadRequestError ||
+          error instanceof UnsupportedGrantTypeError ||
           error instanceof UnauthorizedClientError ||
           error instanceof InvalidDpopProofError ||
           error instanceof TemporarilyUnavailableError
@@ -1502,7 +1528,7 @@ async function handleTokenExchange(
   // `client_id` is never read as a `users.id` (#754).
   if (subjectPayload.sub === subjectPayload.clientId) {
     await emitRequestFailed(ctx, 'invalid_request', 'subject_not_a_user');
-    throw new InvalidRequestError('subject_token subject is not a user');
+    throw inactiveSubjectTokenError();
   }
 
   // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
@@ -1511,11 +1537,11 @@ async function handleTokenExchange(
   const user = await fastify.repositories.users.findById(subjectPayload.sub);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_request', 'user_not_found');
-    throw new InvalidRequestError('subject_token subject is unknown');
+    throw inactiveSubjectTokenError();
   }
   if (!user.enabled) {
     await emitRequestFailed(ctx, 'invalid_request', 'user_disabled', user.id);
-    throw new InvalidRequestError('subject_token subject is not active');
+    throw inactiveSubjectTokenError();
   }
 
   // GATE 4a — scope narrowing. The delegated token's scope is the subject
@@ -1965,7 +1991,7 @@ async function handleJwtBearer(
   // able to skip the flag.
   if (!env.ID_JAG_ENABLED) {
     await emitRequestFailed(ctx, 'unsupported_grant_type', 'id_jag_disabled');
-    throw new BadRequestError('unsupported_grant_type');
+    throw new UnsupportedGrantTypeError();
   }
 
   // GATE 1 — grant authorisation (RFC 6749 §5.2). The grant is not registrable

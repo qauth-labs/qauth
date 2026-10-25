@@ -88,6 +88,9 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body
+        // (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit: {
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,

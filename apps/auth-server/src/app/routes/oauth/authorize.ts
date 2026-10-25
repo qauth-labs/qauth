@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 
 import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
 import {
-  BadRequestError,
   isUniqueConstraintError,
   JWTInvalidError,
   UnauthorizedClientError,
@@ -20,11 +19,11 @@ import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
-import { resolveClient } from '../../helpers/client-resolution';
-import { isClientUsable } from '../../helpers/client-status';
+import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
+import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
-import { readAuthorizationDpopJkt } from '../../helpers/dpop';
+import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
@@ -34,6 +33,8 @@ import {
   isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
+  redirectUriNotPermittedError,
+  unregisteredRedirectUriError,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
@@ -45,6 +46,7 @@ import {
   stepUpErrorForPromptNone,
 } from '../../helpers/step-up';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
@@ -122,6 +124,9 @@ export default async function (fastify: FastifyInstance) {
   const config = {
     // Reads and sets the browser session cookie: the realm host only (#486).
     surface: 'browser' as const,
+    // An OAuth protocol endpoint: an error it does not redirect answers the
+    // RFC 6749 body, not a problem document (ADR-019 Decision 7, #513).
+    errorFormat: 'oauth' as const,
     rateLimit: {
       // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
       // forces the strict cap; a development/staging ceiling permits the
@@ -176,7 +181,7 @@ export default async function (fastify: FastifyInstance) {
         { error: 'invalid_client', reason: unresolvedClientReason(reason) },
         { realmId: realm.id, actor: 'client' }
       );
-      throw new BadRequestError('invalid_client');
+      throw unresolvedClientError();
     }
 
     // Who the events below name until a user is known: the requesting client.
@@ -200,7 +205,7 @@ export default async function (fastify: FastifyInstance) {
         { error: 'invalid_request', reason: 'redirect_uri_not_registered' },
         clientEvent
       );
-      throw new BadRequestError('redirect_uri not registered');
+      throw unregisteredRedirectUriError();
     }
 
     // ADR-008 §5/§7 (#197): resolve the effective environment policy now that
@@ -230,7 +235,7 @@ export default async function (fastify: FastifyInstance) {
         },
         clientEvent
       );
-      throw new BadRequestError('redirect_uri not permitted for this environment');
+      throw redirectUriNotPermittedError();
     }
 
     // A client that may not use this endpoint at all (disabled, or not
@@ -240,24 +245,28 @@ export default async function (fastify: FastifyInstance) {
     // send a visitor straight off the issuer; open DCR can register a client
     // that fails them (`grant_types: ["refresh_token"]`) with any redirect
     // URI, and no working flow depends on receiving this error by redirect.
-    let unauthorizedReason: string | null = null;
+    let unauthorized: UnauthorizedClientError | null = null;
     if (!isClientUsable(client)) {
       // A client its owner disabled and one an operator suspended
-      // (ANT-2026-DR5XI3LV) get the same answer.
-      unauthorizedReason = 'client is disabled';
+      // (ANT-2026-DR5XI3LV) get the same answer, as on the consent page.
+      unauthorized = unusableClientError();
     } else if (!client.grantTypes.includes('authorization_code')) {
-      unauthorizedReason = 'client is not registered for the authorization_code grant';
+      unauthorized = new UnauthorizedClientError(
+        'client is not registered for the authorization_code grant'
+      );
     } else if (!client.responseTypes.includes('code')) {
-      unauthorizedReason = 'client is not registered for the code response type';
+      unauthorized = new UnauthorizedClientError(
+        'client is not registered for the code response type'
+      );
     }
-    if (unauthorizedReason) {
+    if (unauthorized) {
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.failed:v1-rc.0',
         { error: 'unauthorized_client' },
         clientEvent
       );
-      throw new UnauthorizedClientError(unauthorizedReason);
+      throw unauthorized;
     }
 
     // RFC 9449 §10 (#480): `dpop_jkt` binds the code to a DPoP key, whose
@@ -274,7 +283,7 @@ export default async function (fastify: FastifyInstance) {
       );
       return sendAuthorizationError(reply, client, redirectUri, {
         error: 'invalid_request',
-        error_description: 'dpop_jkt must be the base64url SHA-256 JWK thumbprint of a DPoP key',
+        error_description: MALFORMED_DPOP_JKT_DESCRIPTION,
         state: state ?? undefined,
         iss,
       });
@@ -364,7 +373,7 @@ export default async function (fastify: FastifyInstance) {
         // `resolveBrowserSession`) and every grant at `/oauth/token` refuse.
         const user = await fastify.repositories.users.findById(payload.sub);
         if (!user || !user.enabled) {
-          throw new BadRequestError('Token subject is not an active user');
+          throw inactiveSubjectError();
         }
         userId = payload.sub;
       } catch {
