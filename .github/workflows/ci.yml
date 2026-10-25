@@ -14,9 +14,9 @@ jobs:
   # The affected Nx targets, one matrix leg per target, so lint, typecheck,
   # test and build run side by side instead of one after another in a single
   # `nx affected -t lint typecheck test build`. Each leg installs and computes
-  # the affected set on its own, and the legs share no task results (there is
-  # no remote cache): a task another target depends on runs in that target's
-  # leg, as test-vectors' `validate` runs in the test leg before its `test`.
+  # the affected set on its own. A task another target depends on runs in that
+  # target's leg, as test-vectors' `validate` runs in the test leg before its
+  # `test`, unless the remote cache already holds its result.
   # `fail-fast: false` keeps what the single command did, which ran every task
   # and reported every failure: a red leg does not cancel the others.
   #
@@ -25,8 +25,19 @@ jobs:
   # package.json files, eslint.config.mjs), which Oxlint cannot run because it
   # does not lint JSON. Together they are what `lint` checked under ESLint,
   # less formatting, which the `format` job checks.
+  #
+  # Remote cache (`nxCloudId` in nx.json): a push to main reads and writes it,
+  # every other run only reads. The read-write token is a secret of the
+  # `protected` environment, whose deployment branch policy admits main alone,
+  # so a pull request's job cannot reach it even by naming the environment;
+  # pull requests get the read-only token, and a fork's pull request, which
+  # gets no secrets, runs anonymously and never stores. An empty `environment`
+  # name attaches none.
   affected:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'protected' || '' }}
+    env:
+      NX_CLOUD_ACCESS_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.NX_CLOUD_RW_TOKEN || secrets.NX_CLOUD_RO_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,12 +54,6 @@ jobs:
           version: 12.14.0
           run_install: false
 
-      # This enables task distribution via Nx Cloud
-      # Run this command as early as possible, before dependencies are installed
-      # Learn more at https://nx.dev/ci/reference/nx-cloud-cli#npx-nxcloud-startcirun
-      # Uncomment this line to enable task distribution
-      # - run: pnpm dlx nx start-ci-run --distribute-on="3 linux-medium-js" --stop-agents-after="build"
-
       # Cache node_modules
       - uses: actions/setup-node@v7
         with:
@@ -58,8 +63,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: nrwl/nx-set-shas@v5
 
-      # Prepend any command with "nx-cloud record --" to record its logs to Nx Cloud
-      # - run: pnpm exec nx-cloud record -- echo Hello World
       # The targets reach the script through the environment, not by
       # interpolation into it. Nx takes a comma-separated list.
       - run: pnpm exec nx affected -t "$TARGETS"
@@ -173,6 +176,10 @@ jobs:
   # fails rather than skips when `CI` is set, so this job cannot pass vacuously.
   integration:
     runs-on: ubuntu-latest
+    # `test-integration` is not a cacheable target, so the remote cache has
+    # nothing to give it.
+    env:
+      NX_NO_CLOUD: 'true'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -419,6 +426,8 @@ jobs:
   wire-suite:
     runs-on: ubuntu-latest
     env:
+      # `wire-suite:run` is not cacheable (it tests a live server).
+      NX_NO_CLOUD: 'true'
       SERVER_IMAGE: qauth/auth-server:wire
       MIGRATION_IMAGE: qauth/migration-runner:wire
       CONTAINER: qauth-auth-server-wire
