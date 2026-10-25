@@ -815,6 +815,13 @@ async function handleAuthorizationCode(
           // issuer the realm assures nothing about — spreads to NOTHING, so the
           // claim is absent rather than present-and-low.
           ...resolveAcrClaims(authCode.assuranceLevel),
+          // ADR-019 Decisions 3 and 4 (#549): the browser session behind the
+          // code, as back-channel logout will name it. The only place an ID
+          // token gets `sid` (`id-token-sid.test.ts`). A code from the legacy
+          // Bearer path has none, and neither does one minted before
+          // migration 0039: the claim is then absent. Never on the access
+          // token, the introspection response or the refresh row.
+          sid: authCode.sessionId ?? undefined,
         })
       : undefined;
 

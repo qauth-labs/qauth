@@ -277,6 +277,13 @@ export interface JwtUtils {
      * new field must be added in BOTH places or the app cannot pass it.
      */
     acr?: string;
+    /**
+     * OIDC `sid` — the browser session behind the authorization code (#549),
+     * as back-channel logout names it. Passed only by the code exchange, and
+     * only when a browser session backs the code; omitted (claim absent)
+     * otherwise.
+     */
+    sid?: string;
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)

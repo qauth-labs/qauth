@@ -624,8 +624,18 @@ export default async function (fastify: FastifyInstance) {
     // locked `FOR SHARE` in the transaction that inserts the code: a
     // revocation either waits for this transaction to commit, or committed
     // first and the re-read finds no covering consent, in which case no code
-    // is issued (`null`). The issued code's event commits with it.
-    const createCode = async (): Promise<string | null> => {
+    // is issued (`consent_withdrawn`). The issued code's event commits with it.
+    //
+    // The browser session gets the same treatment (#549): its row is locked
+    // `FOR SHARE` while the transaction records which client it served
+    // (`session_clients`, what back-channel logout reads) and stores its `sid`
+    // on the code. A sign-out that committed first leaves no live session,
+    // and no code is issued (`session_ended`): the ID token would name a
+    // session no logout reaches. One that comes later waits, then deletes the
+    // row written here.
+    const createCode = async (): Promise<
+      { code: string } | 'consent_withdrawn' | 'session_ended'
+    > => {
       const code = randomBytes(32).toString('base64url');
       return fastify.db.transaction(async (tx) => {
         const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
@@ -633,7 +643,18 @@ export default async function (fastify: FastifyInstance) {
           client.id,
           tx
         );
-        if (!canSkipConsent(lockedConsent, client, scopes, resources)) return null;
+        if (!canSkipConsent(lockedConsent, client, scopes, resources)) return 'consent_withdrawn';
+        if (
+          browserSession &&
+          !(await fastify.repositories.sessions.recordClient(
+            browserSession.realmId,
+            browserSession.sid,
+            client.id,
+            tx
+          ))
+        ) {
+          return 'session_ended';
+        }
         await fastify.repositories.authorizationCodes.create(
           {
             code,
@@ -658,6 +679,10 @@ export default async function (fastify: FastifyInstance) {
             // refresh family this code starts never outlives the session. Null
             // on the legacy Bearer path (no interactive session).
             sessionExpiresAt: browserSession?.expiresAt ?? null,
+            // ADR-019 Decisions 3 and 4 (#549): the session's `sid`, which the
+            // code exchange puts in the ID token. Null on the legacy Bearer
+            // path (no interactive session), whose ID token has no `sid`.
+            sessionId: browserSession?.sid ?? null,
             scopes,
             // RFC 8707: bind the resource indicator(s) to the authorization
             // code so /oauth/token can set the access token's `aud` claim to
@@ -680,22 +705,46 @@ export default async function (fastify: FastifyInstance) {
           {},
           { ...userEvent, tx }
         );
-        return code;
+        return { code };
       });
     };
 
     const MAX_CREATE_ATTEMPTS = 3;
     let code: string | null = null;
     let consentWithdrawn = false;
+    let sessionEnded = false;
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
       try {
-        code = await createCode();
-        consentWithdrawn = code === null;
+        const outcome = await createCode();
+        consentWithdrawn = outcome === 'consent_withdrawn';
+        sessionEnded = outcome === 'session_ended';
+        code = typeof outcome === 'object' ? outcome.code : null;
         break;
       } catch (err) {
         if (!isUniqueConstraintError(err)) throw err;
         if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
       }
+    }
+
+    if (sessionEnded) {
+      // The session ended under this request (#549). Fail closed, once, with
+      // the answer a request arriving after the sign-out gets: no session, so
+      // `login_required` under `prompt=none`, else the login page.
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'login_required', reason: 'session_ended_during_authorization' },
+        userEvent
+      );
+      if (parsePromptMode(query.prompt) === 'none') {
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'login_required',
+          error_description: 'authentication is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
+      }
+      return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
     }
 
     if (consentWithdrawn) {

@@ -133,6 +133,17 @@ export interface SignIdTokenPayload {
    * destroy that signal.
    */
   acr?: string;
+  /**
+   * OIDC `sid` — the browser session the end-user authenticated in (ADR-019
+   * Decisions 3 and 4, #549): the `sessions` row id the authorization code
+   * recorded, which back-channel logout names (Back-Channel Logout 1.0 §2.1).
+   *
+   * Only the authorization code exchange passes it, and only for a code a
+   * browser session backs. Omitted (claim absent) otherwise: a code from the
+   * legacy Bearer path has no session. Never the Authority Tree's id, which is
+   * `tree_id` on agent access tokens (ADR-014).
+   */
+  sid?: string;
 }
 
 /**
