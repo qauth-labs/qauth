@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import * as ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
@@ -10,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
  * peer dependency that only `@qauth-labs/resource-guard/fastify` needs.
  */
 
-const LIBRARY_ROOT = resolve(__dirname, '..');
+const LIBRARY_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** Every bare import of the modules reachable from `entry`, with the file that makes it. */
 function bareImports(entry: string): Array<{ file: string; specifier: string }> {
@@ -27,7 +28,8 @@ function bareImports(entry: string): Array<{ file: string; specifier: string }> 
         found.push({ file: relative(LIBRARY_ROOT, file), specifier });
         continue;
       }
-      const base = resolve(dirname(file), specifier);
+      // The sources import `./x.js` for Node's ESM resolution; the file is `x.ts`.
+      const base = resolve(dirname(file), specifier.replace(/\.js$/, ''));
       const next = [`${base}.ts`, join(base, 'index.ts')].find((candidate) =>
         existsSync(candidate)
       );

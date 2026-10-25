@@ -8,8 +8,8 @@
  * fastest path for a client and is recommended — `resource-guard` always emits it.
  */
 
-import type { ResourceGuardError } from './errors';
-import { advertisableScopes } from './scope';
+import type { ResourceGuardError } from './errors.js';
+import { advertisableScopes } from './scope.js';
 
 export interface ChallengeParams {
   /** Absolute URL of the RFC 9728 PRM document (`resource_metadata`). */

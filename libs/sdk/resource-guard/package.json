@@ -1,12 +1,58 @@
 {
   "name": "@qauth-labs/resource-guard",
   "version": "0.0.0",
-  "private": true,
+  "description": "Resource-server SDK for QAuth: RFC 9728 protected-resource metadata, RFC 6750 challenges and audience-bound bearer-token validation for MCP servers and other OAuth 2.1 resource servers.",
+  "keywords": [
+    "oauth",
+    "oauth2.1",
+    "mcp",
+    "resource-server",
+    "rfc9728",
+    "bearer",
+    "jwt",
+    "qauth"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://docs.qauth.dev/integrate/mcp-quickstart/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qauth-labs/qauth.git",
+    "directory": "libs/sdk/resource-guard"
+  },
+  "bugs": {
+    "url": "https://github.com/qauth-labs/qauth/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./fastify": "./src/fastify.ts",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./fastify": {
+        "types": "./dist/fastify.d.ts",
+        "import": "./dist/fastify.js"
+      },
+      "./package.json": "./package.json"
+    }
   },
   "dependencies": {
     "fastify-plugin": "catalog:",

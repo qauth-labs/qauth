@@ -21,9 +21,9 @@ import {
   jwtVerify,
 } from 'jose';
 
-import type { ValidatedToken } from '../types';
-import { InvalidTokenError } from './errors';
-import { parseScopes } from './scope';
+import type { ValidatedToken } from '../types.js';
+import { InvalidTokenError } from './errors.js';
+import { parseScopes } from './scope.js';
 
 export interface JwtValidatorOptions {
   /** JWKS document URL. */

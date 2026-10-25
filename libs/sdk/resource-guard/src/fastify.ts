@@ -11,4 +11,4 @@ export {
   resourceGuardPlugin,
   type ResourceGuardPluginOptions,
   sendBearerChallenge,
-} from './lib/fastify-plugin';
+} from './lib/fastify-plugin.js';

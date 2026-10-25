@@ -17,7 +17,7 @@
  */
 
 // Framework-agnostic core.
-export { extractBearerToken, ResourceGuard } from './lib/core';
+export { extractBearerToken, ResourceGuard } from './lib/core.js';
 
 // Errors (for `instanceof` checks and custom error handling).
 export {
@@ -28,7 +28,7 @@ export {
   MissingTokenError,
   ResourceGuardConfigError,
   ResourceGuardError,
-} from './lib/errors';
+} from './lib/errors.js';
 
 // RFC 9728 metadata helpers.
 export {
@@ -37,20 +37,20 @@ export {
   metadataUrlForResource,
   PRM_WELL_KNOWN_PREFIX,
   type ProtectedResourceMetadata,
-} from './lib/metadata';
+} from './lib/metadata.js';
 
 // Challenge construction (RFC 6750 §3.1).
-export { buildWwwAuthenticate, type ChallengeParams } from './lib/challenge';
+export { buildWwwAuthenticate, type ChallengeParams } from './lib/challenge.js';
 
 // Scope helpers.
-export { hasRequiredScopes, missingScopes, parseScopes } from './lib/scope';
+export { hasRequiredScopes, missingScopes, parseScopes } from './lib/scope.js';
 
 // Validators (advanced / custom wiring).
 export {
   IntrospectionValidator,
   type IntrospectionValidatorOptions,
-} from './lib/introspection-validator';
-export { JwtValidator, type JwtValidatorOptions } from './lib/jwt-validator';
+} from './lib/introspection-validator.js';
+export { JwtValidator, type JwtValidatorOptions } from './lib/jwt-validator.js';
 
 // Public config & result types.
 export type {
@@ -59,4 +59,4 @@ export type {
   ResourceGuardConfig,
   ValidatedToken,
   ValidationMode,
-} from './types';
+} from './types.js';

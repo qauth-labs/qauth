@@ -4,5 +4,24 @@
   "sourceRoot": "libs/sdk/resource-guard/src",
   "projectType": "library",
   "tags": ["scope:sdk", "type:sdk"],
+  "targets": {
+    "build-npm": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/LICENSE",
+        {
+          "externalDependencies": ["@typescript/native-preview"]
+        }
+      ],
+      "outputs": ["{projectRoot}/dist"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["rm -rf dist", "tsgo -p tsconfig.npm.json"],
+        "parallel": false
+      }
+    }
+  },
   "// targets": "to see all targets run: nx show project resource-guard --web"
 }

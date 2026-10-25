@@ -92,6 +92,14 @@ A husky `pre-commit` hook runs lint-staged (`oxlint --fix`, then Oxfmt) on stage
 - All code, comments, docs, commits, and PRs are in **English**; only user-facing
   content may be localized.
 
+## Releases
+
+Releases are cut by maintainers: the server images on a `vX.Y.Z` tag and each
+SDK package on a `<sdk>@X.Y.Z` tag. [RELEASING.md](./RELEASING.md) has the
+steps, the version rule and how to roll back. Every pull request also packs
+each SDK as npm would receive it and installs it into an empty project, so a
+change that would break a published package fails there first.
+
 ## Reporting security issues
 
 Do **not** open a public issue for security vulnerabilities. Use GitHub's private
