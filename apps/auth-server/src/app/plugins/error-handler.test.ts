@@ -10,6 +10,7 @@ import {
   JWTInvalidError,
   MisdirectedRequestError,
   NotFoundError,
+  TemporarilyUnavailableError,
   UnauthorizedClientError,
   UniqueConstraintError,
   WeakPasswordError,
@@ -97,6 +98,10 @@ async function buildTestApp(): Promise<FastifyInstance> {
     async () => ({ reached: true })
   );
 
+  app.post('/test-shed', async () => {
+    throw new TemporarilyUnavailableError(1, { reason: 'argon2_queue_full', queued: 32 });
+  });
+
   app.post('/test-unique-constraint', async () => {
     // The DB layer surfaces the offending constraint name; the handler must NOT
     // leak it (account-enumeration oracle, e.g. duplicate-email registration).
@@ -176,6 +181,9 @@ async function buildProblemApp(): Promise<FastifyInstance> {
   app.get('/admin/v1-rc.0/misdirected', async () => {
     throw new MisdirectedRequestError();
   });
+  app.get('/admin/v1-rc.0/shed', async () => {
+    throw new TemporarilyUnavailableError(3, { reason: 'argon2_queue_full' });
+  });
 
   return app;
 }
@@ -217,6 +225,24 @@ describe('error-handler plugin', () => {
       error: 'Invalid JWT token',
       code: 'JWT_INVALID',
     });
+
+    await app.close();
+  });
+
+  it('maps TemporarilyUnavailableError to 503 temporarily_unavailable with Retry-After (#751)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({ method: 'POST', url: '/test-shed' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['retry-after']).toBe('1');
+    expect(response.json()).toEqual({
+      statusCode: 503,
+      error: 'temporarily_unavailable',
+      code: 'TEMPORARILY_UNAVAILABLE',
+    });
+    // `details` is logged, never sent.
+    expect(response.body).not.toContain('argon2_queue_full');
 
     await app.close();
   });
@@ -406,6 +432,25 @@ describe('error-handler plugin', () => {
       // The legacy members are gone, so a client cannot branch on them.
       expect(response.json()).not.toHaveProperty('error');
       expect(response.json()).not.toHaveProperty('statusCode');
+
+      await app.close();
+    });
+
+    it('answers a shed request with 503, service_unavailable and Retry-After (#751)', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/shed' });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.headers['retry-after']).toBe('3');
+      expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      expect(response.json()).toMatchObject({
+        status: 503,
+        title: 'Service Unavailable',
+        code: 'service_unavailable',
+      });
+      // The reason is the operator's, in the log line.
+      expect(response.body).not.toContain('argon2');
 
       await app.close();
     });
@@ -886,6 +931,9 @@ describe('error-handler plugin', () => {
       app.get('/server-error', async () => {
         throw new Error('something came apart');
       });
+      app.post('/shed', async () => {
+        throw new TemporarilyUnavailableError(1, { reason: 'argon2_queue_full', queued: 32 });
+      });
 
       const calls: Array<{ level: string; payload: Record<string, unknown> }> = [];
       app.addHook('onRequest', async (request) => {
@@ -916,6 +964,19 @@ describe('error-handler plugin', () => {
 
       expect(response.statusCode).toBe(500);
       expect(calls.map((call) => call.level)).toContain('error');
+    });
+
+    it('logs a request shed under load at warn, with its details (#751)', async () => {
+      // A burst anyone can send is shed by design; at `error` it would flood
+      // the level that pages someone.
+      const { calls, response } = await captureLogs('/shed');
+
+      expect(response.statusCode).toBe(503);
+      expect(calls.map((call) => call.level)).toEqual(['warn']);
+      expect(calls[0]?.payload['statusCode']).toBe(503);
+      expect(calls[0]?.payload['err']).toMatchObject({
+        details: { reason: 'argon2_queue_full', queued: 32 },
+      });
     });
 
     it('logs through the REQUEST logger, so the line carries a reqId', async () => {

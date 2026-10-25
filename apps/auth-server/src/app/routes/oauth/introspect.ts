@@ -1,4 +1,9 @@
-import { InvalidClientError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  InvalidClientError,
+  JWTExpiredError,
+  JWTInvalidError,
+  TemporarilyUnavailableError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -263,7 +268,9 @@ export default async function (fastify: FastifyInstance) {
             : { token_type: 'DPoP' as const, cnf: { jkt: payload.cnf.jkt } }),
         });
       } catch (error) {
-        if (error instanceof InvalidClientError) {
+        // Both come only from client authentication, whose catch above already
+        // recorded the event; the second is a secret check shed under load (#751).
+        if (error instanceof InvalidClientError || error instanceof TemporarilyUnavailableError) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
           throw error;
         }

@@ -1,4 +1,9 @@
-import { InvalidClientError, InvalidScopeError } from '@qauth-labs/shared-errors';
+import { Argon2QueueFullError } from '@qauth-labs/fastify-plugin-password';
+import {
+  InvalidClientError,
+  InvalidScopeError,
+  TemporarilyUnavailableError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
@@ -15,6 +20,14 @@ const AUDIENCE_MAX_ENTRIES = 20;
 const audienceSchema = z
   .array(z.string().min(1).max(AUDIENCE_ENTRY_MAX_LENGTH))
   .max(AUDIENCE_MAX_ENTRIES);
+
+/**
+ * `Retry-After`, in seconds, of a client-secret check shed because the Argon2
+ * queue was full (#751). Short on purpose: a shed check costs the server no
+ * hash, so an early retry is cheap, and at the default limit a full queue
+ * drains in about a second.
+ */
+export const SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS = 1;
 
 /**
  * Minimal OAuth client view used by helper functions in this file.
@@ -191,6 +204,13 @@ export function extractClientCredentials(
  * requirement. Public clients (`'none'`) are likewise rejected here: their
  * stored hash is a non-verifiable sentinel, so this is an explicit denial
  * rather than a reliance on the sentinel never matching.
+ *
+ * The secret check is shed rather than queued (#751): when
+ * `PASSWORD_HASH_QUEUE_LIMIT` Argon2 jobs already wait for a thread, it throws
+ * {@link TemporarilyUnavailableError} (503 with `Retry-After`) before any hash
+ * is computed, and counts the refusal. Only a client that exists, is usable
+ * and authenticates with a secret gets that far; every other request is the
+ * same `invalid_client` as before.
  */
 export async function authenticateClient(
   fastify: FastifyInstance,
@@ -205,10 +225,25 @@ export async function authenticateClient(
   if (!acceptsClientSecret(client.tokenEndpointAuthMethod)) {
     throw new InvalidClientError();
   }
-  const valid = await fastify.passwordHasher.verifyPassword(
-    client.clientSecretHash,
-    creds.clientSecret
-  );
+  let valid: boolean;
+  try {
+    valid = await fastify.passwordHasher.verifyPassword(
+      client.clientSecretHash,
+      creds.clientSecret,
+      { shedWhenQueueFull: true }
+    );
+  } catch (error) {
+    if (!(error instanceof Argon2QueueFullError)) throw error;
+    fastify.metrics.clientSecretChecksShed.inc();
+    // The error handler logs `details` on the request's line, with its id.
+    throw new TemporarilyUnavailableError(SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS, {
+      reason: 'argon2_queue_full',
+      realmId,
+      clientId: client.clientId,
+      queued: error.queued,
+      queueLimit: error.queueLimit,
+    });
+  }
   if (!valid) {
     throw new InvalidClientError();
   }

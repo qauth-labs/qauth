@@ -13,6 +13,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   NotFoundError,
+  TemporarilyUnavailableError,
   TokenExpiredError,
   TooManyRequestsError,
   UnauthorizedClientError,
@@ -224,7 +225,9 @@ export function oauthErrorCode(error: unknown): string {
     return 'access_denied';
   }
   if (error instanceof NotFoundError) return 'invalid_request';
-  if (error instanceof TooManyRequestsError) return 'temporarily_unavailable';
+  if (error instanceof TooManyRequestsError || error instanceof TemporarilyUnavailableError) {
+    return 'temporarily_unavailable';
+  }
   return 'server_error';
 }
 
