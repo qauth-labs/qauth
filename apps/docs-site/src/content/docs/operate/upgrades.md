@@ -127,6 +127,39 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
+### Refresh tokens pause while migration 0038 runs
+
+Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records
+when each refresh-token family started. It fills the new column for every row
+of `refresh_tokens` in one statement, inside the runner's transaction, and the
+`ALTER TABLE` before it locks the table until that transaction commits. While
+the runner works, every token request that reads or writes a refresh token
+waits: a code exchange, a refresh, `POST /auth/login` and the purge job. Nothing
+fails; those requests finish once the runner does, unless your proxy or client
+gives up first.
+
+The pause grows with the number of rows in `refresh_tokens`, rotated and
+revoked tokens included. Measured on a 12-vCPU AMD EPYC virtual machine with
+47 GB of memory, against a `postgres:18-alpine` container on its default
+settings (`shared_buffers` 128 MB, `max_wal_size` 1 GB), with five tokens per
+family:
+
+| Rows in `refresh_tokens` | Table size | Whole migration | A token insert waited |
+| ------------------------ | ---------- | --------------- | --------------------- |
+| 100,000                  | 58 MB      | 5.7 s           | 4.7 s                 |
+| 1,000,000                | 588 MB     | 100 s           | 99.8 s                |
+
+Almost all of it is the `UPDATE` (5.5 s and 98.4 s). A Postgres with more
+`shared_buffers` and a larger `max_wal_size` takes less time. To know your own
+number, count first:
+
+```sql
+SELECT count(*) FROM refresh_tokens;
+```
+
+With many rows, run the migration at a quiet hour, and keep the proxy's and
+the clients' timeouts above the expected pause.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

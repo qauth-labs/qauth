@@ -759,18 +759,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Decision 3). A family is every refresh token descended from one code
   exchange or `POST /auth/login`; the new `refresh_tokens.family_created_at`
   (migration 0038) records when it started, and every rotation keeps it. A
-  token issued in the family expires no later than that start plus the limit,
-  and a refresh at or past that end revokes the whole family and answers
-  `invalid_grant` (the `token.request_failed` event's reason is
+  family also ends no later than the browser session that backed its code: the
+  code records the session's absolute end (`authorization_codes.session_expires_at`)
+  and the family keeps it (`refresh_tokens.family_session_expires_at`), so a
+  silent re-authorization just before the session's end starts a family that
+  ends with the session. A family no browser session started (`POST /auth/login`)
+  has only its start plus the limit. A token issued in the family expires no
+  later than that end, and a refresh at or past it revokes the whole family and
+  answers `invalid_grant` (the `token.request_failed` event's reason is
   `refresh_family_expired`). Replay detection runs first, as before. The limit
   is read from the realm at each refresh, within the host cache time, so
   lowering it ends older families at their next refresh. A realm with no
-  `sso_max_lifespan` keeps the sliding `REFRESH_TOKEN_LIFESPAN`. The migration
-  gives each existing token the creation time of the earliest token of its
-  family, in one statement over the whole table, so refresh-token traffic waits
-  for it. During a rolling upgrade the previous release does not write the
-  column: a trigger gives its insert the start of the family the token joins,
-  or the current time for a new family.
+  `sso_max_lifespan` keeps the sliding `REFRESH_TOKEN_LIFESPAN`, and the
+  session's end does not cap its families either. Families that exist at the
+  upgrade have no recorded session end, so their start plus the limit caps them
+  alone. During a rolling upgrade the previous release does not write the new
+  columns: a trigger gives its insert the start and session end of the family
+  the token joins, or the current time and no session end for a new family.
+- **BREAKING (realms with `sso_max_lifespan` of zero or less)**: a realm's
+  `sso_max_lifespan` must now be null (no limit) or a positive number of
+  seconds ([#552]). Migration 0038 turns a value of zero or less into null,
+  then adds the CHECK `realms_sso_max_lifespan_positive`; the realms repository
+  refuses such a value with `400` before it reaches the database. Before, such
+  a value ended every session and every refresh-token family at its start.
+- **Migration 0038 pauses refresh-token traffic** ([#552]). It fills
+  `family_created_at` for every row of `refresh_tokens` in one statement,
+  inside the runner's transaction, with the table locked until it commits.
+  Measured on a 12-vCPU virtual machine against a default `postgres:18-alpine`
+  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. See the upgrade
+  guide (`operate/upgrades`) before upgrading a large deployment.
 
   **Action for operators**: none for a realm without `sso_max_lifespan`. In a
   realm that sets it, a family already older than the limit ends at its next

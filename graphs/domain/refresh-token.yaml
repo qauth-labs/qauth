@@ -15,6 +15,7 @@ entities:
         oauthClientId: 0199f99f-0a0b-7c0d-8e0f-101112131415
         familyId: 6f1c2a7e-3b4d-4e5f-9a6b-7c8d9e0f1a2b # /auth/login starts a new family with a random (v4) UUID
         familyCreatedAt: 1792918800000 # when that sign-in started the family; every rotation keeps it
+        familySessionExpiresAt: null # /auth/login has no browser session, so none caps the family
         scopes: []
         resource: []
         expiresAt: 1793523600000
@@ -30,6 +31,7 @@ entities:
         oauthClientId: 0199f99f-0a0b-7c0d-8e0f-101112131415
         familyId: 6f1c2a7e-3b4d-4e5f-9a6b-7c8d9e0f1a2b
         familyCreatedAt: 1792918800000
+        familySessionExpiresAt: null
         scopes: []
         resource: []
         expiresAt: 1793523600000
