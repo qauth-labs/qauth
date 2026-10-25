@@ -1,9 +1,11 @@
 export * from './email-already-verified.error';
 export * from './email-not-verified.error';
 export * from './invalid-client.error';
+export * from './invalid-client-metadata.error';
 export * from './invalid-credentials.error';
 export * from './invalid-dpop-proof.error';
 export * from './invalid-grant.error';
+export * from './invalid-redirect-uri.error';
 export * from './invalid-request.error';
 export * from './invalid-scope.error';
 export * from './invalid-target.error';
@@ -15,4 +17,5 @@ export * from './provider-not-registered.error';
 export * from './token-already-used.error';
 export * from './token-expired.error';
 export * from './unauthorized-client.error';
+export * from './unsupported-grant-type.error';
 export * from './weak-password.error';
