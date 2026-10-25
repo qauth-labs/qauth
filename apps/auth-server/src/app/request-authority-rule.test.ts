@@ -157,6 +157,57 @@ const SAMPLES: readonly Sample[] = [
     code: 'export const header = `x-forwarded-prefix`;\n',
   },
   {
+    kind: 'authority',
+    what: '_request.hostname',
+    code: `export const read = (_${REQUEST}) => _request.hostname;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'reply.request.hostname',
+    code: 'export const read = (reply: { request: { hostname: string } }) => reply.request.hostname;\n',
+  },
+  {
+    kind: 'authority',
+    what: 'this.request.protocol',
+    code: 'export class Handler {\n  constructor(private readonly request: { protocol: string }) {}\n  read() {\n    return this.request.protocol;\n  }\n}\n',
+  },
+  {
+    kind: 'authority',
+    what: 'a hostname destructured from a FastifyRequest parameter',
+    code: "import type { FastifyRequest } from 'fastify';\nexport const read = ({ hostname }: FastifyRequest) => hostname;\n",
+  },
+  {
+    kind: 'authority',
+    what: 'a Host header destructured through headers',
+    code: `export function read(${REQUEST}) {\n  const {\n    headers: { host },\n  } = request;\n  return host;\n}\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'a hostname destructured in an assignment',
+    code: `export function read(${REQUEST}) {\n  let name = '';\n  ({ hostname: name } = request);\n  return name;\n}\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'the Forwarded header',
+    code: `export const read = (${REQUEST}) => request.headers.forwarded;\n`,
+  },
+  {
+    kind: 'allowed',
+    what: 'the url destructured from a request',
+    code: `export function read(${REQUEST}) {\n  const { url } = request;\n  return url;\n}\n`,
+  },
+  {
+    // The browser's own origin, which a CSRF check compares with the realm's.
+    kind: 'allowed',
+    what: 'the Origin header',
+    code: `export const read = (${REQUEST}) => request.headers.origin;\n`,
+  },
+  {
+    kind: 'allowed',
+    what: 'a hostname destructured from a value that is no request',
+    code: 'export const read = ({ hostname }: URL) => hostname;\n',
+  },
+  {
     // The path is the route's, not the authority: the DPoP `htu` check joins it
     // onto the realm's issuer.
     kind: 'allowed',

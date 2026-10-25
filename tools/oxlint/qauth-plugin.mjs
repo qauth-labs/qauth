@@ -59,14 +59,17 @@ const noRestrictedSyntax = {
   },
 };
 
-/** The request objects of the auth server's handlers and hooks, by their usual names. */
-const REQUEST_NAMES = new Set(['request', 'req']);
+/** A request object by its usual names: `request`, `req`, and either with leading underscores. */
+const REQUEST_NAME = /^_*(?:request|req)$/;
+
+/** Type names whose value is a request, for a destructured parameter. */
+const REQUEST_TYPES = new Set(['FastifyRequest', 'IncomingMessage']);
 
 /** Request properties Fastify derives from the `Host` header or `X-Forwarded-*`. */
 const AUTHORITY_PROPERTIES = new Set(['host', 'hostname', 'port', 'protocol']);
 
 /** Header names that carry the request's authority, compared in lower case. */
-const AUTHORITY_HEADERS = new Set(['host', ':authority']);
+const AUTHORITY_HEADERS = new Set(['host', ':authority', 'forwarded']);
 
 /** A header name of the `X-Forwarded-*` family, alone in its string. */
 const FORWARDED_HEADER = /^x-forwarded-[a-z0-9-]*$/i;
@@ -78,9 +81,15 @@ function propertyName(key, computed) {
   return undefined;
 }
 
-/** `request`, `req`. */
+/**
+ * A request: `request`, `req`, `_request`, or a member that names one, such as
+ * `reply.request`, `this.request` or `ctx.req`.
+ */
 function isRequest(node) {
-  return node?.type === 'Identifier' && REQUEST_NAMES.has(node.name);
+  if (node?.type === 'Identifier') return REQUEST_NAME.test(node.name);
+  if (node?.type !== 'MemberExpression') return false;
+  const name = propertyName(node.property, node.computed);
+  return name !== undefined && REQUEST_NAME.test(name);
 }
 
 /** `headers`, or any `<x>.headers`, such as `request.headers` or `request.raw.headers`. */
@@ -98,17 +107,62 @@ function readsAuthority(object, name) {
   return isHeaders(object) && AUTHORITY_HEADERS.has(name.toLowerCase());
 }
 
+/** What a destructuring pattern unpacks: a request, its headers, or neither. */
+function sourceOf(node) {
+  if (isRequest(node)) return 'request';
+  if (isHeaders(node)) return 'headers';
+  return undefined;
+}
+
+/** The type name an annotated pattern declares, as in `({ hostname }: FastifyRequest)`. */
+function annotatedTypeName(pattern) {
+  const type = pattern.typeAnnotation?.typeAnnotation;
+  return type?.type === 'TSTypeReference' && type.typeName?.type === 'Identifier'
+    ? type.typeName.name
+    : undefined;
+}
+
+/**
+ * Report every property of an object pattern that unpacks the authority from
+ * `source`, following nested patterns: `{ hostname }` and `{ headers: { host } }`
+ * from a request, `{ host }` from headers. A default value (`{ host = '' }`) is
+ * looked through.
+ */
+function checkPattern(pattern, source, report) {
+  if (pattern?.type === 'AssignmentPattern') return checkPattern(pattern.left, source, report);
+  if (pattern?.type !== 'ObjectPattern' || source === undefined) return;
+  for (const property of pattern.properties) {
+    if (property.type !== 'Property') continue;
+    const name = propertyName(property.key, property.computed);
+    if (name === undefined) continue;
+    if (source === 'request' && AUTHORITY_PROPERTIES.has(name)) report(property);
+    else if (source === 'headers' && AUTHORITY_HEADERS.has(name.toLowerCase())) report(property);
+    else if (source === 'request' && name === 'headers') {
+      checkPattern(property.value, 'headers', report);
+    } else if (source === 'request' && name === 'raw') {
+      checkPattern(property.value, 'request', report);
+    }
+  }
+}
+
 /**
  * `no-request-authority` (ADR-019 Decision 1, issue #490): no URL is built from
  * the request. The realm resolver is the one reader of the request's
  * authority; every other file takes the realm it resolved and builds URLs from
  * the realm row (`realmIssuer`, `buildRealmUrl`). Reported:
  *
- * - `request.host`, `request.hostname`, `request.port` and `request.protocol`
- *   (also on `req`, computed, or destructured from it);
- * - the `Host` header and `:authority` read from any `headers` object
- *   (`request.headers.host`, `headers['Host']`, `const { host } = headers`);
+ * - `request.host`, `request.hostname`, `request.port` and `request.protocol`,
+ *   on `request`, `req` (with leading underscores too) or a member naming one
+ *   (`reply.request`, `this.request`), computed or destructured, including a
+ *   parameter typed `FastifyRequest` or `IncomingMessage`;
+ * - the `Host`, `:authority` and `Forwarded` headers read from any `headers`
+ *   object (`request.headers.host`, `headers['Host']`, `const { host } = headers`,
+ *   `const { headers: { host } } = request`);
  * - any string that is an `X-Forwarded-*` header name, wherever it appears.
+ *
+ * A path rule like the key custody guard: it keeps honest code honest. An
+ * alias (`const h = request.headers; h.host`) or a request under another name
+ * passes; review and the tests of each URL hold the rest of the line.
  *
  * Takes no options. `.oxlintrc.json` turns it on for the auth server and the
  * libraries it loads, outside the resolver and the tests, which send such
@@ -131,13 +185,13 @@ const noRequestAuthority = {
         if (readsAuthority(node.object, propertyName(node.property, node.computed))) report(node);
       },
       VariableDeclarator(node) {
-        if (node.id.type !== 'ObjectPattern') return;
-        for (const property of node.id.properties) {
-          if (property.type !== 'Property') continue;
-          if (readsAuthority(node.init, propertyName(property.key, property.computed))) {
-            report(property);
-          }
-        }
+        checkPattern(node.id, sourceOf(node.init), report);
+      },
+      AssignmentExpression(node) {
+        checkPattern(node.left, sourceOf(node.right), report);
+      },
+      ObjectPattern(node) {
+        if (REQUEST_TYPES.has(annotatedTypeName(node))) checkPattern(node, 'request', report);
       },
       Literal(node) {
         if (typeof node.value === 'string' && FORWARDED_HEADER.test(node.value)) report(node);
