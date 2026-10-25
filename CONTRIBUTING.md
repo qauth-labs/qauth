@@ -94,9 +94,10 @@ A husky `pre-commit` hook runs lint-staged (`oxlint --fix`, then Oxfmt) on stage
 
 ## Releases
 
-Releases are cut by maintainers: the server images on a `vX.Y.Z` tag and each
-SDK package on a `<sdk>@X.Y.Z` tag. [RELEASING.md](./RELEASING.md) has the
-steps, the version rule and how to roll back. Every pull request also packs
+Releases are cut by maintainers. One tag, `vX.Y.Z` or `vX.Y.Z-rc.N`, releases
+the server images and every SDK package at QAuth's version.
+[RELEASING.md](./RELEASING.md) has the steps, the version rule and how to roll
+back. Every pull request also packs
 each SDK as npm would receive it and installs it into an empty project, so a
 change that would break a published package fails there first.
 

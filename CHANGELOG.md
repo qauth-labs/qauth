@@ -21,21 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page (`operate/images`) shows how to pin the digests and verify them.
 - The auth-server image installs `tsx` at the exact version the lockfile
   resolves (4.23.15), not the floating `tsx@4`.
-- **npm releases of the SDK packages** ([#596], ADR-018 §6). A tag
-  `<sdk>@<version>` packs that SDK, checks the tarball (only `package.json`,
-  `README.md`, `LICENSE` and compiled `dist/`; no environment, test, source-map
-  or source file; no private key or build-machine path; complete metadata) and
-  installs it into an empty project, where every entry point must import and
-  type-check. It is then staged on npm through trusted publishing, with no
-  stored token and with provenance, in the `npm` environment. It goes live only
-  when a maintainer approves it with 2FA. Every pull request runs the same pack,
-  check and install as a dry run. `nx release` gives each SDK its own version
-  and `CHANGELOG.md`. Before 1.0, versions stay `0.x`; a release candidate goes
-  to the `next` dist-tag and a release to `latest`. `@qauth-labs/resource-guard`
-  is the first package: ESM with type declarations, an `exports` map,
-  `engines` and its licence. `RELEASING.md` is the maintainer guide for both
-  the images and the packages: release, rollback (deprecate, never unpublish)
-  and the version rule.
+- **npm releases of the SDK packages** ([#596], ADR-018 §6). The SDK packages
+  carry QAuth's own version: the release tag `vX.Y.Z` or `vX.Y.Z-rc.N` that
+  publishes the images also packs every SDK in `libs/sdk/` at that version (the
+  workspace `package.json` files stay at `0.0.0`; the job writes the version in
+  before packing). Each tarball is checked: it may hold only `package.json`,
+  `README.md`, `LICENSE` and compiled `dist/`, with no environment, test,
+  source-map or source file, no private key or build-machine path, and complete
+  metadata. It is then installed into an empty project, where every entry point
+  must import and type-check. Last, it is staged on npm through trusted
+  publishing, with no stored token and with provenance, in the `npm`
+  environment, and goes live only when a maintainer approves it with 2FA. A
+  release candidate goes to the `next` dist-tag and a release to `latest`;
+  before 1.0 the versions are `0.x`. The SDK release notes are QAuth's CHANGELOG
+  section. Every pull request runs the same stamp, pack, check and install as a
+  dry run. `@qauth-labs/resource-guard` is the first package: ESM with type
+  declarations, an `exports` map, `engines` and its licence. `RELEASING.md` is
+  the maintainer guide for both the images and the packages: release, rollback
+  (deprecate, never unpublish) and the version rule.
 - **A registry of configuration keys** ([#449], ADR-018 §5). Every environment
   key the auth server and the developer portal read has one entry in
   `libs/server/config/src/lib/registry/`: a tier (stable, advanced or

@@ -83,3 +83,7 @@ The second shows the packages inside it. Run the same commands for the
 
 A manual run of the workflow, and a pull request that changes it, build both
 images and push nothing.
+
+The same tag also stages QAuth's SDK packages on npm at the same version, in a
+second workflow behind its own approval. The images and the packages of a
+release always carry the same version.

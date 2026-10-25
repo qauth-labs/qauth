@@ -1,11 +1,15 @@
 /**
  * SDK releases to npm (#596, ADR-018 §6): the rules a packed SDK tarball must
- * pass before it is staged, without the process glue. `check-package.mjs` and
- * `smoke.mjs` are the CLIs the `release-npm` workflow runs; this module takes
- * plain values so the tests can drive every rule offline.
+ * pass before it is staged, without the process glue. `plan.mjs`,
+ * `check-package.mjs` and `smoke.mjs` are the CLIs the `release-npm` workflow
+ * runs; this module takes plain values so the tests can drive every rule
+ * offline.
  *
- * An SDK lives in `libs/sdk/<project>`, is released on its own version, and is
- * tagged `<project>@<version>`.
+ * Every SDK in `libs/sdk/<project>` is published at QAuth's own version, from
+ * QAuth's release tag `vX.Y.Z` or `vX.Y.Z-rc.N`, the tag that also publishes
+ * the server images. Its release notes are QAuth's CHANGELOG section for that
+ * version. The workspace package.json files stay at 0.0.0; the release job
+ * writes the tag's version into the package it packs.
  *
  * Zero runtime dependencies — Node's standard library only.
  */
@@ -39,19 +43,56 @@ export function distTagFor(version) {
   return match[4] === undefined ? 'latest' : 'next';
 }
 
-/** `<project>@<version>` → `{ project, version }`, for a project in `projects`. */
-export function parseReleaseTag(tag, projects) {
-  const at = tag.lastIndexOf('@');
-  if (at <= 0) throw new SdkReleaseError(`${tag} is not an SDK release tag (<project>@<version>)`);
-  const project = tag.slice(0, at);
-  const version = tag.slice(at + 1);
-  if (!projects.includes(project)) {
-    throw new SdkReleaseError(
-      `${tag}: ${project} is not an SDK project (${projects.join(', ') || 'none'})`
-    );
+/** QAuth's release tag `vX.Y.Z` or `vX.Y.Z-rc.N` → its version, checked by {@link distTagFor}. */
+export function parseReleaseTag(tag) {
+  if (!tag.startsWith('v')) {
+    throw new SdkReleaseError(`${tag} is not a QAuth release tag (vX.Y.Z or vX.Y.Z-rc.N)`);
   }
+  const version = tag.slice(1);
   distTagFor(version);
-  return { project, version };
+  return version;
+}
+
+/**
+ * The name in a `## [X.Y.Z]` heading, or in its escaped Markdown form
+ * `## \\[X.Y.Z\\]`; `undefined` for any other line.
+ */
+const headingName = (line) => /^## \\?\[([^\\\]]+)\\?\]/.exec(line)?.[1];
+
+/** The `## [X.Y.Z]` release headings of QAuth's CHANGELOG, newest first. */
+function releaseHeadings(changelog) {
+  return changelog
+    .split('\n')
+    .map(headingName)
+    .filter((version) => version !== undefined && version !== 'Unreleased');
+}
+
+/** The newest version the CHANGELOG has a section for (the dry run stamps this one). */
+export function latestReleasedVersion(changelog) {
+  const [latest] = releaseHeadings(changelog);
+  if (latest === undefined) throw new SdkReleaseError('CHANGELOG.md has no `## [X.Y.Z]` section');
+  return latest;
+}
+
+/** Whether the CHANGELOG has the `## [version]` section a stable release needs. */
+export function hasReleaseSection(changelog, version) {
+  return releaseHeadings(changelog).includes(version);
+}
+
+/**
+ * The release notes for `version`: its CHANGELOG section, or for a release
+ * candidate (which has none) the `## [Unreleased]` section it ships.
+ */
+export function releaseNotes(changelog, version) {
+  const heading = version.includes('-rc.') ? 'Unreleased' : version;
+  const lines = changelog.split('\n');
+  const start = lines.findIndex((line) => headingName(line) === heading);
+  if (start === -1) throw new SdkReleaseError(`CHANGELOG.md has no \`## [${heading}]\` section`);
+  const end = lines.findIndex((line, i) => i > start && line.startsWith('## '));
+  return lines
+    .slice(start + 1, end === -1 ? undefined : end)
+    .join('\n')
+    .trim();
 }
 
 /** Only these files may be in a tarball: the manifest, README, LICENSE and compiled `dist/`. */
