@@ -12,8 +12,8 @@ import type { SsrfSafeFetchResult } from '../app/helpers/ssrf-safe-fetch';
  *
  * The issuer answers what the resolver fetches through the SSRF-guarded
  * fetcher: wire it with `ssrfSafeGet.mockImplementation(idp.fetch)`. It counts
- * every fetch of each document, rotates its signing key, and goes down on
- * demand, so a test can state "N requests cost one refresh" or "an outage costs
+ * every fetch of each document, rotates its signing key, goes down and hangs
+ * on demand, so a test can state "N requests cost one refresh" or "an outage costs
  * one attempt per window" in fetches the issuer actually saw.
  */
 
@@ -39,6 +39,14 @@ export interface FakeIdJagIssuer {
   /** Fail fetches of the named documents (both by default) until {@link comeBack}. */
   goDown(documents?: readonly FakeIdJagIssuerOutage[]): void;
   comeBack(): void;
+  /**
+   * Hold every fetch from now on unanswered, as a host that drops packets does
+   * until the fetch timeout, until {@link release}. Fetches are counted when
+   * they arrive, not when they are answered.
+   */
+  hang(): void;
+  /** Answer the held fetches, as the issuer is at that moment (up or down). */
+  release(): void;
 }
 
 /** Create a fake issuer publishing one Ed25519 key under `kid` `key-1`. */
@@ -52,6 +60,7 @@ export async function createFakeIdJagIssuer(
   let current: { kid: string; privateKey: CryptoKey; publicJwk: JWK };
   const down = new Set<FakeIdJagIssuerOutage>();
   const fetches = { discovery: 0, jwks: 0 };
+  let held: { promise: Promise<void>; open: () => void } | undefined;
 
   async function newKey(): Promise<void> {
     generation += 1;
@@ -83,15 +92,16 @@ export async function createFakeIdJagIssuer(
       fetches.jwks = 0;
     },
     async fetch(url) {
-      if (url === discoveryUrl) {
-        fetches.discovery += 1;
-        return respond('discovery', { issuer, jwks_uri: jwksUri });
-      }
-      if (url === jwksUri) {
-        fetches.jwks += 1;
-        return respond('jwks', { keys: [current.publicJwk] });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
+      let document: FakeIdJagIssuerOutage;
+      if (url === discoveryUrl) document = 'discovery';
+      else if (url === jwksUri) document = 'jwks';
+      else throw new Error(`unexpected fetch: ${url}`);
+
+      fetches[document] += 1;
+      if (held) await held.promise;
+      return document === 'discovery'
+        ? respond('discovery', { issuer, jwks_uri: jwksUri })
+        : respond('jwks', { keys: [current.publicJwk] });
     },
     rotate: newKey,
     goDown(documents = ['discovery', 'jwks']) {
@@ -99,6 +109,17 @@ export async function createFakeIdJagIssuer(
     },
     comeBack() {
       down.clear();
+    },
+    hang() {
+      let open = () => undefined as void;
+      const promise = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      held = { promise, open };
+    },
+    release() {
+      held?.open();
+      held = undefined;
     },
   };
 }

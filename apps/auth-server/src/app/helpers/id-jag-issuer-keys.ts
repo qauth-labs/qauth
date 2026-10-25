@@ -80,7 +80,13 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
  *  - the negative cache: a failed fetch is remembered for
  *    `ID_JAG_JWKS_NEGATIVE_CACHE_TTL`, and no fetch is made for the issuer
  *    until it lapses, so an outage costs one attempt per window rather than
- *    two timeouts on every token request.
+ *    two timeouts on every token request. Concurrent requests in one process
+ *    share a fetch that is already running, so a fetch that hangs until its
+ *    timeout is still one attempt.
+ *
+ * The cooldown bounds forced refreshes only. With `ID_JAG_JWKS_CACHE_TTL=0`
+ * nothing is cached, every assertion fetches both documents on the ordinary
+ * path, and only the negative cache and the in-flight sharing still bound it.
  *
  * Every bound fails closed: inside it, resolution answers `undefined` exactly as
  * it does for an unknown key.
@@ -328,46 +334,86 @@ async function fetchRecentlyFailed(fastify: FastifyInstance, issuer: string): Pr
   try {
     return (await fastify.redis.get(REDIS_KEYS.ID_JAG_FETCH_FAILED(issuer))) !== null;
   } catch {
-    // Read as "no failure on record", like an unreachable positive cache: the
-    // fetch it allows still goes through the guarded path, and with the store
-    // down the request fails closed later, at the `jti` burn, anyway.
+    // Read as "no failure on record", as an unreachable positive cache reads
+    // as a miss: the fetch still goes through the guarded path. With the store
+    // down every request fetches, and is then refused at the `jti` burn, which
+    // fails closed; those fetches are the cost of an unavailable store.
     return false;
   }
 }
 
 /**
+ * Document fetches in flight, per server instance, keyed by document and
+ * issuer.
+ *
+ * The negative cache can only hold a failure once a fetch has failed, and
+ * against an issuer that drops packets that takes the whole
+ * `ID_JAG_FETCH_TIMEOUT_MS`. Without this map every request arriving in that
+ * time would start a fetch of its own; with it, concurrent requests in one
+ * process wait on the one fetch already running and share its answer. Unlike a
+ * Redis "fetching" marker, a joiner is never refused, so the requests that
+ * meet a cache expiry are not failed while the refetch runs. Across processes
+ * the bound is one fetch per process.
+ */
+const fetchesInFlight = new WeakMap<FastifyInstance, Map<string, Promise<unknown>>>();
+
+/** Run `fetch` unless the same `key` is already being fetched, then share that. */
+function shareInFlight<T>(
+  fastify: FastifyInstance,
+  key: string,
+  fetch: () => Promise<T | undefined>
+): Promise<T | undefined> {
+  let inFlight = fetchesInFlight.get(fastify);
+  if (!inFlight) {
+    inFlight = new Map();
+    fetchesInFlight.set(fastify, inFlight);
+  }
+  const running = inFlight.get(key) as Promise<T | undefined> | undefined;
+  if (running) return running;
+
+  const started = fetch().finally(() => inFlight.delete(key));
+  inFlight.set(key, started);
+  return started;
+}
+
+/**
  * Run one document fetch for `issuer` through the negative cache: skip it while
  * a recent failure is on record, and record a failure when it yields nothing.
+ * Concurrent calls for the same document share one run ({@link shareInFlight}),
+ * so the failure is on record before any of them returns.
  *
  * Every way a fetch can fail counts, not only a transport error: a non-200, a
  * body that does not parse or validate, a discovery document naming another
  * issuer. Each would fail the same way on the next request, and each costs the
  * issuer a request to find out.
  */
-async function fetchUnlessRecentlyFailed<T>(
+function fetchUnlessRecentlyFailed<T>(
   fastify: FastifyInstance,
   issuer: string,
+  what: 'discovery' | 'jwks',
   fetch: () => Promise<T | undefined>
 ): Promise<T | undefined> {
-  if (await fetchRecentlyFailed(fastify, issuer)) {
-    fastify.log.debug({ issuer }, 'ID-JAG issuer fetch skipped: a recent fetch failed');
-    return undefined;
-  }
-
-  const document = await fetch();
-  if (document === undefined) {
-    try {
-      await fastify.redis.set(
-        REDIS_KEYS.ID_JAG_FETCH_FAILED(issuer),
-        '1',
-        'EX',
-        env.ID_JAG_JWKS_NEGATIVE_CACHE_TTL
-      );
-    } catch {
-      // Best-effort: an unwritten entry only costs the next request a fetch.
+  return shareInFlight(fastify, `${what} ${issuer}`, async () => {
+    if (await fetchRecentlyFailed(fastify, issuer)) {
+      fastify.log.debug({ issuer, what }, 'ID-JAG issuer fetch skipped: a recent fetch failed');
+      return undefined;
     }
-  }
-  return document;
+
+    const document = await fetch();
+    if (document === undefined) {
+      try {
+        await fastify.redis.set(
+          REDIS_KEYS.ID_JAG_FETCH_FAILED(issuer),
+          '1',
+          'EX',
+          env.ID_JAG_JWKS_NEGATIVE_CACHE_TTL
+        );
+      } catch {
+        // Best-effort: an unwritten entry only costs the next request a fetch.
+      }
+    }
+    return document;
+  });
 }
 
 /**
@@ -377,8 +423,10 @@ async function fetchUnlessRecentlyFailed<T>(
  * `SET NX EX` makes the claim atomic across processes: of N concurrent `kid`
  * misses, at most one refreshes. An unreachable store refuses rather than
  * allows — this is the bound on attacker-driven traffic, so it does not open
- * when it cannot be checked. A key that is in the cache is unaffected, and so
- * is a cache miss, which fetches on the ordinary path.
+ * when it cannot be checked. That costs nothing a working store would give: a
+ * store that cannot take this write cannot take the `jti` burn either, which
+ * refuses the assertion. A key that is in the cache is unaffected, and so is a
+ * cache miss, which fetches on the ordinary path.
  *
  * The negative cache is consulted first, so a refresh that would not fetch
  * anyway does not spend the cooldown.
@@ -485,7 +533,7 @@ async function resolveIssuerMetadata(
     if (cached) return cached;
   }
 
-  const metadata = await fetchUnlessRecentlyFailed(fastify, issuer, () =>
+  const metadata = await fetchUnlessRecentlyFailed(fastify, issuer, 'discovery', () =>
     fetchIssuerMetadata(fastify, issuer)
   );
   if (!metadata) return undefined;
@@ -548,7 +596,7 @@ async function resolveIssuerJwks(
     if (cached) return cached;
   }
 
-  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, () =>
+  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', () =>
     fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks')
   );
   if (!jwks) return undefined;

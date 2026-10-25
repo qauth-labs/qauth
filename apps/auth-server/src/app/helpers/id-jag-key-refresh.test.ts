@@ -21,6 +21,8 @@ import {
  *  - while an issuer is unreachable, at most one attempt per negative-cache
  *    window;
  *  - a rotated key is still picked up after the cooldown.
+ * Each also holds for requests that arrive together, against an issuer that
+ * hangs until its fetch timeout rather than failing at once.
  * The TTL ceiling is a config rule, tested with the schema
  * (`libs/server/config`).
  */
@@ -56,11 +58,22 @@ const MCP_SERVER = 'https://mcp.example.com/';
 
 let idp: FakeIdJagIssuer;
 let redis: ExpiringRedis;
+/**
+ * One server instance for every request of a test, as the token route passes
+ * its own instance on each request: fetches in flight are shared per instance.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let fastify: any;
 let jtiCounter = 0;
 
 beforeEach(async () => {
   idp = await createFakeIdJagIssuer();
   redis = createExpiringRedis();
+  fastify = {
+    redis,
+    jwtUtils: { getIssuer: () => AS_ISSUER },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
   ssrfSafeGet.mockReset();
   ssrfSafeGet.mockImplementation((url: string) => idp.fetch(url));
   ENV.ID_JAG_TRUSTED_ISSUERS = [idp.issuer];
@@ -88,12 +101,6 @@ async function assertion(signer: { kid: string; privateKey: CryptoKey }): Promis
 
 /** Validate one assertion; the IdJagValidationError reason, or `'accepted'`. */
 async function present(signer: { kid: string; privateKey: CryptoKey }): Promise<string> {
-  const fastify = {
-    redis,
-    jwtUtils: { getIssuer: () => AS_ISSUER },
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
   try {
     await validateIdJagAssertion(fastify, {
       assertion: await assertion(signer),
@@ -104,6 +111,28 @@ async function present(signer: { kid: string; privateKey: CryptoKey }): Promise<
     if (err instanceof IdJagValidationError) return err.reason;
     throw err;
   }
+}
+
+/**
+ * Present `count` assertions at once while the issuer hangs, and release it
+ * only once every request is waiting on it, so none can have missed the fetch
+ * that is in flight.
+ */
+async function presentTogetherWhileHanging(
+  count: number,
+  signer: () => Promise<{ kid: string; privateKey: CryptoKey }>
+): Promise<string[]> {
+  const signers = await Promise.all(Array.from({ length: count }, signer));
+  idp.hang();
+  const outcomes = Promise.all(signers.map((s) => present(s)));
+  // Every request reads the discovery cache before it reaches the fetch.
+  await vi.waitFor(() => {
+    const reads = redis.get.mock.calls.filter(([key]) => key.startsWith('id-jag:discovery:'));
+    expect(reads.length).toBeGreaterThanOrEqual(count);
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  idp.release();
+  return outcomes;
 }
 
 /** The issuer's current key, as a signer. */
@@ -200,6 +229,15 @@ describe('refresh cooldown — key rotation', () => {
   });
 });
 
+describe('concurrent cache misses', () => {
+  it('share one fetch of each document and all succeed', async () => {
+    const outcomes = await presentTogetherWhileHanging(25, async () => issuerKey());
+
+    expect(new Set(outcomes)).toEqual(new Set(['accepted']));
+    expect(idp.fetches).toEqual({ discovery: 1, jwks: 1 });
+  });
+});
+
 describe('negative cache — an unreachable issuer', () => {
   it('costs one attempt per window, not two fetches per request', async () => {
     idp.goDown();
@@ -244,6 +282,18 @@ describe('negative cache — an unreachable issuer', () => {
     expect(await present(issuerKey())).toBe('unresolvable_key');
     redis.advance(30);
     expect(await present(issuerKey())).toBe('accepted');
+  });
+
+  it('costs one attempt when the requests arrive together and the issuer hangs', async () => {
+    idp.goDown();
+
+    const outcomes = await presentTogetherWhileHanging(25, async () => issuerKey());
+
+    expect(new Set(outcomes)).toEqual(new Set(['unresolvable_key']));
+    expect(idp.fetches).toEqual({ discovery: 1, jwks: 0 });
+
+    expect(await present(issuerKey())).toBe('unresolvable_key');
+    expect(idp.totalFetches()).toBe(1);
   });
 
   it('keeps verifying a cached key through the outage', async () => {
