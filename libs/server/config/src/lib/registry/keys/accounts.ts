@@ -65,6 +65,15 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: 'The Argon2id parallelism, in lanes, of a password hash.',
   },
   {
+    name: 'PASSWORD_HASH_QUEUE_LIMIT',
+    tier: 'advanced',
+    role: 'deployment',
+    owner: 'accounts',
+    default: '32',
+    since: '0.2.0',
+    docs: 'How many Argon2id jobs may wait for a free thread before a client-secret check is refused at once with `503` and `Retry-After`; `0` refuses one whenever every thread is busy.',
+  },
+  {
     name: 'FAILED_LOGIN_TRACKING_ENABLED',
     tier: 'stable',
     role: 'realm-seed',

@@ -240,12 +240,13 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Accounts and passwords
 
-| Key                    | Role       | Default  | Since | Description                                                                                                                 |
-| ---------------------- | ---------- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------- |
-| `PASSWORD_MEMORY_COST` | deployment | `65536`  | 0.1.0 | The Argon2id memory cost, in KiB, of a password hash.                                                                       |
-| `PASSWORD_PARALLELISM` | deployment | `4`      | 0.1.0 | The Argon2id parallelism, in lanes, of a password hash.                                                                     |
-| `PASSWORD_TIME_COST`   | deployment | `3`      | 0.1.0 | The Argon2id time cost, in iterations, of a password hash.                                                                  |
-| `SYSTEM_CLIENT_ID`     | deployment | `system` | 0.1.0 | The client id of the system client that direct logins, outside an OAuth flow, are issued under; it is created on first use. |
+| Key                         | Role       | Default  | Since | Description                                                                                                                                                                    |
+| --------------------------- | ---------- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PASSWORD_HASH_QUEUE_LIMIT` | deployment | `32`     | 0.2.0 | How many Argon2id jobs may wait for a free thread before a client-secret check is refused at once with `503` and `Retry-After`; `0` refuses one whenever every thread is busy. |
+| `PASSWORD_MEMORY_COST`      | deployment | `65536`  | 0.1.0 | The Argon2id memory cost, in KiB, of a password hash.                                                                                                                          |
+| `PASSWORD_PARALLELISM`      | deployment | `4`      | 0.1.0 | The Argon2id parallelism, in lanes, of a password hash.                                                                                                                        |
+| `PASSWORD_TIME_COST`        | deployment | `3`      | 0.1.0 | The Argon2id time cost, in iterations, of a password hash.                                                                                                                     |
+| `SYSTEM_CLIENT_ID`          | deployment | `system` | 0.1.0 | The client id of the system client that direct logins, outside an OAuth flow, are issued under; it is created on first use.                                                    |
 
 ### Browser sessions
 

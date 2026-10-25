@@ -141,6 +141,12 @@ services:
       PASSWORD_TIME_COST: ${PASSWORD_TIME_COST:-3}
       PASSWORD_PARALLELISM: ${PASSWORD_PARALLELISM:-4}
       PASSWORD_MIN_SCORE: ${PASSWORD_MIN_SCORE:-2}
+      # Client-secret checks beyond this many waiting Argon2 jobs answer 503
+      # with Retry-After at once instead of queueing.
+      PASSWORD_HASH_QUEUE_LIMIT: ${PASSWORD_HASH_QUEUE_LIMIT:-32}
+      # Node's libuv thread pool; Argon2 uses half of it. Raise it to the
+      # core count on a host with four or more cores.
+      UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-4}
 
       # Email
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
@@ -400,8 +406,9 @@ services:
       INTROSPECT_RATE_LIMIT: ${INTROSPECT_RATE_LIMIT:-30}
       INTROSPECT_RATE_WINDOW: ${INTROSPECT_RATE_WINDOW:-60}
     # Bounded memory, and back up after a crash or an out-of-memory kill. 1 GiB
-    # holds the Node heap plus four concurrent Argon2id hashes (one per libuv
-    # worker thread, PASSWORD_MEMORY_COST each); raise it if you raise that.
+    # holds the Node heap plus the concurrent Argon2id hashes (half of
+    # UV_THREADPOOL_SIZE, PASSWORD_MEMORY_COST each); raise it if you raise
+    # either.
     mem_limit: 1g
     restart: unless-stopped
     ports:
