@@ -2592,3 +2592,71 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 9449 §10, #480)', () => {
+  const JKT = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
+
+  /** A signed-in user whose stored consent covers the request, so a code is minted. */
+  async function issueCode(dpopOn: boolean, dpopJkt: string) {
+    const { fastify, ctx } = makeFastify();
+    (fastify as unknown as { dpop: unknown }).dpop = dpopOn
+      ? { algorithms: ['ES256'], verifyRequest: vi.fn() }
+      : null;
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email', 'read:foo'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-dpop',
+      createdAt: Date.now(),
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, dpop_jkt: dpopJkt },
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { cookie: `__Host-qauth_session=${signSessionId('sid-dpop')}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('stores the thumbprint on the code while DPoP is on', async () => {
+    const { fastify, state } = await issueCode(true, JKT);
+    const [created] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0];
+    expect(created.dpopJkt).toBe(JKT);
+    expect(state.redirected).toContain('code=');
+  });
+
+  it('refuses a dpop_jkt that is not a SHA-256 thumbprint, before any code is minted', async () => {
+    const { fastify, state } = await issueCode(true, 'not-a-thumbprint');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(state.redirected).toContain('error=invalid_request');
+    expect(state.redirected).toContain('state=xyz');
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_request', reason: 'dpop_jkt_malformed' },
+      expect.objectContaining({ clientId: CLIENT.clientId })
+    );
+  });
+
+  it('reads no dpop_jkt while DPoP is off: the code is unbound, whatever the value', async () => {
+    for (const value of [JKT, 'not-a-thumbprint']) {
+      const { fastify, state } = await issueCode(false, value);
+      const [created] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+        .calls[0];
+      expect(created.dpopJkt).toBeNull();
+      expect(state.redirected).toContain('code=');
+    }
+  });
+});
