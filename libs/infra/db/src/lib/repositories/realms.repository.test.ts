@@ -147,3 +147,36 @@ describe('createRealmsRepository — sso_max_lifespan (#552)', () => {
     expect(queries).toHaveLength(2);
   });
 });
+
+describe('createRealmsRepository — sso_idle_timeout (#552)', () => {
+  const MESSAGE =
+    'Realm sso_idle_timeout must be a positive whole number of seconds, or null for no limit';
+
+  it.each([0, -1, -900, 2.5])('refuses %s seconds before the database sees it', async (value) => {
+    const { db, queries } = createRecordingDb();
+    const realms = createRealmsRepository(db);
+    const id = '0192e000-0000-7000-8000-000000000001';
+
+    await expect(realms.update(id, { ssoIdleTimeout: value })).rejects.toThrow(
+      new BadRequestError(MESSAGE)
+    );
+    await expect(realms.create({ name: 'zero', ssoIdleTimeout: value })).rejects.toThrow(MESSAGE);
+    await expect(
+      realms.createWithPrimaryHost(
+        { name: 'zero', issuer: 'https://zero.example.com', ssoIdleTimeout: value },
+        'zero.example.com'
+      )
+    ).rejects.toThrow(MESSAGE);
+    expect(queries).toEqual([]);
+  });
+
+  it('accepts a positive timeout and null, which means no limit', async () => {
+    const { db, queries } = createRecordingDb();
+    const realms = createRealmsRepository(db);
+    const id = '0192e000-0000-7000-8000-000000000001';
+
+    await expect(realms.update(id, { ssoIdleTimeout: 1800 })).rejects.toThrow('not found');
+    await expect(realms.update(id, { ssoIdleTimeout: null })).rejects.toThrow('not found');
+    expect(queries).toHaveLength(2);
+  });
+});

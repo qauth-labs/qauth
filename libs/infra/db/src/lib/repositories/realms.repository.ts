@@ -293,17 +293,26 @@ function assertEventRetention(data: Partial<EventRetentionPolicy>): void {
 }
 
 /**
- * Refuse a maximum session length of zero or less (#552): it would end every
- * session and every refresh-token family at its start. NULL means no limit.
- * The CHECK `realms_sso_max_lifespan_positive` refuses the same.
+ * Refuse a session limit of zero or less (#552). A maximum session length of
+ * zero would end every session and every refresh-token family at its start; an
+ * idle timeout of zero would end every session at its first request after
+ * sign-in. NULL means no limit. The CHECKs `realms_sso_max_lifespan_positive`
+ * and `realms_sso_idle_timeout_positive` refuse the same.
  */
-function assertSsoMaxLifespan(data: { ssoMaxLifespan?: number | null }): void {
-  const value = data.ssoMaxLifespan;
-  if (value === undefined || value === null) return;
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new BadRequestError(
-      'Realm sso_max_lifespan must be a positive whole number of seconds, or null for no limit'
-    );
+function assertSsoLimits(data: {
+  ssoMaxLifespan?: number | null;
+  ssoIdleTimeout?: number | null;
+}): void {
+  for (const [column, value] of [
+    ['sso_max_lifespan', data.ssoMaxLifespan],
+    ['sso_idle_timeout', data.ssoIdleTimeout],
+  ] as const) {
+    if (value === undefined || value === null) continue;
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new BadRequestError(
+        `Realm ${column} must be a positive whole number of seconds, or null for no limit`
+      );
+    }
   }
 }
 
@@ -345,7 +354,7 @@ export function createRealmsRepository(
       if (row[key] === undefined) row[key] = value;
     }
     assertEventRetention(row);
-    assertSsoMaxLifespan(row);
+    assertSsoLimits(row);
     return row;
   }
 
@@ -654,7 +663,7 @@ export function createRealmsRepository(
      */
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       assertEventRetention(data);
-      assertSsoMaxLifespan(data);
+      assertSsoLimits(data);
       const invoker = tx ?? defaultDb;
       const updateData = {
         ...data,

@@ -1582,6 +1582,10 @@
         "realms_sso_max_lifespan_positive": {
           "name": "realms_sso_max_lifespan_positive",
           "value": "\"realms\".\"sso_max_lifespan\" IS NULL OR \"realms\".\"sso_max_lifespan\" > 0"
+        },
+        "realms_sso_idle_timeout_positive": {
+          "name": "realms_sso_idle_timeout_positive",
+          "value": "\"realms\".\"sso_idle_timeout\" IS NULL OR \"realms\".\"sso_idle_timeout\" > 0"
         }
       },
       "isRLSEnabled": false

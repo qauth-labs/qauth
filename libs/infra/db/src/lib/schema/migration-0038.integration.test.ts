@@ -303,4 +303,25 @@ describe('migration 0038 — refresh-token family start (seed-then-migrate)', ()
       db().query(`UPDATE realms SET sso_max_lifespan = -1 WHERE name = 'hour'`)
     ).rejects.toThrow(/realms_sso_max_lifespan_positive/);
   });
+
+  it('turns an sso_idle_timeout of zero or less into no limit, and refuses it from then on', async () => {
+    await db().query(
+      `INSERT INTO realms (name, sso_idle_timeout) VALUES ('idle-zero', 0), ('idle-negative', -60),
+       ('idle-half-hour', 1800)`
+    );
+    await migrate();
+
+    const { rows } = await db().query(
+      `SELECT name, sso_idle_timeout FROM realms
+       WHERE name IN ('idle-zero', 'idle-negative', 'idle-half-hour') ORDER BY name`
+    );
+    expect(rows).toEqual([
+      { name: 'idle-half-hour', sso_idle_timeout: '1800' },
+      { name: 'idle-negative', sso_idle_timeout: null },
+      { name: 'idle-zero', sso_idle_timeout: null },
+    ]);
+    await expect(
+      db().query(`UPDATE realms SET sso_idle_timeout = 0 WHERE name = 'idle-half-hour'`)
+    ).rejects.toThrow(/realms_sso_idle_timeout_positive/);
+  });
 });

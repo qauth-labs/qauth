@@ -34,6 +34,12 @@ UPDATE "realms" SET "sso_max_lifespan" = NULL WHERE "sso_max_lifespan" <= 0;
 --> statement-breakpoint
 ALTER TABLE "realms" ADD CONSTRAINT "realms_sso_max_lifespan_positive" CHECK ("realms"."sso_max_lifespan" IS NULL OR "realms"."sso_max_lifespan" > 0);
 --> statement-breakpoint
+-- An idle timeout of zero or less would end every session at its first request
+-- after sign-in. It gets the same treatment: no limit, then the CHECK.
+UPDATE "realms" SET "sso_idle_timeout" = NULL WHERE "sso_idle_timeout" <= 0;
+--> statement-breakpoint
+ALTER TABLE "realms" ADD CONSTRAINT "realms_sso_idle_timeout_positive" CHECK ("realms"."sso_idle_timeout" IS NULL OR "realms"."sso_idle_timeout" > 0);
+--> statement-breakpoint
 -- A writer that predates these columns inserts no value: the previous release,
 -- which keeps serving on this schema during a rolling upgrade (operate/upgrades).
 -- Its insert takes the start and the session end of the family the token joins,

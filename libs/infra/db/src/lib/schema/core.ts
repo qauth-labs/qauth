@@ -234,6 +234,12 @@ export const realms = pgTable(
       'realms_sso_max_lifespan_positive',
       sql`${t.ssoMaxLifespan} IS NULL OR ${t.ssoMaxLifespan} > 0`
     ),
+    // The same for the idle timeout: zero or less would end every session at
+    // its first request after sign-in.
+    check(
+      'realms_sso_idle_timeout_positive',
+      sql`${t.ssoIdleTimeout} IS NULL OR ${t.ssoIdleTimeout} > 0`
+    ),
   ]
 );
 

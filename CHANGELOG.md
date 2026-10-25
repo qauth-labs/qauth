@@ -776,12 +776,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone. During a rolling upgrade the previous release does not write the new
   columns: a trigger gives its insert the start and session end of the family
   the token joins, or the current time and no session end for a new family.
-- **BREAKING (realms with `sso_max_lifespan` of zero or less)**: a realm's
-  `sso_max_lifespan` must now be null (no limit) or a positive number of
-  seconds ([#552]). Migration 0038 turns a value of zero or less into null,
-  then adds the CHECK `realms_sso_max_lifespan_positive`; the realms repository
-  refuses such a value with `400` before it reaches the database. Before, such
-  a value ended every session and every refresh-token family at its start.
+- **BREAKING (realms with `sso_max_lifespan` or `sso_idle_timeout` of zero or
+  less)**: a realm's `sso_max_lifespan` and `sso_idle_timeout` must now each be
+  null (no limit) or a positive number of seconds ([#552]). Migration 0038
+  turns a value of zero or less into null, then adds the CHECKs
+  `realms_sso_max_lifespan_positive` and `realms_sso_idle_timeout_positive`;
+  the realms repository refuses such a value with `400` before it reaches the
+  database. Before, a maximum of zero ended every session and every
+  refresh-token family at its start, and an idle timeout of zero ended every
+  session at its first request after sign-in.
 - **Migration 0038 pauses refresh-token traffic** ([#552]). It fills
   `family_created_at` for every row of `refresh_tokens` in one statement,
   inside the runner's transaction, with the table locked until it commits.
