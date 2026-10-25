@@ -125,6 +125,13 @@ export async function generateJwtPem(): Promise<PemKeyPair> {
 }
 
 /**
+ * The name of the default realm every booted deployment creates
+ * (`DEFAULT_REALM_NAME` below), for a suite that seeds rows in it. Named here
+ * so no test reads the setting: only the boot step does (#487).
+ */
+export const E2E_REALM_NAME = 'master';
+
+/**
  * The environment every deployment needs regardless of what it is testing.
  *
  * Exported so the HAIP suite can build a deployment with no containers behind it
@@ -141,7 +148,7 @@ export const REQUIRED_TEST_ENVIRONMENT: Record<string, string> = Object.freeze({
   EMAIL_PROVIDER: 'mock',
   EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
   EMAIL_BASE_URL: 'https://auth.example.com',
-  DEFAULT_REALM_NAME: 'master',
+  DEFAULT_REALM_NAME: E2E_REALM_NAME,
   ENABLE_SWAGGER: 'false',
   LOG_LEVEL: 'fatal',
 });
@@ -619,14 +626,19 @@ export const E2E_PASSWORD = 'Correct-Horse-Battery-Staple-42!';
  * mail the server hands its provider (the mail goes out off the request path),
  * and the id from the account's password credential.
  *
+ * `options.host` registers the account in the realm of that host (#487); by
+ * default the requests go to the default realm's host.
+ *
  * @returns the new account's `users.id`.
  * @throws Error when registration, the mail or the verification fails.
  */
 export async function registerPasswordAccount(
   app: FastifyInstance,
   email: string,
-  password = E2E_PASSWORD
+  password = E2E_PASSWORD,
+  options: { readonly host?: string } = {}
 ): Promise<string> {
+  const headers = options.host === undefined ? {} : { host: options.host };
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
@@ -638,6 +650,7 @@ export async function registerPasswordAccount(
     const response = await app.inject({
       method: 'POST',
       url: '/auth/register',
+      headers,
       payload: { email, password },
     });
     if (response.statusCode !== 202) {
@@ -658,15 +671,17 @@ export async function registerPasswordAccount(
   const verified = await app.inject({
     method: 'POST',
     url: '/auth/verify',
+    headers,
     payload: { token, password },
   });
   if (verified.statusCode !== 200) {
     throw new Error(`POST /auth/verify answered ${verified.statusCode}: ${verified.body}`);
   }
 
-  const realm = await app.repositories.realms.findByName(
-    REQUIRED_TEST_ENVIRONMENT['DEFAULT_REALM_NAME']
-  );
+  const realm =
+    options.host === undefined
+      ? await app.repositories.realms.findByName(E2E_REALM_NAME)
+      : (await app.repositories.realms.findByHost(options.host))?.realm;
   const credential =
     realm &&
     (await app.repositories.userCredentials.findByRealmProviderSub(realm.id, 'password', email));

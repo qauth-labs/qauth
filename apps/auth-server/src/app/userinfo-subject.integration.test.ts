@@ -10,6 +10,7 @@ import {
   type BootedAuthServer,
   type CookieJar,
   E2E_PASSWORD,
+  E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
@@ -42,7 +43,7 @@ import {
  * (`requireDockerOrSkip`).
  */
 
-const REALM = REQUIRED_TEST_ENVIRONMENT['DEFAULT_REALM_NAME'] as string;
+const REALM = E2E_REALM_NAME;
 const USERINFO_ENDPOINT = `${REQUIRED_TEST_ENVIRONMENT['JWT_ISSUER']}/oauth/userinfo`;
 const MACHINE_SECRET = 'machine-client-secret-of-sufficient-length-42';
 const MACHINE_SCOPE = 'reports:read';
