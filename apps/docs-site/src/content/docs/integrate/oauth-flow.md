@@ -337,6 +337,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
   machine token is rejected per RFC 9700).
 - `resource` must fall within the client's configured `audience` (or defaults to
   the `client_id`); it sets the token `aud`.
+- An audience in the reserved `urn:qauth:aud:` namespace, such as the developer
+  API's `urn:qauth:aud:developer:v1-rc.0`, is issued only to a client whose
+  `audience` lists it, on every grant; any other client gets `invalid_target`.
+  See [API conventions](/reference/api-conventions/#issuing-a-family-audience).
 - Provision such clients with the seed script (it lets you set `scopes` and
   `audience` explicitly) — see the
   [MCP Quickstart, Option B](/integrate/mcp-quickstart/#option-b--verify-the-handshake-with-curl-no-browser).
@@ -739,6 +743,12 @@ only** — a client must not be able to grant itself a capability whose trust
 boundary an operator owns. Zod strips these keys, so a registration request
 carrying them is silently ignored rather than honoured; do not rely on that
 silence as the enforcement mechanism.
+
+A registration that names an audience in the reserved `urn:qauth:aud:` namespace
+in an `audience` or `resource` member is refused with `invalid_client_metadata`,
+and a CIMD document that does so does not resolve: QAuth's own API audiences are
+issued only to clients an operator set up. Any other value in those members is
+ignored, as before.
 
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).

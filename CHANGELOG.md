@@ -604,8 +604,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs site's new **Reverse Proxy** page (`operate/reverse-proxy`) lists the
   rules proxy-neutrally, with the file layout. The ceremony app has not shipped
   yet, so the configuration is not yet a working front for browser sign-in.
+- **One audience per API family, and a token guard for each** ([#509], ADR-019
+  Decision 7). The admin, account and developer APIs have the audiences
+  `urn:qauth:aud:admin:v1-rc.0`, `urn:qauth:aud:account:v1-rc.0` and
+  `urn:qauth:aud:developer:v1-rc.0`, and `requireFamilyToken(family, options)`
+  guards a family route: it requires `typ: at+jwt` whatever
+  `requireAccessTokenTyp` says, an `iss` its `IssuerResolver` hook accepts (by
+  default only `JWT_ISSUER`), `sub`, `exp` and `jti`, an `aud` holding exactly
+  the family's audience, and, on the developer family, no `act` claim. A refused
+  token gets 401 with the RFC 6750 `invalid_token` challenge, and a token that
+  lacks a route's scope gets 403 `insufficient_scope`, a new problem code, with
+  the scopes in the challenge. No route uses the guards yet; the developer and
+  account routes move under their prefixes in [#524]. The token endpoint issues
+  an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
+  `audience` lists it, on every grant (`invalid_target` otherwise, at
+  `/oauth/authorize` too), and dynamic registration and Client ID Metadata
+  Documents refuse the namespace in `audience` or `resource` metadata. The JWT
+  plugin's new `verifyRequestAccessToken(request, policy)` runs `requireJwt`'s
+  checks under a route's issuer rule and `typ` requirement.
 
 ### Changed
+
+- **The developer portal's token carries the developer audience** ([#509]).
+  The system client's `audience` is `urn:qauth:aud:developer:v1-rc.0`: a new
+  system client is created with it, and an existing one is given it the first
+  time it is read after the upgrade. `/auth/login` therefore mints a token whose
+  `aud` is the developer audience instead of the system client id. The
+  `/api/clients`, `/api/consents`, `/auth/logout` and `/oauth/authorize` Bearer
+  paths accept both, so a portal token minted before the upgrade works until it
+  expires, and userinfo accepts the portal's token with the new audience. An
+  integration that read the portal token's `aud` must expect the new value.
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
@@ -968,6 +996,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#509]: https://github.com/qauth-labs/qauth/issues/509
+[#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552

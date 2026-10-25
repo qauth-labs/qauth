@@ -34,6 +34,47 @@ not: they keep the shapes their specifications define ([Errors](#errors)).
   developer families define no scopes here: their guards check the audience and the subject. A
   route that needs a scope adds it in its own change.
 
+### Family tokens
+
+Every family route is guarded by `requireFamilyToken(family, options)` in
+`apps/auth-server/src/app/helpers/family-token.ts`. A token passes when:
+
+- its signature verifies and it has not expired or been revoked, as on every bearer-protected
+  route;
+- its protected header carries `typ: at+jwt` (RFC 9068 §2.1), whatever
+  `requireAccessTokenTyp` is set to;
+- its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
+  accepts only the deployment's issuer, `JWT_ISSUER`;
+- it carries `sub`, `exp` and `jti`;
+- its `aud` holds exactly one value, the family's audience. A token with several audiences is
+  refused even when one of them is the family's;
+- on the developer family, it carries no `act` claim: a delegated token (RFC 8693) never manages a
+  developer's clients;
+- it carries every scope the route lists.
+
+A token that fails is refused with 401 and `WWW-Authenticate: Bearer error="invalid_token"`
+(`jwt_invalid`, or `jwt_expired`). A token that lacks a scope is refused with 403 and
+`WWW-Authenticate: Bearer error="insufficient_scope"`, whose `scope` names the scopes the route
+needs (`insufficient_scope`). Both follow RFC 6750 §3.1. A request under the `DPoP` scheme gets a
+`DPoP` challenge instead (RFC 9449 §7.1).
+
+The guard does not tie a token to the realm of the request: until each realm has its own issuer,
+every realm's tokens carry the deployment's. A route reads the realm from the token's subject.
+
+### Issuing a family audience
+
+- A client gets a family audience only when an operator lists it in the client's `audience`. The
+  client names it with the RFC 8707 `resource` parameter, at `/oauth/authorize` and at
+  `/oauth/token`, and the token's `aud` is that value. A client that does not list it is refused
+  with `invalid_target`, on every grant.
+- `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case. Dynamic
+  registration refuses it in an `audience` or `resource` member with `invalid_client_metadata`, and
+  a Client ID Metadata Document that names it there does not resolve (`invalid_client`).
+- The developer portal's system client has the developer audience, so the token `/auth/login`
+  mints is a developer family token. Until the developer routes move under their prefix, the
+  routes at `/api/clients` and `/api/consents` keep their own check (`assertManagementToken`),
+  which also accepts a portal token minted before the system client had the audience.
+
 No route is served under these prefixes yet. The developer routes at `/api/clients` and
 `/api/consents` and the account routes at `/consents` move under them, and their old paths are then
 listed in [Deprecations](#deprecations).
