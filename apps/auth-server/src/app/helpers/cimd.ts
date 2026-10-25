@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -402,6 +403,19 @@ export function toCimdClientInsert(
   // materialised from them included.
   assertRegistrableRedirectUris(doc.redirect_uris);
   const redirectUris = [...doc.redirect_uris];
+
+  // The `admin:` scope prefix is reserved for the admin API (#507, ADR-019
+  // Decision 7). The document's `scope` grants nothing (the row's scopes stay
+  // empty below), but a document that asks for an admin scope is refused
+  // outright, as dynamic registration refuses the same request: no client
+  // obtains an admin scope by describing itself. Runs on every resolution, so
+  // a cached document or an existing row is refused too.
+  if (doc.scope !== undefined) {
+    const reserved = reservedAdminScopesIn(doc.scope.split(/\s+/).filter((s) => s.length > 0));
+    if (reserved.length > 0) {
+      throw new InvalidClientError('CIMD document requests a reserved admin: scope');
+    }
+  }
 
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted

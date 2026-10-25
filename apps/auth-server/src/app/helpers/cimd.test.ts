@@ -291,6 +291,29 @@ describe('toCimdClientInsert — never operator-provisioned (ANT-2026-O8U3P920)'
   });
 });
 
+describe('toCimdClientInsert — the reserved admin: scopes (#507)', () => {
+  it.each([
+    'openid admin:read',
+    'admin:write',
+    'profile admin:security',
+    'ADMIN:read',
+    'admin:other',
+  ])('refuses a document whose scope is %j', (scope) => {
+    const doc = cimdDocumentSchema.parse(validDoc({ scope }));
+    expect(() => toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel')).toThrow(
+      expect.objectContaining({
+        name: 'InvalidClientError',
+        errorDescription: 'CIMD document requests a reserved admin: scope',
+      })
+    );
+  });
+
+  it('materialises a document whose scopes only contain "admin", with no scope', () => {
+    const doc = cimdDocumentSchema.parse(validDoc({ scope: 'openid agent:admin example:admin' }));
+    expect(toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel').scopes).toEqual([]);
+  });
+});
+
 describe('toCimdClientInsert — no ID-JAG target (ADR-011, #434)', () => {
   it('pins idJagTargets to [], whatever the document says', () => {
     // Which foreign parties a client may name in an ID-JAG is the operator's

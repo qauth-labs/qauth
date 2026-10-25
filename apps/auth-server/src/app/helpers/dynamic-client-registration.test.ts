@@ -236,6 +236,42 @@ describe('validateAndNormalize', () => {
     expect(n.scopeString).toBeUndefined();
   });
 
+  // #507: the admin: prefix is reserved for the admin API.
+  it.each(['admin:read', 'admin:write', 'admin:security', 'admin:anything', 'Admin:Security'])(
+    'refuses the whole registration when it asks for %s',
+    (adminScope) => {
+      expect(() =>
+        validateAndNormalize(
+          { redirect_uris: ['https://app.example/cb'], scope: `openid ${adminScope}` },
+          allowedScopes,
+          NO_CUSTOM_SCHEMES
+        )
+      ).toThrow(/^invalid_client_metadata: scopes starting with "admin:" are reserved/);
+    }
+  );
+
+  it('refuses an admin scope even when the realm allowlist lists it', () => {
+    expect(() =>
+      validateAndNormalize(
+        { redirect_uris: ['https://app.example/cb'], scope: 'admin:read' },
+        [...allowedScopes, 'admin:read'],
+        NO_CUSTOM_SCHEMES
+      )
+    ).toThrow(BadRequestError);
+  });
+
+  it('leaves scopes that only contain "admin" to the allowlist', () => {
+    const n = validateAndNormalize(
+      {
+        redirect_uris: ['https://app.example/cb'],
+        scope: 'openid agent:admin example:admin administrator',
+      },
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
+    );
+    expect(n.scopes).toEqual(['openid']);
+  });
+
   it('requires redirect_uris for authorization_code grants', () => {
     expect(() =>
       validateAndNormalize(

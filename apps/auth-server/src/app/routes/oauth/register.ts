@@ -39,7 +39,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list.",
+          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list; a scope with the reserved admin: prefix refuses the request.",
         tags: ['OAuth', 'Registration'],
         'x-qauth-stability': 'stable',
         body: dynamicClientRegistrationRequestSchema,

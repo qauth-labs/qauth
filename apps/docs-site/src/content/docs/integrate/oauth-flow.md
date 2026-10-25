@@ -720,7 +720,7 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 | `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
-| `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+| `scope`                      | Space-separated; **capped to the realm allowlist**. No `admin:` scope. |
 
 Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
 `[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
@@ -739,6 +739,15 @@ only** — a client must not be able to grant itself a capability whose trust
 boundary an operator owns. Zod strips these keys, so a registration request
 carrying them is silently ignored rather than honoured; do not rely on that
 silence as the enforcement mechanism.
+
+A scope the realm allowlist does not list is dropped, and the client is
+registered with the rest (RFC 7591 §2 lets the server narrow the request). A
+scope that starts with `admin:`, in any case, is different: it is reserved for
+the admin API, whose clients only an operator provisions, so the whole request
+is refused with `invalid_client_metadata`. A CIMD document whose `scope` holds
+one is refused too (`invalid_client`), and a realm's allowlist cannot hold one.
+The three admin scopes and what they allow are on the
+[admin permissions](/reference/admin-permissions/) page.
 
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).

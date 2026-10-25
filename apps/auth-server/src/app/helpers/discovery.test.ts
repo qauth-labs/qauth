@@ -6,6 +6,7 @@ import {
   ID_JAG_GRANT_PROFILE,
   JWT_BEARER_GRANT_TYPE,
 } from '../schemas/oauth';
+import { ADMIN_SCOPE_LIST } from './admin-scopes';
 import {
   buildAuthorizationServerMetadata,
   buildOpenIdConfiguration,
@@ -189,6 +190,24 @@ describe('buildAuthorizationServerMetadata', () => {
     });
 
     expect(meta['scopes_supported']).toEqual(['openid', 'custom:read']);
+  });
+
+  // #507: the admin scopes are reserved for the admin API and never advertised.
+  it('never advertises an admin scope, whatever list it is given', () => {
+    expect(DEFAULT_SCOPES_SUPPORTED.filter((scope) => scope.startsWith('admin:'))).toEqual([]);
+    const input = {
+      issuer: ISSUER,
+      scopesSupported: [
+        'openid',
+        ...ADMIN_SCOPE_LIST,
+        'Admin:other',
+        'agent:admin',
+        'example:admin',
+      ],
+    };
+    for (const meta of [buildAuthorizationServerMetadata(input), buildOpenIdConfiguration(input)]) {
+      expect(meta['scopes_supported']).toEqual(['openid', 'agent:admin', 'example:admin']);
+    }
   });
 
   it('strips a trailing slash on the issuer so URLs are not double-slashed', () => {
