@@ -15,8 +15,8 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
 import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
-import { answerFrameworkError, answerUnknownRouteBeforeBody } from '../app/helpers/request-bounds';
 import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
+import { answerFrameworkError, answerUnknownRouteBeforeBody } from '../app/helpers/request-bounds';
 
 /**
  * TEST SUPPORT — booting the REAL auth-server against throwaway containers
