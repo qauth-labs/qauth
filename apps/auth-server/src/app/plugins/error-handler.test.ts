@@ -3,6 +3,7 @@ import { Writable } from 'node:stream';
 import rateLimit from '@fastify/rate-limit';
 import {
   ForbiddenError,
+  InsufficientScopeError,
   InvalidClientError,
   InvalidDpopProofError,
   InvalidRequestError,
@@ -177,6 +178,9 @@ async function buildProblemApp(): Promise<FastifyInstance> {
   });
   app.get('/legacy', async () => {
     throw new ForbiddenError('No.');
+  });
+  app.get('/admin/v1-rc.0/scoped', async () => {
+    throw new InsufficientScopeError(['admin:read', 'admin:write'], 'the token lacks admin:write');
   });
   app.get('/admin/v1-rc.0/misdirected', async () => {
     throw new MisdirectedRequestError();
@@ -565,6 +569,21 @@ describe('error-handler plugin', () => {
       await app.close();
     });
 
+    it('answers a missing scope with 403 insufficient_scope and a challenge naming the scopes (#509)', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/scoped' });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      expect(response.json()).toMatchObject({ status: 403, code: 'insufficient_scope' });
+      expect(response.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="admin:read admin:write"'
+      );
+
+      await app.close();
+    });
+
     it('puts weak-password feedback in errors[] under /password', async () => {
       const app = await buildProblemApp();
 
@@ -704,6 +723,9 @@ describe('error-handler plugin', () => {
       app.get('/resource-token', async () => {
         throw new JWTInvalidError('Invalid DPoP key binding');
       });
+      app.get('/resource-scope', async () => {
+        throw new InsufficientScopeError(['account:read', 'bad"scope']);
+      });
       return app;
     }
 
@@ -758,6 +780,35 @@ describe('error-handler plugin', () => {
         );
         await app.close();
       }
+    });
+
+    it('answers a missing scope under the scheme the request used (#509)', async () => {
+      const app = await buildDpopApp(true);
+      const dpop = await app.inject({
+        method: 'GET',
+        url: '/resource-scope',
+        headers: { authorization: 'DPoP some.token.value' },
+      });
+      expect(dpop.statusCode).toBe(403);
+      // A scope outside the scope-token grammar never reaches the quoted string.
+      expect(dpop.headers['www-authenticate']).toBe(
+        'DPoP error="insufficient_scope", scope="account:read", algs="ES256 EdDSA"'
+      );
+      const bearer = await app.inject({
+        method: 'GET',
+        url: '/resource-scope',
+        headers: { authorization: 'Bearer some.token.value' },
+      });
+      expect(bearer.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="account:read"'
+      );
+      // Outside the families the body keeps the OAuth error shape.
+      expect(bearer.json()).toEqual({
+        error: 'insufficient_scope',
+        code: 'INSUFFICIENT_SCOPE',
+        statusCode: 403,
+      });
+      await app.close();
     });
 
     it('keeps the Bearer challenge for a DPoP-scheme request while DPoP is off', async () => {

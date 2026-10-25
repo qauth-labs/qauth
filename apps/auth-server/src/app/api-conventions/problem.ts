@@ -80,6 +80,11 @@ export const PROBLEM_CODES = {
     status: 403,
     description: 'The caller is authenticated but may not perform the operation.',
   },
+  insufficient_scope: {
+    status: 403,
+    description:
+      'The access token lacks a scope the operation needs. The `WWW-Authenticate` challenge names the scopes.',
+  },
   email_not_verified: {
     status: 403,
     description: 'The account must verify its email address first.',

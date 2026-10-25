@@ -180,6 +180,7 @@ routes that #513 converts names the same errors in upper case (`VALIDATION_ERROR
 | `jwt_invalid`                 | 401    | The access token is not valid.                                                                                                      |
 | `invalid_credentials`         | 401    | The identifier or the credential is wrong. The answer does not say which.                                                           |
 | `forbidden`                   | 403    | The caller is authenticated but may not perform the operation.                                                                      |
+| `insufficient_scope`          | 403    | The access token lacks a scope the operation needs. The `WWW-Authenticate` challenge names the scopes.                              |
 | `email_not_verified`          | 403    | The account must verify its email address first.                                                                                    |
 | `not_found`                   | 404    | The resource does not exist, or the caller may not know that it exists.                                                             |
 | `method_not_allowed`          | 405    | The resource does not support the method.                                                                                           |

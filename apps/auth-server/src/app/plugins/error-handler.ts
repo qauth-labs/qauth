@@ -3,6 +3,7 @@ import {
   EmailAlreadyVerifiedError,
   EmailNotVerifiedError,
   ForbiddenError,
+  InsufficientScopeError,
   InvalidClientError,
   InvalidCredentialsError,
   InvalidDpopProofError,
@@ -208,7 +209,8 @@ function isOAuthTokenError(
   | InvalidTargetError
   | InvalidClientError
   | UnauthorizedClientError
-  | InvalidDpopProofError {
+  | InvalidDpopProofError
+  | InsufficientScopeError {
   return (
     error instanceof InvalidScopeError ||
     error instanceof InvalidGrantError ||
@@ -216,8 +218,22 @@ function isOAuthTokenError(
     error instanceof InvalidTargetError ||
     error instanceof InvalidClientError ||
     error instanceof UnauthorizedClientError ||
-    error instanceof InvalidDpopProofError
+    error instanceof InvalidDpopProofError ||
+    error instanceof InsufficientScopeError
   );
+}
+
+/** RFC 6749 §3.3 `scope-token`: what a `scope` challenge parameter may hold. */
+const SCOPE_TOKEN = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
+
+/**
+ * The RFC 6750 §3 `scope` parameter of an `insufficient_scope` challenge: the
+ * scopes the request needs, space-separated. A value outside the scope-token
+ * grammar is left out rather than allowed to break the quoted string; the
+ * scopes come from the route, not the caller, so none should be.
+ */
+function challengeScope(scopes: readonly string[]): string {
+  return scopes.filter((scope) => SCOPE_TOKEN.test(scope)).join(' ');
 }
 
 /**
@@ -386,6 +402,19 @@ export default fp(async function (fastify: FastifyInstance) {
           dpopAlgs !== undefined && usedDpopScheme(request)
             ? `DPoP error="invalid_token", error_description="${description}", algs="${dpopAlgs}"`
             : `Bearer realm="OAuth", error="invalid_token", error_description="${description}"`
+        );
+      }
+      // RFC 6750 §3.1: a valid token that lacks a scope the resource needs is a
+      // 403 whose challenge names the scopes, so the client can ask for them
+      // (#509). The scheme follows the credential, as for `invalid_token`.
+      if (error instanceof InsufficientScopeError) {
+        const scope = challengeScope(error.requiredScopes);
+        const scopeParameter = scope.length > 0 ? `, scope="${scope}"` : '';
+        reply.header(
+          'WWW-Authenticate',
+          dpopAlgs !== undefined && usedDpopScheme(request)
+            ? `DPoP error="insufficient_scope"${scopeParameter}, algs="${dpopAlgs}"`
+            : `Bearer realm="OAuth", error="insufficient_scope"${scopeParameter}`
         );
       }
       if (error instanceof InvalidDpopProofError && error.statusCode === 401) {
