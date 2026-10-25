@@ -688,13 +688,6 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
-  // A spent code, presented by its own client with its redirect URI and its
-  // PKCE verifier: a second valid redemption (OAuth 2.1 §4.1.3). Only now,
-  // after those checks, does it revoke anything, so whoever saw the code but
-  // holds neither the client's credentials nor the verifier cannot end the
-  // client's tokens with it (OAuth 2.1 §7.5.3).
-  if (authCode.used) return rejectCodeReplay(ctx, authCode);
-
   // RFC 9449 §10 (#480): a code the authorization request bound to a DPoP key
   // (`dpop_jkt`) is redeemed only with a proof under that key. It is not
   // burned on a refusal: whoever lacks the key cannot spend the code the
@@ -720,6 +713,15 @@ async function handleAuthorizationCode(
     }
   }
   const effectiveResource = requestedResource.length > 0 ? requestedResource : codeResource;
+
+  // A spent code, presented by its own client with its redirect URI, its PKCE
+  // verifier, its DPoP key and a resource inside its binding: a second valid
+  // redemption (OAuth 2.1 §4.1.3). Only now, after every check of the request,
+  // does it revoke anything, so whoever saw the code but holds neither the
+  // client's credentials nor the verifier cannot end the client's tokens with
+  // it (OAuth 2.1 §7.5.3). It comes before the checks below, which spend an
+  // unspent code.
+  if (authCode.used) return rejectCodeReplay(ctx, authCode);
 
   const user = await fastify.repositories.users.findById(authCode.userId);
   if (!user) {

@@ -2093,6 +2093,54 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       }
     );
 
+    it('refuses a replay of a DPoP-bound code without its key and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+      // DPoP is off in this stub, so a code bound to a key is refused outright
+      // (`dpop_disabled`), the way a proof under another key is.
+      const { fastify, ctx } = setupSpentCode({ dpopJkt: 'k'.repeat(43) });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'dpop_disabled' },
+      ]);
+    });
+
+    it('refuses a replay naming a resource outside the code’s binding and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+      const { fastify, ctx } = setupSpentCode({ resource: ['https://api.example.com'] });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(
+        handler(baseRequest({ resource: ['https://other.example.com'] }), createReply())
+      ).rejects.toThrow(InvalidTargetError);
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).not.toHaveBeenCalled();
+    });
+
+    it('a replay for a user disabled since is still a replay, and spends nothing', async () => {
+      const { fastify, ctx, authCode } = setupSpentCode();
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: 'user-uuid-1',
+        enabled: false,
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
+      expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+    });
+
     it('a redemption that loses the race to a concurrent one is a replay: invalid_grant, family revoked', async () => {
       // Models the concurrent-redemption window: a code passes the lookup (it
       // was still unspent when read), but a parallel exchange spent it first,

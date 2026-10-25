@@ -25,7 +25,7 @@
       "section": "7.5.3",
       "level": "SHOULD NOT",
       "quote": "The authorization server SHOULD NOT revoke any issued tokens when receiving a replayed authorization code that contains invalid parameters.",
-      "applies": "POST /oauth/token, authorization_code grant. The replay check runs after client authentication, the client binding, the `redirect_uri` rule and the PKCE verifier; a replay that fails any of them is refused for that reason and revokes nothing.",
+      "applies": "POST /oauth/token, authorization_code grant. The replay check runs after every check of the request: client authentication, the client binding, the `redirect_uri` rule, the PKCE verifier, the DPoP key binding and the `resource` binding. A replay that fails any of them is refused for that reason and revokes nothing.",
       "status": "covered",
       "evidenceMatch": "revokes nothing"
     }
