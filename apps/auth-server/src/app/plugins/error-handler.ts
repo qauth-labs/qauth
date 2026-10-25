@@ -1,4 +1,5 @@
 import {
+  ForbiddenError,
   InvalidClientError,
   InvalidDpopProofError,
   JWTExpiredError,
@@ -382,19 +383,35 @@ export function oauthErrorBody(error: FastifyError | Error, status: number): OAu
  * The challenge for a 401 or 403 problem answer on a bearer-protected route
  * that no earlier branch gave one (RFC 6750 §3, RFC 9449 §7.1; #513).
  *
- * A request that presented no credentials gets a challenge with no error code,
- * as RFC 6750 §3.1 asks; a 401 for credentials that were presented says
- * `invalid_token`, and a 403 `insufficient_scope`. A request that used the
- * `DPoP` scheme while DPoP is on is answered in that scheme, with the proof
- * algorithms in `algs`.
+ * A 401 for credentials that were presented says `invalid_token`; one for a
+ * request that presented none names no error code, as RFC 6750 §3.1 asks. A
+ * 403 says `insufficient_scope`, with the scope, only when the refusal names
+ * the scope that would lift it (`ForbiddenError`'s `requiredScope`): a client
+ * that reads `insufficient_scope` goes back for a wider token, and a refusal no
+ * scope can lift, such as the developer client limit, must not send it there.
+ * A request that used the `DPoP` scheme while DPoP is on is answered in that
+ * scheme, with the proof algorithms in `algs`.
  */
-function bearerChallenge(request: FastifyRequest, status: number, dpopAlgs?: string): string {
-  const presented = (request.headers.authorization ?? '') !== '';
-  const error = status === 403 ? 'insufficient_scope' : presented ? 'invalid_token' : undefined;
-  if (dpopAlgs !== undefined && usedDpopScheme(request)) {
-    return `DPoP ${error === undefined ? '' : `error="${error}", `}algs="${dpopAlgs}"`;
+function bearerChallenge(
+  request: FastifyRequest,
+  error: FastifyError | Error,
+  status: number,
+  dpopAlgs?: string
+): string {
+  const parameters: string[] = [];
+  if (status === 403) {
+    const scope = error instanceof ForbiddenError ? error.requiredScope : undefined;
+    if (scope) {
+      parameters.push('error="insufficient_scope"');
+      parameters.push(`scope="${sanitizeDescription(scope, MAX_CHALLENGE_DESCRIPTION)}"`);
+    }
+  } else if ((request.headers.authorization ?? '') !== '') {
+    parameters.push('error="invalid_token"');
   }
-  return `Bearer realm="OAuth"${error === undefined ? '' : `, error="${error}"`}`;
+  if (dpopAlgs !== undefined && usedDpopScheme(request)) {
+    return `DPoP ${[...parameters, `algs="${dpopAlgs}"`].join(', ')}`;
+  }
+  return ['Bearer realm="OAuth"', ...parameters].join(', ');
 }
 
 /**
@@ -528,7 +545,7 @@ export default fp(async function (fastify: FastifyInstance) {
         !reply.hasHeader('WWW-Authenticate') &&
         isBearerProtected(request)
       ) {
-        reply.header('WWW-Authenticate', bearerChallenge(request, status, dpopAlgs));
+        reply.header('WWW-Authenticate', bearerChallenge(request, error, status, dpopAlgs));
       }
       return reply
         .code(status)

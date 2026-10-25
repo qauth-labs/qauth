@@ -136,6 +136,9 @@ async function buildApp(): Promise<FastifyInstance> {
   app.get('/admin/v1-rc.0/forbidden', async () => {
     throw new ForbiddenError('No.');
   });
+  app.get('/admin/v1-rc.0/needs-scope', async () => {
+    throw new ForbiddenError('This operation needs admin:read.', { requiredScope: 'admin:read' });
+  });
   app.get('/auth/credentials', async () => {
     throw new InvalidCredentialsError();
   });
@@ -463,7 +466,7 @@ describe('error-handler plugin (#513)', () => {
     });
 
     describe('the challenge on a bearer-protected route (RFC 6750 §3, RFC 9449 §7.1)', () => {
-      it('answers a 403 with insufficient_scope beside the problem document', async () => {
+      it('answers a 403 no scope can lift with a challenge that names no error', async () => {
         const app = await buildApp();
 
         const response = await app.inject({
@@ -474,8 +477,26 @@ describe('error-handler plugin (#513)', () => {
 
         expect(response.statusCode).toBe(403);
         expect(bodyOf(response)['code']).toBe('forbidden');
+        // Not insufficient_scope: a client reading it would go back for a
+        // wider token that cannot help (RFC 6750 §3.1).
+        expect(response.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+
+        await app.close();
+      });
+
+      it('answers a 403 that names the scope it needs with insufficient_scope and the scope', async () => {
+        const app = await buildApp();
+
+        const response = await app.inject({
+          method: 'GET',
+          url: '/admin/v1-rc.0/needs-scope',
+          headers: { authorization: 'Bearer a.b.c' },
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(bodyOf(response)['code']).toBe('forbidden');
         expect(response.headers['www-authenticate']).toBe(
-          'Bearer realm="OAuth", error="insufficient_scope"'
+          'Bearer realm="OAuth", error="insufficient_scope", scope="admin:read"'
         );
 
         await app.close();
@@ -505,9 +526,7 @@ describe('error-handler plugin (#513)', () => {
 
         const forbidden = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/forbidden' });
         expect(forbidden.statusCode).toBe(403);
-        expect(forbidden.headers['www-authenticate']).toBe(
-          'Bearer realm="OAuth", error="insufficient_scope"'
-        );
+        expect(forbidden.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
         // Not a 401 or 403: no challenge.
         const missing = await app.inject({ method: 'GET', url: '/developer/v1-rc.0/widgets/x' });
         expect(missing.headers['www-authenticate']).toBeUndefined();
@@ -531,7 +550,7 @@ describe('error-handler plugin (#513)', () => {
         app.decorate('dpop', { algorithms: ['ES256', 'EdDSA'] } as never);
         await app.register(errorHandler);
         app.get('/api/x', { schema: { security: [{ bearerAuth: [] }] } }, async () => {
-          throw new ForbiddenError();
+          throw new ForbiddenError('Needs a scope.', { requiredScope: 'clients:write' });
         });
 
         const response = await app.inject({
@@ -541,7 +560,7 @@ describe('error-handler plugin (#513)', () => {
         });
 
         expect(response.headers['www-authenticate']).toBe(
-          'DPoP error="insufficient_scope", algs="ES256 EdDSA"'
+          'DPoP error="insufficient_scope", scope="clients:write", algs="ES256 EdDSA"'
         );
 
         await app.close();

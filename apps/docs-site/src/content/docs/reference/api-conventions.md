@@ -150,7 +150,9 @@ document, sent as `application/problem+json` (ADR-019 Decision 7, decided 2026-1
 - A minor release may add codes. A client treats a code it does not know by its HTTP status.
 - A 401 or 403 from a bearer-protected route also carries a `WWW-Authenticate` challenge (RFC 6750
   §3; the `DPoP` scheme of RFC 9449 §7.1 when the request used it): `invalid_token` for a token
-  that is not valid, and `insufficient_scope` on a 403.
+  that is not valid. A 403 says `insufficient_scope`, with the `scope`, only when a token with that
+  scope would be let through; a refusal no scope can lift, such as the developer client limit,
+  carries a challenge with no error code, so a client does not go back for a wider token.
 - A weak password's feedback is a list of `errors` under the pointer `/password`.
 - The shared schema is `Problem` (`#/components/schemas/Problem` in the OpenAPI document), and a
   route declares its error responses with `problemResponses(...)` from
@@ -195,7 +197,8 @@ Each family is published as OpenAPI 3.1. Every operation of a family carries:
 
 Every other operation of the server lists its error responses too: a route names the statuses it
 answers by design in `x-qauth-errors`, and the document adds 421, 429 and 500, which any operation
-of a realm may answer, each referencing `Problem`, or `OAuthError` on an OAuth protocol endpoint.
+of a realm may answer (`/health` only 429), each referencing `Problem`, or `OAuthError` on an OAuth
+protocol endpoint.
 
 | Extension            | Values                             | Meaning                                                                                                                                                                                                   |
 | -------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
