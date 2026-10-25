@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { getCACertificates } from 'node:tls';
+import tls from 'node:tls';
 
 import {
   type ExchangeFailureReason,
@@ -303,14 +303,22 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
   };
 
   const send = (proc: FetchProcess, message: ToFetchProcess): void => {
-    proc.child.send(message, (err: Error | null) => {
-      if (err === null || proc.ending) return;
+    const unreachable = (): void => {
+      if (proc.ending) return;
       kill(
         proc,
         proc.call && failed(proc.call.job, 'network', 'the fetch process could not be reached'),
         false
       );
-    });
+    };
+    try {
+      proc.child.send(message, (err: Error | null) => {
+        if (err !== null) unreachable();
+      });
+    } catch {
+      // A message that cannot be serialized throws here.
+      unreachable();
+    }
   };
 
   /**
@@ -421,8 +429,17 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     });
     // The trust store of this process, so an exchange there trusts exactly
     // what one here would: the bundled roots, NODE_EXTRA_CA_CERTS and the
-    // system store when Node uses it.
-    send(proc, { type: 'init', ca: getCACertificates('default') });
+    // system store when Node uses it. And its TLS defaults, which flags such
+    // as --tls-min-v1.3 set and the empty environment would drop.
+    send(proc, {
+      type: 'init',
+      ca: tls.getCACertificates('default'),
+      tls: {
+        ciphers: tls.DEFAULT_CIPHERS,
+        minVersion: tls.DEFAULT_MIN_VERSION,
+        maxVersion: tls.DEFAULT_MAX_VERSION,
+      },
+    });
     return proc;
   };
 

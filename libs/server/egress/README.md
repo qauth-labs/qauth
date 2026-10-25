@@ -124,8 +124,8 @@ A process can be killed.
   variables of its IPC channel and removes them at start), `/dev/null` for its standard streams, no
   file descriptor of the server's but that channel, none of the server's Node flags, a 64 MiB heap
   and the lowest CPU priority. It trusts the certificates the server's process trusts — Node's
-  bundled roots, `NODE_EXTRA_CA_CERTS`, the system store when Node uses it — sent over the channel
-  when it starts.
+  bundled roots, `NODE_EXTRA_CA_CERTS`, the system store when Node uses it — and takes its TLS
+  defaults (`--tls-min-v1.3`, `--tls-cipher-list`), both sent over the channel when it starts.
 - **Bounds.** At most 8 processes run at once, and the calls to one host family hold at most 2 of
   them. A host name counts under its registrable domain, by the Public Suffix List with its private
   section: `a.example.com` and `b.example.com` share a family, `alice.eu.org` and `bob.eu.org` do

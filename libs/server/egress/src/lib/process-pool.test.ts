@@ -8,7 +8,7 @@ import {
   type Socket,
 } from 'node:net';
 import { platform } from 'node:os';
-import { getCACertificates, setDefaultCACertificates } from 'node:tls';
+import tls, { getCACertificates, setDefaultCACertificates } from 'node:tls';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -36,6 +36,7 @@ import { NODE_TRANSPORT } from './transport';
 const LINUX = platform() === 'linux';
 
 let trustedBefore: string[];
+let leaf: ReturnType<typeof createTestCertificate>;
 let okServer: HttpsServer;
 let okPort: number;
 let okRequests: { url: string; host: string | undefined; body: string }[];
@@ -59,7 +60,7 @@ const respond: typeof okHandler = (_req, _body, res) => {
 
 beforeAll(async () => {
   const ca = createTestCertificate({ subject: 'pool test CA' });
-  const leaf = createTestCertificate({
+  leaf = createTestCertificate({
     subject: 'egress.test',
     issuer: ca,
     dnsNames: ['egress.test', '*.egress.test'],
@@ -428,6 +429,28 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     expect(fetches.stats().processes).toBe(1);
     await until(() => fetches.stats().processes === 0);
     expect(fetches.stats().deadlineKills).toBe(0);
+  });
+
+  it('runs an exchange with the TLS defaults of this process', async () => {
+    // A server that speaks TLS 1.2 at most.
+    const old = createHttpsServer(
+      { key: leaf.keyPem, cert: leaf.pem, maxVersion: 'TLSv1.2' },
+      (_req, res) => res.end('old')
+    );
+    await new Promise<void>((resolve) => old.listen(0, '127.0.0.1', resolve));
+    const port = (old.address() as AddressInfo).port;
+    const minVersion = tls.DEFAULT_MIN_VERSION;
+    try {
+      expect(text(await pool().exchange(job('old.egress.test', port), within(5_000)))).toBe('old');
+      // As `--tls-min-v1.3` would set it. A process started now takes it.
+      tls.DEFAULT_MIN_VERSION = 'TLSv1.3';
+      const outcome = await pool().exchange(job('old.egress.test', port), within(5_000));
+      expect(outcome).toMatchObject({ kind: 'failed', reason: 'network' });
+    } finally {
+      tls.DEFAULT_MIN_VERSION = minVersion;
+      old.closeAllConnections();
+      await new Promise<void>((resolve) => old.close(() => resolve()));
+    }
   });
 
   it('returns a TLS failure from the process with its host-only message', async () => {

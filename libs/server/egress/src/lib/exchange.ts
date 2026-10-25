@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as netConnect, type Socket } from 'node:net';
 import { setPriority } from 'node:os';
-import { connect as tlsConnect, DEFAULT_CIPHERS, setDefaultCACertificates } from 'node:tls';
+import tls, { type SecureVersion } from 'node:tls';
 
 /**
  * One HTTPS request over a connection of its own: the TLS handshake with a
@@ -113,11 +113,28 @@ export const dialPinned: Dial = (hostname, addresses, port) => {
 };
 
 /**
+ * The TLS defaults an exchange uses: those of the process it runs in, which a
+ * fetch process replaces with the server's (`init`), so that `--tls-min-v1.3`
+ * or `--tls-cipher-list` in the server's `NODE_OPTIONS` still applies.
+ */
+export interface TlsDefaults {
+  readonly ciphers: string;
+  readonly minVersion: SecureVersion;
+  readonly maxVersion: SecureVersion;
+}
+
+let tlsDefaults: TlsDefaults = {
+  ciphers: tls.DEFAULT_CIPHERS,
+  minVersion: tls.DEFAULT_MIN_VERSION,
+  maxVersion: tls.DEFAULT_MAX_VERSION,
+};
+
+/**
  * Cipher list. Finite-field DHE is left out: a host can name a 10 000-bit
  * group in its ServerKeyExchange and make the client compute in it (about a
  * second of CPU per handshake). ECDHE and TLS 1.3 are unaffected.
  */
-const EGRESS_CIPHERS = `${DEFAULT_CIPHERS}:!kDHE`;
+const egressCiphers = (): string => `${tlsDefaults.ciphers}:!kDHE`;
 
 /** Largest response head, in bytes, whatever `--max-http-header-size` says. */
 const MAX_HEADER_BYTES = 16 * 1024;
@@ -207,19 +224,21 @@ export function exchange(
     }
     sockets.push(tcp);
     tcp.on('error', (err) => failed(err.message));
-    const tls = tlsConnect({
+    const secure = tls.connect({
       socket: tcp,
       host: job.hostname,
       // RFC 6066 has no SNI for an IP literal; the certificate is then checked
       // against the address.
       ...(job.literalFamily === 0 ? { servername: job.hostname } : {}),
-      ciphers: EGRESS_CIPHERS,
+      ciphers: egressCiphers(),
+      minVersion: tlsDefaults.minVersion,
+      maxVersion: tlsDefaults.maxVersion,
       ALPNProtocols: ['http/1.1'],
       // Explicit, so NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn it off.
       rejectUnauthorized: true,
     });
-    sockets.push(tls);
-    tls.on('error', (err) => failed(err.message));
+    sockets.push(secure);
+    secure.on('error', (err) => failed(err.message));
 
     const tooLarge = (): ExchangeOutcome =>
       failure('size', `the response is larger than ${job.maxResponseBytes} bytes`);
@@ -230,14 +249,14 @@ export function exchange(
     // cap for the body with its framing.
     const maxWireBytes = 2 * job.maxResponseBytes + MAX_HEADER_BYTES * (MAX_INTERIM_RESPONSES + 2);
     let wireBytes = 0;
-    tls.on('data', (chunk: Buffer) => {
+    secure.on('data', (chunk: Buffer) => {
       wireBytes += chunk.length;
       // Fail once this chunk has reached the HTTP parser, which listens after
       // this listener: a socket destroyed under it in the middle of a 'data'
       // event trips an assertion in Node's HTTP client, an uncaught exception.
       if (wireBytes > maxWireBytes) process.nextTick(() => finish(tooLarge()));
     });
-    tls.once('secureConnect', () => {
+    secure.once('secureConnect', () => {
       clearTimeout(connectTimer);
       if (!settled) onSecured?.();
     });
@@ -259,7 +278,7 @@ export function exchange(
         setHost: false,
         maxHeaderSize: MAX_HEADER_BYTES,
         insecureHTTPParser: false,
-        createConnection: () => tls,
+        createConnection: () => secure,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -331,8 +350,8 @@ export const FETCH_PROCESS_TAG = 'qauth:egress-fetch-process';
 
 /** What the pool sends a fetch process. */
 export type ToFetchProcess =
-  /** First, once: the trust store of the server's process, as PEM. */
-  | { readonly type: 'init'; readonly ca: readonly string[] }
+  /** First, once: the trust store of the server's process, as PEM, and its TLS defaults. */
+  | { readonly type: 'init'; readonly ca: readonly string[]; readonly tls: TlsDefaults }
   /** One exchange at a time; the next only after the outcome of this one. */
   | { readonly type: 'exchange'; readonly id: number; readonly job: ExchangeJob };
 
@@ -371,7 +390,8 @@ function runFetchProcess(send: (message: FromFetchProcess) => void): void {
     // The pool is the server's process, the side this process trusts.
     const message = received as ToFetchProcess;
     if (message.type === 'init') {
-      setDefaultCACertificates([...message.ca]);
+      tls.setDefaultCACertificates([...message.ca]);
+      tlsDefaults = { ...message.tls };
       send({ type: 'ready' });
       return;
     }
