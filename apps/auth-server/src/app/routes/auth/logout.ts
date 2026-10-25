@@ -6,8 +6,9 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
 import { endBrowserSessions } from '../../helpers/browser-session';
-import { clientAddressKey } from '../../helpers/client-address';
 import { assertManagementToken } from '../../helpers/management-token';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import {
   clearSessionCookie,
   readCookie,
@@ -52,7 +53,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGOUT_RATE_LIMIT,
           timeWindow: env.LOGOUT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -100,8 +101,11 @@ export default async function (fastify: FastifyInstance) {
         // user access token carries the user's id as `sub`. Accept only the
         // first-party token `/auth/login` mints, expired or not, so a token
         // issued to another client or audience cannot end the user's sessions.
-        // A disabled user may still sign out: logout only ends access.
-        await assertManagementToken(fastify, claims, { requireActiveUser: false });
+        // A disabled user may still sign out: logout only ends access. The
+        // token must still be one of this host's realm (#487).
+        await assertManagementToken(fastify, requestRealm(request), claims, {
+          requireActiveUser: false,
+        });
         const tokenSub = claims.sub;
 
         if (!tokenSub) {

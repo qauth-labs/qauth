@@ -13,13 +13,11 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
-vi.mock('../../helpers/realm', () => ({
-  getOrCreateDefaultRealm: vi.fn(async () => ({ id: 'realm-1' })),
-}));
 vi.mock('../../helpers/oauth-client', () => ({
   getOrCreateSystemClient: vi.fn(async () => ({ clientId: 'system', audience: null })),
 }));
 
+import { testRealm } from '../../../testing/request-realm';
 import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
 import logoutRoute from './logout';
@@ -61,9 +59,12 @@ function createReply(): ReplyStub {
   return reply;
 }
 
+/** The realm the realm resolver (#486) decorated the request with. */
+const REALM = testRealm({ id: 'realm-1' });
+
 const VALID_USER = {
   id: 'user-logout-1',
-  realmId: 'realm-1',
+  realmId: REALM.id,
   email: 'logout@example.com',
   emailVerified: true,
   enabled: true,
@@ -132,6 +133,7 @@ function logoutRequest(
       ...(cookie ? { cookie } : {}),
     },
     ip: '203.0.113.7',
+    realm: REALM,
     // Request-scoped logger used by the structured auth-event helper (#124).
     log: { info: vi.fn(), warn: vi.fn() },
   };
@@ -478,6 +480,32 @@ describe('POST /auth/logout', () => {
       { reason: 'subject_not_a_user' },
       { realmId: undefined, userId: null, actor: 'user' }
     );
+  });
+
+  it('throws (401) and does NOT revoke for the token of a user of another realm (#487)', async () => {
+    // The management token reads the same in every realm, so its subject's
+    // realm decides: a token from another realm's host ends nothing here.
+    const subject = '22222222-2222-4222-8222-222222222222';
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ sub: subject })
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...VALID_USER,
+      id: subject,
+      realmId: 'realm-other',
+    });
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(logoutRequest(), createReply())).rejects.toThrow(
+      'Access token was not issued in this realm'
+    );
+    expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
   it('records a user.sign_out_failed event when logout fails', async () => {

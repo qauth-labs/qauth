@@ -32,17 +32,22 @@ vi.mock('../../helpers/failed-login', () => ({
 }));
 
 import { env } from '../../../config/env';
+import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import {
   recordSuccessfulLogin,
   registerLoginAttempt,
   resetFailedAttempts,
 } from '../../helpers/failed-login';
+import type { RealmRow } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
 import loginRoute from './login';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
@@ -54,6 +59,9 @@ interface TestContext {
   /** The POST route's options, so a test can reach the form schema Fastify applies. */
   postOpts?: { schema: { body: { safeParse: (value: unknown) => { success: boolean } } } };
 }
+
+/** A captured route handler, called with a plain-object request. */
+type RouteHandler = NonNullable<TestContext['post']>;
 
 function createReply() {
   const state: {
@@ -91,25 +99,32 @@ function createReply() {
   return { reply, state };
 }
 
+/**
+ * The realm resolver's decoration (#486): a request reaches its handler with
+ * the realm of its host. A request that names its own realm keeps it.
+ */
+function withRealm(handler: RouteHandler): RouteHandler {
+  return (request, reply) => {
+    request.realm ??= REALM;
+    return handler(request, reply);
+  };
+}
+
 function makeFastify() {
   const ctx: TestContext = {};
   const fastify: any = {
     withTypeProvider: () => ({
       get: (_url: string, _opts: unknown, handler: any) => {
-        ctx.get = handler;
+        ctx.get = withRealm(handler);
         return fastify;
       },
       post: (_url: string, opts: TestContext['postOpts'], handler: any) => {
-        ctx.post = handler;
+        ctx.post = withRealm(handler);
         ctx.postOpts = opts;
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       users: {
         findById: vi.fn(),
         updateLastLogin: vi.fn().mockResolvedValue(undefined),
@@ -294,7 +309,13 @@ describe('UI /ui/login — CSRF defence', () => {
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
     const LOCKOUT_IDS = [`email:${hashEmail('user@example.com')}`, 'ip:127.0.0.1'];
 
-    async function postLogin(options: { verifies: boolean; emailVerified?: boolean; ip?: string }) {
+    async function postLogin(options: {
+      verifies: boolean;
+      emailVerified?: boolean;
+      ip?: string;
+      /** The realm of the host the request named; {@link REALM} when absent. */
+      realm?: RealmRow;
+    }) {
       const { fastify, ctx } = makeFastify();
       await loginRoute(fastify);
       const getReply = createReply();
@@ -325,6 +346,7 @@ describe('UI /ui/login — CSRF defence', () => {
           body: { email: 'User@Example.com', password: 'pw', csrf_token: rawToken },
           headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
           ip: options.ip ?? '127.0.0.1',
+          realm: options.realm,
         },
         reply
       );
@@ -343,7 +365,7 @@ describe('UI /ui/login — CSRF defence', () => {
 
       const { fastify, state } = await postLogin({ verifies: true });
 
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
       expect(state.statusCode).toBe(429);
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
@@ -353,7 +375,7 @@ describe('UI /ui/login — CSRF defence', () => {
         expect.anything(),
         'urn:qauth:event:user.sign_in_failed:v1-rc.0',
         { method: 'password', reason: 'locked_out' },
-        { actor: 'user' }
+        { realmId: REALM.id, actor: 'user' }
       );
     });
 
@@ -361,7 +383,7 @@ describe('UI /ui/login — CSRF defence', () => {
       const { fastify, state } = await postLogin({ verifies: false });
 
       expect(state.statusCode).toBe(401);
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
       // Counted on the way in, not after argon2 has returned, so concurrent
       // guesses cannot outrun the counter (ROIQJSAT); a failure leaves it counted.
       expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
@@ -371,10 +393,21 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
+    it("looks the account up and counts the attempt in the request's realm (#487)", async () => {
+      const { fastify } = await postLogin({ verifies: false, realm: testRealm({ id: 'realm-2' }) });
+
+      expect(fastify.repositories.userCredentials.findByRealmProviderSub).toHaveBeenCalledWith(
+        'realm-2',
+        'password',
+        'user@example.com'
+      );
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), 'realm-2', LOCKOUT_IDS);
+    });
+
     it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
       await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
 
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), [
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, [
         LOCKOUT_IDS[0],
         'ip:2001:db8:1:2::',
       ]);
@@ -389,9 +422,12 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.statusCode).toBe(302);
       // Anyone can register an account: its login must not wipe the failures
       // counted against the address it comes from (GPU4YL6X).
-      expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(expect.anything(), attempt, [
-        LOCKOUT_IDS[0],
-      ]);
+      expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        REALM.id,
+        attempt,
+        [LOCKOUT_IDS[0]]
+      );
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
@@ -429,7 +465,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(floorFirst()).toBe(true);
       expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
       expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
       // The reason is kept where only operators read it, with the unverified

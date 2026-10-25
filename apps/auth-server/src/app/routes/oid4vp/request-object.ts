@@ -2,7 +2,7 @@ import { OID4VP_REQUEST_OBJECT_MEDIA_TYPE } from '@qauth-labs/fastify-plugin-fed
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../../config/env';
-import { clientAddressKey } from '../../helpers/client-address';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { readWalletRequestObject } from '../../helpers/wallet-login-flow';
 
 /**
@@ -94,7 +94,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.OID4VP_REQUEST_OBJECT_RATE_LIMIT,
           timeWindow: env.OID4VP_REQUEST_OBJECT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },

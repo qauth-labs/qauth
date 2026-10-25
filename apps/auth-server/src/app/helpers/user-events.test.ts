@@ -1,11 +1,3 @@
-import { vi } from 'vitest';
-
-vi.mock('../../config/env', () => ({
-  env: {
-    DEFAULT_REALM_NAME: 'master',
-  },
-}));
-
 import {
   BadRequestError,
   ForbiddenError,
@@ -20,30 +12,33 @@ import {
 } from '@qauth-labs/shared-errors';
 import { parseEvent } from '@qauth-labs/shared-events';
 import type { FastifyRequest } from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { emitUserEvent, oauthErrorCode, userEventFor } from './user-events';
 
 const REALM_ID = '0b5c1f3e-8a4d-4c2b-9f6e-1d2a3b4c5d6e';
-const DEFAULT_REALM_ID = '7d1e2f3a-4b5c-4d6e-8f70-819203a4b5c6';
+const REQUEST_REALM_ID = '7d1e2f3a-4b5c-4d6e-8f70-819203a4b5c6';
 const USER_ID = '3f6c2a1b-9d8e-4f7a-b6c5-d4e3f2a1b0c9';
 
-function createRequest(overrides: { headers?: Record<string, string>; ip?: string } = {}) {
+function createRequest(
+  overrides: { headers?: Record<string, string>; ip?: string; realm?: { id: string } | null } = {}
+) {
   const events = {
     emit: vi.fn().mockResolvedValue('event-in-tx'),
     emitInOwnTransaction: vi.fn().mockResolvedValue('event-own-tx'),
   };
-  const realms = {
-    findByName: vi.fn().mockResolvedValue({ id: DEFAULT_REALM_ID, name: 'master' }),
-    create: vi.fn(),
-  };
   const request = {
     id: 'req-42',
+    method: 'GET',
     ip: overrides.ip ?? '203.0.113.7',
     headers: overrides.headers ?? { 'user-agent': 'vitest-agent' },
-    server: { repositories: { events, realms } },
+    // The realm the resolver found through the request's host (#486).
+    realm:
+      overrides.realm === undefined ? { id: REQUEST_REALM_ID, name: 'tenant' } : overrides.realm,
+    routeOptions: { url: '/probe' },
+    server: { repositories: { events } },
   } as unknown as FastifyRequest;
-  return { request, events, realms };
+  return { request, events };
 }
 
 describe('emitUserEvent', () => {
@@ -89,8 +84,8 @@ describe('emitUserEvent', () => {
     );
   });
 
-  it('takes the default realm when the handler names none', async () => {
-    const { request, events, realms } = createRequest();
+  it('takes the request’s realm when the handler names none (#487)', async () => {
+    const { request, events } = createRequest();
 
     await emitUserEvent(
       request,
@@ -99,10 +94,33 @@ describe('emitUserEvent', () => {
       { userId: USER_ID }
     );
 
-    expect(realms.findByName).toHaveBeenCalledTimes(1);
     expect(events.emitInOwnTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({ realm: DEFAULT_REALM_ID })
+      expect.objectContaining({ realm: REQUEST_REALM_ID })
     );
+  });
+
+  it('keeps the realm the handler names over the request’s', async () => {
+    const { request, events } = createRequest();
+
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:userinfo.served:v1-rc.0',
+      {},
+      { realmId: REALM_ID, userId: USER_ID }
+    );
+
+    expect(events.emitInOwnTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ realm: REALM_ID })
+    );
+  });
+
+  it('refuses to guess a realm when the request has none and the handler names none', async () => {
+    const { request, events } = createRequest({ realm: null });
+
+    await expect(
+      emitUserEvent(request, 'urn:qauth:event:userinfo.served:v1-rc.0', {}, { userId: USER_ID })
+    ).rejects.toThrow('has no resolved realm');
+    expect(events.emitInOwnTransaction).not.toHaveBeenCalled();
   });
 
   it('makes the acting client of a delegated request the actor, with the whole chain', async () => {

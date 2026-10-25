@@ -32,10 +32,17 @@ export const REDIS_KEYS = {
   RESEND_RATE_LIMIT: (email: string) => `rate-limit:resend:${digest(email)}`,
   /** Last email sent timestamp for minimum interval check (address digested, as above) */
   LAST_EMAIL_SENT: (email: string) => `last-email-sent:${digest(email)}`,
-  /** Sliding-window failed-login attempt counter, keyed per identifier (#115) */
-  FAILED_LOGIN_ATTEMPTS: (identifier: string) => `failed-login:attempts:${identifier}`,
-  /** Active failed-login lockout marker, keyed per identifier (#115) */
-  FAILED_LOGIN_LOCKOUT: (identifier: string) => `failed-login:lockout:${identifier}`,
+  /**
+   * Sliding-window failed-login attempt counter, keyed per realm and identifier
+   * (#115). An account is one realm's, so the same address in two realms is two
+   * accounts with two counters, and a source address is counted per realm, as
+   * the rate limits are (#487).
+   */
+  FAILED_LOGIN_ATTEMPTS: (realmId: string, identifier: string) =>
+    `failed-login:attempts:${realmId}:${identifier}`,
+  /** Active failed-login lockout marker, keyed per realm and identifier (#115, #487) */
+  FAILED_LOGIN_LOCKOUT: (realmId: string, identifier: string) =>
+    `failed-login:lockout:${realmId}:${identifier}`,
   /**
    * Access-token revocation denylist entry, keyed by the token's `jti`
    * (RFC 7009). Stored with a TTL equal to the token's remaining lifetime so

@@ -21,12 +21,16 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
 });
 
 import { env } from '../../../config/env';
+import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import { emitUserEvent } from '../../helpers/user-events';
 import consentRoute from './consent';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
@@ -67,6 +71,9 @@ interface TestContext {
   postOpts?: any;
 }
 
+/** A captured route handler, called with a plain-object request. */
+type RouteHandler = NonNullable<TestContext['post']>;
+
 function createReply() {
   const state: {
     statusCode?: number;
@@ -99,25 +106,32 @@ function createReply() {
   return { reply, state };
 }
 
+/**
+ * The realm resolver's decoration (#486): a request reaches its handler with
+ * the realm of its host. A request that names its own realm keeps it.
+ */
+function withRealm(handler: RouteHandler): RouteHandler {
+  return (request, reply) => {
+    request.realm ??= REALM;
+    return handler(request, reply);
+  };
+}
+
 function makeFastify() {
   const ctx: TestContext = {};
   const fastify: any = {
     withTypeProvider: () => ({
       get: (_url: string, _opts: unknown, handler: any) => {
-        ctx.get = handler;
+        ctx.get = withRealm(handler);
         return fastify;
       },
       post: (_url: string, opts: any, handler: any) => {
-        ctx.post = handler;
+        ctx.post = withRealm(handler);
         ctx.postOpts = opts;
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       oauthClients: {
         findByClientId: vi.fn(),
       },
@@ -512,6 +526,46 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(state.redirected).toContain('state=xyz');
     // #282: consent Allow is the authorization success response.
     expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
+  });
+
+  it("resolves the client and records the grant in the request's realm (#487)", async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-r');
+    const csrf = 'csrf-token-realm';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-r',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply } = createReply();
+    await ctx.post!(
+      {
+        body: { ...BASE_QUERY, decision: 'allow', allow_forever: '1', csrf_token: csrf },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+        realm: testRealm({ id: 'realm-2' }),
+      },
+      reply
+    );
+
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-2',
+      'app-123'
+    );
+    expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'user-1',
+      'client-uuid-1',
+      'realm-2',
+      ['email'],
+      []
+    );
   });
 
   it('persists RFC 8707 resource on the code when POST body carries resource field(s)', async () => {

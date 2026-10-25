@@ -7,7 +7,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
-// The create route transitively imports `helpers/realm` → `config/env`, which
+// The routes import `config/env` (directly and through their helpers), which
 // validates required env at module load. Stub it so the unit run needs no real
 // environment (matches `routes/oauth/register.test.ts`).
 vi.mock('../../../config/env', () => ({
@@ -38,6 +38,7 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
 });
 
 import { env } from '../../../config/env';
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import clientsRoute, { autoPrefix } from './index';
 
@@ -75,6 +76,18 @@ interface TestContext {
 // UUID `users.id`, so the developer subjects in these tests must be UUIDs.
 const DEV_A = '0190a000-0000-7000-8000-00000000000a';
 const DEV_B = '0190a000-0000-7000-8000-00000000000b';
+
+/**
+ * The realm the realm resolver (#486) decorated the request with. It already
+ * carries a seeded allowlist so scope-cap tests are deterministic and don't
+ * depend on the env-seeding write path.
+ */
+const REALM = testRealm({
+  id: 'realm-1',
+  name: 'default',
+  maxEnvironmentLaxity: 'development',
+  dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
+});
 
 function createReply() {
   const state: { statusCode?: number; body?: unknown; headers: Record<string, string> } = {
@@ -131,24 +144,9 @@ function makeFastify() {
         delete: vi.fn(),
       },
       realms: {
-        // Realm already carries a seeded allowlist so scope-cap tests are
-        // deterministic and don't depend on the env-seeding write path.
-        findByName: vi.fn(async () => ({
-          id: 'realm-1',
-          name: 'default',
-          enabled: true,
-          maxEnvironmentLaxity: 'development',
-          dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
-        })),
-        findById: vi.fn(async () => ({
-          id: 'realm-1',
-          name: 'default',
-          enabled: true,
-          maxEnvironmentLaxity: 'development',
-          dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
-        })),
+        // The allowlist is read from the realm row, not the request's (#487).
+        findById: vi.fn(async () => REALM),
         update: vi.fn(),
-        create: vi.fn(),
       },
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -168,6 +166,7 @@ function authedRequest(overrides: Record<string, unknown> = {}): FastifyRequest 
     jwtPayload: { sub: DEV_A },
     headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     ip: '127.0.0.1',
+    realm: REALM,
     ...overrides,
   } as unknown as FastifyRequest;
 }
@@ -1036,6 +1035,32 @@ describe('scope allowlist enforcement (#86/#88)', () => {
 
     await route(ctx, 'POST /').handler(request, reply);
     expect(state.statusCode).toBe(201);
+  });
+
+  it("creates the client in the request's realm, under that realm's allowlist (#487)", async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    const realm = testRealm({ id: 'realm-2', dynamicRegistrationAllowedScopes: ['openid'] });
+    (fastify.repositories.realms.findById as unknown as Mock).mockImplementation(
+      async (id: string) => (id === realm.id ? realm : undefined)
+    );
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const { reply, state } = createReply();
+    await route(ctx, 'POST /').handler(
+      authedRequest({
+        realm,
+        body: { name: 'Realm 2', redirectUris: ['https://app.example.com/cb'], scopes: ['openid'] },
+      }),
+      reply
+    );
+
+    expect(state.statusCode).toBe(201);
+    expect(fastify.repositories.realms.findById).toHaveBeenCalledWith('realm-2');
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created.realmId).toBe('realm-2');
   });
 
   it('rejects a PATCH that widens scopes beyond the realm allowlist', async () => {

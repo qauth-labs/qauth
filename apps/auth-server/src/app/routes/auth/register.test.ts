@@ -1,5 +1,9 @@
 import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
-import { UniqueConstraintError, WeakPasswordError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  UniqueConstraintError,
+  WeakPasswordError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -20,6 +24,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { testRealm } from '../../../testing/request-realm';
 import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -44,6 +49,9 @@ const TX = { __tx: 'register-tx' };
 
 /** The address every request below registers, as the route normalizes it. */
 const ADDRESS = 'user@example.com';
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 function createReply() {
   const state: { statusCode?: number; body?: unknown; headers: Record<string, string> } = {
@@ -126,11 +134,6 @@ function createFastifyStub() {
     },
     redis: createMemoryRedis(),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        findById: vi.fn(),
-        create: vi.fn(),
-      },
       users: {
         create: vi.fn().mockResolvedValue(createdUser),
         findById: vi.fn().mockResolvedValue({ id: 'user-existing', enabled: true }),
@@ -187,6 +190,7 @@ function requestFixture() {
     ip: '127.0.0.1',
     headers: { 'user-agent': 'vitest' },
     log: { info: vi.fn(), warn: vi.fn() },
+    realm: REALM,
   };
 }
 
@@ -503,6 +507,35 @@ describe('POST /auth/register', () => {
 
       expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain');
     });
+  });
+
+  it("registers in the request's realm: a body realmId may only name that realm (#487)", async () => {
+    // The host chooses the realm. A body realmId naming it, in any case, is
+    // accepted; one naming any other realm is refused as unknown, before
+    // anything is hashed or written.
+    const realm = testRealm({ id: '0b5a1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d' });
+    const { fastify, ctx } = createFastifyStub();
+    await registerRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const fixture = requestFixture();
+    await ctx.handler(
+      { ...fixture, realm, body: { ...fixture.body, realmId: realm.id.toUpperCase() } },
+      createReply()
+    );
+    expect(fastify.repositories.users.create).toHaveBeenCalledWith({ realmId: realm.id }, TX);
+
+    vi.mocked(fastify.repositories.users.create).mockClear();
+    vi.mocked(fastify.passwordHasher.hashPassword).mockClear();
+    const other = '9f8e7d6c-5b4a-4c3d-9e2f-1a0b9c8d7e6f';
+    const refused = ctx.handler(
+      { ...fixture, realm, body: { ...fixture.body, realmId: other } },
+      createReply()
+    );
+    await expect(refused).rejects.toBeInstanceOf(BadRequestError);
+    await expect(refused).rejects.toThrow(`Invalid realmId: ${other}`);
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    expect(fastify.repositories.users.create).not.toHaveBeenCalled();
   });
 
   it('lets any other failure of the transaction through', async () => {

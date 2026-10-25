@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { testRealm } from '../../../testing/request-realm';
+import type { RealmRow } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -59,6 +61,21 @@ interface TestContext {
   postHandler?: (request: any, reply: any) => Promise<unknown>;
 }
 
+const REALM = testRealm({ id: 'realm-1' });
+
+/**
+ * The realm resolver's decoration (#486): a request reaches its handler with
+ * the realm of its host. A request that names its own realm keeps it.
+ */
+function withRequestRealm(
+  handler: NonNullable<TestContext['handler']>
+): NonNullable<TestContext['handler']> {
+  return (request, reply) => {
+    request.realm ??= REALM;
+    return handler(request, reply);
+  };
+}
+
 function createReply() {
   const state: {
     statusCode?: number;
@@ -95,21 +112,17 @@ function makeFastify() {
     withTypeProvider: () => {
       const route = {
         get: (_url: string, _opts: unknown, handler: any) => {
-          ctx.handler = handler;
+          ctx.handler = withRequestRealm(handler);
           return route;
         },
         post: (_url: string, _opts: unknown, handler: any) => {
-          ctx.postHandler = handler;
+          ctx.postHandler = withRequestRealm(handler);
           return route;
         },
       };
       return route;
     },
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       oauthClients: {
         findByClientId: vi.fn(),
       },
@@ -125,9 +138,9 @@ function makeFastify() {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
       },
       // Both the session path and the Bearer fallback accept only a user who is
-      // still enabled.
+      // still enabled; the Bearer fallback, only a user of the request's realm.
       users: {
-        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+        findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })),
       },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
@@ -302,6 +315,49 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
+  });
+
+  it("resolves the client in the request's realm and records that realm (#487)", async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      sessionId: 'sid-1',
+      createdAt: Date.now(),
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply, state } = createReply();
+    await handler(
+      {
+        query: BASE_QUERY,
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { cookie: `__Host-qauth_session=${signSessionId('sid-1')}` },
+        ip: '127.0.0.1',
+        realm: testRealm({ id: 'realm-tenant' }),
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-tenant',
+      CLIENT.clientId
+    );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.completed:v1-rc.0',
+      {},
+      expect.objectContaining({ realmId: 'realm-tenant', userId: 'user-1' })
+    );
   });
 
   // The first consent read is a snapshot. A revocation that commits after it
@@ -778,11 +834,11 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
       withTypeProvider: () => {
         const route = {
           get: (_url: string, _opts: unknown, handler: any) => {
-            ctx.handler = handler;
+            ctx.handler = withRequestRealm(handler);
             return route;
           },
           post: (_url: string, _opts: unknown, handler: any) => {
-            ctx.postHandler = handler;
+            ctx.postHandler = withRequestRealm(handler);
             return route;
           },
         };
@@ -797,10 +853,6 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
       },
       passwordHasher: { hashPassword: vi.fn(async () => 'argon2id$sentinel') },
       repositories: {
-        realms: {
-          findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-          create: vi.fn(),
-        },
         oauthClients: {
           // No pre-registered row → falls through to CIMD resolution.
           findByClientId: vi.fn().mockResolvedValue(undefined),
@@ -1850,6 +1902,7 @@ describe('GET /oauth/authorize — disabled user', () => {
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: BEARER_USER,
       enabled: false,
+      realmId: REALM.id,
     });
 
     const handler = ctx.handler;
@@ -1884,12 +1937,6 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
 
   async function run(realmEnv: string, clientEnv: string) {
     const { fastify, ctx } = makeFastify();
-    (fastify.repositories.realms.findByName as unknown as Mock).mockResolvedValue({
-      id: 'realm-1',
-      name: 'master',
-      enabled: true,
-      maxEnvironmentLaxity: realmEnv,
-    });
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...LOCALHOST_CLIENT,
@@ -1909,6 +1956,10 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
             url: '/oauth/authorize?response_type=code&client_id=app-123',
             headers: {},
             ip: '127.0.0.1',
+            realm: testRealm({
+              id: 'realm-1',
+              maxEnvironmentLaxity: realmEnv as RealmRow['maxEnvironmentLaxity'],
+            }),
           },
           reply
         ),

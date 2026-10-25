@@ -13,7 +13,8 @@ import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
 import { type LoginRequest, loginResponseSchema, loginSchema } from '../../schemas/auth';
@@ -42,7 +43,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -59,14 +60,15 @@ export default async function (fastify: FastifyInstance) {
       const emailHash = hashEmail(normalizedEmail);
       const emailIdentifier = `email:${emailHash}`;
       const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
-      // The realm once resolved, for the event of a failure after that point.
-      let realmId: string | undefined;
+      // The realm of the host the request named (#487): the account is looked
+      // up in it, and its lockout and events are its own.
+      const realm = requestRealm(request);
 
       try {
         // Reject early if this identifier is currently locked out; otherwise
         // count the attempt now, before the password is looked at, so that
         // guesses sent concurrently cannot outrun the counter (#115).
-        const lockout = await registerLoginAttempt(fastify.redis, lockoutIdentifiers);
+        const lockout = await registerLoginAttempt(fastify.redis, realm.id, lockoutIdentifiers);
         if (lockout.locked) {
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'locked_out' });
           logAuthEvent(request, 'user.login.failure', false, {
@@ -79,10 +81,6 @@ export default async function (fastify: FastifyInstance) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
           throw new TooManyRequestsError('Too many failed login attempts. Please try again later.');
         }
-
-        // Get default realm
-        const realm = await getOrCreateDefaultRealm(fastify);
-        realmId = realm.id;
 
         // Password check via the user_credentials read path (#228): lookup on
         // (realm_id, 'password', external_sub), argon2 against
@@ -239,7 +237,7 @@ export default async function (fastify: FastifyInstance) {
         // count: its counter holds the failures of every account guessed at
         // from it, and registration is open, so logging in to an account of
         // one's own must not clear them.
-        await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
+        await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
         fastify.metrics.loginAttempts.inc({ result: 'success' });
         fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'password' });
         fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'password' });
@@ -277,7 +275,7 @@ export default async function (fastify: FastifyInstance) {
           request,
           'urn:qauth:event:user.sign_in_failed:v1-rc.0',
           { method: 'password', reason: 'internal_error' },
-          { realmId, userId: null, actor: 'user' }
+          { realmId: realm.id, userId: null, actor: 'user' }
         );
 
         // Ensure minimum response time even on errors

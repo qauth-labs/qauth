@@ -18,7 +18,6 @@ import {
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
-import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import { isClientUsable } from '../../helpers/client-status';
@@ -35,8 +34,8 @@ import {
   redirectUriMatchesRegistered,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import {
   evaluateStepUp,
   isDangerousScope,
@@ -124,15 +123,15 @@ export default async function (fastify: FastifyInstance) {
     rateLimit: {
       // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
       // forces the strict cap; a development/staging ceiling permits the
-      // lenient cap. Resolved at the realm level because rate limiting runs
-      // before the client is authenticated. Fail-safe to strict.
-      max: () =>
-        resolveRealmRateLimitMax(fastify, {
+      // lenient cap. Resolved from the request's realm (#487) because rate
+      // limiting runs before the client is authenticated. Fail-safe to strict.
+      max: (request: FastifyRequest) =>
+        resolveRealmRateLimitMax(request.realm, {
           lenientMax: env.AUTHORIZE_RATE_LIMIT_LENIENT,
           strictMax: env.AUTHORIZE_RATE_LIMIT,
         }),
       timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-      keyGenerator: clientAddressKey,
+      keyGenerator: realmRateLimitKey,
     },
   };
 
@@ -157,7 +156,7 @@ export default async function (fastify: FastifyInstance) {
     // reach a redirect with a differently-shaped issuer.
     const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
 
-    const realm = await getOrCreateDefaultRealm(fastify);
+    const realm = requestRealm(request);
 
     // Client resolution priority (MCP 2025-11-25): pre-registered (DB) →
     // CIMD (https-URL client_id, fetched + SSRF-guarded + validated, then
@@ -328,7 +327,7 @@ export default async function (fastify: FastifyInstance) {
         // any code whose bound `resource` resolves to the system audience
         // mints a user token that passes the check above. Pin `client_id`
         // (and refuse delegated tokens) exactly as the management API does.
-        await assertManagementToken(fastify, payload);
+        await assertManagementToken(fastify, realm, payload);
         // RFC 7009: `requireJwt` and token exchange consult the per-`jti`
         // denylist; this path issues codes from the same token, so it must
         // too. A Redis failure throws into the catch below (fails closed).

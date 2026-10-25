@@ -7,12 +7,12 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import { clientAddressKey } from '../../helpers/client-address';
 import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { createRequireManagementJwt } from '../../helpers/management-token';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
 import {
   clientSchema,
@@ -235,11 +235,18 @@ function assertGrantResponseConsistency(input: {
  * realm would refuse at dynamic registration — keeping the two
  * client-creation paths consistent. Seeding is best-effort: a racing write
  * never blocks the request.
+ *
+ * The list is read from the database, not from the realm resolver's row
+ * (`request.realm`), which can be up to its cache time old (#487): the seed
+ * must see a list an operator set since then, or it would overwrite it. A
+ * realm that no longer exists permits no scope.
  */
 async function resolveRealmAllowedScopes(
   fastify: FastifyInstance,
-  realm: { id: string; dynamicRegistrationAllowedScopes?: string[] | null }
+  realmId: string
 ): Promise<string[]> {
+  const realm = await fastify.repositories.realms.findById(realmId);
+  if (!realm) return [];
   let allowedScopes = realm.dynamicRegistrationAllowedScopes ?? [];
   if (allowedScopes.length === 0 && env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0) {
     allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
@@ -383,7 +390,7 @@ export default async function (fastify: FastifyInstance) {
 
       // Resolve each client's effective policy against its realm ceiling. Realms
       // are cached per id within the request so a developer's clients (which all
-      // share the default realm) cost a single realm lookup, not one per client.
+      // share the developer's realm) cost a single realm lookup, not one per client.
       const realmCache = new Map<
         string,
         Awaited<ReturnType<FastifyInstance['repositories']['realms']['findById']>>
@@ -425,7 +432,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -461,11 +468,11 @@ export default async function (fastify: FastifyInstance) {
         redirectUris,
       });
 
-      const realm = await getOrCreateDefaultRealm(fastify);
+      const realm = requestRealm(request);
 
       // Cap requested scopes against the realm policy *before* hashing — a
       // policy-violating request must not pay the argon2id cost or persist.
-      const allowedScopes = await resolveRealmAllowedScopes(fastify, realm);
+      const allowedScopes = await resolveRealmAllowedScopes(fastify, realm.id);
       assertScopesAllowed(scopes, allowedScopes);
 
       // The per-developer ceiling, also before hashing. `GET /api/clients`
@@ -534,8 +541,8 @@ export default async function (fastify: FastifyInstance) {
         { developerId, client: { clientId, realmId: realm.id } }
       );
 
-      // Reuse the realm already loaded above so the response's effective
-      // environment respects the realm ceiling without a second lookup.
+      // The request's realm, as the resolver read it, so the response's
+      // effective environment respects the realm ceiling without a lookup.
       const policy = resolveEnvironmentPolicy(created, realm);
 
       // Response carries the plaintext secret once — MUST NOT be cached.
@@ -627,8 +634,7 @@ export default async function (fastify: FastifyInstance) {
       // allowlist dynamic registration enforces — a developer must not widen
       // scopes via PATCH beyond what the realm permits.
       if (scopes !== undefined) {
-        const realm = await fastify.repositories.realms.findById(existing.realmId);
-        const allowedScopes = realm ? await resolveRealmAllowedScopes(fastify, realm) : [];
+        const allowedScopes = await resolveRealmAllowedScopes(fastify, existing.realmId);
         assertScopesAllowed(scopes, allowedScopes);
       }
 
@@ -730,7 +736,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },

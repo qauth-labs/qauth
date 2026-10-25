@@ -30,6 +30,7 @@ vi.mock('../../../config/env', () => ({
 }));
 
 import { env } from '../../../config/env';
+import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
@@ -42,6 +43,9 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
 });
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1', name: 'default' });
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
@@ -82,15 +86,16 @@ function createFastifyStub() {
         _opts: unknown,
         handler: (request: any, reply: any) => Promise<unknown>
       ) => {
-        ctx.handler = handler;
+        ctx.handler = (request, reply) => {
+          // The realm resolver's decoration (#486): a request reaches its
+          // handler with the realm of its host.
+          request.realm ??= REALM;
+          return handler(request, reply);
+        };
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'default', enabled: true }),
-        create: vi.fn(),
-      },
       users: {
         findById: vi.fn(),
         updateLastLogin: vi.fn().mockResolvedValue(undefined),
@@ -466,6 +471,40 @@ describe('POST /auth/login', () => {
     );
   });
 
+  it("looks the account up, counts the attempt and records the refusal in the request's realm (#487)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(undefined);
+
+    const realm = testRealm({ id: 'realm-2' });
+    const request = {
+      body: { email: 'user@example.com', password: 'p' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
+      realm,
+    };
+
+    await expect(handler(request, createReply())).rejects.toThrow(InvalidCredentialsError);
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).toHaveBeenCalledWith(
+      'realm-2',
+      'password',
+      'user@example.com'
+    );
+    expect(fastify.redis.incr).toHaveBeenCalledWith('failed-login:attempts:realm-2:ip:127.0.0.1');
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      request,
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'password', reason: 'invalid_credentials' },
+      { realmId: 'realm-2', userId: null, actor: 'user' }
+    );
+  });
+
   it('records an unexpected failure as a sign_in_failed event with internal_error', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
@@ -743,7 +782,7 @@ describe('POST /auth/login', () => {
     // Only the /64 key is locked; every address inside it must hit that key.
     const ttl = fastify.redis.ttl as unknown as Mock;
     ttl.mockImplementation(async (key: string) =>
-      key === 'failed-login:lockout:ip:2001:db8:1:2::' ? 300 : -2
+      key === `failed-login:lockout:${REALM.id}:ip:2001:db8:1:2::` ? 300 : -2
     );
 
     for (const ip of ['2001:db8:1:2::1', '2001:db8:1:2:ffff:eeee:dddd:cccc']) {
@@ -887,9 +926,11 @@ describe('POST /auth/login', () => {
     // address still holds its 4 failures, so the 5th guess is the last one
     // checked and the 6th is refused (env.FAILED_LOGIN_MAX_ATTEMPTS is 5).
     expect(
-      redis._store.has(`failed-login:attempts:email:${hashEmail('attacker@example.com')}`)
+      redis._store.has(
+        `failed-login:attempts:${REALM.id}:email:${hashEmail('attacker@example.com')}`
+      )
     ).toBe(false);
-    expect(redis._store.get('failed-login:attempts:ip:203.0.113.7')).toBe('4');
+    expect(redis._store.get(`failed-login:attempts:${REALM.id}:ip:203.0.113.7`)).toBe('4');
     await expect(login('victim-4@example.com', 'Spring2026!')).rejects.toThrow(
       InvalidCredentialsError
     );

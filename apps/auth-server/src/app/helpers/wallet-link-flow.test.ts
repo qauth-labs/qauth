@@ -50,6 +50,7 @@ vi.mock('./user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { testRealm } from '../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../constants';
 import { readWalletFlowBindings } from './session-cookie';
 import { emitUserEvent } from './user-events';
@@ -65,6 +66,9 @@ const emitUserEventMock = vi.mocked(emitUserEvent);
 
 const WALLET_LINKED = 'urn:qauth:event:wallet.linked:v1-rc.0';
 const WALLET_LINK_FAILED = 'urn:qauth:event:wallet.link_failed:v1-rc.0';
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 function createSessionUtils() {
   const store = new Map<string, unknown>();
@@ -100,10 +104,6 @@ function makeFastify() {
   const sessionUtils = createSessionUtils();
   const fastify: any = {
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       oid4vpRequestStates: { create: vi.fn(async (row: unknown) => row) },
     },
     sessionUtils,
@@ -113,9 +113,12 @@ function makeFastify() {
   return { fastify: fastify as FastifyInstance, sessionUtils };
 }
 
-/** A request as the state machine sees it: a cookie header and an address. */
+/**
+ * A request as the state machine sees it: a cookie header, an address and the
+ * realm of its host.
+ */
 function makeRequest(cookie?: string): any {
-  return { headers: cookie === undefined ? {} : { cookie }, ip: '127.0.0.1' };
+  return { headers: cookie === undefined ? {} : { cookie }, ip: '127.0.0.1', realm: REALM };
 }
 
 /** A reply that records only what the state machine touches: Set-Cookie. */

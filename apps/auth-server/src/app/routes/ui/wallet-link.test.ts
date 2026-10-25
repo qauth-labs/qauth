@@ -57,7 +57,9 @@ import {
   hashOid4vpResponseCode,
 } from '@qauth-labs/fastify-plugin-federation';
 
+import { testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
+import type { RealmRow } from '../../helpers/request-realm';
 import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
 import { WALLET_LINK_CONFLICT, WALLET_LINK_REFUSAL } from '../../helpers/wallet-link-flow';
@@ -84,6 +86,9 @@ type Handler = (request: any, reply: any) => Promise<unknown>;
 
 // Cleared by the `vi.clearAllMocks()` of the file's `beforeEach`.
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 const WALLET_LINKED_EVENT = 'urn:qauth:event:wallet.linked:v1-rc.0';
 const WALLET_LINK_FAILED_EVENT = 'urn:qauth:event:wallet.link_failed:v1-rc.0';
@@ -170,21 +175,23 @@ function createRedis() {
   };
 }
 
-function makeFastify() {
+/** A stub server whose requests come in on a host of `realm`. */
+function makeFastify(realm: RealmRow = REALM) {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
   const responseCodes = createResponseCodes();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
-    routes.set(`${method} ${url}`, handler);
+    routes.set(`${method} ${url}`, (request, reply) => {
+      // The realm resolver's decoration (#486): a request reaches its handler
+      // with the realm of its host.
+      request.realm ??= realm;
+      return handler(request, reply);
+    });
     return fastify;
   };
   const fastify: any = {
     withTypeProvider: () => ({ get: register('GET'), post: register('POST') }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       users: {
         findById: vi.fn().mockResolvedValue({ id: 'user-1', enabled: true }),
         updateLastLogin: vi.fn().mockResolvedValue(undefined),
@@ -484,6 +491,16 @@ describe('wallet-link UI — the pending screen and completion', () => {
     expect(flow['mode']).toBe('link');
     expect(flow['linkUserId']).toBe('user-77');
     expect(binderCookie.length).toBeGreaterThan(0);
+  });
+
+  it("records the flow in the request's realm (#487)", async () => {
+    const context = makeFastify(testRealm({ id: 'realm-2' }));
+    await walletLinkRoute(context.fastify);
+    await walletLoginRoute(context.fastify);
+    const { row, flow } = await startLink({ context });
+
+    expect(row['realmId']).toBe('realm-2');
+    expect(flow['realmId']).toBe('realm-2');
   });
 
   it('renders the success screen once the credential is linked', async () => {

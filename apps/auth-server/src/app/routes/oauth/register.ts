@@ -4,11 +4,11 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { clientAddressKey } from '../../helpers/client-address';
 import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
+import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import {
   type DynamicClientRegistrationRequest,
@@ -54,7 +54,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -67,12 +67,15 @@ export default async function (fastify: FastifyInstance) {
       // bad token fails the request rather than leaving an unowned row behind.
       const developerId = await resolveRegistrationDeveloperId(fastify, request);
 
-      const realm = await getOrCreateDefaultRealm(fastify);
+      const realm = requestRealm(request);
 
       // Seed realm's allowlist on first use. We *only* do this when the
       // realm has an empty list — never overwrite an operator's choice.
-      // Defaults are intentionally tight (OIDC core scopes).
-      let allowedScopes = realm.dynamicRegistrationAllowedScopes ?? [];
+      // Defaults are intentionally tight (OIDC core scopes). The list is read
+      // from the database, not from the resolver's row, which can be up to its
+      // cache time old (#487): the seed must see a list an operator set since.
+      const current = (await fastify.repositories.realms.findById(realm.id)) ?? realm;
+      let allowedScopes = current.dynamicRegistrationAllowedScopes ?? [];
       if (allowedScopes.length === 0 && env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0) {
         allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
         try {

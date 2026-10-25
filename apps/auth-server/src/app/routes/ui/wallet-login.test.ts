@@ -62,7 +62,9 @@ import {
   hashOid4vpResponseCode,
 } from '@qauth-labs/fastify-plugin-federation';
 
+import { testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
+import type { RealmRow } from '../../helpers/request-realm';
 import {
   readWalletFlowBindings,
   WALLET_FLOW_COOKIE_MAX_BINDINGS,
@@ -83,6 +85,9 @@ type Handler = (request: any, reply: any) => Promise<unknown>;
 
 // Cleared by the `vi.clearAllMocks()` of the file's `beforeEach`.
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 /** The event types emitted so far, in order. */
 function emittedTypes(): string[] {
@@ -184,21 +189,23 @@ function createResponseCodes() {
   };
 }
 
-function makeFastify() {
+/** A stub server whose requests come in on a host of `realm`. */
+function makeFastify(realm: RealmRow = REALM) {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
   const responseCodes = createResponseCodes();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
-    routes.set(`${method} ${url}`, handler);
+    routes.set(`${method} ${url}`, (request, reply) => {
+      // The realm resolver's decoration (#486): a request reaches its handler
+      // with the realm of its host.
+      request.realm ??= realm;
+      return handler(request, reply);
+    });
     return fastify;
   };
   const fastify: any = {
     withTypeProvider: () => ({ get: register('GET'), post: register('POST') }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       users: {
         findById: vi.fn().mockResolvedValue({ id: 'user-1', enabled: true }),
         updateLastLogin: vi.fn().mockResolvedValue(undefined),
@@ -633,6 +640,17 @@ describe('wallet login — the wallet invocation (QR + deep link)', () => {
     expect(JSON.stringify(row)).not.toContain(
       flow.invocationUri.split('state=')[1]?.split('&')[0] ?? 'unreachable'
     );
+  });
+
+  it("records the flow in the request's realm (#487)", async () => {
+    const context = makeFastify(testRealm({ id: 'realm-2' }));
+    await walletLoginRoute(context.fastify);
+    const { fastify, flow } = await startFlow({ context });
+    const row = (fastify.repositories.oid4vpRequestStates.create as unknown as Mock).mock
+      .calls[0][0];
+
+    expect(row.realmId).toBe('realm-2');
+    expect(flow.realmId).toBe('realm-2');
   });
 
   it('polls a same-origin status endpoint from a nonced inline script', async () => {

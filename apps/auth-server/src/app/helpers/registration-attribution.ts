@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { assertManagementToken } from './management-token';
+import { requestRealm } from './request-realm';
 
 /**
  * Who owns a dynamically registered client (issue #374).
@@ -95,7 +96,7 @@ export async function resolveRegistrationDeveloperId(
   await verify(request);
   // Attribution makes the caller a client's owner, so it takes the same
   // management token `POST /api/clients` does — not any token for this user.
-  await assertManagementToken(fastify, request.jwtPayload);
+  await assertManagementToken(fastify, requestRealm(request), request.jwtPayload);
 
   const sub = request.jwtPayload?.sub;
   if (!sub || !uuidSubjectSchema.safeParse(sub).success) {

@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -39,6 +40,8 @@ interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
 }
 
+const REALM = testRealm({ id: 'realm-1' });
+
 function createFastifyStub() {
   const ctx: TestContext = {};
 
@@ -49,23 +52,16 @@ function createFastifyStub() {
         _opts: unknown,
         handler: (request: any, reply: any) => Promise<unknown>
       ) => {
-        ctx.handler = handler;
+        ctx.handler = (request, reply) => {
+          // The realm resolver's decoration (#486): a request reaches its
+          // handler with the realm of its host.
+          request.realm ??= REALM;
+          return handler(request, reply);
+        };
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({
-          id: 'realm-1',
-          name: 'default',
-          enabled: true,
-        }),
-        create: vi.fn().mockResolvedValue({
-          id: 'realm-1',
-          name: 'default',
-          enabled: true,
-        }),
-      },
       oauthClients: {
         findByClientId: vi.fn(),
       },
@@ -180,6 +176,50 @@ describe('POST /oauth/introspect route', () => {
         clientId: client.clientId,
         actor: 'client',
       })
+    );
+  });
+
+  it("authenticates the caller in the request's realm and records that realm (#487)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: client.clientId,
+      clientId: client.clientId,
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Introspect handler was not registered');
+    await handler(
+      {
+        body: { token: 'valid-token', client_id: client.clientId, client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        realm: testRealm({ id: 'realm-tenant' }),
+      },
+      { send: (body: unknown) => body }
+    );
+
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-tenant',
+      client.clientId
+    );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.introspected:v1-rc.0',
+      expect.anything(),
+      expect.objectContaining({ realmId: 'realm-tenant', clientId: client.clientId })
     );
   });
 
@@ -923,12 +963,12 @@ describe('POST /oauth/introspect route', () => {
     app.setSerializerCompiler(serializerCompiler);
 
     app.decorate('repositories', {
-      realms: { findByName: vi.fn(), create: vi.fn() },
       oauthClients: { findByClientId: vi.fn() },
     } as any);
     app.decorate('passwordHasher', { verifyPassword: vi.fn() } as any);
     app.decorate('jwtUtils', { verifyAccessToken: vi.fn() } as any);
 
+    supplyRequestRealm(app, REALM);
     await app.register(introspectRoute);
     await app.register(errorHandler);
 

@@ -24,6 +24,7 @@ vi.mock('../../constants', async (importOriginal) => {
   };
 });
 
+import { testRealm } from '../../../testing/request-realm';
 import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import resendRoute from './resend-verification';
 
@@ -58,10 +59,6 @@ function createFastifyStub() {
       return fastify;
     },
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       userCredentials: {
         findByRealmProviderSub: vi.fn(),
       },
@@ -95,7 +92,15 @@ function createFastifyStub() {
   return { fastify: fastify as FastifyInstance, ctx };
 }
 
-const request = { body: { email: 'user@example.com' }, ip: '127.0.0.1', headers: {} };
+/** The realm the realm resolver (#486) decorated the request with. */
+const REALM = testRealm({ id: 'realm-1' });
+
+const request = {
+  body: { email: 'user@example.com' },
+  ip: '127.0.0.1',
+  headers: {},
+  realm: REALM,
+};
 
 /**
  * In-memory Redis with the commands the route uses (incr, expire, get, set

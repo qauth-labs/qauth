@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { getOrCreateDefaultRealm } from './realm';
+import { requestRealm } from './request-realm';
 import {
   csrfTokensEqual,
   dropWalletFlowBinding,
@@ -175,7 +175,7 @@ export async function startWalletLinkFlow(
   // reached this helper without validation is still cross-device.
   const sameDevice = options.device === 'this';
 
-  const realm = await getOrCreateDefaultRealm(fastify);
+  const realm = requestRealm(request);
   const invocation = await buildWalletLoginInvocation(fastify, capability);
 
   await fastify.repositories.oid4vpRequestStates.create({

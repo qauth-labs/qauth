@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 
 import { env } from '../../config/env';
-import { clientAddressKey } from '../helpers/client-address';
+import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 
 /**
  * Rate limiting plugin configuration
@@ -29,8 +29,9 @@ export const rateLimitPlugin = fp<FastifyPluginOptions>(
       // `request.ip` is the TCP peer unless TRUST_PROXY names the proxies
       // allowed to report the client address (see main.ts). Rate-limit and
       // lockout keys use the client's /64 for IPv6 so one allocation shares
-      // one bucket; every per-route limit uses the same key.
-      keyGenerator: clientAddressKey,
+      // one bucket, and carry the request's realm (#487), so an address has a
+      // bucket per realm; every per-route limit uses the same key.
+      keyGenerator: realmRateLimitKey,
     });
 
     fastify.log.info('Rate limiting plugin registered');

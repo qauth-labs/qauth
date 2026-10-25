@@ -4,9 +4,9 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
-import { clientAddressKey } from '../../helpers/client-address';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { revokeJti } from '../../helpers/token-revocation';
 import { emitUserEvent, failureData } from '../../helpers/user-events';
@@ -57,7 +57,7 @@ export default async function (fastify: FastifyInstance) {
           // token-bearing endpoints (#211 follow-up; reuses the introspect cap).
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -66,7 +66,7 @@ export default async function (fastify: FastifyInstance) {
       const body = request.body as RevokeRequest;
       const { token, token_type_hint } = body;
 
-      const realm = await getOrCreateDefaultRealm(fastify);
+      const realm = requestRealm(request);
 
       // Confidential client authentication (RFC 7009 §2.1). A failure here is
       // the ONLY non-200 outcome (`invalid_client`, §2.2.1).

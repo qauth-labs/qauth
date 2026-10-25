@@ -11,7 +11,7 @@ import {
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
 import { resolveIssuerIdentifier } from './discovery';
-import type { RealmRow } from './realm';
+import type { RealmRow } from './request-realm';
 import {
   PasskeyRelyingPartyError,
   type PasskeyRelyingPartySettings,
@@ -47,8 +47,10 @@ import {
  * that start together do it one at a time: the first creates the realm, the
  * others find it.
  *
- * `getOrCreateDefaultRealm` (`./realm.ts`) still creates the realm by name at
- * request time, should a request find none, until host routing replaces it.
+ * This step is the only place the server picks a realm by its name. A request
+ * finds its realm through the host it names (`request.realm`, #486 and #487),
+ * and `DEFAULT_REALM_NAME` is read nowhere else at request time: the lint
+ * configuration refuses it (`.oxlintrc.json`).
  */
 
 /** The transaction the realms repository's provisioning lock takes. */

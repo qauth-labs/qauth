@@ -9,7 +9,7 @@ import {
   JWT_ISSUER_PATH_WARNING,
   JWT_ISSUER_TRAILING_SLASH_WARNING,
 } from './default-realm-boot';
-import type { RealmRow } from './realm';
+import type { RealmRow } from './request-realm';
 
 /**
  * The default realm's boot step (#484), without a database: how `JWT_ISSUER`

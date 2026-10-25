@@ -32,6 +32,8 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { testRealm } from '../../../testing/request-realm';
+import type { RealmRow } from '../../helpers/request-realm';
 import tokenRoute from './token';
 
 const SHORT_LIFESPAN = 900;
@@ -65,23 +67,25 @@ function makeAuthCodeStub(opts: {
   codeChallenge?: string;
 }) {
   const ctx: TestContext = {};
+  const realm = testRealm({
+    id: 'realm-1',
+    name: 'default',
+    // Unchecked on purpose: the fail-safe test hands in a value outside the enum.
+    maxEnvironmentLaxity: opts.realmEnv as RealmRow['maxEnvironmentLaxity'],
+  });
   const fastify: any = {
     withTypeProvider: () => ({
       post: (_url: string, _o: unknown, handler: any) => {
-        ctx.handler = handler;
+        ctx.handler = (request, reply) => {
+          // The realm resolver's decoration (#486): a request reaches its
+          // handler with the realm of its host, ceiling included.
+          request.realm ??= realm;
+          return handler(request, reply);
+        };
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({
-          id: 'realm-1',
-          name: 'default',
-          enabled: true,
-          maxEnvironmentLaxity: opts.realmEnv,
-        }),
-        create: vi.fn(),
-      },
       oauthClients: {
         findByClientId: vi.fn().mockResolvedValue({
           id: 'client-uuid',

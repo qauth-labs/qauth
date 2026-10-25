@@ -19,7 +19,6 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
 import { actDepth, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
-import { clientAddressKey } from '../../helpers/client-address';
 import {
   authenticateClientRequest,
   enforceAgentScopeCap,
@@ -46,8 +45,8 @@ import {
   validateIdJagAssertion,
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
@@ -125,15 +124,15 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
           // forces the strict cap; a development/staging ceiling permits the
-          // lenient cap. Resolved at the realm level because rate limiting runs
-          // before the client is authenticated. Fail-safe to strict.
-          max: () =>
-            resolveRealmRateLimitMax(fastify, {
+          // lenient cap. Resolved from the request's realm (#487) because rate
+          // limiting runs before the client is authenticated. Fail-safe to strict.
+          max: (request: FastifyRequest) =>
+            resolveRealmRateLimitMax(request.realm, {
               lenientMax: env.TOKEN_RATE_LIMIT_LENIENT,
               strictMax: env.TOKEN_RATE_LIMIT,
             }),
           timeWindow: env.TOKEN_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -173,7 +172,7 @@ export default async function (fastify: FastifyInstance) {
           throw new BadRequestError('unsupported_grant_type');
         }
 
-        const realm = await getOrCreateDefaultRealm(fastify);
+        const realm = requestRealm(request);
         realmId = realm.id;
 
         // Authenticate the client. authorization_code (PKCE) and
