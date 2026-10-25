@@ -81,6 +81,7 @@ export default async function (fastify: FastifyInstance) {
           'RFC 7662 token introspection. Send access token and client credentials in application/x-www-form-urlencoded body. Returns active and claims when token is valid for the client.',
         tags: ['OAuth', 'Introspection'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 503],
         body: introspectRequestSchema,
         response: {
           200: introspectResponseSchema,

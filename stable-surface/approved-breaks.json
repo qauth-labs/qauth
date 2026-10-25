@@ -21,6 +21,28 @@
       },
       "ref": "#480",
       "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "response-required-property-removed",
+        "operation": "POST /auth/resend-verification",
+        "fingerprint": "294748126cb3",
+        "text": "removed the required property `error` from the response with the `429` status"
+      },
+      "ref": "#513",
+      "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "response-required-property-removed",
+        "operation": "POST /auth/resend-verification",
+        "fingerprint": "1a076c3068a6",
+        "text": "removed the required property `statusCode` from the response with the `429` status"
+      },
+      "ref": "#513",
+      "release": "v0.2.0"
     }
   ]
 }

@@ -288,6 +288,7 @@ export default async function (fastify: FastifyInstance) {
           "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.",
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401],
         security: [{ bearerAuth: [] }],
         response: {
           200: userinfoResponseSchema,
@@ -318,6 +319,7 @@ export default async function (fastify: FastifyInstance) {
           "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.",
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401],
         security: [{ bearerAuth: [] }],
         response: {
           200: userinfoResponseSchema,

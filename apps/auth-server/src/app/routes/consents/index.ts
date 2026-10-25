@@ -111,6 +111,7 @@ export default async function (fastify: FastifyInstance) {
           'Revoke an OAuth consent row owned by the currently signed-in user. Requires a valid `X-CSRF-Token` header whose value matches the session CSRF token returned by `GET /consents`.',
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 404],
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null(), 401: z.null() },
       },

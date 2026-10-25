@@ -21,7 +21,6 @@ import {
   resendVerificationResponseSchema,
   resendVerificationSchema,
 } from '../../schemas/auth';
-import { errorResponseSchema } from '../../schemas/common';
 
 /**
  * Resend verification email route
@@ -60,10 +59,10 @@ export default async function (fastify: FastifyInstance) {
           'Request a new verification email. Rate limited per IP and per email. Always returns success to prevent email enumeration.',
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         body: resendVerificationSchema,
         response: {
           200: resendVerificationResponseSchema,
-          429: errorResponseSchema,
         },
       },
       config: {
