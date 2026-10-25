@@ -14,6 +14,8 @@ vi.mock('../../config/env', () => ({
   env: mockEnv,
 }));
 
+import { EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
+
 import { ID_JAG_GRANT_PROFILE, JWT_BEARER_GRANT_TYPE } from '../schemas/oauth';
 import wellKnownRoutes from './well-known';
 
@@ -277,6 +279,55 @@ describe('GET /.well-known/jwks.json', () => {
       expect(served.keys.map((k) => k['kid'])).toEqual(['active', 'retired']);
     } finally {
       await app.close();
+    }
+  });
+});
+
+/**
+ * ADR-018 §5 (#477): the served documents mention an experimental item only
+ * while its switch is on, by the members its registry entry lists.
+ */
+describe('experimental items in the served discovery documents', () => {
+  const DOCUMENTS = [
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/openid-configuration',
+  ];
+  const REGISTRY_MEMBERS = EXPERIMENTAL_ITEMS.flatMap((item) => item.discoveryMembers);
+
+  async function serve(): Promise<Record<string, Record<string, unknown>>> {
+    const app = await buildApp();
+    try {
+      const served: Record<string, Record<string, unknown>> = {};
+      for (const url of DOCUMENTS) {
+        served[url] = (await app.inject({ method: 'GET', url })).json() as Record<string, unknown>;
+      }
+      return served;
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('lists no member of any registry item under the default configuration', async () => {
+    expect(REGISTRY_MEMBERS.length).toBeGreaterThan(0);
+    const served = await serve();
+    for (const url of DOCUMENTS) {
+      for (const member of REGISTRY_MEMBERS) expect(Object.keys(served[url])).not.toContain(member);
+    }
+  });
+
+  it("serves the default documents plus the pilot item's members once the pilot is on", async () => {
+    const defaults = await serve();
+    mockEnv['WALLET_FEDERATION_ENABLED'] = true;
+    mockEnv['OID4VP_VERIFIER_PROFILE'] = 'oid4vp-1.0-base';
+    const members: readonly string[] =
+      EXPERIMENTAL_ITEMS.find((item) => item.id === 'oid4vp-1.0-base')?.discoveryMembers ?? [];
+    const served = await serve();
+    for (const url of DOCUMENTS) {
+      const rest = Object.fromEntries(
+        Object.entries(served[url]).filter(([member]) => !members.includes(member))
+      );
+      expect(rest).toEqual(defaults[url]);
+      for (const member of members) expect(served[url]).toHaveProperty(member);
     }
   });
 });

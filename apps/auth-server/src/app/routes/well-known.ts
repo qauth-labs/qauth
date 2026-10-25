@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
+import { listEnabledExperimental } from '../../config/experimental-features';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
 
 /**
@@ -28,6 +29,11 @@ const JWKS_CACHE_CONTROL = 'public, max-age=300';
  * during bootstrap and cache responses locally.
  */
 export default async function (fastify: FastifyInstance) {
+  // ADR-018 §5 (#477): the experimental items that are on, read once from the
+  // configuration, which does not change while the server runs. Each adds the
+  // discovery members its registry entry lists; an item that is off adds none.
+  const experimentalItems = listEnabledExperimental();
+
   const buildInput = () => ({
     issuer: fastify.jwtUtils.getIssuer(),
     // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
@@ -45,6 +51,7 @@ export default async function (fastify: FastifyInstance) {
     // RFC 9449 §5.1 (#480): the DPoP proof algorithms, only while DPOP_ENABLED
     // is on (`fastify.dpop` is null otherwise).
     ...(fastify.dpop ? { dpopSigningAlgValuesSupported: fastify.dpop.algorithms } : {}),
+    experimentalItems,
   });
 
   fastify.get(
