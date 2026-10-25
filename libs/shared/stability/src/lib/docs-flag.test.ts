@@ -8,6 +8,7 @@ import {
   docsFlagProblems,
   type DocsPage,
   docsPageRoute,
+  namesItem,
   readDocsPage,
 } from './docs-flag';
 import { EXPERIMENTAL_ITEMS } from './items';
@@ -55,6 +56,15 @@ describe('readDocsPage', () => {
   });
 
   it.each([
+    ['True', '---\ntitle: A\nexperimental: True\n---\nText.'],
+    ['TRUE', '---\ntitle: A\nexperimental: TRUE\n---\nText.'],
+    ['true with a comment', '---\ntitle: A\nexperimental: true # the base profile\n---\nText.'],
+    ['true with CRLF line ends', '---\r\ntitle: A\r\nexperimental: true\r\n---\r\nText.'],
+  ])('is flagged with %s', (_label, source) => {
+    expect(readDocsPage('integrate/a.md', source).experimental).toBe(true);
+  });
+
+  it.each([
     ['set to false', '---\ntitle: A\nexperimental: false\n---\nText.'],
     ['missing', '---\ntitle: A\n---\nText.'],
     ['indented under another key', '---\ntitle: A\nsidebar:\n  experimental: true\n---\nText.'],
@@ -62,6 +72,21 @@ describe('readDocsPage', () => {
     ['without frontmatter', 'experimental: true\n'],
   ])('is not flagged with the flag %s', (_label, source) => {
     expect(readDocsPage('integrate/a.md', source).experimental).toBe(false);
+  });
+});
+
+describe('namesItem', () => {
+  it.each([
+    ['`oid4vp-1.0-base`', true],
+    ['the oid4vp-1.0-base profile', true],
+    ['under oid4vp-1.0-base.', true],
+    ['(oid4vp-1.0-base)', true],
+    ['oid4vp-1.0-base-extended', false],
+    ['xoid4vp-1.0-base', false],
+    ['oid4vp-1.0-base.1', false],
+    ['oid4vp-1.0', false],
+  ])('in "%s": %s', (text, named) => {
+    expect(namesItem(text, 'oid4vp-1.0-base')).toBe(named);
   });
 });
 

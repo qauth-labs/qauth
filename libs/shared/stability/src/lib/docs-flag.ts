@@ -38,6 +38,12 @@ export function docsPageRoute(pathInCollection: string): string {
 }
 
 /**
+ * A top-level `experimental` key set to true, in each spelling YAML reads as
+ * true and the docs schema then accepts, with an optional comment after it.
+ */
+const FLAG_LINE = /^experimental:[ \t]*(?:true|True|TRUE)[ \t]*(?:#.*)?\r?$/m;
+
+/**
  * Read one page: its route, whether its frontmatter sets `experimental: true`
  * at the top level, and its text. A file without frontmatter is not flagged.
  */
@@ -47,9 +53,18 @@ export function readDocsPage(pathInCollection: string, source: string): DocsPage
   if (match === null) return { route, experimental: false, body: source };
   return {
     route,
-    experimental: /^experimental:[ \t]*true[ \t]*$/m.test(match[1]),
+    experimental: FLAG_LINE.test(match[1]),
     body: source.slice(match[0].length),
   };
+}
+
+/**
+ * Whether `text` names the item `id` as a whole: not as part of a longer id
+ * or word, so `oid4vp-1.0` does not name `oid4vp-1.0-base`.
+ */
+export function namesItem(text: string, id: string): boolean {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w.-])${escaped}(?![\\w-]|\\.\\w)`).test(text);
 }
 
 /**
@@ -92,7 +107,7 @@ export function docsFlagProblems(
       problems.push(
         `${page.route}: sets experimental: true, but no item of the registry names it as its docs page`
       );
-    } else if (!page.body.includes(id)) {
+    } else if (!namesItem(page.body, id)) {
       problems.push(`${page.route}: documents ${id}, but does not name it`);
     }
   }

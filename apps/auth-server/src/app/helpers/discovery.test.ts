@@ -11,7 +11,7 @@ import {
   buildOpenIdConfiguration,
   DEFAULT_SCOPES_SUPPORTED,
   type DiscoveryMetadataInput,
-  EXPERIMENTAL_DISCOVERY_MEMBERS,
+  EXPERIMENTAL_MEMBER_VALUES,
   type ExperimentalDiscoveryItem,
   experimentalDiscoveryMembers,
   type ExperimentalMemberValues,
@@ -366,7 +366,7 @@ describe('experimental items', () => {
     it.each(builtServerItems.map((item) => [item.id, item] as const))(
       '%s adds exactly the members its registry entry lists',
       (id, item) => {
-        const added = EXPERIMENTAL_DISCOVERY_MEMBERS[id as BuiltServerItemId](ISSUER);
+        const added = EXPERIMENTAL_MEMBER_VALUES[id as BuiltServerItemId](ISSUER);
         expect(Object.keys(added).sort()).toEqual([...item.discoveryMembers].sort());
         expect(Object.values(added)).not.toContain(null);
         expect(Object.values(added)).not.toContain(false);

@@ -54,7 +54,7 @@ decision record names before it is built is listed with `built: false`; building
    `experimentalValues`. The auth server's tests check both registries agree.
 3. For a built `server` item, tell the auth server how its switch reads, in
    `apps/auth-server/src/config/experimental-features.ts`, and what its discovery members hold, in
-   `EXPERIMENTAL_DISCOVERY_MEMBERS` (`apps/auth-server/src/app/helpers/discovery.ts`). Both types
+   `EXPERIMENTAL_MEMBER_VALUES` (`apps/auth-server/src/app/helpers/discovery.ts`). Both types
    name every built server item, so a missing entry fails to compile. Register its routes only
    while its switch is on, and tag each `x-qauth-stability: experimental`.
 4. For a built item, set `experimental: true` in the frontmatter of its docs page, which then

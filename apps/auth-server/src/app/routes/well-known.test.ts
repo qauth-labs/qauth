@@ -319,6 +319,9 @@ describe('experimental items in the served discovery documents', () => {
     const defaults = await serve();
     mockEnv['WALLET_FEDERATION_ENABLED'] = true;
     mockEnv['OID4VP_VERIFIER_PROFILE'] = 'oid4vp-1.0-base';
+    // The route reads the same configuration, so the pilot is on for it too.
+    const { listEnabledExperimental } = await import('../../config/experimental-features');
+    expect(listEnabledExperimental().map((item) => item.id)).toContain('oid4vp-1.0-base');
     const members: readonly string[] =
       EXPERIMENTAL_ITEMS.find((item) => item.id === 'oid4vp-1.0-base')?.discoveryMembers ?? [];
     const served = await serve();

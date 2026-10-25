@@ -94,7 +94,7 @@ export interface DiscoveryMetadataInput {
   experimentalItems?: readonly ExperimentalDiscoveryItem[];
   /**
    * What the members of each experimental item hold. Defaults to
-   * {@link EXPERIMENTAL_DISCOVERY_MEMBERS}; a test passes the values of an
+   * {@link EXPERIMENTAL_MEMBER_VALUES}; a test passes the values of an
    * item it makes up.
    */
   experimentalMemberValues?: ExperimentalMemberValues;
@@ -116,7 +116,7 @@ export type ExperimentalMemberValues = Readonly<Record<string, ExperimentalMembe
  * compile; an item that adds nothing returns `{}`. Each must return exactly
  * the members its registry entry lists, which the tests check.
  */
-export const EXPERIMENTAL_DISCOVERY_MEMBERS: {
+export const EXPERIMENTAL_MEMBER_VALUES: {
   readonly [Id in BuiltServerItemId]: ExperimentalMembersOf;
 } = {
   // A verifier profile changes how a wallet presentation is requested and
@@ -138,7 +138,7 @@ export const EXPERIMENTAL_DISCOVERY_MEMBERS: {
 export function experimentalDiscoveryMembers(
   issuer: string,
   enabledItems: readonly ExperimentalDiscoveryItem[],
-  values: ExperimentalMemberValues = EXPERIMENTAL_DISCOVERY_MEMBERS
+  values: ExperimentalMemberValues = EXPERIMENTAL_MEMBER_VALUES
 ): Record<string, unknown> {
   const members: Record<string, unknown> = {};
   for (const item of enabledItems) {

@@ -59,8 +59,8 @@ an experimental route is registered only while its switch is on, and every switc
 
 The exporter checks its own environment against the experimental-feature registry
 (`libs/shared/stability`): it refuses to write a default export with an experimental item on, or a
-maximal export that leaves a built item off. So every experimental operation is in the maximal
-export, where the check requires its tag.
+maximal export that leaves a built item off. So the routes of every built item are in the maximal
+export, where the check requires their tag.
 
 **Breaks.** Each `stable` surface is compared with the same file at the baseline release: the
 latest release tag that is not a pre-release, among the tags reachable from the commit under check

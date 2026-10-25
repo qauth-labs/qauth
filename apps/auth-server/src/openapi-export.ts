@@ -88,8 +88,7 @@ import { dirname, resolve } from 'node:path';
 
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
-/** Which feature switches the exported app boots with (see the module doc comment). */
-type FlagSurface = 'default' | 'maximal';
+import { experimentalSurfaceProblem, type FlagSurface } from './openapi-export-surface';
 
 const FLAG_SURFACES: readonly FlagSurface[] = ['default', 'maximal'];
 
@@ -253,28 +252,6 @@ function setEphemeralEnv(surface: FlagSurface): void {
       ],
     }),
   });
-}
-
-/**
- * Why the environment of `surface` cannot be exported, or `null` when it can:
- * the default surface turns no experimental item on, and the maximal surface
- * turns on every one the server has a switch for (see the module doc
- * comment).
- */
-function experimentalSurfaceProblem(
-  surface: FlagSurface,
-  enabled: readonly string[],
-  builtServerItems: readonly string[]
-): string | null {
-  if (surface === 'default') {
-    return enabled.length === 0
-      ? null
-      : `the default surface turns experimental items on: ${enabled.join(', ')}`;
-  }
-  const off = builtServerItems.filter((id) => !enabled.includes(id));
-  return off.length === 0
-    ? null
-    : `the maximal surface leaves experimental items off: ${off.join(', ')}`;
 }
 
 /** Minimal shape of `@fastify/swagger`'s generated document this script needs. */
