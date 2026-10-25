@@ -413,8 +413,8 @@ Do **not** reach instead for the weaker-sounding but tempting "and anyway it is 
 is not. The developer-facing write paths do set it `true`
 (`apps/auth-server/src/app/routes/clients/index.ts:449`, dynamic registration at
 `apps/auth-server/src/app/routes/oauth/register.ts:127`, CIMD at
-`apps/auth-server/src/app/helpers/cimd.ts:272`, and the column default at
-`libs/infra/db/src/lib/schema/core.ts:147`), but `getOrCreateSystemClient` creates the internal
+`apps/auth-server/src/app/helpers/cimd.ts:273`, and the column default at
+`libs/infra/db/src/lib/schema/core.ts:149`), but `getOrCreateSystemClient` creates the internal
 system client with `requirePkce: false`
 (`apps/auth-server/src/app/helpers/oauth-client.ts:31`), reached from first-party login
 (`apps/auth-server/src/app/routes/auth/login.ts:170`) and the authorize route
@@ -490,21 +490,21 @@ from what the developer set.** A realm pinned to `production` overrides a client
 your realm's ceiling" — prevents it, shown only when the effective value is stricter than the
 client's declared value. That comparison needs the declared value, which the response does not
 carry; **so the widened `policy` object also carries `declaredEnvironment`**, the raw
-`oauth_clients.environment` column (`libs/infra/db/src/lib/schema/core.ts:226`), read-only.
+`oauth_clients.environment` column (`libs/infra/db/src/lib/schema/core.ts:228`), read-only.
 
 ## Surface C — agent visibility
 
 **Shipped semantics.** Two columns, two very different trust levels:
 
-- `isAgent` (`libs/infra/db/src/lib/schema/core.ts:182`) is **self-asserted, unverified client
+- `isAgent` (`libs/infra/db/src/lib/schema/core.ts:184`) is **self-asserted, unverified client
   input**. It arrives in the client's own dynamic-registration body or its own CIMD metadata
   document. The schema comment says so in as many words
-  (`libs/infra/db/src/lib/schema/core.ts:172`), and the fail-closed accessor `isAgentClient`
+  (`libs/infra/db/src/lib/schema/core.ts:174`), and the fail-closed accessor `isAgentClient`
   (`apps/auth-server/src/app/helpers/client-resolution.ts:94`) exists so nothing reads the column
   directly.
-- `maxAgentMode` (`libs/infra/db/src/lib/schema/core.ts:199`) is **operator-set server state**. It
+- `maxAgentMode` (`libs/infra/db/src/lib/schema/core.ts:201`) is **operator-set server state**. It
   is not part of any registration request; a client cannot raise its own cap
-  (`libs/infra/db/src/lib/schema/core.ts:190`).
+  (`libs/infra/db/src/lib/schema/core.ts:192`).
 
 A reserved `agent:*` scope is granted only when **both** hold: the client is classified as an agent
 **and** its cap covers the requested mode. `findExceedingAgentScopes`
@@ -608,7 +608,7 @@ file exports `autoPrefix = '/api/audit'`, mirroring
 the schema. `request.jwtPayload.sub` is the developer's `users.id`.
 
 Ownership is the same rule the management API already enforces — scope by
-`oauth_clients.developer_id` (`libs/infra/db/src/lib/schema/core.ts:159`), the rule
+`oauth_clients.developer_id` (`libs/infra/db/src/lib/schema/core.ts:161`), the rule
 `resolveOwnedClient` applies per-client
 (`apps/auth-server/src/app/routes/clients/index.ts:155`). For a collection it becomes a join
 predicate rather than a per-row check:
@@ -890,7 +890,7 @@ behind a flag that is off by default.
 **A fourth structural gap, found while enumerating: dynamically registered clients are invisible to
 this feed entirely.** Both `POST /oauth/register`
 (`apps/auth-server/src/app/routes/oauth/register.ts:129`) and CIMD registration
-(`apps/auth-server/src/app/helpers/cimd.ts:389`) create clients with `developerId: null`. The
+(`apps/auth-server/src/app/helpers/cimd.ts:390`) create clients with `developerId: null`. The
 ownership predicate is `oauth_clients.developer_id = :sub`, so **no** row belonging to a DCR or CIMD
 client can ever match it — not just `oauth.client.registered`, but every token exchange and
 authorize event those clients generate. A developer whose clients were all registered dynamically
@@ -941,7 +941,7 @@ structural causes and their code anchors.
    history from the ownership predicate.
 4. **Every row belonging to a dynamically registered or CIMD client**, because those clients carry
    `developerId: null` (`apps/auth-server/src/app/routes/oauth/register.ts:129`,
-   `apps/auth-server/src/app/helpers/cimd.ts:274`) and the ownership predicate is
+   `apps/auth-server/src/app/helpers/cimd.ts:275`) and the ownership predicate is
    `developer_id = :sub`.
 
 **Decision — gap 4 gets its own empty state, not the generic one.** A developer whose clients were
@@ -1081,7 +1081,7 @@ implementer from wiring the allowlist in twice and quietly zeroing a tile.
 **Decision — cache for 60 seconds in Redis, keyed by `developerId` and window.** Redis, not
 in-process memory, for the same reason the Prometheus registry was rejected: a per-process cache
 gives different replicas different answers. `fastify.redis` is already available and the
-set-with-TTL pattern is established (`apps/auth-server/src/app/helpers/cimd.ts:312`). Sixty seconds
+set-with-TTL pattern is established (`apps/auth-server/src/app/helpers/cimd.ts:313`). Sixty seconds
 bounds the worst case to one aggregate query per developer per minute while staying visibly fresh
 for a surface that is a trend indicator, not a monitor.
 

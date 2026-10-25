@@ -605,6 +605,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules proxy-neutrally, with the file layout. The ceremony app has not shipped
   yet, so the configuration is not yet a working front for browser sign-in.
 
+- **Admin scopes, the admin permission catalog and the built-in admin roles**
+  ([#507], ADR-019 Decision 7). The admin API's scopes are `admin:read`,
+  `admin:write` and `admin:security`, one per permission class, and no scope
+  implies another. A permission registry (`definePermission`) gives each
+  permission id exactly one class; a security permission never shares an id
+  with a write permission. The built-in roles `viewer`, `editor` and
+  `security-admin` follow the catalog by class and cannot be edited.
+  `effectivePermissions` keeps a role's permission only when the token carries
+  its class's scope, and `validateCustomRole` refuses an unknown or retired id.
+  The catalog starts with `realms.read`, `realms.export`, `realms.import.plan`,
+  `realms.policies.write`, `realms.policies.security`, `approvals.read` and
+  `approvals.approve`. A permission id, once published, is never renamed or
+  reused; a removed permission is retired and keeps its id. The docs site's new
+  **Admin permissions** page (`reference/admin-permissions`) is generated from
+  the registry, and the API conventions check refuses an admin operation whose
+  `x-qauth-permission` names a permission the catalog cannot grant. No admin
+  API route reads the catalog yet.
+
 ### Changed
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
@@ -618,6 +636,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public API, and a test keeps it in step with both entry points. A new
   `scope:sdk` boundary rule lets an SDK library import no workspace library.
   Behaviour is unchanged.
+- **BREAKING (clients that register `admin:` scopes)**: every scope that starts
+  with `admin:`, in any case, is reserved for the admin API ([#507]).
+  `POST /oauth/register` now refuses a request that asks for one with
+  `invalid_client_metadata`, where before it dropped any scope outside the
+  realm's allowlist; a Client ID Metadata Document whose `scope` holds one is
+  refused (`invalid_client`); discovery never lists one in `scopes_supported`;
+  and the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it names one.
+  Migration 0039 removes such entries from every realm's
+  `dynamic_registration_allowed_scopes`, keeping the others in their order,
+  then adds the CHECK `realms_dynamic_registration_scopes_not_admin`; the
+  realms repository refuses the same with `400`. Clients that already hold such
+  a scope keep it.
+
+  **Action for operators**: none unless an application scope of yours starts
+  with `admin:`. Such a scope can no longer be dynamically registered: rename it,
+  or provision its clients through the seed manifest.
+
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
   a person or a client did as events in the event store ([#458], ADR-019
   Decision 8) and writes no `audit_logs` row. One emitter, `emitUserEvent`,
@@ -968,6 +1003,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#507]: https://github.com/qauth-labs/qauth/issues/507
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552
