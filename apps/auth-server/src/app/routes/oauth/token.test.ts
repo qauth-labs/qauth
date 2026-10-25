@@ -173,7 +173,7 @@ function createFastifyStub() {
         findByClientId: vi.fn(),
       },
       authorizationCodes: {
-        findByCode: vi.fn(),
+        findByCodeIncludingUsed: vi.fn(),
         markUsed: vi.fn(),
       },
       users: {
@@ -213,6 +213,7 @@ function createFastifyStub() {
         // request won the race, undefined when the token was already rotated.
         revokeIfActive: vi.fn().mockResolvedValue({ id: 'rotated-row' }),
         revokeFamily: vi.fn().mockResolvedValue(0),
+        revokeFamilyByAuthorizationCode: vi.fn().mockResolvedValue(0),
       },
       oauthConsents: {
         // Deny-by-default: no stored consent means no refresh token on the
@@ -1262,13 +1263,15 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       codeChallenge: 'challenge-value',
       scopes: ['read:foo'],
       nonce: null,
+      used: false,
+      expiresAt: Date.now() + 60_000,
     };
 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue(
-      authCode
-    );
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue(authCode);
     (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockResolvedValue(
       undefined
     );
@@ -1388,7 +1391,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     // A silent re-authorization one minute before the session's end.
     const sessionExpiresAt = Date.now() + 60_000;
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       sessionExpiresAt,
     });
@@ -1409,7 +1414,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   it('leaves a family uncapped by its session when the realm sets no limit (#552)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     const sessionExpiresAt = Date.now() + 60_000;
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       sessionExpiresAt,
     });
@@ -1481,7 +1488,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('issues an id_token when the granted scope includes openid (OIDC Core §3.1.3.3)', async () => {
     const { fastify, ctx, client, user, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid', 'email', 'profile'],
       nonce: 'n-0S6_WzA2Mj',
@@ -1522,7 +1531,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       const { fastify, ctx, authCode } = setupAuthCodeStub();
       // The stub user is "Ada Lovelace", so only the scope gate can explain
       // the omission (OIDC Core §5.4: `name` is a `profile` claim).
-      (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
         ...authCode,
         scopes,
       });
@@ -1550,7 +1561,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     // A fixed session establishment time captured on the code at authorize time.
     const authTimeMs = 1_700_000_000_000;
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid'],
       authTime: authTimeMs,
@@ -1569,7 +1582,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('omits auth_time when the code carries none (legacy in-flight code)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid'],
       authTime: null,
@@ -1589,7 +1604,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('threads the code assurance level into the id_token as acr (#237)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid'],
       assuranceLevel: 'high',
@@ -1609,7 +1626,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('omits acr entirely when the code records no assurance — the password-login invariant (#237/#240)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid'],
       // What /oauth/authorize writes for a password session: ADR-003 makes a
@@ -1636,7 +1655,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     ['an unreadable value', 'medium'],
   ])('omits acr when the code carries %s', async (_label, assuranceLevel) => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid'],
       assuranceLevel,
@@ -1656,7 +1677,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('gates ID-token AND access-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259, ANT-2026-2O0T72HY', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       // openid WITHOUT email: the default stub fixture has a VERIFIED email
       // attribute, so only the scope gate can explain the omission.
@@ -1685,7 +1708,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('releases the email claims in BOTH tokens under the email scope (ANT-2026-2O0T72HY)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid', 'email'],
     });
@@ -1705,7 +1730,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('omits BOTH email claims from access AND id token when no verified attribute exists — BREAKING #229', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid', 'email'],
     });
@@ -1734,7 +1761,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   it('omits the email claims when the only verified attribute has expired (#229)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     // The `email` scope is granted, so only the expiry can explain the omission.
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['email'],
     });
@@ -1790,7 +1819,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       [[self], 'self@example.com'],
     ] as const) {
       const { fastify, ctx, authCode } = setupAuthCodeStub();
-      (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
         ...authCode,
         scopes: ['openid', 'email'],
       });
@@ -1814,7 +1845,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('issues an id_token with no nonce when the authorization request omitted it', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid'],
       nonce: null,
@@ -1840,7 +1873,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       lastName: null,
     });
     // `profile` IS granted, so only the missing name can explain the omission.
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['openid', 'profile'],
     });
@@ -1860,7 +1895,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('rejects when authorization code was issued to a different client', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       id: 'authcode-uuid-1',
       oauthClientId: 'some-other-client-id',
       userId: 'user-uuid-1',
@@ -1897,7 +1934,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     function setupLoopbackCode() {
       const stub = setupAuthCodeStub();
       (
-        stub.fastify.repositories.authorizationCodes.findByCode as unknown as Mock
+        stub.fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
       ).mockResolvedValue({ ...stub.authCode, redirectUri: ISSUED_TO });
       return stub;
     }
@@ -1928,17 +1965,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     });
   });
 
-  it('rejects a used / expired / unknown code (findByCode filters them out → invalid_grant)', async () => {
-    // Single-use + expiry are enforced at the repository layer: findByCode
-    // returns ONLY codes that are `used = false` AND unexpired (see the
-    // repository integration tests for the markUsed CAS + expiry filter). So a
-    // second redemption of an already-used code — and an expired one — both
-    // surface to the route as `findByCode` → undefined. The token endpoint must
-    // map that to invalid_grant (RFC 6749 §5.2), not a 500.
+  it('rejects an unknown code (invalid_grant, code_invalid)', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue(
-      undefined
-    );
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue(undefined);
     await tokenRoute(fastify);
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
@@ -1948,7 +1979,218 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // No token issued, and the code was never (re-)marked used.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+    expect(
+      fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+    ).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_invalid' },
+    ]);
   });
+
+  it('rejects an unspent code past its expiry like an unknown one, and revokes nothing', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, expiresAt: Date.now() - 1 });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+    expect(
+      fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+    ).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_invalid' },
+    ]);
+  });
+
+  describe('a second redemption of a code (OAuth 2.1 draft-16 §4.1.3, RFC 6749 §4.1.2, RFC 9700 §4.2.4)', () => {
+    function setupSpentCode(fields: Record<string, unknown> = {}) {
+      const stub = setupAuthCodeStub();
+      (
+        stub.fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({ ...stub.authCode, used: true, usedAt: Date.now() - 1_000, ...fields });
+      return stub;
+    }
+
+    it('denies a replayed code with invalid_grant and revokes the refresh family it started', async () => {
+      const { fastify, ctx, authCode } = setupSpentCode();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
+      // Nothing is issued and the code is not spent again.
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+      expect(fastify.db.transaction).not.toHaveBeenCalled();
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        TOKEN_REQUEST_FAILED,
+        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_replay' },
+        expect.objectContaining({ userId: 'user-uuid-1', clientId: 'test-client-1' })
+      );
+      expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+    });
+
+    it('treats a replay past the code’s expiry as a replay too', async () => {
+      const { fastify, ctx, authCode } = setupSpentCode({ expiresAt: Date.now() - 1 });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
+    });
+
+    // OAuth 2.1 draft-16 §7.5.3: whoever holds the code but not the client's
+    // credentials or the verifier must not be able to end the client's tokens.
+    it.each([
+      [
+        'a wrong code_verifier (OAuth 2.1 draft-16 §7.5.3)',
+        'pkce_mismatch',
+        {},
+        (stub: ReturnType<typeof setupSpentCode>) =>
+          (stub.fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(false),
+      ],
+      [
+        'another client (OAuth 2.1 draft-16 §7.5.3)',
+        'client_mismatch',
+        {},
+        (stub: ReturnType<typeof setupSpentCode>) =>
+          (
+            stub.fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+          ).mockResolvedValue({ ...stub.authCode, used: true, oauthClientId: 'another-client' }),
+      ],
+      ['a different redirect_uri', 'redirect_uri_mismatch', { redirect_uri: 'https://x.test/cb' }],
+      ['no redirect_uri', 'redirect_uri_missing', { redirect_uri: undefined }],
+    ] as const)(
+      'refuses a replay with %s and revokes nothing',
+      async (_label, reason, body, arrange?: (stub: ReturnType<typeof setupSpentCode>) => void) => {
+        const stub = setupSpentCode();
+        arrange?.(stub);
+        const { fastify, ctx } = stub;
+        await tokenRoute(fastify);
+        const handler = ctx.handler;
+        if (!handler) throw new Error('Handler missing');
+
+        await expect(handler(baseRequest(body), createReply())).rejects.toThrow(InvalidGrantError);
+        expect(
+          fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+        ).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          { grantType: 'authorization_code', error: 'invalid_grant', reason },
+        ]);
+      }
+    );
+
+    it('a redemption that loses the race to a concurrent one is a replay: invalid_grant, family revoked', async () => {
+      // Models the concurrent-redemption window: a code passes the lookup (it
+      // was still unspent when read), but a parallel exchange spent it first,
+      // so the atomic markUsed CAS (`WHERE used = false`) matches no row and
+      // throws NotFoundError. No second token for the same code; the family
+      // the winner started is revoked once the losing transaction is over.
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      let open = false;
+      (fastify.db.transaction as unknown as Mock).mockImplementation(
+        async (cb: (tx: unknown) => Promise<unknown>) => {
+          open = true;
+          try {
+            return await cb({ tx: true });
+          } finally {
+            open = false;
+          }
+        }
+      );
+      (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
+        new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
+      );
+      const revokedInTransaction: boolean[] = [];
+      (
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode as unknown as Mock
+      ).mockImplementation(async () => {
+        revokedInTransaction.push(open);
+        return 2;
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
+      // After the losing transaction, so the winner's family is committed.
+      expect(revokedInTransaction).toEqual([false]);
+      expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_replay' },
+      ]);
+    });
+
+    it('a failure other than a lost compare-and-set is not a replay', async () => {
+      const { fastify, ctx } = setupAuthCodeStub();
+      (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
+        new Error('connection lost')
+      );
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow('connection lost');
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  it('links the refresh token the exchange starts to the code', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ authorizationCodeId: authCode.id }),
+      expect.anything()
+    );
+  });
+
+  // ADR-017 Decision 10: whether the parameter is needed depends on the code,
+  // so a missing value is a mismatch (RFC 6749 §5.2 invalid_grant), not a
+  // malformed request.
+  it.each([
+    ['without redirect_uri', { redirect_uri: undefined }],
+    ['with an empty redirect_uri (RFC 6749 §3.2: treated as omitted)', { redirect_uri: '' }],
+  ])(
+    'answers a browser code presented %s with invalid_grant and leaves the code unspent',
+    async (_label, body) => {
+      const { fastify, ctx } = setupAuthCodeStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(body), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'redirect_uri_missing' },
+      ]);
+    }
+  );
 
   it('marks the authorization code used before issuing tokens (single-use)', async () => {
     // The route MUST consume the code via markUsed (the atomic CAS that makes a
@@ -2045,27 +2287,6 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(emittedData(TOKEN_ISSUED)).toEqual([]);
   });
 
-  it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
-    // Models the concurrent-redemption window: a code passes findByCode (it was
-    // still live when read), but a parallel exchange consumed it first, so the
-    // atomic markUsed CAS (`WHERE used = false`) matches no row and throws
-    // NotFoundError. The route must surface that and issue NO token, rather than
-    // minting a second access token for the same code.
-    const { fastify, ctx } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
-      new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
-    );
-    await tokenRoute(fastify);
-    const handler = ctx.handler;
-    if (!handler) throw new Error('Handler missing');
-
-    const reply = createReply();
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
-    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
-    expect(emittedData(TOKEN_ISSUED)).toEqual([]);
-  });
-
   it('rejects when PKCE verification fails', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(false);
@@ -2114,7 +2335,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       isAgent: true,
       maxAgentMode: 'readonly',
     });
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       scopes: ['read:foo', 'agent:exec'],
     });
@@ -2173,7 +2396,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   it('issues access token with aud = resource bound to the auth code (RFC 8707)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     // Simulate the authorize step having stored `resource` on the auth code.
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       resource: ['https://api.example.com/v1'],
     });
@@ -2192,7 +2417,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
   it('rejects authorization_code exchange when request resource is outside code binding', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
-    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
       ...authCode,
       resource: ['https://api.example.com/v1'],
     });
@@ -5009,7 +5236,9 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         client
       );
       (instance.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
-      (instance.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      (
+        instance.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
         id: 'code-1',
         oauthClientId: 'client-uuid-1',
         userId: 'user-1',

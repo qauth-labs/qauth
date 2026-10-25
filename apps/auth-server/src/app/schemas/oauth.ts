@@ -285,7 +285,14 @@ export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;
 export const tokenExchangeAuthCodeBodySchema = z.object({
   grant_type: z.literal('authorization_code'),
   code: z.string().min(1),
-  redirect_uri: z.string().min(1),
+  // Optional here, required by the code (ADR-017 Decision 10): every code
+  // QAuth issues today came through a browser redirect, so the handler wants
+  // the URI the authorization request named, exactly. A missing or empty value
+  // is a mismatch, `invalid_grant` (RFC 6749 §5.2), not a malformed request:
+  // whether the parameter is needed depends on the code, which the schema
+  // cannot see, and RFC 6749 §3.2 treats a parameter sent without a value as
+  // omitted.
+  redirect_uri: z.string().optional(),
   code_verifier: z
     .string()
     .min(43)

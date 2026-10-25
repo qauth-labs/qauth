@@ -553,6 +553,51 @@ async function emitRequestFailed(
 }
 
 /**
+ * Spend an authorization code in the redemption's transaction: the
+ * compare-and-set of `markUsed`.
+ *
+ * @returns false when the code was already spent, by a concurrent redemption
+ *   or by a logout or consent revocation that invalidated it
+ */
+async function spendCode(
+  fastify: FastifyInstance,
+  authorizationCodeId: string,
+  tx: Parameters<FastifyInstance['repositories']['authorizationCodes']['markUsed']>[1]
+): Promise<boolean> {
+  try {
+    await fastify.repositories.authorizationCodes.markUsed(authorizationCodeId, tx);
+    return true;
+  } catch (err) {
+    if (err instanceof NotFoundError) return false;
+    throw err;
+  }
+}
+
+/**
+ * Deny a second redemption of an authorization code and revoke the
+ * refresh-token family the first one started (OAuth 2.1 §4.1.3 "SHOULD revoke
+ * (when possible) all access tokens and refresh tokens previously issued based
+ * on that authorization code"; ADR-017 Decision 10).
+ *
+ * Reached two ways: the code was already spent when read, or a concurrent
+ * redemption spent it between the read and this request's compare-and-set.
+ * Both are the same event. A code a logout or a consent revocation spent
+ * started no family, so nothing is revoked for it. Access tokens the first
+ * redemption issued are self-contained JWTs and stay valid until they expire.
+ */
+async function rejectCodeReplay(
+  ctx: HandlerContext<TokenExchangeAuthCodeBody>,
+  authCode: { id: string; userId: string }
+): Promise<never> {
+  await ctx.fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode(
+    authCode.id,
+    'code_replay'
+  );
+  await emitRequestFailed(ctx, 'invalid_grant', 'code_replay', authCode.userId);
+  throw new InvalidGrantError('Invalid or expired authorization code');
+}
+
+/**
  * Handle the authorization_code grant (legacy flow from Phase 1).
  * Now also issues `aud` + `scope` claims on the access token.
  */
@@ -567,9 +612,12 @@ async function handleAuthorizationCode(
     throw new UnauthorizedClientError();
   }
 
-  // Authorization code lookup
-  const authCode = await fastify.repositories.authorizationCodes.findByCode(body.code);
-  if (!authCode) {
+  // Authorization code lookup. A spent code is read too, so that a second
+  // redemption is recognised as the replay it is (below) instead of looking
+  // like a code that never existed. An unspent code past its expiry is as
+  // good as unknown.
+  const authCode = await fastify.repositories.authorizationCodes.findByCodeIncludingUsed(body.code);
+  if (!authCode || (!authCode.used && authCode.expiresAt <= Date.now())) {
     await emitRequestFailed(ctx, 'invalid_grant', 'code_invalid');
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
@@ -579,10 +627,20 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
+  // Every code QAuth issues today came through a browser redirect, so the
+  // request names the redirect URI again (RFC 6749 §4.1.3; OAuth 2.1 §10.2
+  // keeps that rule for a server that also serves OAuth 2.0 clients). A
+  // missing or empty value is a mismatch, `invalid_grant` (RFC 6749 §5.2;
+  // ADR-017 Decision 10), not a malformed request.
+  //
   // Exact string match, port included (RFC 6749 §4.1.3). The loopback-port
   // relaxation of `redirectUriMatchesRegistered` (#414) applies only at the
   // authorization request: the code stores the URI as requested, with the
   // port the client actually listened on, so there is nothing to relax here.
+  if (!body.redirect_uri) {
+    await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_missing', authCode.userId);
+    throw new InvalidGrantError('Invalid or expired authorization code');
+  }
   if (body.redirect_uri !== authCode.redirectUri) {
     await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_mismatch', authCode.userId);
     throw new InvalidGrantError('Invalid or expired authorization code');
@@ -593,11 +651,12 @@ async function handleAuthorizationCode(
   // OAuth 2.1 default — REQUIRES a bound S256 challenge; `development` only
   // RECOMMENDS it. Two distinct cases:
   //
-  //   1. No challenge bound to the code. Today the authorize endpoint always
-  //      binds one (the schema mandates `code_challenge`), so this is a defence-
-  //      in-depth guard for any future dev-only flow that mints a code without
-  //      PKCE: when `policy.pkceRequired` it is rejected; in `development` it is
-  //      allowed (with a warning) since PKCE is merely recommended there.
+  //   1. No challenge bound to the code. `mintAuthorizationCode` refuses to
+  //      mint a code without an S256 challenge in every environment (ADR-017
+  //      Decision 10), so only a row written some other way reaches this; it
+  //      stays as defence in depth: when `policy.pkceRequired` it is rejected;
+  //      in `development` it is allowed (with a warning) since PKCE is merely
+  //      recommended there.
   //   2. PKCE DOWNGRADE (RFC 9700 §2.1.1 / §4.5): a `code_verifier` presented
   //      against a code that carries NO challenge must NEVER be silently
   //      accepted — that is the downgrade attack. This is a HARD FLOOR enforced
@@ -628,6 +687,13 @@ async function handleAuthorizationCode(
     await emitRequestFailed(ctx, 'invalid_grant', 'pkce_mismatch', authCode.userId);
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
+
+  // A spent code, presented by its own client with its redirect URI and its
+  // PKCE verifier: a second valid redemption (OAuth 2.1 §4.1.3). Only now,
+  // after those checks, does it revoke anything, so whoever saw the code but
+  // holds neither the client's credentials nor the verifier cannot end the
+  // client's tokens with it (OAuth 2.1 §7.5.3).
+  if (authCode.used) return rejectCodeReplay(ctx, authCode);
 
   // RFC 9449 §10 (#480): a code the authorization request bound to a DPoP key
   // (`dpop_jkt`) is redeemed only with a proof under that key. It is not
@@ -748,8 +814,12 @@ async function handleAuthorizationCode(
   // matches nothing, or waits on the row lock taken here until the refresh
   // token is committed, where the sweep that follows sees it. The
   // `token.issued` event commits with the redemption, or neither does.
-  const { accessToken, idToken } = await fastify.db.transaction(async (tx) => {
-    await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
+  //
+  // A redemption that loses the compare-and-set to a concurrent one is the
+  // second redemption of the code: the transaction writes nothing and the
+  // family the winner started is revoked once it has committed.
+  const redeemed = await fastify.db.transaction(async (tx) => {
+    if (!(await spendCode(fastify, authCode.id, tx))) return undefined;
     if (refresh) {
       await fastify.repositories.refreshTokens.create(
         {
@@ -757,6 +827,9 @@ async function handleAuthorizationCode(
           oauthClientId: client.id,
           tokenHash: refresh.tokenHash,
           familyId: refresh.familyId,
+          // The code that started the family, so a second redemption of it
+          // finds the family and revokes it (ADR-017 Decision 10).
+          authorizationCodeId: authCode.id,
           familyCreatedAt: refresh.familyCreatedAt,
           familySessionExpiresAt: refresh.familySessionExpiresAt,
           expiresAt: refresh.expiresAt,
@@ -833,6 +906,8 @@ async function handleAuthorizationCode(
     );
     return { accessToken, idToken };
   });
+  if (redeemed === undefined) return rejectCodeReplay(ctx, authCode);
+  const { accessToken, idToken } = redeemed;
 
   // Token issuance metrics (#126).
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });
