@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { fstatSync, readdirSync, readFileSync } from 'node:fs';
 import { validateHeaderName, validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import tls from 'node:tls';
@@ -8,6 +8,7 @@ import {
   type ExchangeFailureReason,
   type ExchangeJob,
   type ExchangeOutcome,
+  FETCH_PROCESS_CHANNEL_FD,
   FETCH_PROCESS_TAG,
   type FromFetchProcess,
   type ToFetchProcess,
@@ -89,6 +90,45 @@ export interface ProcessPool {
  * one exchange; bodies are Buffers, which live outside it.
  */
 const FETCH_PROCESS_FLAGS = ['--max-old-space-size=64', '--no-addons'];
+
+/** `O_CLOEXEC` in the octal `flags` of `/proc/self/fdinfo/<fd>`. */
+const O_CLOEXEC = 0o2000000;
+
+/**
+ * The descriptors of this process that a child keeps across the exec: those
+ * above the child's standard streams and channel without close-on-exec, as
+ * `fd:dev:ino`. A fetch process closes them at its start
+ * (`closeInheritedDescriptors` in `exchange.ts`).
+ *
+ * Node opens every descriptor close-on-exec and marks a low few it inherits,
+ * but a supervisor (a CI runner, an init system, a shell) can hand the server
+ * higher ones, and libuv's spawn passes them on. Linux only: the flags are
+ * read from `/proc/self/fdinfo`. Elsewhere the list is empty.
+ */
+export function inheritedDescriptors(): string {
+  let names: string[];
+  try {
+    names = readdirSync('/proc/self/fd');
+  } catch {
+    return '';
+  }
+  const found: string[] = [];
+  for (const name of names) {
+    const fd = Number(name);
+    if (!Number.isInteger(fd) || fd <= FETCH_PROCESS_CHANNEL_FD) continue;
+    try {
+      const flags = /^flags:\s*([0-7]+)$/m.exec(
+        readFileSync(`/proc/self/fdinfo/${fd}`, 'utf8')
+      )?.[1];
+      if (flags === undefined || (parseInt(flags, 8) & O_CLOEXEC) !== 0) continue;
+      const { dev, ino } = fstatSync(fd, { bigint: true });
+      found.push(`${fd}:${dev}:${ino}`);
+    } catch {
+      // Closed between the listing and the read (the listing's own, for one).
+    }
+  }
+  return found.join(',');
+}
 
 /**
  * The program of a fetch process: `exchange.ts` next to this module. The
@@ -450,6 +490,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
   const spawnProcess = (): FetchProcess => {
     const source = fetchProcessProgram();
     const openssl = opensslSetup(process.execArgv, process.env['NODE_OPTIONS'], process.env);
+    const inherited = inheritedDescriptors();
     const child = spawn(
       process.execPath,
       [
@@ -459,14 +500,18 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
         '--eval',
         source,
         FETCH_PROCESS_TAG,
+        // The descriptors the process closes first: what it would otherwise
+        // hold of this process beside the channel.
+        ...(inherited ? [inherited] : []),
       ],
       {
         // Nothing of the server's environment (database URL, key material,
         // proxy settings, NODE_OPTIONS) is the fetch's business. Node adds the
         // channel's two variables, which the process removes at start.
         env: {},
-        // `/dev/null` for the standard streams; the IPC channel is the only
-        // descriptor the process gets from the server.
+        // `/dev/null` for the standard streams and the IPC channel as `stdio[3]`
+        // (FETCH_PROCESS_CHANNEL_FD). Any other descriptor the exec keeps, the
+        // process closes before it reads a message.
         stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
         // Bodies cross as bytes, not as JSON arrays of numbers.
         serialization: 'advanced',

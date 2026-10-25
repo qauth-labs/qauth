@@ -125,6 +125,13 @@ A process can be killed.
   file descriptor of the server's but that channel, none of the server's Node flags, a 64 MiB heap,
   the lowest CPU priority and, on Linux, the highest OOM score, so that the kernel ends a fetch
   process before the server when memory runs out.
+- **The descriptors, in detail.** Node opens its own descriptors close-on-exec and marks a low few
+  it inherits, but a supervisor (a CI runner, an init system, a shell) can hand the server higher
+  ones without close-on-exec, and libuv's spawn closes none. On Linux the pool lists those
+  (`/proc/self/fdinfo`, as `fd:dev:ino`) and passes the list to the process, which closes each
+  that is still the same file before it reads its first message (`inheritedDescriptors`,
+  `closeInheritedDescriptors`). Elsewhere the list is empty, so a descriptor the server inherited
+  without close-on-exec reaches the fetch process.
 - **The server's TLS setup.** A process trusts the certificates the server's process trusts —
   Node's bundled roots, `NODE_EXTRA_CA_CERTS`, the system store when Node uses it — and takes its
   TLS defaults (`--tls-min-v1.3`, `--tls-cipher-list`), both sent over the channel when it starts.
@@ -217,7 +224,8 @@ the transport module (`vi.mock('./transport')`). The resolver (`resolveWithCares
 stalls mid-handshake and one that keeps OpenSSL busy for seconds (`src/testing/hostile-handshake.ts`)
 are killed at the deadline while another host is served; many host names of one server hold no
 more than the family's share; and on Linux `/proc` shows what a process inherits: its environment
-and its file descriptors.
+and its file descriptors, also when the server holds a descriptor without close-on-exec (the test
+starts a vitest that holds one at descriptor 200, as a CI runner does).
 Run them with:
 
 ```console

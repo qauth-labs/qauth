@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import {
   closeSync,
   mkdtempSync,
@@ -17,8 +18,9 @@ import {
   type Socket,
 } from 'node:net';
 import { platform, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import tls, { getCACertificates, setDefaultCACertificates } from 'node:tls';
+import { stripVTControlCharacters } from 'node:util';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -642,6 +644,43 @@ describe.skipIf(!LINUX)(
         closeSync(held);
       }
     });
+
+    it('gives it none this process holds without close-on-exec either, as a CI runner hands some down', async () => {
+      // The test above, run by a vitest that holds a socket at descriptor 200
+      // without close-on-exec, the way a CI runner hands a job pipes. Node marks
+      // only a low few inherited descriptors close-on-exec and libuv's spawn
+      // closes none, so the socket reaches this process's fetch processes
+      // unless they close it first.
+      const root = join(__dirname, '../../../../..');
+      const vitest = join(__dirname, '../../node_modules/vitest/vitest.mjs');
+      const child = spawn(
+        process.execPath,
+        [
+          vitest,
+          'run',
+          relative(root, __filename),
+          '-t',
+          'gives a fetch process no file descriptor of this process but its channel',
+        ],
+        {
+          cwd: root,
+          env: { PATH: process.env['PATH'], HOME: process.env['HOME'] },
+          stdio: [
+            'ignore',
+            'pipe',
+            'pipe',
+            ...Array.from({ length: 197 }, () => 'ignore' as const),
+            'pipe',
+          ],
+        }
+      );
+      let output = '';
+      child.stdout?.on('data', (chunk: Buffer) => (output += chunk.toString()));
+      child.stderr?.on('data', (chunk: Buffer) => (output += chunk.toString()));
+      const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+      expect(stripVTControlCharacters(output)).toMatch(/Tests\s+1 passed/);
+      expect(code).toBe(0);
+    }, 120_000);
   }
 );
 

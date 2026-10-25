@@ -1,5 +1,5 @@
 import type { LookupAddress } from 'node:dns';
-import { writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as netConnect, type Socket } from 'node:net';
@@ -439,7 +439,38 @@ function runFetchProcess(send: (message: FromFetchProcess) => void): void {
   });
 }
 
+/** The descriptor of a fetch process's channel to the pool (`stdio[3]`). */
+export const FETCH_PROCESS_CHANNEL_FD = 3;
+
+/**
+ * Closes the descriptors this process got from the server's process beyond
+ * its standard streams and channel. The pool lists them as `fd:dev:ino`
+ * (`inheritedDescriptors` in `process-pool.ts`): those the server held without
+ * close-on-exec, which survive the exec. Node marks the descriptors it opens,
+ * and a low few it inherits, close-on-exec, but a supervisor such as a CI
+ * runner can hand the server higher ones, and libuv's spawn closes nothing.
+ *
+ * A descriptor is closed only when it is the same file here (device and
+ * inode), so none this process opened itself at that number is touched.
+ */
+export function closeInheritedDescriptors(list: string | undefined): void {
+  if (!list) return;
+  for (const entry of list.split(',')) {
+    const [fdText, dev, ino] = entry.split(':');
+    const fd = Number(fdText);
+    if (!Number.isInteger(fd) || fd <= FETCH_PROCESS_CHANNEL_FD) continue;
+    try {
+      const stat = fstatSync(fd, { bigint: true });
+      if (String(stat.dev) === dev && String(stat.ino) === ino) closeSync(fd);
+    } catch {
+      // Not open here: nothing to close.
+    }
+  }
+}
+
 if (process.argv[1] === FETCH_PROCESS_TAG && process.send !== undefined) {
+  // First, before any message: nothing of the server's process but the channel.
+  closeInheritedDescriptors(process.argv[2]);
   const toPool = process.send.bind(process);
   runFetchProcess((message) => {
     toPool(message, undefined, undefined, (err: Error | null) => {
