@@ -49,6 +49,11 @@
  * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, and the passkey app lists
  * `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
  * the caller's shell cannot change which operations an export contains.
+ * The maximal surface also turns on every built experimental item of the
+ * registry (`@qauth-labs/shared-stability`), and the default surface none, or
+ * the export refuses to write (ADR-018 §5, #477): an experimental item's
+ * routes would otherwise be missing from both documents, and the
+ * stable-surface check could not require their tag.
  * `oid4vp-1.0-base` is used because it is the profile that actually starts on
  * this deployment's crypto (EdDSA-only) — `haip-1.0` requires ES256 signing
  * and an unprovisioned certificate chain and refuses to boot; see
@@ -250,6 +255,28 @@ function setEphemeralEnv(surface: FlagSurface): void {
   });
 }
 
+/**
+ * Why the environment of `surface` cannot be exported, or `null` when it can:
+ * the default surface turns no experimental item on, and the maximal surface
+ * turns on every one the server has a switch for (see the module doc
+ * comment).
+ */
+function experimentalSurfaceProblem(
+  surface: FlagSurface,
+  enabled: readonly string[],
+  builtServerItems: readonly string[]
+): string | null {
+  if (surface === 'default') {
+    return enabled.length === 0
+      ? null
+      : `the default surface turns experimental items on: ${enabled.join(', ')}`;
+  }
+  const off = builtServerItems.filter((id) => !enabled.includes(id));
+  return off.length === 0
+    ? null
+    : `the maximal surface leaves experimental items off: ${off.join(', ')}`;
+}
+
 /** Minimal shape of `@fastify/swagger`'s generated document this script needs. */
 interface OpenApiDocument {
   readonly paths?: Record<string, unknown>;
@@ -266,15 +293,35 @@ async function main(): Promise<void> {
   // ordering in the module doc comment true. `./app/openapi-options` itself
   // has no such dependency (it only imports `fastify-type-provider-zod`),
   // but it's grouped here anyway to keep every import in one place.
-  const [{ default: Fastify }, { default: swagger }, typeProviderZod, { app }, { openapiOptions }] =
-    await Promise.all([
-      import('fastify'),
-      import('@fastify/swagger'),
-      import('fastify-type-provider-zod'),
-      import('./app/app'),
-      import('./app/openapi-options'),
-    ]);
+  const [
+    { default: Fastify },
+    { default: swagger },
+    typeProviderZod,
+    { app },
+    { openapiOptions },
+    { listEnabledExperimental },
+    { EXPERIMENTAL_ITEMS },
+  ] = await Promise.all([
+    import('fastify'),
+    import('@fastify/swagger'),
+    import('fastify-type-provider-zod'),
+    import('./app/app'),
+    import('./app/openapi-options'),
+    import('./config/experimental-features'),
+    import('@qauth-labs/shared-stability'),
+  ]);
   const { serializerCompiler, validatorCompiler } = typeProviderZod;
+
+  const experimentalProblem = experimentalSurfaceProblem(
+    surface,
+    listEnabledExperimental().map((item) => item.id),
+    EXPERIMENTAL_ITEMS.filter((item) => item.built && item.surface === 'server').map(
+      (item) => item.id
+    )
+  );
+  if (experimentalProblem !== null) {
+    throw new Error(`openapi-export: ${experimentalProblem}`);
+  }
 
   // No logger, no request-id/router options — this process never accepts a
   // request, so `main.ts`'s production Fastify constructor options do not

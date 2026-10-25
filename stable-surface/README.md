@@ -54,7 +54,13 @@ schema: {
 The auth server exports its API twice: under default flags to `stable-surface/openapi.json`, and with
 every switch that registers a route turned on to `apps/docs-site/public/openapi.json`. An operation
 only the second has sits behind a switch, so it must be `experimental` (ADR-018 §5). An operation
-both have carries the same tag in both.
+both have carries the same tag in both. The default export has no `experimental` operation at all:
+an experimental route is registered only while its switch is on, and every switch is off there.
+
+The exporter checks its own environment against the experimental-feature registry
+(`libs/shared/stability`): it refuses to write a default export with an experimental item on, or a
+maximal export that leaves a built item off. So every experimental operation is in the maximal
+export, where the check requires its tag.
 
 **Breaks.** Each `stable` surface is compared with the same file at the baseline release: the
 latest release tag that is not a pre-release, among the tags reachable from the commit under check
