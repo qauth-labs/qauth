@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-10-24'
+lastVerified: '2026-10-25'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -763,7 +763,10 @@ This Docker setup is designed for **local development**. For production:
    append the address it accepted the connection from to `X-Forwarded-For`
    (for example, nginx:
    `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`), so the
-   last entry is always one it wrote; the portal sets the header itself. Use
+   last entry is always one it wrote; the portal sets the header itself. The
+   first hop, the proxy clients connect to, may instead replace the header
+   with that address, as the reference configuration does; a proxy behind
+   another trusted hop must append. Use
    single addresses in both, never a client range; on the Compose network,
    give the proxy a fixed address below `<prefix>.128`, such as
    `172.30.80.20`. If `172.30.80.0/24` overlaps a network on your host, set
@@ -781,7 +784,8 @@ This Docker setup is designed for **local development**. For production:
    believes the value it forwards, and one passed through from the client
    would let the client pick the realm. An endpoint host answers the API
    routes only: the sign-in pages, `/oauth/authorize` and `/consents` answer
-   421 there.
+   421 there. [Reverse Proxy](/operate/reverse-proxy/) lists every rule the
+   proxy follows, and the reference nginx configuration that implements them.
 5. **Configure resource limits** in Docker/Kubernetes. `docker-compose.yml`
    caps the auth-server at 1 GiB and the developer portal at 512 MiB and
    restarts both after a crash (`restart: unless-stopped`); size the limits to

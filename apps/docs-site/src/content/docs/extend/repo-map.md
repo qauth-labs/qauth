@@ -3,7 +3,7 @@ title: Repository map
 description: The apps/ and libs/ layout, the Nx scope tags and the module boundary constraints derived from them, where new code belongs, and the Windows CRLF gotcha that fails the format check on files you never touched.
 sidebar:
   order: 3
-lastVerified: '2026-10-24'
+lastVerified: '2026-10-25'
 ---
 
 QAuth is an Nx monorepo with two trees: `apps/` for deployable entry points and `libs/` for
@@ -29,6 +29,11 @@ The auth server, the portal and this site are tagged `scope:app` (e.g. `apps/aut
 a released server and the new build from outside, over HTTP and `pg`, and imports no workspace
 project (`.oxlintrc.json:298`, and `.oxlintrc.json:302` stops anything importing it).
 Nothing in `apps/` may be imported by anything — the app layer is the top of the graph.
+
+One project lives outside both trees: `deploy/reference/proxy` (`reference-proxy`), the reference
+reverse-proxy configuration and the container test that runs it in front of stub upstreams. It is
+tagged `scope:reference-proxy` and `type:testing`, and imports no workspace project
+(`.oxlintrc.json:318`).
 
 `apps/migration-runner` is tagged `scope:migration-runner`, and may depend only on the database
 library (`type:db`) and, in its container suite, the testing library. Its build bundles
@@ -97,6 +102,7 @@ import **from inside the workspace**; external npm packages are never restricted
 | `scope:upgrade-test`     | nothing — and nothing may import it                                              | `.oxlintrc.json:298` |
 | `type:kek-adapter`       | `scope:core`, `scope:shared`, `type:key-custody` — and nothing may import it     | `.oxlintrc.json:284` |
 | `scope:sdk`              | nothing — an SDK is installed outside the workspace                              | `.oxlintrc.json:309` |
+| `scope:reference-proxy`  | nothing — it tests the shipped proxy configuration from outside                  | `.oxlintrc.json:318` |
 
 ### Key custody has a second, path-based rule
 
