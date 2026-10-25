@@ -64,7 +64,9 @@ function reportedNames(): Record<string, string[]> {
   return report;
 }
 
-describe('the API report', () => {
+// Each case builds a TypeScript program: about 2 s alone, 6 to 8 s while CI
+// runs every project's suite at once, past Vitest's default of 5 s.
+describe('the API report', { timeout: 30_000 }, () => {
   it('lists the same entry points the package exports', () => {
     const manifest = JSON.parse(readFileSync(join(LIBRARY_ROOT, 'package.json'), 'utf8')) as {
       exports: Record<string, string>;
