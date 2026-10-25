@@ -8,6 +8,8 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     ID_JAG_TRUSTED_ISSUERS: [] as string[],
     ID_JAG_FETCH_TIMEOUT_MS: 5000,
     ID_JAG_JWKS_CACHE_TTL: 300,
+    ID_JAG_JWKS_REFRESH_COOLDOWN: 30,
+    ID_JAG_JWKS_NEGATIVE_CACHE_TTL: 30,
     ID_JAG_MAX_DOCUMENT_BYTES: 65536,
     ID_JAG_ALLOW_PRIVATE_ADDRESSES: false,
   },
@@ -21,6 +23,8 @@ vi.mock('./ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+import { createExpiringRedis, createFakeIdJagIssuer } from '../../testing/fake-id-jag-issuer';
+import { REDIS_KEYS } from '../constants/redis-keys';
 import {
   createIdJagIssuerKeyResolver,
   ID_JAG_SIGNING_ALG_VALUES_SUPPORTED,
@@ -44,19 +48,13 @@ function ok(body: unknown) {
   return { status: 200, body: JSON.stringify(body), headers: {} };
 }
 
-/** Minimal in-memory `fastify.redis` stand-in (no TTL clock). */
+/** `fastify` stand-in: an in-memory Redis with `EX`/`NX` on a manual clock. */
 function fastifyStub() {
-  const store = new Map<string, string>();
+  const redis = createExpiringRedis();
   return {
-    store,
+    redis,
     fastify: {
-      redis: {
-        get: vi.fn(async (k: string) => store.get(k) ?? null),
-        set: vi.fn(async (k: string, v: string) => {
-          store.set(k, v);
-          return 'OK';
-        }),
-      },
+      redis,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
@@ -84,6 +82,8 @@ beforeEach(() => {
   ENV.ID_JAG_ENABLED = true;
   ENV.ID_JAG_TRUSTED_ISSUERS = [ISSUER];
   ENV.ID_JAG_JWKS_CACHE_TTL = 300;
+  ENV.ID_JAG_JWKS_REFRESH_COOLDOWN = 30;
+  ENV.ID_JAG_JWKS_NEGATIVE_CACHE_TTL = 30;
 });
 
 describe('ID_JAG_SIGNING_ALG_VALUES_SUPPORTED', () => {
@@ -345,11 +345,11 @@ describe('createIdJagIssuerKeyResolver — caching', () => {
   it('does not write to the cache when the TTL is zero', async () => {
     ENV.ID_JAG_JWKS_CACHE_TTL = 0;
     wireHappyPath([await publicJwk()]);
-    const { fastify, store } = fastifyStub();
+    const { fastify, redis } = fastifyStub();
 
     await createIdJagIssuerKeyResolver(fastify)({ issuer: ISSUER, algorithm: 'EdDSA' });
 
-    expect(store.size).toBe(0);
+    expect(redis.keys()).toEqual([]);
   });
 
   it('treats an unreachable cache as a miss rather than a failure', async () => {
@@ -360,6 +360,201 @@ describe('createIdJagIssuerKeyResolver — caching', () => {
 
     await expect(
       createIdJagIssuerKeyResolver(fastify)({ issuer: ISSUER, algorithm: 'EdDSA' })
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('createIdJagIssuerKeyResolver — refresh cooldown (#433)', () => {
+  const COOLDOWN_KEY = REDIS_KEYS.ID_JAG_KEY_REFRESH(ISSUER);
+
+  it('claims the cooldown with SET NX EX before it fetches anything', async () => {
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify, redis } = fastifyStub();
+
+    await createIdJagIssuerKeyResolver(fastify)({
+      issuer: ISSUER,
+      keyId: 'key-a',
+      algorithm: 'EdDSA',
+      forceRefresh: true,
+    });
+
+    const claim = redis.set.mock.calls.findIndex(([key]) => key === COOLDOWN_KEY);
+    expect(redis.set.mock.calls[claim]).toEqual([COOLDOWN_KEY, '1', 'EX', 30, 'NX']);
+    expect(redis.set.mock.invocationCallOrder[claim]).toBeLessThan(
+      ssrfSafeGet.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('refuses a second forced refresh inside the cooldown, without a fetch', async () => {
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+    const refresh = {
+      issuer: ISSUER,
+      keyId: 'key-a',
+      algorithm: 'EdDSA',
+      forceRefresh: true,
+    } as const;
+
+    await expect(resolve(refresh)).resolves.toBeDefined();
+    const fetches = ssrfSafeGet.mock.calls.length;
+
+    redis.advance(29);
+    await expect(resolve(refresh)).resolves.toBeUndefined();
+    expect(ssrfSafeGet.mock.calls.length).toBe(fetches);
+
+    redis.advance(1);
+    await expect(resolve(refresh)).resolves.toBeDefined();
+    expect(ssrfSafeGet.mock.calls.length).toBe(fetches * 2);
+  });
+
+  it('takes its length from ID_JAG_JWKS_REFRESH_COOLDOWN', async () => {
+    ENV.ID_JAG_JWKS_REFRESH_COOLDOWN = 5;
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+
+    await resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA', forceRefresh: true });
+    expect(redis.set).toHaveBeenCalledWith(COOLDOWN_KEY, '1', 'EX', 5, 'NX');
+
+    redis.advance(5);
+    await expect(
+      resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA', forceRefresh: true })
+    ).resolves.toBeDefined();
+  });
+
+  it('keeps one cooldown per issuer', async () => {
+    const first = await createFakeIdJagIssuer(ISSUER);
+    const second = await createFakeIdJagIssuer('https://other-idp.example.com');
+    ENV.ID_JAG_TRUSTED_ISSUERS = [first.issuer, second.issuer];
+    ssrfSafeGet.mockImplementation((url: string) =>
+      url.startsWith(`${first.issuer}/`) ? first.fetch(url) : second.fetch(url)
+    );
+    const { fastify } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+
+    await resolve({ issuer: first.issuer, keyId: 'x', algorithm: 'EdDSA', forceRefresh: true });
+    await resolve({ issuer: second.issuer, keyId: 'x', algorithm: 'EdDSA', forceRefresh: true });
+
+    expect(first.totalFetches()).toBe(2);
+    expect(second.totalFetches()).toBe(2);
+  });
+
+  it('refuses a forced refresh when the cooldown cannot be claimed', async () => {
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify, redis } = fastifyStub();
+    redis.set.mockRejectedValue(new Error('redis down'));
+
+    await expect(
+      createIdJagIssuerKeyResolver(fastify)({
+        issuer: ISSUER,
+        keyId: 'key-a',
+        algorithm: 'EdDSA',
+        forceRefresh: true,
+      })
+    ).resolves.toBeUndefined();
+    expect(ssrfSafeGet).not.toHaveBeenCalled();
+  });
+
+  it('does not hold an ordinary cache miss to the cooldown', async () => {
+    // Nothing is cached, so every resolution misses and fetches on its own.
+    ENV.ID_JAG_JWKS_CACHE_TTL = 0;
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+
+    await resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA', forceRefresh: true });
+    await expect(
+      resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA' })
+    ).resolves.toBeDefined();
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('createIdJagIssuerKeyResolver — negative cache (#433)', () => {
+  const FAILED_KEY = REDIS_KEYS.ID_JAG_FETCH_FAILED(ISSUER);
+
+  it('remembers a failed fetch for ID_JAG_JWKS_NEGATIVE_CACHE_TTL and fetches nothing meanwhile', async () => {
+    ENV.ID_JAG_JWKS_NEGATIVE_CACHE_TTL = 7;
+    ssrfSafeGet.mockRejectedValue(new Error('connect ETIMEDOUT'));
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+
+    await expect(resolve({ issuer: ISSUER, algorithm: 'EdDSA' })).resolves.toBeUndefined();
+    expect(redis.set).toHaveBeenCalledWith(FAILED_KEY, '1', 'EX', 7);
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+
+    redis.advance(6);
+    await expect(resolve({ issuer: ISSUER, algorithm: 'EdDSA' })).resolves.toBeUndefined();
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+
+    redis.advance(1);
+    wireHappyPath([await publicJwk()]);
+    await expect(resolve({ issuer: ISSUER, algorithm: 'EdDSA' })).resolves.toBeDefined();
+  });
+
+  it('remembers a failed JWKS fetch after a good discovery fetch', async () => {
+    ssrfSafeGet.mockImplementation(async (url: string) => {
+      if (url === DISCOVERY_URL) return ok({ issuer: ISSUER, jwks_uri: JWKS_URI });
+      return { status: 503, body: '', headers: {} };
+    });
+    const { fastify } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+
+    await expect(resolve({ issuer: ISSUER, algorithm: 'EdDSA' })).resolves.toBeUndefined();
+    await expect(resolve({ issuer: ISSUER, algorithm: 'EdDSA' })).resolves.toBeUndefined();
+
+    expect(ssrfSafeGet.mock.calls.map(([url]) => url)).toEqual([DISCOVERY_URL, JWKS_URI]);
+  });
+
+  it('counts a document that fails validation as a failed fetch', async () => {
+    wireHappyPath([await publicJwk()], { documentIssuer: 'https://someone-else.example.com' });
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+
+    await resolve({ issuer: ISSUER, algorithm: 'EdDSA' });
+    await resolve({ issuer: ISSUER, algorithm: 'EdDSA' });
+
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(redis.keys()).toContain(FAILED_KEY);
+  });
+
+  it('writes no failure after a successful fetch', async () => {
+    wireHappyPath([await publicJwk()]);
+    const { fastify, redis } = fastifyStub();
+
+    await createIdJagIssuerKeyResolver(fastify)({ issuer: ISSUER, algorithm: 'EdDSA' });
+
+    expect(redis.keys()).not.toContain(FAILED_KEY);
+  });
+
+  it('is not consulted while the documents are cached', async () => {
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+    await resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA' });
+
+    await redis.set(FAILED_KEY, '1', 'EX', 30);
+    await expect(
+      resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA' })
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a forced refresh while a failure is on record, without spending the cooldown', async () => {
+    wireHappyPath([await publicJwk('key-a')]);
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify);
+    await redis.set(FAILED_KEY, '1', 'EX', 30);
+
+    await expect(
+      resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA', forceRefresh: true })
+    ).resolves.toBeUndefined();
+    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(redis.keys()).not.toContain(REDIS_KEYS.ID_JAG_KEY_REFRESH(ISSUER));
+
+    redis.advance(30);
+    await expect(
+      resolve({ issuer: ISSUER, keyId: 'key-a', algorithm: 'EdDSA', forceRefresh: true })
     ).resolves.toBeDefined();
   });
 });

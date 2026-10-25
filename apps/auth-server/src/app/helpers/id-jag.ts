@@ -298,7 +298,8 @@ export interface ValidateIdJagOptions {
  * Validate an inbound ID-JAG end to end (draft §4.4.1, EMA §5.1).
  *
  * Order is load-bearing — each step is cheaper and less trusting than the next,
- * and no side effect happens before the signature is established:
+ * and nothing but the key resolver's own Redis entries (its cache, refresh
+ * cooldown and negative cache) is written before the signature is established:
  *
  *  1. feature flag;
  *  2. structural decode + `alg` in {@link ID_JAG_SIGNING_ALG_VALUES_SUPPORTED}
@@ -306,7 +307,8 @@ export interface ValidateIdJagOptions {
  *  3. `iss` is not this server's own issuer (gate 5), then on the operator
  *     allowlist — both BEFORE any network call;
  *  4. key resolution against that allowlisted issuer only, with ONE bounded
- *     refresh on a `kid` miss so a rotation is picked up promptly;
+ *     refresh on a `kid` miss so a rotation is picked up promptly, which the
+ *     resolver allows once per issuer per `ID_JAG_JWKS_REFRESH_COOLDOWN`;
  *  5. signature + `iss` + `aud` + `exp`/`nbf` (bounded skew) via the crypto
  *     abstraction, with the algorithm pinned to the ONE the header declared;
  *  6. `typ` asserted on the AUTHENTICATED header;
@@ -388,9 +390,12 @@ export async function validateIdJagAssertion(
   let resolved = await resolver({ issuer: claimedIssuer, keyId, algorithm: alg });
   if (!resolved) {
     // ONE bounded refresh: an issuer that rotated its keys inside the cache TTL
-    // would otherwise fail every verification until the TTL lapsed. Bounded to a
-    // single retry per request, and only reachable AFTER the allowlist check,
-    // so a forged `kid` cannot be used to drive unbounded outbound traffic.
+    // would otherwise fail every verification until the TTL lapsed. A single
+    // retry per request, only reachable AFTER the allowlist check, and the
+    // resolver refreshes an issuer at most once per
+    // `ID_JAG_JWKS_REFRESH_COOLDOWN` across all requests (and not while a
+    // failed fetch is remembered), so a forged `kid` cannot be used to drive
+    // outbound traffic: inside the cooldown this retry fails closed unfetched.
     resolved = await resolver({
       issuer: claimedIssuer,
       keyId,

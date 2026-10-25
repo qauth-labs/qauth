@@ -126,9 +126,30 @@ export const REDIS_KEYS = {
   /**
    * Cached JWK Set of an ALLOWLISTED ID-JAG issuer, fetched from the `jwks_uri`
    * that issuer's OWN discovery document names — never a URL taken from an
-   * assertion. Same bounded TTL as the discovery entry; a `kid` miss forces ONE
-   * bounded refresh rather than waiting the TTL out, so a key rotation is picked
+   * assertion. Same bounded TTL as the discovery entry; a `kid` miss forces a
+   * refresh rather than waiting the TTL out, at most once per
+   * {@link REDIS_KEYS.ID_JAG_KEY_REFRESH} cooldown, so a key rotation is picked
    * up promptly without turning every verification into a network fetch.
    */
   ID_JAG_JWKS: (issuer: string) => `id-jag:jwks:${digest(issuer)}`,
+  /**
+   * Per-issuer cooldown marker on the refresh a `kid` miss forces (#433).
+   *
+   * Claimed with `SET NX EX ID_JAG_JWKS_REFRESH_COOLDOWN` before the refresh
+   * fetches anything: the request that claims it refreshes, and every other
+   * `kid` miss for that issuer until it expires fails closed without a fetch.
+   * The refresh runs before any signature check, so this marker — not the
+   * token endpoint's rate limit — is what bounds the outbound traffic a client
+   * can drive with random `kid` values.
+   */
+  ID_JAG_KEY_REFRESH: (issuer: string) => `id-jag:key-refresh:${digest(issuer)}`,
+  /**
+   * Negative cache entry for an ID-JAG issuer whose discovery document or JWK
+   * Set could not be obtained (#433): transport error, timeout, non-200, a body
+   * that fails validation. Written for `ID_JAG_JWKS_NEGATIVE_CACHE_TTL`; while
+   * it exists no fetch is made for the issuer, so an outage costs one attempt
+   * per window. Consulted only when a fetch would happen, so a key already in
+   * the cache keeps verifying throughout.
+   */
+  ID_JAG_FETCH_FAILED: (issuer: string) => `id-jag:fetch-failed:${digest(issuer)}`,
 } as const;
