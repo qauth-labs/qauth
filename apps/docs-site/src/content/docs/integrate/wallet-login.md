@@ -4,12 +4,20 @@ description: The browser wallet-login flow — the asserted-identifier step, the
 sidebar:
   order: 7
 lastVerified: '2026-09-11'
+experimental: true
 ---
 
 How an end user signs in with a wallet credential, what the server does at each
 step, and what is deliberately not built yet. Implements
 [ADR-004](/reference/records/adr/004-wallet-agnostic-federation/) and
 [ADR-009](/reference/records/adr/009-wallet-account-resolution/) (issue #239).
+
+> **Experimental.** Wallet sign-in is off by default, and every route it adds is
+> tagged `x-qauth-stability: experimental` in the API reference. The verifier
+> profile it has been validated on, `oid4vp-1.0-base`, is an
+> [experimental item](/reference/experimental-features/#oid4vp-10-base): it may
+> change in a minor release without a deprecation window, and the server logs a
+> warning at boot while it is on.
 
 > **Status (updated by #238): the sign-in completes, and a wallet credential can
 > be linked to an existing account.** Presentation validation (#234), issuer

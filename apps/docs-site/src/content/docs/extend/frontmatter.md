@@ -19,15 +19,16 @@ Starlight's built-in `docsSchema()` via its `extend` option.
 | `description`   | yes — convention | One sentence; used for the meta description and search.                       |
 | `sidebar.order` | yes — convention | Position within its lane. Pages sort by this value, ascending.                |
 | `unbuiltClaims` | no               | Declares that this page intentionally describes something not yet built.      |
+| `experimental`  | no               | Marks the page that documents an experimental item; shows the banner.         |
 
 Only two fields are enforced by a schema: Starlight requires `title`, and this project's
 `extend:` requires `lastVerified` — omit either and the build fails. `description` and
 `sidebar.order` are **optional** in Starlight's schema (`index.mdx` sets no `sidebar` block at all
 and builds fine); they are required here by convention, and nothing mechanical enforces them.
 
-`title`, `description`, and `sidebar.order` come from Starlight's own schema. `lastVerified`
-and `unbuiltClaims` are added by this project's `extend:` — without that extension, Zod would
-silently strip them from frontmatter instead of validating them.
+`title`, `description`, and `sidebar.order` come from Starlight's own schema. `lastVerified`,
+`unbuiltClaims` and `experimental` are added by this project's `extend:` — without that extension,
+Zod would silently strip them from frontmatter instead of validating them.
 
 ## Quote `lastVerified`
 
@@ -76,3 +77,30 @@ This is a narrow, page-level escape hatch for that one specific check, not a gen
 way to silence it. Reaching for `unbuiltClaims: true` because a guard failure is inconvenient,
 on a page that isn't actually describing something unbuilt, is a defect — file it as one if you
 see it.
+
+## The `experimental` flag
+
+An experimental item ships outside the stability promise, and the docs label it (ADR-018 §5).
+The page that documents one sets `experimental: true`, and the site shows an "Experimental"
+banner at its top that links [Experimental features](/reference/experimental-features/). The
+banner comes from `src/experimental-banner.ts`, a Starlight route middleware; a `banner` the page
+sets itself follows it.
+
+```yaml
+---
+title: Example
+description: An example of the flag.
+sidebar:
+  order: 1
+lastVerified: '2026-10-25'
+experimental: true
+---
+```
+
+Flagged pages and the items of the experimental-feature registry (`libs/shared/stability`) match
+one to one, and the registry's tests fail otherwise:
+
+- each built item names its page in the registry (`docsPage`), and that page carries the flag;
+- each flagged page is the page of exactly one item, and names that item's id in its text.
+
+A page that only mentions an item, such as the configuration reference, does not set the flag.

@@ -24,6 +24,12 @@ export const collections = {
         // narrow, page-level escape hatch — not general-purpose
         // suppression. See extend/frontmatter.md.
         unbuiltClaims: z.boolean().default(false),
+        // The experimental flag (ADR-018 §5, #477). A page that documents an
+        // item of the experimental-feature registry (libs/shared/stability)
+        // sets it, and src/experimental-banner.ts then shows the page's
+        // "Experimental" banner. The registry's tests hold flagged pages and
+        // registry items one to one. See extend/frontmatter.md.
+        experimental: z.boolean().default(false),
       }),
     }),
   }),

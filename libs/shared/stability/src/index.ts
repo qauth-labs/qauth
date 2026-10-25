@@ -1,4 +1,5 @@
 export * from './lib/anchor';
+export * from './lib/docs-flag';
 export * from './lib/docs-page';
 export * from './lib/enabled';
 export * from './lib/evidence';
