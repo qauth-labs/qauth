@@ -255,6 +255,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/.well-known/assetlinks.json` from `WEBAUTHN_APPLE_APP_IDS` and
   `WEBAUTHN_ANDROID_APPS`; with neither set, both paths stay 404.
 
+- **The DPoP proof verifier** ([#479], RFC 9449, ADR-014 §3, ADR-017
+  Decision 14). `@qauth-labs/server-dpop` is the one verifier the token
+  endpoint, the admin API, `resource-guard` and the Authority Tree will share.
+  It takes the `DPoP` header, the request's method and URL and, at a protected
+  resource, the access token, and returns the RFC 7638 thumbprint of the
+  proof's key. It checks `typ` (`dpop+jwt`), an asymmetric algorithm from an
+  allowlist (`none` and MAC algorithms can never be on it), a public `jwk`
+  with no private members, `htm` and `htu` against the values the caller
+  passes, `iat` within 60 seconds, `jti`, `ath` and, when an endpoint asks for
+  one, a server-provided nonce, answered with `use_dpop_nonce`. Used proofs are
+  recorded in Redis for the window; with Redis unavailable, every proof is
+  refused. The library imports only `jose` and `node:crypto`, no Fastify.
+  `test-vectors/dpop/proof.json` holds the RFC's example proofs and one
+  failing case per check. Nothing calls the verifier yet: `DPOP_ENABLED`
+  (default `false`) is refused at boot until the token endpoint binds tokens to
+  a DPoP key.
+
 - **The signer** ([#464], ADR-019 Decision 9). `@qauth-labs/server-keys`
   defines `Signer`, the one interface for private-key work: sign a JWS, sign
   the ADR-005 hybrid carrier, hand out the cookie HMAC secrets, encrypt and
@@ -722,6 +739,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#475]: https://github.com/qauth-labs/qauth/issues/475
 [#476]: https://github.com/qauth-labs/qauth/issues/476
 [#478]: https://github.com/qauth-labs/qauth/issues/478
+[#479]: https://github.com/qauth-labs/qauth/issues/479
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 [#485]: https://github.com/qauth-labs/qauth/issues/485
 [#486]: https://github.com/qauth-labs/qauth/issues/486
