@@ -458,6 +458,36 @@ and `Cache-Control: public, max-age=3600`.
 | `GET /.well-known/apple-app-site-association` | `webcredentials.apps` from `WEBAUTHN_APPLE_APP_IDS`                                           |
 | `GET /.well-known/assetlinks.json`            | One `delegate_permission/common.get_login_creds` statement per app in `WEBAUTHN_ANDROID_APPS` |
 
+### Shared Signals Framework transmitter
+
+Experimental, off by default. With `SSF_TRANSMITTER_ENABLED=true`, a realm whose
+`ssf_transmitter_enabled` is on is an
+[OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
+transmitter: receivers create a stream and QAuth pushes Security Event Tokens
+(RFC 8417) to it (RFC 8935). With the switch off none of these routes exists;
+for a realm whose own switch is off they answer `404`.
+[SSF transmitter](/operate/ssf-transmitter/) covers setting one up.
+
+| Endpoint                               | Purpose                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| `GET /.well-known/ssf-configuration`   | Transmitter metadata (SSF 1.0 §7). Unauthenticated.                         |
+| `POST /ssf/stream`                     | Create the receiver's stream: `201`, or `409` when it has one in the realm. |
+| `GET /ssf/stream`                      | Read it with `?stream_id=`, or list the receiver's streams without.         |
+| `PATCH /ssf/stream`, `PUT /ssf/stream` | Update or replace the receiver-supplied members.                            |
+| `DELETE /ssf/stream`                   | Delete it with `?stream_id=`: `204`.                                        |
+| `GET /ssf/status`, `POST /ssf/status`  | Read or set `enabled`, `paused` or `disabled`, with `delivery_status`.      |
+| `POST /ssf/subjects/add`               | Add an RFC 9493 subject: `200`.                                             |
+| `POST /ssf/subjects/remove`            | Remove one: `204`.                                                          |
+| `POST /ssf/verify`                     | Ask for a verification event: `204`; `429` within 10 seconds of the last.   |
+
+Every stream management route takes the receiver's own access token (`client_credentials`)
+carrying the `ssf:stream` scope, with the realm's issuer in `aud`. A receiver
+reaches only its own stream; another `stream_id` answers `404`. Delivery is push
+only. `default_subjects` is `NONE`: a stream receives events only about the
+subjects its receiver added, and its verification events. Until the event
+mapping of #540 lands, `events_supported` is empty and verification events are
+the only ones sent.
+
 ---
 
 ## Hosted UI
