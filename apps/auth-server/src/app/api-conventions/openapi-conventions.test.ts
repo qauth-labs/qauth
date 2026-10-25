@@ -281,6 +281,31 @@ describe('the API conventions check — fixture document (#506)', () => {
       ).toEqual(['permission']);
     });
 
+    // #507: the class of an admin operation is the strictest class of its permissions.
+    it('MUTATION: an admin class that is not the strictest class of its permissions', () => {
+      // A security operation that names only a write permission.
+      expect(
+        rulesOf(mutated((d) => (PATCH(d)['x-qauth-permission'] = 'realms.policies.write')))
+      ).toEqual(['permission']);
+      // A read operation that names a write permission.
+      expect(
+        rulesOf(
+          mutated((d) => (GET(d)['x-qauth-permission'] = ['realms.read', 'realms.policies.write']))
+        )
+      ).toEqual(['permission']);
+      // A write operation that names a security permission: also missing its
+      // effects and two-admin marker would be reported by their own rules.
+      expect(
+        rulesOf(
+          mutated((d) => {
+            Object.assign(PATCH(d), { 'x-qauth-class': 'write' });
+            delete PATCH(d)['x-qauth-effects'];
+            delete PATCH(d)['x-qauth-two-admin'];
+          })
+        )
+      ).toEqual(['permission']);
+    });
+
     it('MUTATION: a security operation without effects, or without the two-admin marker', () => {
       expect(rulesOf(mutated((d) => delete PATCH(d)['x-qauth-effects']))).toEqual(['effects']);
       expect(rulesOf(mutated((d) => delete PATCH(d)['x-qauth-two-admin']))).toEqual(['two-admin']);

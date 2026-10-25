@@ -274,13 +274,32 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
   } else if (family === 'admin') {
     // An admin operation needs permissions a role can grant (#507): an id the
     // catalog does not know, or a retired one, could never be authorized.
+    const classes = new Set<OperationClass>();
     for (const id of permissions as string[]) {
-      if (!PERMISSION_REGISTRY.isGrantable(id)) {
+      const granted = PERMISSION_REGISTRY.isGrantable(id) ? PERMISSION_REGISTRY.get(id) : undefined;
+      if (granted === undefined) {
         report(
           'permission',
           `x-qauth-permission names ${id}, which is not a grantable permission of the admin catalog (helpers/admin-permissions.ts)`
         );
+      } else {
+        classes.add(granted.class);
       }
+    }
+    // The class is the strictest class among the permissions: a security
+    // operation that named only a write permission would let `admin:write`
+    // reach it, and a write operation that named a security permission would
+    // escape the effects and two-admin rules (ADR-019 Decision 7).
+    const strictest = OPERATION_CLASSES.filter((candidate) => classes.has(candidate)).at(-1);
+    if (
+      strictest !== undefined &&
+      OPERATION_CLASSES.includes(operationClass as OperationClass) &&
+      operationClass !== strictest
+    ) {
+      report(
+        'permission',
+        `x-qauth-class is ${String(operationClass)}, but the strictest class of its permissions is ${strictest}; they must be the same`
+      );
     }
   }
 
