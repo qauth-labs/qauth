@@ -119,10 +119,12 @@ export async function resolveBrowserSession(
 
 /**
  * Record a newly created browser session under its user, so
- * {@link endBrowserSessions} can end it (`/auth/logout`). The index expires
- * with the newest session in it: every session of a realm gets the realm's
- * lifetime when it is created, and the service never extends one, so no
- * session in the index outlives the newest.
+ * {@link endBrowserSessions} can end it (`/auth/logout`). The index lives as
+ * long as the latest-ending session in it, which is not always the newest: a
+ * realm whose lifetime shrank between two sign-ins gives the newer session an
+ * earlier end. So the deadline is set on a new index (`NX`) and otherwise only
+ * ever moved later (`GT`), never pulled in under a session still live
+ * (Redis 7.0 or later).
  */
 async function trackBrowserSession(
   fastify: FastifyInstance,
@@ -132,7 +134,8 @@ async function trackBrowserSession(
   const results = await fastify.redis
     .multi()
     .sadd(key, session.sid)
-    .pexpireat(key, session.expiresAt)
+    .pexpireat(key, session.expiresAt, 'NX')
+    .pexpireat(key, session.expiresAt, 'GT')
     .exec();
   // A MULTI reports a failed command in its results, not by rejecting. An
   // untracked session would survive `/auth/logout`.
