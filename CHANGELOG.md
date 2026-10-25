@@ -846,6 +846,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also issues a new secret, or set the column by hand. See the operator guide
   (`operate/docker`, "Provisioning a client for ID-JAG").
 
+- **BREAKING (only where `ID_JAG_JWKS_CACHE_TTL` is set above 3600)**: the
+  ID-JAG issuer key resolver bounds how often it dials an issuer ([#433],
+  [ADR-011](./docs/adr/011-enterprise-managed-authorization.md) §4). An
+  assertion whose `kid` is not in the cached key set forces a refresh of the
+  issuer's discovery document and JWKS at most once per issuer per
+  `ID_JAG_JWKS_REFRESH_COOLDOWN` (default 30 seconds); inside the cooldown it is
+  refused without a fetch. Before, every such assertion cost the issuer two
+  fetches, and the refresh runs before the signature is checked. A failed fetch
+  is now remembered for `ID_JAG_JWKS_NEGATIVE_CACHE_TTL` (default 30 seconds),
+  during which nothing is fetched from that issuer, so an outage costs one
+  attempt per window instead of two fetches, each up to
+  `ID_JAG_FETCH_TIMEOUT_MS`, on every token request. Both new settings take 1 to
+  300 seconds. `ID_JAG_JWKS_CACHE_TTL` now has a ceiling of 3600 seconds, as
+  `CIMD_CACHE_MAX_TTL` does for CIMD, and the auth-server refuses to start with
+  a larger value; the error names the variable.
+
+  **Action for operators**: set `ID_JAG_JWKS_CACHE_TTL` to 3600 or less, or
+  leave it unset (the default is 300). An identity provider that rotates its
+  signing key should publish the new key in its JWKS at least one cooldown
+  before it signs with it; otherwise an assertion under the new key can be
+  refused for up to one cooldown.
+
 - **BREAKING (operators who run commands through the migration-runner
   image)**: the image no longer holds the workspace, pnpm or nx ([#474]), so
   `docker compose run --entrypoint pnpm migration-runner nx run …` no longer
@@ -911,6 +933,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nx` command by up to about 50 seconds before Nx falls back to the local
   cache.
 
+[#433]: https://github.com/qauth-labs/qauth/issues/433
 [#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#448]: https://github.com/qauth-labs/qauth/issues/448

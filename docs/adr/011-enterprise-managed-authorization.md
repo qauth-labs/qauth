@@ -22,6 +22,11 @@
 > **Amended 2026-10-24 (#458):** the auth server records events in the event store
 > (ADR-019 Decision 8) and writes no `audit_logs` row. §8 now says how these paths
 > are recorded: through `emitUserEvent`, as `token.issued` and `token.request_failed`.
+>
+> **Amended 2026-10-25 (#433):** the issuer key resolver has a per-issuer refresh
+> cooldown, a negative cache and a one-hour ceiling on its cache TTL. §4, the
+> negative consequences and the review findings now say what each bounds and what it
+> costs.
 
 ## Context
 
@@ -342,8 +347,19 @@ The rules that make this a trust model rather than a list:
 - **Every outbound fetch uses the CIMD SSRF-guard pattern** —
   `apps/auth-server/src/app/helpers/ssrf-safe-fetch.ts`: https-only, no
   credentials in the URL, DNS-pinned TOCTOU-safe IP validation, **no redirect
-  following**, response size and time bounds, non-200 rejection, and a bounded Redis cache (`ID_JAG_JWKS_CACHE_TTL`, default 5 minutes). Unlike
-  `CIMD_CACHE_MAX_TTL`, that TTL has no hard ceiling yet.
+  following**, response size and time bounds, non-200 rejection, and a bounded Redis cache (`ID_JAG_JWKS_CACHE_TTL`, default 5 minutes). The
+  TTL has a hard ceiling of one hour, as `CIMD_CACHE_MAX_TTL` is for CIMD. A larger
+  value fails config validation rather than being clamped (#433).
+- **How often an issuer is dialled is bounded per issuer, in Redis, across every
+  process** (#433). An unknown `kid` forces a refresh of both documents, at most
+  once per `ID_JAG_JWKS_REFRESH_COOLDOWN` (default 30 s). The request that claims the
+  cooldown marker (`SET NX EX`) refreshes. Every other `kid` miss inside it is refused
+  without a fetch. A failed fetch is remembered for `ID_JAG_JWKS_NEGATIVE_CACHE_TTL`
+  (default 30 s). Until that lapses, nothing is fetched from the issuer, and any
+  resolution that would need a fetch is refused. A failed fetch is a transport error, a
+  timeout, a non-200 or a document that fails validation. A key already in the cache
+  keeps verifying throughout. Both settings take 1 to 300 seconds, so neither can be
+  switched off. If Redis cannot be reached, the cooldown refuses the refresh.
 - **One escape hatch exists.** `ID_JAG_ALLOW_PRIVATE_ADDRESSES` (default `false`) turns the
   address check off so tests can use a localhost IdP. The auth-server refuses to start with
   it set to `true` when `NODE_ENV` is `production`, and refuses its CIMD twin,
@@ -490,10 +506,12 @@ through `fastify.repositories.auditLogs.create`.)
   latency and can exhaust connections; JWKS rotation trades cache staleness
   against re-fetch storms; and an IdP domain that is compromised or expires and
   is re-registered becomes a valid identity source until an operator removes it.
-  Mitigations in the code today: SSRF-guarded fetch, a bounded cache, a per-fetch timeout,
-  and the allowlist that bounds which hosts can ever be dialled. Negative caching, a
-  refresh cooldown and a hard TTL ceiling are not implemented. They reduce the risk but
-  would not remove it.
+  Mitigations in the code today: SSRF-guarded fetch, a cache capped at one hour, a
+  per-fetch timeout, a per-issuer refresh cooldown, a negative cache (#433), and the
+  allowlist that bounds which hosts can ever be dialled. They reduce the risk but do not
+  remove it. During an outage, a request whose key is not cached still fails. Requests
+  that miss the cache at the same moment each still fetch, because the negative cache
+  only holds failures already recorded.
 - **Minting makes QAuth a credential source for third parties — a genuinely
   larger blast radius than issuing its own tokens.** Every other token QAuth
   signs is only meaningful to resource servers that validate `aud` against
@@ -511,11 +529,19 @@ through `fastify.repositories.auditLogs.create`.)
   `https`, a tenant-scoped issuer URL — all fail closed, which is correct but
   opaque, so rejection diagnostics must name the reason precisely enough to be
   actionable without leaking assertion contents.
-- **A `kid` miss costs the issuer two fetches, and nothing limits how often.** A miss
-  forces one cache refresh: discovery and JWKS. The bound is one refresh per request, not
-  per minute. A client that holds the grant can send assertions with a valid `iss` and
-  random `kid` values. Only the endpoint's rate limit slows it. A per-issuer refresh
-  cooldown would close this.
+- **A forged `kid` can hold back a key rotation for up to one cooldown.** A `kid` miss
+  forces a refresh of discovery and JWKS before any signature is checked. Since #433 an
+  issuer is refreshed at most once per `ID_JAG_JWKS_REFRESH_COOLDOWN`, so random `kid`
+  values cost it at most two fetches per cooldown, whatever the request rate. The price
+  is that a client holding the grant can keep the cooldown spent. An assertion signed
+  with a key the issuer has only just published is then refused until the cooldown
+  lapses. The next refresh picks the key up, so the delay is at most one cooldown, 30
+  seconds by default. An issuer that publishes a key in its JWKS at least one cooldown
+  before it signs with it never meets the delay: any refresh inside the cooldown before
+  the first such assertion already fetched the key. The negative cache has a matching
+  price: an issuer that comes
+  back inside the window stays refused until the window lapses, for every key not
+  already cached.
 - **An ID-JAG client has a second list to keep.** Mint targets and consume resources
   read `oauth_clients.id_jag_targets`, apart from the `audience` that bounds
   `client_credentials` (#434, amended into §3 on 2026-10-22). Until then all three read
@@ -614,8 +640,10 @@ Each new test was checked to fail when its fix is removed.
 
 ### Accepted for now, tracked as issues
 
-- #433: a refresh cooldown, a negative cache and a hard TTL ceiling for the issuer key
-  resolver.
+- #433, since fixed: the issuer key resolver refreshes an issuer at most once per
+  `ID_JAG_JWKS_REFRESH_COOLDOWN` and remembers a failed fetch for
+  `ID_JAG_JWKS_NEGATIVE_CACHE_TTL`, both 30 seconds by default. Config validation refuses
+  an `ID_JAG_JWKS_CACHE_TTL` above one hour. See §4 and the negative consequences.
 - #434, since fixed: the ID-JAG targets have their own column,
   `oauth_clients.id_jag_targets`, and `audience` no longer grants an ID-JAG target.
   See §3.
