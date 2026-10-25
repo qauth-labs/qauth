@@ -27,8 +27,10 @@ after it was taken.
 ### 2. Run the migration runner of the new version
 
 The runner is the `migration-runner` image built from
-`apps/migration-runner/Dockerfile`. It holds Node and one program, with the new
-version's migrations beside it, and needs only `DATABASE_URL`:
+`apps/migration-runner/Dockerfile`. Each release also publishes it, signed, as
+`ghcr.io/qauth-labs/qauth/migration-runner` (see
+[Published images](/operate/images/)). It holds Node and one program, with the
+new version's migrations beside it, and needs only `DATABASE_URL`:
 
 ```bash
 # Docker Compose: build the new version's image, then run it once.

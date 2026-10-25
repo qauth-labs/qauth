@@ -55,8 +55,11 @@ WORKDIR /app
 
 # tsx is a lightweight TypeScript runner (zero config) that we use as
 # the production entrypoint. Kept global so the deployed bundle's
-# node_modules stays tight to the app's own runtime deps.
-RUN npm install --global tsx@4
+# node_modules stays tight to the app's own runtime deps. Pinned to the
+# version pnpm-lock.yaml resolves, so a published image never picks up a
+# tsx release the workspace has not taken; bump it with the lockfile.
+ARG TSX_VERSION=4.23.15
+RUN npm install --global tsx@${TSX_VERSION}
 
 # Create the non-root user up-front so the subsequent COPY --chown can
 # reference it. Chowning at COPY time avoids a trailing `chown -R /app`
