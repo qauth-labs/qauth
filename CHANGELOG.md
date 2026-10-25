@@ -577,19 +577,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8). `deploy/reference/proxy/` holds an nginx configuration that sends every
   realm host to the auth server and `/ui/*` on the same host to the ceremony
   app. It routes on the normalised path and sends both upstreams that path. It
-  answers 404 for an encoded slash and for any `/ui` look-alike that is not
-  `/ui/` (`/UI/`, `/ui;x`, `/ui`), 421 for a host that is not a realm host
-  (only `/health` and `/ready` pass), and 404 for `/metrics` and `/internal/*`.
-  On `/ui/*` it strips the `Cookie` header and replaces the CSP,
+  answers 404 for an encoded slash or a backslash and for any `/ui` look-alike
+  that is not `/ui/` (`/UI/`, `/ui;x`, `/ui`), 421 for a host that is not a
+  realm host (only `/health` and `/ready` pass), and 404 for `/metrics` and
+  `/internal/*`. On `/ui/*` it strips the `Cookie` header and replaces the CSP,
   `Referrer-Policy` and `Cache-Control` the app sends; `Cache-Control` is
   `no-store` except on content-hashed assets. It overwrites `X-Forwarded-For`,
-  `X-Forwarded-Host` and `X-Forwarded-Proto` and removes `Forwarded`.
-  Certificates are mounted files. A container test runs the configuration,
-  unchanged, in front of stub upstreams and checks each rule
-  (`reference-proxy:test-integration`, in CI's `integration` job). The docs
-  site's new **Reverse Proxy** page (`operate/reverse-proxy`) lists the rules
-  proxy-neutrally, with the file layout. The ceremony app has not shipped yet,
-  so the configuration is not yet a working front for browser sign-in.
+  `X-Forwarded-Host` and `X-Forwarded-Proto`, removes `Forwarded` and the other
+  client-sent proxy headers, and ignores `X-Accel-*` answers, so no upstream can
+  make nginx fetch another location. Certificates are mounted files. A container
+  test runs the configuration, unchanged, in front of stub upstreams and checks
+  each rule (`reference-proxy:test-integration`, in CI's `integration` job). The
+  docs site's new **Reverse Proxy** page (`operate/reverse-proxy`) lists the
+  rules proxy-neutrally, with the file layout. The ceremony app has not shipped
+  yet, so the configuration is not yet a working front for browser sign-in.
 
 ### Changed
 

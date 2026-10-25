@@ -29,39 +29,54 @@ split.
 2. **Route on the normalised path.** Merge repeated slashes, decode the percent-escapes of
    unreserved characters, and resolve `.` and `..` segments. Then match case-sensitively. Send the
    upstream the normalised path, not the raw request target, so it cannot read the path
-   differently from the way it was routed.
+   differently from the way it was routed. A proxy may decode more than that: nginx decodes every
+   escape, so `%3B` reaches the upstream as `;`. Rules 3 and 9 then apply to the decoded path.
 3. **Refuse path variants with 404.** The proxy answers by itself and neither upstream sees the
    request:
-   - an encoded slash (`%2F`) anywhere in the path;
-   - a path that looks like `/ui` but is not `/ui/` after normalisation: `/ui` itself, a case
-     variant such as `/UI/login`, and a path parameter such as `/ui;x/login`.
+   - a disguised separator anywhere in the path, before the query: an encoded slash (`%2F`), or a
+     backslash (`\` or `%5C`), which a WHATWG URL parser reads as a slash;
+   - a path that looks like `/ui` but does not start with exactly `/ui/`. That is any path which,
+     with every percent-escape decoded and compared case-insensitively, matches
+     `^/ui(?:$|[^a-z0-9_-])`. Examples: `/ui` itself, a case variant such as `/UI/login`, a path
+     parameter such as `/ui;x/login` or `/ui%3Bx/login`.
 4. **Split by path.** `/ui/*` goes to the ceremony app. Every other path goes to the auth server.
-5. **Strip cookies from `/ui/*`.** Remove the `Cookie` header from every request to `/ui/*`. The
-   ceremony app never sees QAuth's cookies, so it can neither read nor mint a session-bound value.
+5. **Strip cookies from `/ui/*`.** Remove the `Cookie` header from every request to `/ui/*`,
+   including every separate `cookie` field of an HTTP/2 request. The ceremony app never sees
+   QAuth's cookies, so it can neither read nor mint a session-bound value.
 6. **Set the ceremony headers.** On every `/ui/*` answer, replace whatever the app sent. This
    includes error answers and answers the proxy makes itself, such as a `502`.
    - `Content-Security-Policy: default-src 'self'; base-uri 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'`
    - `Referrer-Policy: no-referrer`
    - `Cache-Control: no-store`, with one exception. A content-hashed asset gets
      `Cache-Control: public, max-age=31536000, immutable` when all of these hold: the answer is a
-     `200` or `304` to a `GET` or `HEAD`, it sets no cookie, and the path matches
-     `^/ui/assets/(?:[A-Za-z0-9._-]+-)?[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2|woff|svg|png|jpg|jpeg|gif|webp|avif|ico)$`.
-7. **Overwrite the forwarded headers.** Set `X-Forwarded-For` to the address the proxy accepted the
-   connection from, `X-Forwarded-Host` to the realm host and `X-Forwarded-Proto` to `https`.
-   Remove `Forwarded`. Never pass on, or append to, what the client sent. Then set the auth
-   server's `TRUST_PROXY` to the proxy's address, so the auth server believes these headers from
-   the proxy and from no one else.
-8. **Keep internal paths internal.** Answer `404` for `/metrics` and `/internal/*` on the public
-   side, with their case and path-parameter variants.
-9. **Mount certificates as files.** Automatic certificates (ACME) are not part of 1.0.
+     `200` or `304` to a `GET` or `HEAD`, it sets no cookie, and the whole normalised path matches
+     `^/ui/assets/(?:[A-Za-z0-9._-]+-)?[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2|woff|svg|png|jpg|jpeg|gif|webp|avif|ico)\z`.
+     The pattern ends in `\z`, not `$`, because in most regular-expression engines `$` also
+     matches before a final newline, which `%0A` decodes to.
+7. **Let no upstream steer the proxy.** Ignore every response header that asks the proxy to fetch
+   another location or file internally: nginx's `X-Accel-Redirect` and the other `X-Accel-*`
+   headers, or their equivalent in another proxy. Otherwise the ceremony app could have the proxy
+   fetch an auth server page, with the client's cookies, and serve it under `/ui/*` without the
+   ceremony headers.
+8. **Overwrite the forwarded headers.** Set `X-Forwarded-For` to the address the proxy accepted the
+   connection from, `X-Forwarded-Host` to the realm host and `X-Forwarded-Proto` to the scheme the
+   client used, which is `https` on the only listener. Never pass on, or append to, what the
+   client sent. Remove `Forwarded`, `X-Real-IP`, `X-Forwarded-Port`, `X-Forwarded-Prefix`,
+   `X-Original-URL` and `X-Rewrite-URL`: QAuth reads none of them, and a web framework behind the
+   proxy might. Then set the auth server's `TRUST_PROXY` to the proxy's address, so the auth server
+   believes these headers from the proxy and from no one else.
+9. **Keep internal paths internal.** Answer `404` on the public side for `/metrics`, `/internal/*`
+   and their variants: every path which, with every percent-escape decoded and compared
+   case-insensitively, matches `^/(?:metrics|internal)(?:$|[^a-z0-9_-])`.
+10. **Mount certificates as files.** Automatic certificates (ACME) are not part of 1.0.
 
 ## The reference configuration
 
 | File                       | Edit it? | What it holds                                                                                                              |
 | -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `nginx.conf`               | No       | The `http` block: path normalisation, the encoded-slash and `Cache-Control` maps, and the default server (421, health).    |
+| `nginx.conf`               | No       | The `http` block: path normalisation, the separator and `Cache-Control` maps, and the default server (421, health).        |
 | `qauth/realm.conf`         | No       | The rules of a realm host: path variants, internal paths, `/ui/*` and its headers, and everything else to the auth server. |
-| `qauth/proxy-headers.conf` | No       | `Host` and the forwarded headers, for every proxied location.                                                              |
+| `qauth/proxy-headers.conf` | No       | `Host`, the forwarded headers and the ignored `X-Accel-*` headers, for every proxied location.                             |
 | `site/upstreams.conf`      | Yes      | The addresses of the auth server and the ceremony app.                                                                     |
 | `site/realms.conf`         | Yes      | The realm hosts and their certificate paths. The hosts in it are examples.                                                 |
 | `test/`                    | No       | The CI test and its stub upstream.                                                                                         |
