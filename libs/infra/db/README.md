@@ -297,9 +297,9 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `deleteBatch({ realmId, category, before, through, limit, now })` deletes one batch of the realm's oldest rows of one category, older than `before` and at or before `through`, in a short transaction under the realm's retention lock (`busy` when another instance holds it). Admin rows go only from the start of the chain, never its head, and only while each verifies; the last one deleted becomes the realm's anchor in `event_chain_anchors`, in the same transaction, and a row that breaks the chain stays (`chainBreak`).
   - `oldestEventTimes()` returns the time of each category's oldest event, for the `qauth_events_oldest_age_seconds` gauge.
 - **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
-  - `create()`, `findByCode()`, `markUsed()`
+  - `create()`, `findByCode()`, `findByCodeIncludingUsed()` (spent and expired codes too, so a second redemption is recognised as a replay), `markUsed()`
 - **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
-  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`
+  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`, `revokeFamilyByAuthorizationCode(codeId, reason)` (the family whose first token carries `authorization_code_id`)
 - **`createEmailVerificationTokensRepository(db)`**: Verification tokens
   - `create()`, `findByTokenHash()`, `markUsed()`, `deleteExpired()`
 

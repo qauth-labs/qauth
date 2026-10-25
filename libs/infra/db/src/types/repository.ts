@@ -363,6 +363,21 @@ export interface RefreshTokensRepository {
    */
   revokeFamily(familyId: string, reason?: string, tx?: DbClient): Promise<number>;
   /**
+   * Revoke the family an authorization code's redemption started, found
+   * through the first token's `authorizationCodeId`.
+   *
+   * Triggered when a spent code is redeemed again (OAuth 2.1 §4.1.3).
+   * Already-revoked rows keep their original `revokedReason`.
+   *
+   * @returns Count of rows whose state was changed by this call; 0 when the
+   *   code started no family.
+   */
+  revokeFamilyByAuthorizationCode(
+    authorizationCodeId: string,
+    reason: string,
+    tx?: DbClient
+  ): Promise<number>;
+  /**
    * Revoke all active tokens for a user
    * Useful for "logout all sessions" functionality
    */
@@ -478,6 +493,15 @@ export interface AuthorizationCodesRepository {
    * Only returns codes that are not used and not expired
    */
   findByCode(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
+  /**
+   * Find an authorization code by its code value regardless of `used` and
+   * `expiresAt`.
+   *
+   * The token endpoint uses this to recognise a second redemption of a spent
+   * code (OAuth 2.1 §4.1.3). Callers MUST apply their own single-use and
+   * expiry checks.
+   */
+  findByCodeIncludingUsed(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
   /**
    * Mark a code as used
    * Sets used=true and usedAt=now

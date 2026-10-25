@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, gt, gte, lt, notExists, type SQL, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, lt, notExists, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import type { NewRefreshToken, RefreshToken, RefreshTokensRepository } from '../../types';
@@ -235,6 +235,65 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
             revokedReason: reason ?? null,
           })
           .where(and(eq(refreshTokens.familyId, familyId), eq(refreshTokens.revoked, false)))
+          .returning({ id: refreshTokens.id });
+
+        return updated.length;
+      };
+
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+    },
+
+    /**
+     * Revoke the family an authorization code's redemption started.
+     *
+     * A second redemption of a code (OAuth 2.1 §4.1.3, ADR-017 Decision 10)
+     * revokes every token the first one led to. The family is found through
+     * its first token, the one that carries `authorization_code_id`; every
+     * rotation shares its `family_id`. Takes the same revocation lock as
+     * `revokeFamily`, so a rotation in flight either commits first and its
+     * child is revoked here, or starts after and loses its compare-and-set.
+     * Already-revoked rows keep their original reason.
+     *
+     * @param authorizationCodeId - The code row's id
+     * @param reason - Recorded as `revokedReason`
+     * @param tx - Optional transaction client
+     * @returns Count of rows revoked by this call; 0 when the code started no
+     *   family (no stored consent, a previous release redeemed it) or the
+     *   family is already revoked.
+     */
+    async revokeFamilyByAuthorizationCode(
+      authorizationCodeId: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const now = Date.now();
+
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockUserTokens(
+          invoker,
+          'revoke',
+          sql`select ${refreshTokens.userId} from ${refreshTokens} where ${refreshTokens.authorizationCodeId} = ${authorizationCodeId}`
+        );
+
+        const updated = await invoker
+          .update(refreshTokens)
+          .set({
+            revoked: true,
+            revokedAt: now,
+            revokedReason: reason,
+          })
+          .where(
+            and(
+              inArray(
+                refreshTokens.familyId,
+                invoker
+                  .select({ familyId: refreshTokens.familyId })
+                  .from(refreshTokens)
+                  .where(eq(refreshTokens.authorizationCodeId, authorizationCodeId))
+              ),
+              eq(refreshTokens.revoked, false)
+            )
+          )
           .returning({ id: refreshTokens.id });
 
         return updated.length;

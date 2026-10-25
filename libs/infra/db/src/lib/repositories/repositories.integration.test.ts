@@ -737,6 +737,147 @@ describe('repository integration (real Postgres)', () => {
     }
   });
 
+  // --- code replay revokes the family the code started (#627) --------------
+
+  describe('authorization codes — the refresh family a code started (#627)', () => {
+    async function seedCode(clientId: string, userId: string, code: string, expiresAt: number) {
+      return createAuthorizationCodesRepository(db().database.db).create({
+        code,
+        oauthClientId: clientId,
+        userId,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'c'.repeat(43),
+        codeChallengeMethod: 'S256',
+        scopes: ['read:foo'],
+        expiresAt,
+      });
+    }
+
+    async function seedFamilyToken(
+      userId: string,
+      clientId: string,
+      tokenHash: string,
+      fields: { familyId?: string; authorizationCodeId?: string } = {}
+    ) {
+      return createRefreshTokensRepository(db().database.db).create({
+        tokenHash,
+        userId,
+        oauthClientId: clientId,
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 600_000,
+        ...fields,
+      });
+    }
+
+    async function tokenRow(id: string): Promise<RefreshToken> {
+      const [row] = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, id));
+      return row;
+    }
+
+    it('findByCodeIncludingUsed returns a spent or expired code that findByCode hides', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+      const spent = await seedCode(client.id, user.id, 'spent-code', Date.now() + 60_000);
+      await codes.markUsed(spent.id);
+      await seedCode(client.id, user.id, 'lapsed-code', Date.now() - 1_000);
+
+      expect(await codes.findByCode('spent-code')).toBeUndefined();
+      expect(await codes.findByCode('lapsed-code')).toBeUndefined();
+      expect(await codes.findByCodeIncludingUsed('spent-code')).toMatchObject({
+        id: spent.id,
+        used: true,
+      });
+      expect(await codes.findByCodeIncludingUsed('lapsed-code')).toMatchObject({ used: false });
+      expect(await codes.findByCodeIncludingUsed('no-such-code')).toBeUndefined();
+    });
+
+    it('revokeFamilyByAuthorizationCode revokes the whole family the code started, and only it', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const code = await seedCode(client.id, user.id, 'replayed-code', Date.now() + 60_000);
+      const otherCode = await seedCode(client.id, user.id, 'other-code', Date.now() + 60_000);
+
+      // The exchange's token carries the link; a rotation already happened
+      // (its parent is `rotated`) and its child does not carry the link.
+      const first = await seedFamilyToken(user.id, client.id, 'a'.repeat(64), {
+        authorizationCodeId: code.id,
+      });
+      await tokens.revoke(first.id, 'rotated');
+      const child = await seedFamilyToken(user.id, client.id, 'b'.repeat(64), {
+        familyId: first.familyId,
+      });
+      const otherFamily = await seedFamilyToken(user.id, client.id, 'c'.repeat(64), {
+        authorizationCodeId: otherCode.id,
+      });
+
+      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toBe(1);
+
+      expect(await tokenRow(child.id)).toMatchObject({
+        revoked: true,
+        revokedReason: 'code_replay',
+      });
+      // The rotated parent keeps the reason it was revoked for first.
+      expect((await tokenRow(first.id)).revokedReason).toBe('rotated');
+      expect((await tokenRow(otherFamily.id)).revoked).toBe(false);
+      // A second replay finds nothing left to revoke.
+      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toBe(0);
+    });
+
+    it('revokeFamilyByAuthorizationCode revokes nothing for a code that started no family', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const code = await seedCode(client.id, user.id, 'no-family-code', Date.now() + 60_000);
+      // An unlinked family of the same user stays live.
+      const unlinked = await seedFamilyToken(user.id, client.id, 'd'.repeat(64));
+
+      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toBe(0);
+      expect((await tokenRow(unlinked.id)).revoked).toBe(false);
+    });
+
+    it('refuses a second token linked to the same code: a code starts one family at most', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const code = await seedCode(client.id, user.id, 'one-family-code', Date.now() + 60_000);
+      await seedFamilyToken(user.id, client.id, 'e'.repeat(64), { authorizationCodeId: code.id });
+
+      await expect(
+        seedFamilyToken(user.id, client.id, 'f'.repeat(64), { authorizationCodeId: code.id })
+      ).rejects.toMatchObject({
+        cause: { code: '23505', constraint: 'idx_refresh_tokens_authorization_code_id' },
+      });
+    });
+
+    it('purging the code clears the link and keeps the family', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+      const code = await seedCode(client.id, user.id, 'purged-code', Date.now() - 1_000);
+      const token = await seedFamilyToken(user.id, client.id, 'g'.repeat(64), {
+        authorizationCodeId: code.id,
+      });
+
+      expect(await codes.deleteExpired()).toBe(1);
+
+      expect(await tokenRow(token.id)).toMatchObject({
+        authorizationCodeId: null,
+        revoked: false,
+      });
+    });
+  });
+
   // --- consent soft-delete + scope union ------------------------------------
 
   describe('oauth consents — soft-delete revoke + upsertGrant scope union', () => {
