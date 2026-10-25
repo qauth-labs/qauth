@@ -11,7 +11,8 @@ import type { OAuthClientLike } from './client-auth';
 import { resolveClientKeySet } from './client-jwks';
 import { resolveClient } from './client-resolution';
 import { isClientUsable } from './client-status';
-import { resolveIssuerIdentifier } from './discovery';
+import { realmIssuer } from './realm-url';
+import type { RealmRow } from './request-realm';
 
 /**
  * `private_key_jwt` client authentication — RFC 7523 §2.2 + RFC 7521 §6.
@@ -87,8 +88,14 @@ const CLIENT_ASSERTION_MAX_ISSUER_LENGTH = 2048;
 /* -------------------------------------------------------------------------- */
 
 /**
- * The `aud` a client assertion may name: this server's issuer identifier, and
- * nothing else.
+ * The realm a client assertion is presented in: its id, where the client is
+ * looked up, and its issuer, the only audience.
+ */
+export type ClientAssertionRealm = Pick<RealmRow, 'id' | 'issuer'>;
+
+/**
+ * The `aud` a client assertion may name: the issuer identifier of the realm the
+ * request was sent to (ADR-019 Decision 1, #490), and nothing else.
  *
  * RFC 7523 §3 and OIDC Core errata set 2 also allow the concrete token endpoint
  * URL, and this function used to accept it. The maintainer decided on
@@ -100,8 +107,8 @@ const CLIENT_ASSERTION_MAX_ISSUER_LENGTH = 2048;
  * The caller must also check that the issuer is the SOLE value of `aud`: `jose`
  * accepts an `aud` array that merely contains it.
  */
-export function acceptedClientAssertionAudiences(fastify: FastifyInstance): string[] {
-  return [resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())];
+export function acceptedClientAssertionAudiences(realm: Pick<RealmRow, 'issuer'>): string[] {
+  return [realmIssuer(realm)];
 }
 
 function isPermittedAlg(alg: string | undefined): boolean {
@@ -231,7 +238,7 @@ export interface ClientAssertionCredentials {
  */
 export async function authenticateClientAssertion(
   fastify: FastifyInstance,
-  realmId: string,
+  realm: ClientAssertionRealm,
   creds: ClientAssertionCredentials
 ): Promise<OAuthClientLike> {
   // 1. The assertion type URN. Exact match only — `...:grant-type:jwt-bearer`
@@ -271,7 +278,7 @@ export async function authenticateClientAssertion(
   // 4. Resolve the registered client and confirm it is provisioned for this
   //    authentication method. A `client_secret_*` client MUST NOT be
   //    authenticable by assertion.
-  const client = await findAssertionClient(fastify, realmId, claimedClientId);
+  const client = await findAssertionClient(fastify, realm.id, claimedClientId);
   if (!client) {
     throw new InvalidClientError();
   }
@@ -289,7 +296,7 @@ export async function authenticateClientAssertion(
       algorithms: [...ASSERTION_SIGNING_ALG_VALUES_SUPPORTED],
       issuer: claimedClientId,
       subject: claimedClientId,
-      audience: acceptedClientAssertionAudiences(fastify),
+      audience: acceptedClientAssertionAudiences(realm),
       clockTolerance: CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS,
       requiredClaims: ['iss', 'sub', 'aud', 'exp', 'jti'],
     });

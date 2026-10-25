@@ -7,7 +7,11 @@ import {
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { authenticateClientAssertion, type ClientAssertionCredentials } from './client-assertion';
+import {
+  authenticateClientAssertion,
+  type ClientAssertionCredentials,
+  type ClientAssertionRealm,
+} from './client-assertion';
 import { isAgentClient, resolveClient } from './client-resolution';
 import { isClientUsable } from './client-status';
 import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
@@ -414,7 +418,7 @@ export interface ClientAuthenticationOptions {
  */
 export async function authenticateClientRequest(
   fastify: FastifyInstance,
-  realmId: string,
+  realm: ClientAssertionRealm,
   request: FastifyRequest,
   params: ClientAuthenticationParams,
   options: ClientAuthenticationOptions
@@ -429,12 +433,12 @@ export async function authenticateClientRequest(
       assertion: params.client_assertion as string,
       method: 'private_key_jwt',
     };
-    return authenticateClientAssertion(fastify, realmId, creds);
+    return authenticateClientAssertion(fastify, realm, creds);
   }
 
   if (method === 'secret') {
     const creds = extractClientCredentials(request, params.client_id, params.client_secret);
-    return authenticateClient(fastify, realmId, creds);
+    return authenticateClient(fastify, realm.id, creds);
   }
 
   // No credential presented.
@@ -443,7 +447,7 @@ export async function authenticateClientRequest(
   }
   return authenticateClientPublicOrConfidential(
     fastify,
-    realmId,
+    realm.id,
     request,
     params.client_id,
     params.client_secret

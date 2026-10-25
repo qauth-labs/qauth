@@ -261,8 +261,8 @@ export type AuthorizationResponseParams = (
   /**
    * The AS issuer identifier, VERBATIM as advertised in the `issuer` member of
    * the discovery metadata. Callers MUST source it from
-   * `resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())` so the two can
-   * never drift.
+   * `realmIssuer(requestRealm(request))` (`helpers/realm-url.ts`), the value
+   * the realm's discovery documents publish, so the two can never drift.
    */
   iss: string;
 };

@@ -16,6 +16,7 @@ vi.mock('../../config/env', () => ({
 
 import { EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
 
+import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
 import { ID_JAG_GRANT_PROFILE, JWT_BEARER_GRANT_TYPE } from '../schemas/oauth';
 import wellKnownRoutes from './well-known';
 
@@ -26,13 +27,17 @@ afterEach(() => {
 const ISSUER = 'https://auth.example.com';
 
 /**
- * Build a Fastify app with only the discovery routes registered and a
- * stub `jwtUtils` exposing the two methods these routes rely on. This
- * keeps the test hermetic — no DB, no Redis, no key import.
+ * Build a Fastify app with only the discovery routes registered, every request
+ * resolved to a realm whose issuer is `realmIssuer`, and a stub `jwtUtils`
+ * exposing the methods these routes rely on. This keeps the test hermetic — no
+ * DB, no Redis, no key import.
  */
 async function buildApp(overrides?: {
   jwks?: { keys: Array<Record<string, unknown>> };
+  /** The JWT plugin's issuer, `JWT_ISSUER`. */
   issuer?: string;
+  /** The issuer of the request's realm. */
+  realmIssuer?: string;
   idTokenSigningAlgValuesSupported?: string[];
 }) {
   const app = Fastify({ logger: false });
@@ -56,6 +61,7 @@ async function buildApp(overrides?: {
     getIdTokenSigningAlgValuesSupported: () =>
       overrides?.idTokenSigningAlgValuesSupported ?? ['EdDSA'],
   } as unknown as never);
+  supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: overrides?.realmIssuer ?? ISSUER }));
 
   await app.register(wellKnownRoutes);
   await app.ready();
@@ -166,6 +172,26 @@ describe('GET /.well-known/oauth-authorization-server', () => {
       const body = res.json() as Record<string, unknown>;
       expect(body['issuer']).toBe(ISSUER);
       expect(body['token_endpoint']).toBe(`${ISSUER}/oauth/token`);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("builds every URL on the request realm's issuer, not on JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const app = await buildApp({ issuer: ISSUER, realmIssuer: 'https://b.example.com' });
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/.well-known/oauth-authorization-server',
+        headers: { host: 'spoofed.example.net', 'x-forwarded-host': 'spoofed.example.net' },
+      });
+      const body = res.json() as Record<string, unknown>;
+      expect(body['issuer']).toBe('https://b.example.com');
+      expect(body['authorization_endpoint']).toBe('https://b.example.com/oauth/authorize');
+      expect(body['token_endpoint']).toBe('https://b.example.com/oauth/token');
+      expect(body['jwks_uri']).toBe('https://b.example.com/.well-known/jwks.json');
+      expect(res.body).not.toContain(ISSUER);
+      expect(res.body).not.toContain('spoofed');
     } finally {
       await app.close();
     }

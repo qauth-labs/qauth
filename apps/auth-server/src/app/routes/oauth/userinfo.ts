@@ -8,6 +8,8 @@ import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmIssuer } from '../../helpers/realm-url';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { userinfoResponseSchema } from '../../schemas/oauth';
@@ -92,7 +94,10 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // Audience before anything else: a token for another resource server is
     // refused (401, RFC 6750 §3.1 `invalid_token`) without a user lookup, so
     // its holder learns nothing about the subject.
-    if (!isAddressedToUserinfo(payload, resolveUserinfoEndpoint(fastify.jwtUtils.getIssuer()))) {
+    // The endpoint URL is the request realm's, as its discovery publishes it
+    // (ADR-019 Decision 1, #490).
+    const userinfoEndpoint = resolveUserinfoEndpoint(realmIssuer(requestRealm(request)));
+    if (!isAddressedToUserinfo(payload, userinfoEndpoint)) {
       throw withEventReason(
         new JWTInvalidError('Access token audience does not include the userinfo endpoint'),
         'audience_mismatch'

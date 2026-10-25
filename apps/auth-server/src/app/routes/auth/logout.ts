@@ -8,6 +8,7 @@ import { logAuthEvent } from '../../helpers/auth-events';
 import { endBrowserSessions } from '../../helpers/browser-session';
 import { assertManagementToken } from '../../helpers/management-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmTokenIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   clearSessionCookie,
@@ -83,8 +84,8 @@ export default async function (fastify: FastifyInstance) {
         let claims: JWTPayload;
         try {
           claims = await fastify.jwtUtils.verifyAccessToken(token, {
-            // RFC 9700 mix-up defence: only accept a token this AS issued.
-            issuer: fastify.jwtUtils.getIssuer(),
+            // RFC 9700 mix-up defence: only accept a token this realm issued.
+            issuer: realmTokenIssuer(fastify, requestRealm(request)),
           });
         } catch (error) {
           if (error instanceof JWTExpiredError) {

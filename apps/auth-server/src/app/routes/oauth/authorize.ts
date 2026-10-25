@@ -23,7 +23,6 @@ import { findExceedingAgentScopesForClient, resolveAudience } from '../../helper
 import { resolveClient } from '../../helpers/client-resolution';
 import { isClientUsable } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
-import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { assertManagementToken } from '../../helpers/management-token';
@@ -37,6 +36,7 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   evaluateStepUp,
@@ -150,15 +150,15 @@ export default async function (fastify: FastifyInstance) {
     const redirectUri = query.redirect_uri;
     const state = query.state;
 
-    // RFC 9207 §2 (#282): the issuer identifier echoed as `iss` in EVERY
-    // authorization response below. Derived from the same `getIssuer()` +
-    // `resolveIssuerIdentifier()` pair that builds the `issuer` member of the
-    // discovery documents, so the value a client compares against its cached
-    // metadata is byte-identical. Resolved once, up front, so no branch can
-    // reach a redirect with a differently-shaped issuer.
-    const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
-
     const realm = requestRealm(request);
+
+    // RFC 9207 §2 (#282): the issuer identifier echoed as `iss` in EVERY
+    // authorization response below. The request realm's issuer from its row
+    // (ADR-019 Decision 1, #490), the same value the realm's discovery
+    // documents publish as `issuer`, so the value a client compares against
+    // its cached metadata is byte-identical. Resolved once, up front, so no
+    // branch can reach a redirect with a differently-shaped issuer.
+    const iss = realmIssuer(realm);
 
     // Client resolution priority (MCP 2025-11-25): pre-registered (DB) →
     // CIMD (https-URL client_id, fetched + SSRF-guarded + validated, then
@@ -342,8 +342,8 @@ export default async function (fastify: FastifyInstance) {
         const systemClient = await getOrCreateSystemClient(realm.id, fastify);
         const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
           audience: resolveAudience(systemClient),
-          // RFC 9700 mix-up defence: only accept a token this AS issued.
-          issuer: fastify.jwtUtils.getIssuer(),
+          // RFC 9700 mix-up defence: only accept a token this realm issued.
+          issuer: realmTokenIssuer(fastify, realm),
         });
         // Audience alone does not prove this is the first-party login token:
         // any code whose bound `resource` resolves to the system audience

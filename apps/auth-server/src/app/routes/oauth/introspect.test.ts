@@ -223,6 +223,43 @@ describe('POST /oauth/introspect route', () => {
     );
   });
 
+  it("pins the token issuer to the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: client.clientId,
+      clientId: client.clientId,
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://b.example.com',
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Introspect handler was not registered');
+    await handler(
+      {
+        body: { token: 'valid-token', client_id: client.clientId, client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        realm: testRealm({ id: 'realm-b', issuer: 'https://b.example.com' }),
+      },
+      { send: (body: unknown) => body }
+    );
+
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('valid-token', {
+      issuer: 'https://b.example.com',
+    });
+  });
+
   it('reports a DPoP-bound token as DPoP with its cnf.jkt (RFC 9449 §6.2, #480)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);

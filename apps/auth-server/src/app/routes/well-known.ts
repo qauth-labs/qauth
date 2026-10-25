@@ -1,8 +1,10 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
+import { realmIssuer } from '../helpers/realm-url';
+import { requestRealm } from '../helpers/request-realm';
 
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
@@ -34,8 +36,10 @@ export default async function (fastify: FastifyInstance) {
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
 
-  const buildInput = () => ({
-    issuer: fastify.jwtUtils.getIssuer(),
+  const buildInput = (request: FastifyRequest) => ({
+    // ADR-019 Decision 1 (#490): the issuer of the realm the request's host
+    // names, from its row. Every endpoint URL below is built on it.
+    issuer: realmIssuer(requestRealm(request)),
     // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
     clientIdMetadataDocumentSupported: env.CIMD_ENABLED,
     // ADR-011 §4: gates the jwt-bearer grant type and the ID-JAG grant profile.
@@ -65,11 +69,11 @@ export default async function (fastify: FastifyInstance) {
       },
       config: { surface: 'meta' },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildAuthorizationServerMetadata(buildInput()));
+      return reply.send(buildAuthorizationServerMetadata(buildInput(request)));
     }
   );
 
@@ -84,11 +88,11 @@ export default async function (fastify: FastifyInstance) {
       },
       config: { surface: 'meta' },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildOpenIdConfiguration(buildInput()));
+      return reply.send(buildOpenIdConfiguration(buildInput(request)));
     }
   );
 
