@@ -35,7 +35,8 @@ function hasSystemClientAudience(audience: readonly string[] | null): boolean {
  * A system client created before #509 has no `audience`, so its tokens carried
  * its `client_id`. It is given {@link SYSTEM_CLIENT_AUDIENCE} the first time
  * it is read, once per realm; a token minted before that keeps working at the
- * legacy `/api/*` routes for its short life.
+ * legacy `/api/*` routes for its short life. An audience set on the row by
+ * hand is replaced as well, with a warning.
  */
 export async function getOrCreateSystemClient(realmId: string, fastify: FastifyInstance) {
   const clientId = systemClientId();
@@ -67,6 +68,15 @@ export async function getOrCreateSystemClient(realmId: string, fastify: FastifyI
       provisionedByOperator: true,
     });
   } else if (!hasSystemClientAudience(client.audience)) {
+    // An audience someone set on the row by hand is replaced too: the portal
+    // token must carry the developer audience alone. A token minted with the
+    // old value is refused from now on, so the operator is told.
+    if (client.audience !== null && client.audience.length > 0) {
+      fastify.log.warn(
+        { realmId, clientId, previousAudience: client.audience },
+        'Replaced the audience of the system client with the developer API audience'
+      );
+    }
     client = await fastify.repositories.oauthClients.update(client.id, {
       audience: [...SYSTEM_CLIENT_AUDIENCE],
     });

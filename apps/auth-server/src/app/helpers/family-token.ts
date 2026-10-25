@@ -94,9 +94,13 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  * error="invalid_token"`; a missing scope 403 with `error="insufficient_scope"`
  * (RFC 6750 §3.1).
  *
- * The guard does not tie the token to the request's realm. Every realm's
- * tokens carry the deployment's issuer until per-realm issuers ship, so a
- * route reads its realm from the subject, as `assertManagementToken` does.
+ * The guard proves the token is one for the family, not who its subject is. It
+ * does not check that `sub` names a user, that the user is enabled, or that
+ * the token belongs to the request's realm: every realm's tokens carry the
+ * deployment's issuer until per-realm issuers ship, and a client an operator
+ * gave a family audience may hold a `client_credentials` token whose `sub` is
+ * its own id. A route resolves its subject and realm itself, as
+ * `assertManagementToken` does for the routes that still use it.
  */
 export function requireFamilyToken(
   family: ApiFamily,

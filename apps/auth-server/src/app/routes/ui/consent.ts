@@ -15,7 +15,10 @@ import {
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
-import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
+import {
+  findExceedingAgentScopesForClient,
+  unlistedReservedAudiences,
+} from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
 import { isClientUsable } from '../../helpers/client-status';
 import {
@@ -460,6 +463,20 @@ export default async function (fastify: FastifyInstance) {
       // as the audience, bound to the session below and recorded on the
       // grant, so what the user approves is what the token is issued for.
       const resources = query.resource ?? [];
+
+      // #509: a QAuth API audience (`urn:qauth:aud:`) is issued only to a
+      // client that lists it. /oauth/authorize refuses such a request before
+      // it redirects here; a request that comes straight to this screen is
+      // refused the same way, so no consent is shown, bound or stored for an
+      // audience the token endpoint would refuse.
+      if (unlistedReservedAudiences(client, resources).length > 0) {
+        return sendAuthorizationError(reply, client, query.redirect_uri, {
+          error: 'invalid_target',
+          error_description: 'a QAuth API audience is issued only to a client that lists it',
+          state: query.state ?? undefined,
+          iss,
+        });
+      }
 
       // The CSRF token, the bound scopes and resources, and the identifier
       // shown below live in the session's side record (#488), not in the

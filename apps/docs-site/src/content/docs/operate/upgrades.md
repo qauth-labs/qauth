@@ -127,6 +127,26 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
+### The developer portal's token changes audience in v0.2
+
+From v0.2 the token `POST /auth/login` mints for the developer portal carries
+the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, instead of the
+system client's id ([#509](https://github.com/qauth-labs/qauth/issues/509),
+[API conventions](/reference/api-conventions/#family-tokens)). The new version
+gives each realm's system client that audience the first time it reads the
+client; there is no migration and nothing to run.
+
+- A portal token minted before the upgrade keeps working at `/api/clients`,
+  `/api/consents` and userinfo until it expires.
+- During a rolling upgrade, a node of the old version reads the changed client
+  too, and mints the new token, but its userinfo refuses that token. The portal
+  then shows its sign-in page for every page a node of the old version serves,
+  until the last old node is gone. Applications that hold their own tokens are
+  not affected.
+- An audience set on the system client by hand is replaced, and the server logs
+  a warning that names the old value. A portal token minted with that value is
+  refused after the upgrade, so its user signs in again.
+
 ### Refresh tokens pause while migration 0038 runs
 
 Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records

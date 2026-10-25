@@ -19,6 +19,7 @@ function makeFastify(existing: unknown) {
       },
     },
     passwordHasher: { hashPassword: vi.fn(async () => 'argon2id$hash') },
+    log: { warn: vi.fn() },
   } as unknown as FastifyInstance;
 }
 
@@ -72,5 +73,7 @@ describe('getOrCreateSystemClient', () => {
       audience: ['urn:qauth:aud:developer:v1-rc.0'],
     });
     expect(client).toMatchObject({ id: 'row-0', audience: ['urn:qauth:aud:developer:v1-rc.0'] });
+    // Only an audience someone set by hand is worth a warning.
+    expect(fastify.log.warn).toHaveBeenCalledTimes(audience === null ? 0 : 1);
   });
 });

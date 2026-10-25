@@ -746,6 +746,8 @@ async function handleAuthorizationCode(
   // override and the response `expires_in` so they always agree.
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   const aud = resolveAudience(client, effectiveResource);
+  // Not burned on a refusal, like a `resource` outside the binding: the client
+  // may redeem the code again with a `resource` that names no such audience.
   await assertReservedAudiencesListed(ctx, aud, user.id);
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;

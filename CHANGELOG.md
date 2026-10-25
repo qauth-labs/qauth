@@ -618,7 +618,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   account routes move under their prefixes in [#524]. The token endpoint issues
   an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
   `audience` lists it, on every grant (`invalid_target` otherwise, at
-  `/oauth/authorize` too). Dynamic registration and Client ID Metadata Documents
+  `/oauth/authorize` and `/ui/consent` too). Dynamic registration and Client ID Metadata Documents
   refuse the namespace in `audience` or `resource` metadata, and the seed
   manifest refuses it in a `cimd_clients` entry's `audience`. The JWT
   plugin's new `verifyRequestAccessToken(request, policy)` runs `requireJwt`'s
@@ -635,6 +635,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths accept both, so a portal token minted before the upgrade works until it
   expires, and userinfo accepts the portal's token with the new audience. An
   integration that read the portal token's `aud` must expect the new value.
+  During a rolling upgrade an old node's userinfo refuses the new token, so the
+  portal asks its users to sign in on pages an old node serves until the
+  rollout ends. An audience set on the system client by hand is replaced, with
+  a warning in the log, and a portal token minted with it is refused. See
+  **Upgrades** (`operate/upgrades`).
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to

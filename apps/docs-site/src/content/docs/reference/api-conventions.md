@@ -58,15 +58,18 @@ A token that fails is refused with 401 and `WWW-Authenticate: Bearer error="inva
 needs (`insufficient_scope`). Both follow RFC 6750 §3.1. A request under the `DPoP` scheme gets a
 `DPoP` challenge instead (RFC 9449 §7.1).
 
-The guard does not tie a token to the realm of the request: until each realm has its own issuer,
-every realm's tokens carry the deployment's. A route reads the realm from the token's subject.
+The guard proves a token is one for the family, not who its subject is. It does not check that
+`sub` names an enabled user of the request's realm: until each realm has its own issuer, every
+realm's tokens carry the deployment's, and a client given a family audience may hold a
+`client_credentials` token whose `sub` is its own id. A route resolves its subject and realm
+itself.
 
 ### Issuing a family audience
 
 - A client gets a family audience only when an operator lists it in the client's `audience`. The
   client names it with the RFC 8707 `resource` parameter, at `/oauth/authorize` and at
   `/oauth/token`, and the token's `aud` is that value. A client that does not list it is refused
-  with `invalid_target`, on every grant.
+  with `invalid_target`, on every grant and before any consent screen.
 - `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case. Dynamic
   registration refuses it in an `audience` or `resource` member with `invalid_client_metadata`, a
   Client ID Metadata Document that names it there does not resolve (`invalid_client`), and the
