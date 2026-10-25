@@ -1,0 +1,318 @@
+# core.logout bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
+# delurio's replay drives a browser today, and `request` below is the request template QAuth asks of its replay over
+# HTTP (method, path, headers, and values saved from earlier responses). The shared server binding (#565) gives the
+# server's address, the realms' hosts, the accounts, the seed and how a replay signs in; this file adds the request,
+# the scenarios and what each one needs. What each state answers is its `response` in flow.yaml.
+#
+# A scenario's `request` is merged over the event's template; a header set to null is left out.
+schema: delurio-graph/0
+kind: binding
+flow: core.logout
+extends: ../../../bindings/server.binding.yaml # written by #565
+
+events:
+  LOGOUT:
+    # the flow's one request
+    - request:
+        method: POST
+        path: /auth/logout
+        headers: { Authorization: 'Bearer {token}' }
+        follow: false
+
+scenarios:
+  # The four the issue names first, then one for each other exit.
+  validToken:
+    # a user with a valid access token: the main story
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    as: developer
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+
+  expiredToken:
+    # an expired token with a valid signature: accepted, and not denylisted
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: true
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    as: developer
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+      - run: [sleep, '{accessTokenLifespan}'] # the shared binding: the server's ACCESS_TOKEN_LIFESPAN plus one second
+
+  badSignature:
+    # a token with a bad signature: the signed-in token with one character of its signature changed
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: invalid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    as: developer
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+      - run:
+          - node
+          - --eval
+          - "const p = process.argv[1].split('.'); p[2] = (p[2][0] === 'A' ? 'B' : 'A') + p[2].slice(1); process.stdout.write(p.join('.'))"
+          - '{token}'
+        save: { token: stdout }
+
+  deletedUser:
+    # a token for a user that no longer exists: the account is deleted after it signs in
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: deleted
+      dpopBound: false
+      ownSession: false
+    as: throwaway # an account the shared binding creates for this walk alone
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+      - run:
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - "DELETE FROM users WHERE id = '{account.sub}'"
+          # no API deletes a user
+
+  missingHeader:
+    given:
+      host: realm
+      overLimit: false
+      header: invalid
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    request: { headers: { Authorization: null } }
+
+  otherScheme:
+    given:
+      host: realm
+      overLimit: false
+      header: invalid
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    request: { headers: { Authorization: 'Basic ZGV2ZWxvcGVyOnNlY3JldA==' } }
+
+  notOneToken:
+    # passes the schema's ^Bearer .+$ but holds two parts after Bearer
+    given:
+      host: realm
+      overLimit: false
+      header: notOneToken
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    request: { headers: { Authorization: 'Bearer a b' } }
+
+  otherClientToken:
+    # a client_credentials token of a seeded confidential client
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: otherClient
+      subject: user
+      dpopBound: false
+      ownSession: false
+    setup:
+      - request:
+          method: POST
+          path: /oauth/token
+          form:
+            grant_type: client_credentials
+            client_id: '{seed.clients.confidential.clientId}'
+            client_secret: '{seed.clients.confidential.clientSecret}'
+        save: { token: body.access_token }
+
+  otherRealmToken:
+    # the portal's token of a user of another realm, sent to this realm's host
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: otherRealm
+      dpopBound: false
+      ownSession: false
+    as: otherRealmDeveloper
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          headers: { Host: '{otherRealm.host}' }
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+
+  unknownHost:
+    given:
+      host: unknown
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    as: developer
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+    request: { headers: { Host: logout.unknown-host.invalid } }
+
+  overLimit:
+    # the address has sent LOGOUT_RATE_LIMIT logout requests in this window already; the last one has a good token
+    given:
+      host: realm
+      overLimit: true
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    as: developer
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+      - request:
+          method: POST
+          path: /auth/logout
+          headers: { Authorization: null }
+          # counted, then refused with 400
+        repeat: '{logoutRateLimit}' # the shared binding: the server's LOGOUT_RATE_LIMIT
+
+  ownSessionCookie:
+    # the request carries the session cookie of the user's own browser session
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: true
+    as: developer
+    setup:
+      - signIn: browser # the shared binding's sign-in through /ui/login
+        save: { sessionCookie: 'cookie.__Host-qauth_session' }
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+    request: { headers: { Cookie: '__Host-qauth_session={sessionCookie}' } }
+
+  # A replay over HTTP cannot reach these: QAuth mints no such token for the system client, and the replay cannot make
+  # a store fail. apps/auth-server/src/app/routes/auth/logout.test.ts reaches each.
+  delegatedToken:
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: delegated
+      subject: user
+      dpopBound: false
+      ownSession: false
+    skip: the system client cannot use token exchange, so no portal token carries act
+  otherAudienceToken:
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: otherAudience
+      subject: user
+      dpopBound: false
+      ownSession: false
+    skip: the system client gets tokens only from /auth/login, whose audience is the management API's
+  dpopBoundToken:
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: true
+      ownSession: false
+    skip: /auth/login binds no token to a DPoP key
+  storeFailure:
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: user
+      dpopBound: false
+      ownSession: false
+    skip: the replay cannot make the session store, the database or the event store fail

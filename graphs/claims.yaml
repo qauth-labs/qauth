@@ -1,0 +1,11 @@
+# Which API operations and UI routes each graph covers, or why one is exempt (ADR-021 §4). An operation is written
+# METHOD /path, and a flow is named by its directory under flows/.
+#
+# Only the operations a graph claims so far are listed. #569 seeds every other operation and route with its class,
+# names the sources the check scans, and adds the check, once delurio defines the claims form
+# (delurio-labs/delurio#7). Until then nothing reads this file.
+schema: delurio-graph/0
+kind: claims
+
+operations:
+  POST /auth/logout: { flow: [logout] }

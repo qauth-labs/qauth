@@ -1,0 +1,57 @@
+# The hand-written overlay of RefreshToken, the refresh_tokens table. The entity and its fields are generated from
+# the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the examples and the internal actions
+# the flows invoke. The token flow (#609) adds rotate and revokeFamily.
+schema: delurio-graph/0
+kind: domain
+id: qauth
+
+entities:
+  RefreshToken:
+    # tokenHash and previousTokenHash hold secrets, and no example carries them.
+    examples:
+      # an active token, as /auth/login issues it to the system client
+      - id: 0199f9a1-2b3c-7d4e-8f50-6a7b8c9d0e1f
+        userId: 0199f9a0-11aa-7b22-8c33-4d44e55f6601
+        oauthClientId: 0199f99f-0a0b-7c0d-8e0f-101112131415
+        familyId: 6f1c2a7e-3b4d-4e5f-9a6b-7c8d9e0f1a2b # /auth/login starts a new family with a random (v4) UUID
+        scopes: []
+        resource: []
+        expiresAt: 1793523600000
+        revoked: false
+        revokedAt: null
+        revokedReason: null
+        cnfJkt: null
+        createdAt: 1792918800000
+        lastUsedAt: null
+      # the same token after POST /auth/logout (revokeAllForUser with the reason logout)
+      - id: 0199f9a1-2b3c-7d4e-8f50-6a7b8c9d0e1f
+        userId: 0199f9a0-11aa-7b22-8c33-4d44e55f6601
+        oauthClientId: 0199f99f-0a0b-7c0d-8e0f-101112131415
+        familyId: 6f1c2a7e-3b4d-4e5f-9a6b-7c8d9e0f1a2b
+        scopes: []
+        resource: []
+        expiresAt: 1793523600000
+        revoked: true
+        revokedAt: 1792920600000
+        revokedReason: logout
+        cnfJkt: null
+        createdAt: 1792918800000
+        lastUsedAt: null
+
+actions:
+  RefreshToken.revokeAllForUser:
+    # internal: invoked by core.logout, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:254
+    body:
+      type: object
+      required: [userId]
+      properties:
+        userId: { type: string, format: uuid }
+        reason: { type: [string, 'null'], maxLength: 255 } # core.logout passes logout
+    sideEffects:
+      - >-
+        every RefreshToken of the user that is not revoked and has not expired, at every client, gets revoked = true,
+        revokedAt = now and revokedReason = the reason; one that has expired is left as it is
+      - >-
+        it holds the user's token lock exclusive in its transaction, so a rotation in flight commits first and is
+        swept, and one that starts after it fails
