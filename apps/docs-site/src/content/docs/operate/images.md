@@ -50,7 +50,9 @@ Every image digest is signed with cosign, keyless, by the release workflow's
 own identity. Two attestations are attached to the same digest: build
 provenance (SLSA) and an SPDX SBOM. Check all three before you deploy a digest.
 
-The signature, with [cosign](https://docs.sigstore.dev/cosign/) 2.0 or later:
+The signature, with [cosign](https://docs.sigstore.dev/cosign/) 3.0 or later. The release
+workflow signs with cosign 3, which stores the signature in the newer Sigstore bundle format;
+cosign 2.x does not look there and reports `no signatures found` for a signed image:
 
 ```bash
 cosign verify ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest> \
@@ -58,7 +60,9 @@ cosign verify ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-The provenance and the SBOM, with the `gh` command-line tool:
+The provenance and the SBOM, with the `gh` command-line tool. These need no cosign, and they
+check the same signing identity (the release workflow at a tag), so they also serve as the
+alternative when cosign 3 is not at hand:
 
 ```bash
 gh attestation verify oci://ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest> \

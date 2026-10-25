@@ -374,9 +374,16 @@ describe('release tags and the baseline', () => {
     expect(compareReleases(parseReleaseTag(a), parseReleaseTag(b))).toBe(expected);
   });
 
-  it('uses the latest tag of any kind until a 1.0 release exists', () => {
+  it('uses the latest release, never a release candidate, before 1.0', () => {
     expect(selectBaselineTag(['v0.1.0-rc.0', 'v0.1.0', 'v0.1.0-rc.3', 'nightly'])).toBe('v0.1.0');
-    expect(selectBaselineTag(['v0.1.0', 'v1.0.0-rc.1'])).toBe('v1.0.0-rc.1');
+    // A release candidate newer than the latest release is skipped: a break it
+    // shipped stays measured against the release until its own release is tagged.
+    expect(selectBaselineTag(['v0.1.2', 'v0.1.3', 'v0.1.4-rc.0'])).toBe('v0.1.3');
+    expect(selectBaselineTag(['v0.1.0', 'v1.0.0-rc.1'])).toBe('v0.1.0');
+  });
+
+  it('falls back to the latest release candidate only when no release exists', () => {
+    expect(selectBaselineTag(['v0.1.0-rc.0', 'v0.1.0-rc.2', 'v0.1.0-rc.1'])).toBe('v0.1.0-rc.2');
   });
 
   it('uses the latest 1.0-or-later release once one exists, ignoring later pre-releases', () => {

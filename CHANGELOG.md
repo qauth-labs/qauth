@@ -541,8 +541,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `openapi.json`. A new CI job regenerates every surface registered in
   `stable-surface/surfaces.json` and fails on drift from the committed file, on
   a missing stability tag, and on a break since the latest release tag that
-  `stable-surface/approved-breaks.json` does not approve. See
-  `stable-surface/README.md`.
+  `stable-surface/approved-breaks.json` does not approve. Release candidates
+  are skipped: a break an rc shipped is measured against the last release until
+  its own release is tagged. See `stable-surface/README.md`.
 
 - **Shared test vectors** ([#478], ADR-018 §6 and §7). The new top-level
   `test-vectors/` directory holds language-neutral vector files that every SDK

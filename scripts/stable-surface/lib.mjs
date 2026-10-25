@@ -299,17 +299,20 @@ export function compareReleases(a, b) {
 }
 
 /**
- * The release the break check compares with. Until a 1.0 release exists it is
- * the latest release tag of any kind; from then on it is the latest release
- * of 1.0 or later that is not a pre-release, so a 2.0 release candidate is
- * held to the promise of the 1.x line until 2.0 itself ships.
+ * The release the break check compares with: the latest release that is not
+ * a pre-release. A release candidate (`vX.Y.Z-rc.N`) never becomes the
+ * baseline, before or after 1.0: operators upgrade from releases, so a break
+ * an rc shipped is still measured against the last release until the release
+ * that contains it is tagged, and a 2.0 release candidate is held to the
+ * promise of the 1.x line until 2.0 itself ships. Only a history with no
+ * release at all falls back to the latest pre-release.
  *
  * @param {string[]} tags tag names reachable from the commit under check
  * @returns {string|null}
  */
 export function selectBaselineTag(tags) {
   const releases = tags.map(parseReleaseTag).filter(Boolean);
-  const stable = releases.filter((r) => r.major >= 1 && r.prerelease.length === 0);
+  const stable = releases.filter((r) => r.prerelease.length === 0);
   const pool = stable.length > 0 ? stable : releases;
   if (pool.length === 0) return null;
   return pool.reduce((latest, r) => (compareReleases(r, latest) > 0 ? r : latest)).tag;
