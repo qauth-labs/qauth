@@ -43,6 +43,13 @@ export type OAuthClientLike = {
    */
   idJagTargets?: string[];
   /**
+   * RFC 9449 §5.2 `dpop_bound_access_tokens` (#480): while `DPOP_ENABLED` is
+   * on, the token endpoint refuses this client's requests that carry no DPoP
+   * proof. Operator-set through the seed manifest only. Optional for older
+   * callers; absent ⇒ DPoP stays optional for the client.
+   */
+  dpopBoundAccessTokens?: boolean;
+  /**
    * Token endpoint auth method (RFC 7591). `'none'` identifies public
    * clients (PKCE, native/SPA) that present only `client_id` at /token.
    * When absent we conservatively treat the client as confidential.

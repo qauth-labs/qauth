@@ -523,6 +523,9 @@ export default async function (fastify: FastifyInstance) {
         // seed manifest. Pinned empty here; `UpdateOAuthClient` excludes the
         // column, so `PATCH` cannot write it either.
         idJagTargets: [],
+        // RFC 9449 §5.2 (#480): DPoP-bound access tokens are operator state
+        // too, pinned here and excluded from `UpdateOAuthClient`.
+        dpopBoundAccessTokens: false,
       });
 
       // Best-effort: the client (and its secret hash) is already committed, so

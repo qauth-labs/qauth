@@ -227,6 +227,13 @@ export interface CimdClientInsert {
    * row; `upsertCimdClient` leaves the column out of its conflict set.
    */
   idJagTargets: [];
+  /**
+   * Not DPoP-bound (RFC 9449 §5.2, #480): only the seed manifest marks a
+   * client as always using DPoP, and a document cannot. Pinned for a new row;
+   * `upsertCimdClient` leaves the column out of its conflict set, so an
+   * operator's setting survives a re-resolution.
+   */
+  dpopBoundAccessTokens: false;
   scopes: string[];
   /** ADR-007 §2 agent classification, mirrored from the metadata document. */
   isAgent: boolean;
@@ -458,6 +465,7 @@ export function toCimdClientInsert(
     developerId: null,
     provisionedByOperator: false,
     idJagTargets: [],
+    dpopBoundAccessTokens: false,
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.
     isAgent: doc.is_agent ?? false,

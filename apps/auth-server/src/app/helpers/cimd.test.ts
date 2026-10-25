@@ -306,6 +306,18 @@ describe('toCimdClientInsert — no ID-JAG target (ADR-011, #434)', () => {
   });
 });
 
+describe('toCimdClientInsert — never DPoP-bound by its document (RFC 9449 §5.2, #480)', () => {
+  it('pins dpopBoundAccessTokens to false, whatever the document says', () => {
+    // RFC 9449 §5.2 defines `dpop_bound_access_tokens` as client metadata, but
+    // in QAuth only the operator sets it (seed manifest only).
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ dpop_bound_access_tokens: true, dpopBoundAccessTokens: true })
+    );
+    const insert = toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel');
+    expect(insert.dpopBoundAccessTokens).toBe(false);
+  });
+});
+
 describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', () => {
   const REALM = 'realm-1';
   const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';

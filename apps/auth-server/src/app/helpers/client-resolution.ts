@@ -51,6 +51,12 @@ export interface ResolvedClient {
    * row, which denies both ID-JAG paths.
    */
   idJagTargets: string[];
+  /**
+   * RFC 9449 §5.2 `dpop_bound_access_tokens` (#480): refuse a token request
+   * without a DPoP proof while `DPOP_ENABLED` is on. Operator-set through the
+   * seed manifest only; `false` for every DCR, developer-API and CIMD row.
+   */
+  dpopBoundAccessTokens: boolean;
   redirectUris: string[];
   tokenEndpointAuthMethod?: string;
   /**

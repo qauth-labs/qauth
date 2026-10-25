@@ -94,6 +94,11 @@ export const clientSpecSchema = z
     // `jwks`: no registration path accepts it, so a client cannot widen where
     // its passkeys may be used.
     webauthn_allowed_origins: z.array(webauthnOriginZ).max(20).optional(),
+    // RFC 9449 §5.2 (ADR-014 §3, ADR-017 phase F3, #480): the client always
+    // uses DPoP at the token endpoint, so a token request without a proof is
+    // refused while DPOP_ENABLED is on. Operator-set only, like
+    // `max_agent_mode`: no registration path accepts it. Omitted ⇒ false.
+    dpop_bound_access_tokens: z.boolean().optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be

@@ -451,6 +451,29 @@ describe('POST /api/clients (create) — #86', () => {
     expect(created.idJagTargets).toEqual([]);
   });
 
+  it("never stores a developer's dpop_bound_access_tokens (RFC 9449 §5.2, #480 — seed manifest only)", async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Agent',
+        redirectUris: ['https://agent.example.com/cb'],
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        dpopBoundAccessTokens: true,
+        dpop_bound_access_tokens: true,
+      },
+    });
+    await route(ctx, 'POST /').handler(request, createReply().reply);
+
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created.dpopBoundAccessTokens).toBe(false);
+  });
+
   it('omits client_secret for a public client (token_endpoint_auth_method=none)', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
