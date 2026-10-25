@@ -9,13 +9,13 @@ import {
   type BootedAuthServer,
   type CookieJar,
   E2E_PASSWORD,
+  E2E_REALM_NAME,
   type E2eInfrastructure,
   extractCsrfToken,
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
   registerPasswordAccount,
-  REQUIRED_TEST_ENVIRONMENT,
   resetE2eState,
   signInWithPassword,
   startE2eInfrastructure,
@@ -37,7 +37,7 @@ import {
  * (`requireDockerOrSkip`).
  */
 
-const REALM = REQUIRED_TEST_ENVIRONMENT['DEFAULT_REALM_NAME'] as string;
+const REALM = E2E_REALM_NAME;
 const TOKEN_EXCHANGE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
 const AGENT_CLIENT_ID = 'e2e-agent';

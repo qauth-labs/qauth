@@ -95,11 +95,15 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
 import { emitUserEvent, userEventFor } from '../../helpers/user-events';
 import tokenRoute from './token';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm every request of this file reaches the route in (#487). */
+const REALM = testRealm({ id: 'realm-1', name: 'default' });
 
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
@@ -150,19 +154,16 @@ function createFastifyStub() {
         _opts: unknown,
         handler: (request: any, reply: any) => Promise<unknown>
       ) => {
-        ctx.handler = handler;
+        ctx.handler = (request, reply) => {
+          // The realm resolver's decoration (#486): a request reaches its
+          // handler with the realm of its host.
+          request.realm ??= REALM;
+          return handler(request, reply);
+        };
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({
-          id: 'realm-1',
-          name: 'default',
-          enabled: true,
-        }),
-        create: vi.fn(),
-      },
       oauthClients: {
         findByClientId: vi.fn(),
       },
@@ -335,6 +336,52 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     // No refresh token persisted
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+  });
+
+  it('authenticates the client in the realm of the request, and records the token there (#487)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'client-uuid-tenant',
+      clientId: 'tenant-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+
+    await handler(
+      {
+        // A request to another realm's host: the resolver found that realm.
+        realm: testRealm({ id: 'realm-tenant', name: 'tenant' }),
+        body: {
+          grant_type: 'client_credentials',
+          client_id: 'tenant-client',
+          client_secret: 'secret',
+          scope: 'read:foo',
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      createReply()
+    );
+
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-tenant',
+      'tenant-client'
+    );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_ISSUED,
+      expect.anything(),
+      expect.objectContaining({ realmId: 'realm-tenant' })
+    );
   });
 
   it('issues a client_credentials token with aud = requested resource when inside audience allowlist (RFC 8707)', async () => {
@@ -4607,6 +4654,7 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
     const app = Fastify({ logger: false });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
+    supplyRequestRealm(app, REALM);
     await app.register(async (instance) => {
       const { fastify: stub } = createFastifyStub();
       for (const [key, value] of Object.entries(stub)) {

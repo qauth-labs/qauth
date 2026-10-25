@@ -4,10 +4,10 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
-import { clientAddressKey } from '../../helpers/client-address';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getPqcSignature } from '../../helpers/hybrid-token';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
 import { emitUserEvent, failureData } from '../../helpers/user-events';
@@ -86,7 +86,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -100,7 +100,7 @@ export default async function (fastify: FastifyInstance) {
       let callerClientId: string | undefined;
 
       try {
-        const realm = await getOrCreateDefaultRealm(fastify);
+        const realm = requestRealm(request);
         realmId = realm.id;
 
         // Accept both `client_secret_post` (body) and `client_secret_basic`

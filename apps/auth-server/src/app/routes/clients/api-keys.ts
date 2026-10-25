@@ -5,8 +5,8 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { assertStaticApiKeysAllowed, generateApiKey } from '../../helpers/api-key';
-import { clientAddressKey } from '../../helpers/client-address';
 import { createRequireManagementJwt } from '../../helpers/management-token';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { emitUserEvent } from '../../helpers/user-events';
 import {
   apiKeySchema,
@@ -127,7 +127,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },

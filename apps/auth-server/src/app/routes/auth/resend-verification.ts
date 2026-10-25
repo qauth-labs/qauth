@@ -14,8 +14,8 @@ import {
   REDIS_KEYS,
   SUCCESS_MESSAGES,
 } from '../../constants';
-import { clientAddressKey } from '../../helpers/client-address';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import {
   type ResendVerificationRequest,
   resendVerificationResponseSchema,
@@ -71,7 +71,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.RESEND_VERIFICATION_RATE_LIMIT,
           timeWindow: env.RESEND_VERIFICATION_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -120,8 +120,8 @@ export default async function (fastify: FastifyInstance) {
         throw new TooManyRequestsError(ERROR_MESSAGES.RATE_LIMIT_EXCEEDED);
       }
 
-      // Get default realm for credential lookup
-      const realm = await getOrCreateDefaultRealm(fastify);
+      // The realm of the host the request named (#487), for the credential lookup
+      const realm = requestRealm(request);
 
       // Find the password credential (don't expose if not found — prevent
       // enumeration). Since #228 this is the credential read path; malformed

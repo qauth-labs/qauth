@@ -18,10 +18,10 @@ import {
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
 import { resolveBrowserSession, trackBrowserSession } from '../../helpers/browser-session';
-import { clientAddressKey } from '../../helpers/client-address';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { resolveReturnTo } from '../../helpers/return-to';
 import {
   clearLoginCsrfCookie,
@@ -932,7 +932,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -993,7 +993,7 @@ export default async function (fastify: FastifyInstance) {
       let handle: string;
       let invocationUri: string;
       try {
-        const realm = await getOrCreateDefaultRealm(fastify);
+        const realm = requestRealm(request);
         const invocation = await buildWalletLoginInvocation(fastify, capability);
 
         await fastify.repositories.oid4vpRequestStates.create({
@@ -1123,7 +1123,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -1209,7 +1209,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -1350,7 +1350,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },

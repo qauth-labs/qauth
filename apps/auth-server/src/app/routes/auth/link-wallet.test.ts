@@ -53,6 +53,7 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
 import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
@@ -67,6 +68,9 @@ import linkWalletRoute from './link-wallet';
 const emitUserEventMock = vi.mocked(emitUserEvent);
 
 type Handler = (request: any, reply: any) => Promise<unknown>;
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 function createReply() {
   const state: {
@@ -128,16 +132,17 @@ function makeFastify() {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
-    routes.set(`${method} ${url}`, handler);
+    routes.set(`${method} ${url}`, (request, reply) => {
+      // The realm resolver's decoration (#486): a request reaches its handler
+      // with the realm of its host.
+      request.realm ??= REALM;
+      return handler(request, reply);
+    });
     return fastify;
   };
   const fastify: any = {
     withTypeProvider: () => ({ get: register('GET'), post: register('POST') }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       oid4vpRequestStates: { create: vi.fn(async (row: unknown) => row) },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
       users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
@@ -326,6 +331,13 @@ describe('wallet linking API — a session is the whole authority (ADR-009 §5)'
     expect(typeof flow['nonce']).toBe('string');
     expect(flow['clientId']).toMatch(/^redirect_uri:/);
     expect(flow['dcqlQuery']).toMatchObject({ credentials: expect.any(Array) });
+  });
+
+  it("starts the flow in the request's realm (#487)", async () => {
+    const { flow, row } = await startLink();
+
+    expect(row['realmId']).toBe(REALM.id);
+    expect(flow['realmId']).toBe(REALM.id);
   });
 });
 

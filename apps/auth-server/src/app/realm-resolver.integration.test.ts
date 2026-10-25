@@ -20,9 +20,9 @@ import {
  * Each test empties the database, boots the real auth-server (whose boot step
  * creates the default realm `master` on `auth.example.com`, from `JWT_ISSUER`),
  * seeds whatever other realms it needs through the repositories, and sends
- * requests with the host it names. Handlers still find their realm by name
- * (#487 moves them onto the resolved one), so a probe route added beside the
- * app's shows what the resolver put on the request.
+ * requests with the host it names. A probe route added beside the app's shows
+ * what the resolver put on the request; `realm-routing.integration.test.ts`
+ * shows the handlers using it (#487).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).

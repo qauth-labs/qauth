@@ -59,6 +59,7 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { RESUME_PATH_PREFIX } from '../../helpers/pending-authorization';
 import { signSessionId } from '../../helpers/session-cookie';
@@ -67,6 +68,9 @@ import authorizeRoute from '../oauth/authorize';
 import consentRoute from './consent';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
@@ -172,25 +176,29 @@ function makeFastify() {
     post?: (request: any, reply: any) => Promise<unknown>;
   } = {};
   const stash = new Map<string, unknown>();
+  // The realm resolver's decoration (#486): a request reaches its handler with
+  // the realm of its host.
+  const withRealm =
+    (handler: NonNullable<typeof ctx.get>): NonNullable<typeof ctx.get> =>
+    (request, reply) => {
+      request.realm ??= REALM;
+      return handler(request, reply);
+    };
   const fastify: any = {
     withTypeProvider: () => {
       const route = {
         get: (_url: string, _opts: unknown, handler: any) => {
-          ctx.get = handler;
+          ctx.get = withRealm(handler);
           return route;
         },
         post: (_url: string, _opts: unknown, handler: any) => {
-          ctx.post = handler;
+          ctx.post = withRealm(handler);
           return route;
         },
       };
       return route;
     },
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-        create: vi.fn(),
-      },
       oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
       oauthConsents: { findActive: vi.fn(), upsertGrant: vi.fn().mockResolvedValue({}) },
       authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },

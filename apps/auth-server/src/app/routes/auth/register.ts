@@ -16,8 +16,8 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS, REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
-import { clientAddressKey } from '../../helpers/client-address';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
 import { type RegisterRequest, registerResponseSchema, registerSchema } from '../../schemas/auth';
@@ -180,7 +180,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTRATION_RATE_LIMIT,
           timeWindow: env.REGISTRATION_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -201,18 +201,15 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      // Get or create default realm (also independent of the address).
-      let realm;
-      if (realmId) {
-        realm = await fastify.repositories.realms.findById(realmId);
-        if (!realm) {
-          throw new BadRequestError(`Invalid realmId: ${realmId}`);
-        }
-        if (!realm.enabled) {
-          throw new BadRequestError(`Realm ${realmId} is disabled`);
-        }
-      } else {
-        realm = await getOrCreateDefaultRealm(fastify);
+      // The realm of the host the request named (#487), also independent of
+      // the address. The host chooses the realm: a `realmId` in the body may
+      // only name that same realm, and any other value is refused as an
+      // unknown one, so a body cannot place an account in the realm of
+      // another host, and the answer tells nothing about the realms there.
+      // The resolver has already refused a disabled realm.
+      const realm = requestRealm(request);
+      if (realmId !== undefined && realmId.toLowerCase() !== realm.id) {
+        throw new BadRequestError(`Invalid realmId: ${realmId}`);
       }
 
       // From here on the address decides the outcome, and the caller must not

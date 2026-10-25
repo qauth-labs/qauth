@@ -249,6 +249,9 @@ describe('POST /auth/verify', () => {
   // lockout, with the same identifiers (UZ1HDHZP).
   describe("shares the login routes' failed-login lockout", () => {
     const EMAIL_ID = `email:${hashEmail('user@example.com')}`;
+    // Counted in the account's realm, the realm the login routes count it in
+    // (#487).
+    const REALM_ID = credentialFixture().realmId;
 
     function createReply() {
       const headers: Record<string, string> = {};
@@ -300,8 +303,8 @@ describe('POST /auth/verify', () => {
 
     it('refuses an account locked on a login route before the password is compared', async () => {
       const { fastify, redis, handler } = await setup({ verifies: true });
-      redis._store.set(`failed-login:lockout:${EMAIL_ID}`, '1');
-      redis._ttls.set(`failed-login:lockout:${EMAIL_ID}`, 300);
+      redis._store.set(`failed-login:lockout:${REALM_ID}:${EMAIL_ID}`, '1');
+      redis._ttls.set(`failed-login:lockout:${REALM_ID}:${EMAIL_ID}`, 300);
 
       const { reply, headers } = createReply();
       await expect(handler({ ...request, ip: '127.0.0.1' }, reply)).rejects.toThrow(
@@ -320,8 +323,8 @@ describe('POST /auth/verify', () => {
         handler({ ...request, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' }, createReply().reply)
       ).rejects.toThrow(InvalidCredentialsError);
 
-      expect(redis._store.get(`failed-login:attempts:${EMAIL_ID}`)).toBe('1');
-      expect(redis._store.get('failed-login:attempts:ip:2001:db8:1:2::')).toBe('1');
+      expect(redis._store.get(`failed-login:attempts:${REALM_ID}:${EMAIL_ID}`)).toBe('1');
+      expect(redis._store.get(`failed-login:attempts:${REALM_ID}:ip:2001:db8:1:2::`)).toBe('1');
     });
 
     it("settles a right password like a login: the account's count is cleared", async () => {
@@ -338,9 +341,24 @@ describe('POST /auth/verify', () => {
         email: 'user@example.com',
       });
 
-      expect(redis._store.has(`failed-login:attempts:${EMAIL_ID}`)).toBe(false);
+      expect(redis._store.has(`failed-login:attempts:${REALM_ID}:${EMAIL_ID}`)).toBe(false);
       // The address keeps the failures counted against it.
-      expect(redis._store.get('failed-login:attempts:ip:127.0.0.1')).toBe('2');
+      expect(redis._store.get(`failed-login:attempts:${REALM_ID}:ip:127.0.0.1`)).toBe('2');
+    });
+
+    it("counts the attempt in the realm of the token's account (#487)", async () => {
+      const { fastify, redis, handler } = await setup({ verifies: false });
+      (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+        credentialFixture({ realmId: 'realm-2' })
+      );
+
+      await expect(handler({ ...request, ip: '127.0.0.1' }, createReply().reply)).rejects.toThrow(
+        InvalidCredentialsError
+      );
+
+      expect(redis._store.get(`failed-login:attempts:realm-2:${EMAIL_ID}`)).toBe('1');
+      expect(redis._store.get('failed-login:attempts:realm-2:ip:127.0.0.1')).toBe('1');
+      expect(redis._store.has(`failed-login:attempts:${REALM_ID}:${EMAIL_ID}`)).toBe(false);
     });
   });
 

@@ -13,7 +13,8 @@ import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
 import {
   clearLoginCsrfCookie,
@@ -279,7 +280,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -323,6 +324,9 @@ export default async function (fastify: FastifyInstance) {
       // Failed-login throttling (#115), with the SAME identifiers as
       // POST /auth/login so both front doors share one counter: guesses spread
       // across them add up, and an account locked on one is locked on both.
+      // Counted in the realm of the host the request named (#487), the realm
+      // the account is looked up in.
+      const realm = requestRealm(request);
       const emailIdentifier = `email:${hashEmail(normalizedEmail)}`;
       const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
 
@@ -346,7 +350,7 @@ export default async function (fastify: FastifyInstance) {
 
       // Refuse a locked-out identifier, else count the attempt before the
       // password is looked at (#115), exactly as POST /auth/login does.
-      const lockout = await registerLoginAttempt(fastify.redis, lockoutIdentifiers);
+      const lockout = await registerLoginAttempt(fastify.redis, realm.id, lockoutIdentifiers);
       if (lockout.locked) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         // No subject, and never the typed address: the attempt names no user.
@@ -354,15 +358,13 @@ export default async function (fastify: FastifyInstance) {
           request,
           'urn:qauth:event:user.sign_in_failed:v1-rc.0',
           { method: 'password', reason: 'locked_out' },
-          { actor: 'user' }
+          { realmId: realm.id, actor: 'user' }
         );
         if (lockout.retryAfterSeconds !== undefined) {
           reply.header('Retry-After', String(lockout.retryAfterSeconds));
         }
         return renderRefusal(429, 'Too many failed sign-in attempts. Please try again later.');
       }
-
-      const realm = await getOrCreateDefaultRealm(fastify);
 
       // Password check via the user_credentials read path (#228); the enabled
       // gate below still reads the users row, which is fetched for the
@@ -418,7 +420,7 @@ export default async function (fastify: FastifyInstance) {
       // As on POST /auth/login: the account's state is cleared; the source
       // address only gets back this attempt's own count, not the failures
       // other attempts left on it.
-      await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
+      await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
 
       // Session-fixation defense: always mint a fresh session id on a
       // successful credential check, even if the browser already had one.

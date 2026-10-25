@@ -15,7 +15,6 @@ import {
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser-session';
-import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
 import { isClientUsable } from '../../helpers/client-status';
@@ -36,7 +35,8 @@ import {
   redirectUriMatchesRegistered,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
-import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
@@ -375,7 +375,7 @@ export default async function (fastify: FastifyInstance) {
         return redirectToLoginWithPendingAuthorization(fastify, reply, buildAuthorizeUrl(query));
       }
 
-      const realm = await getOrCreateDefaultRealm(fastify);
+      const realm = requestRealm(request);
       // Pre-registered → CIMD resolution (a CIMD client reaching consent was
       // already materialised by /oauth/authorize, so findByClientId inside
       // resolveClient hits it; if its document cache expired it is re-fetched
@@ -549,7 +549,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.AUTHORIZE_RATE_LIMIT,
           timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -602,7 +602,7 @@ export default async function (fastify: FastifyInstance) {
       // minted on the next GET /ui/consent render.
       await saveBrowserSession(fastify, { ...session, csrfToken: undefined });
 
-      const realm = await getOrCreateDefaultRealm(fastify);
+      const realm = requestRealm(request);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
       if (!client || !isClientUsable(client)) {

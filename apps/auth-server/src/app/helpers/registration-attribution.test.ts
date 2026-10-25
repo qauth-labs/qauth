@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // here it is a seam, so these tests keep exercising attribution alone.
 vi.mock('./management-token', () => ({ assertManagementToken: vi.fn(async () => undefined) }));
 
+import { testRealm } from '../../testing/request-realm';
 import { assertManagementToken } from './management-token';
 import { resolveRegistrationDeveloperId } from './registration-attribution';
 
@@ -20,6 +21,8 @@ import { resolveRegistrationDeveloperId } from './registration-attribution';
  */
 
 const DEVELOPER_ID = '11111111-1111-4111-8111-111111111111';
+/** The realm the realm resolver (#486) decorated the request with. */
+const REALM = testRealm({ id: 'realm-attribution' });
 
 function makeFastify(onVerify?: (request: FastifyRequest) => void) {
   const requireJwt = vi.fn(async (request: FastifyRequest) => {
@@ -29,7 +32,10 @@ function makeFastify(onVerify?: (request: FastifyRequest) => void) {
 }
 
 function makeRequest(authorization?: string): FastifyRequest {
-  return { headers: authorization ? { authorization } : {} } as unknown as FastifyRequest;
+  return {
+    headers: authorization ? { authorization } : {},
+    realm: REALM,
+  } as unknown as FastifyRequest;
 }
 
 describe('resolveRegistrationDeveloperId', () => {
@@ -124,7 +130,9 @@ describe('resolveRegistrationDeveloperId', () => {
     const request = makeRequest('Bearer other-client.token');
 
     await expect(resolveRegistrationDeveloperId(fastify, request)).rejects.toThrow(JWTInvalidError);
-    expect(assertManagementToken).toHaveBeenCalledWith(fastify, {
+    // Checked against the request's realm (#487): a management token of another
+    // realm does not attribute here.
+    expect(assertManagementToken).toHaveBeenCalledWith(fastify, REALM, {
       sub: DEVELOPER_ID,
       clientId: 'third-party-app',
     });

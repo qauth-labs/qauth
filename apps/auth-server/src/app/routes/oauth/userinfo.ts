@@ -4,10 +4,10 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
-import { clientAddressKey } from '../../helpers/client-address';
 import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { userinfoResponseSchema } from '../../schemas/oauth';
@@ -271,7 +271,7 @@ export default async function (fastify: FastifyInstance) {
   const rateLimit = {
     max: env.USERINFO_RATE_LIMIT,
     timeWindow: env.USERINFO_RATE_WINDOW * 1000,
-    keyGenerator: clientAddressKey,
+    keyGenerator: realmRateLimitKey,
   };
 
   const handler = (request: FastifyRequest) => handleUserinfo(fastify, request);

@@ -46,6 +46,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import errorHandler from '../../plugins/error-handler';
 import introspectRoute from './introspect';
 import userinfoRoute from './userinfo';
@@ -53,6 +54,7 @@ import userinfoRoute from './userinfo';
 const ISSUER = 'https://auth.test.example.com';
 const CLIENT_ID = 'sig-test-client';
 const USER_ID = '019dbc24-7a2d-724d-bf26-1923f21f2234';
+const REALM = testRealm({ id: 'realm-1' });
 
 /** Generate a fresh extractable Ed25519 key pair as PEM strings. */
 function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
@@ -96,10 +98,6 @@ async function buildApp(): Promise<FastifyInstance> {
 
   // Minimal repository + redis stubs the two routes touch.
   app.decorate('repositories', {
-    realms: {
-      findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-      create: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-    },
     oauthClients: {
       findByClientId: vi.fn().mockResolvedValue(CONFIDENTIAL_CLIENT),
     },
@@ -140,6 +138,8 @@ async function buildApp(): Promise<FastifyInstance> {
   } as unknown as FastifyInstance['redis']);
 
   await app.register(errorHandler);
+  // The realm resolver's decoration (#486): every request carries its host's realm.
+  supplyRequestRealm(app, REALM);
   await app.register(async (instance) => {
     await introspectRoute(instance.withTypeProvider<ZodTypeProvider>());
     await userinfoRoute(instance.withTypeProvider<ZodTypeProvider>());

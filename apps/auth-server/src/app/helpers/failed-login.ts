@@ -17,6 +17,11 @@ type RedisClient = FastifyInstance['redis'];
  * after `FAILED_LOGIN_MAX_ATTEMPTS` failures inside `FAILED_LOGIN_WINDOW`,
  * applies a temporary lockout for `FAILED_LOGIN_LOCKOUT_DURATION` seconds.
  *
+ * Every key carries the realm the login is for (#487): an account belongs to
+ * one realm, so the same address in two realms is two accounts, each with its
+ * own count and lockout, and a source address is counted per realm, as the
+ * rate limits are (`realmRateLimitKey`).
+ *
  * An attempt is counted BEFORE its password is verified, and the atomic
  * `INCR` of that count is the gate. Counting a failure only once Argon2id had
  * returned was check-then-act: a verification takes ~100 ms and queues, so
@@ -69,6 +74,7 @@ export interface LoginAttempt extends LockoutStatus {
  * a lockout gives back what it had taken.
  *
  * @param redis - The Redis client (`fastify.redis`).
+ * @param realmId - The realm the login is for (`request.realm`).
  * @param identifiers - Identifiers to check and count (e.g. email hash and/or
  *                      IP).
  * @returns The lockout status; `locked: false` when tracking is disabled or
@@ -76,6 +82,7 @@ export interface LoginAttempt extends LockoutStatus {
  */
 export async function registerLoginAttempt(
   redis: RedisClient,
+  realmId: string,
   identifiers: string[]
 ): Promise<LoginAttempt> {
   if (!env.FAILED_LOGIN_TRACKING_ENABLED) {
@@ -86,14 +93,14 @@ export async function registerLoginAttempt(
   const armed: string[] = [];
   try {
     for (const identifier of identifiers) {
-      const ttl = await redis.ttl(REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier));
+      const ttl = await redis.ttl(REDIS_KEYS.FAILED_LOGIN_LOCKOUT(realmId, identifier));
       if (ttl > 0) {
         return { locked: true, retryAfterSeconds: ttl };
       }
     }
 
     for (const identifier of identifiers) {
-      const attemptsKey = REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(identifier);
+      const attemptsKey = REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(realmId, identifier);
       const attempts = await redis.incr(attemptsKey);
       counted.push(identifier);
 
@@ -108,14 +115,14 @@ export async function registerLoginAttempt(
       // refused, however far ahead of it the lockout check let it get.
       if (attempts >= env.FAILED_LOGIN_MAX_ATTEMPTS) {
         const result = await redis.set(
-          REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier),
+          REDIS_KEYS.FAILED_LOGIN_LOCKOUT(realmId, identifier),
           '1',
           'EX',
           env.FAILED_LOGIN_LOCKOUT_DURATION,
           'NX'
         );
         if (result !== 'OK') {
-          await withdrawAttempt(redis, counted, armed);
+          await withdrawAttempt(redis, realmId, counted, armed);
           return { locked: true, retryAfterSeconds: env.FAILED_LOGIN_LOCKOUT_DURATION };
         }
         armed.push(identifier);
@@ -138,11 +145,13 @@ export async function registerLoginAttempt(
  * the failures of a password spray from the same address.
  *
  * @param redis - The Redis client (`fastify.redis`).
+ * @param realmId - The realm `registerLoginAttempt` counted the attempt in.
  * @param attempt - What `registerLoginAttempt` returned for this login.
  * @param proven - Identifiers the login proved (the `email:` identifier).
  */
 export async function recordSuccessfulLogin(
   redis: RedisClient,
+  realmId: string,
   attempt: LoginAttempt,
   proven: string[]
 ): Promise<void> {
@@ -150,9 +159,10 @@ export async function recordSuccessfulLogin(
     return;
   }
 
-  await resetFailedAttempts(redis, proven);
+  await resetFailedAttempts(redis, realmId, proven);
   await withdrawAttempt(
     redis,
+    realmId,
     (attempt.counted ?? []).filter((identifier) => !proven.includes(identifier)),
     (attempt.armed ?? []).filter((identifier) => !proven.includes(identifier))
   );
@@ -164,15 +174,18 @@ export async function recordSuccessfulLogin(
  */
 async function withdrawAttempt(
   redis: RedisClient,
+  realmId: string,
   counted: readonly string[],
   armed: readonly string[]
 ): Promise<void> {
   try {
     if (armed.length > 0) {
-      await redis.del(...armed.map((identifier) => REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier)));
+      await redis.del(
+        ...armed.map((identifier) => REDIS_KEYS.FAILED_LOGIN_LOCKOUT(realmId, identifier))
+      );
     }
     for (const identifier of counted) {
-      const attemptsKey = REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(identifier);
+      const attemptsKey = REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(realmId, identifier);
       // Below zero, the counter had expired or been cleared meanwhile, and
       // DECR recreated it without a TTL: drop it rather than keep it forever.
       if ((await redis.decr(attemptsKey)) < 0) {
@@ -193,10 +206,12 @@ async function withdrawAttempt(
  * address is never one of them (see above).
  *
  * @param redis - The Redis client (`fastify.redis`).
+ * @param realmId - The realm whose state is cleared.
  * @param identifiers - Identifiers to reset (e.g. email hash).
  */
 export async function resetFailedAttempts(
   redis: RedisClient,
+  realmId: string,
   identifiers: string[]
 ): Promise<void> {
   if (!env.FAILED_LOGIN_TRACKING_ENABLED) {
@@ -205,8 +220,8 @@ export async function resetFailedAttempts(
 
   try {
     const keys = identifiers.flatMap((identifier) => [
-      REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(identifier),
-      REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier),
+      REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(realmId, identifier),
+      REDIS_KEYS.FAILED_LOGIN_LOCKOUT(realmId, identifier),
     ]);
     if (keys.length > 0) {
       await redis.del(...keys);

@@ -1,7 +1,12 @@
-import { BadRequestError, ForbiddenError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  MisdirectedRequestError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -77,17 +82,15 @@ function createFastifyStub(
 ) {
   const ctx: TestContext = {};
 
-  const realm = {
+  const realm = testRealm({
     id: 'realm-1',
-    name: 'master',
-    enabled: true,
     dynamicRegistrationAllowedScopes: realmOverrides.dynamicRegistrationAllowedScopes ?? [
       'openid',
       'profile',
       'email',
       'offline_access',
     ],
-  };
+  });
 
   const createdClients: any[] = [];
 
@@ -98,15 +101,20 @@ function createFastifyStub(
         _opts: unknown,
         handler: (request: any, reply: any) => Promise<unknown>
       ) => {
-        ctx.handler = handler;
+        ctx.handler = (request, reply) => {
+          // The realm resolver's decoration (#486): a request reaches its
+          // handler with the realm of its host.
+          request.realm ??= realm;
+          return handler(request, reply);
+        };
         return fastify;
       },
     }),
     repositories: {
       realms: {
-        findByName: vi.fn().mockResolvedValue(realm),
+        // The allowlist is read from the database row (#487).
+        findById: vi.fn().mockResolvedValue(realm),
         update: vi.fn().mockResolvedValue({ ...realm }),
-        create: vi.fn(),
       },
       oauthClients: {
         countByDeveloper: vi.fn(async () => 0),
@@ -568,6 +576,66 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(state.realm.id).toBe('realm-1');
   });
 
+  it("reads the request realm's allowlist from the database, not the resolver's row (#487)", async () => {
+    // The resolver's row can be up to its cache time old: an allowlist an
+    // operator set since must not be overwritten by the first-use seed.
+    const { fastify, ctx, state } = createFastifyStub();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({ id: 'realm-tenant', dynamicRegistrationAllowedScopes: ['openid'] })
+    );
+    await registerRoute(fastify);
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = createReply();
+    const result = (await handler(
+      {
+        body: {
+          redirect_uris: ['https://app.example/cb'],
+          scope: 'openid profile',
+        },
+        ip: '127.0.0.1',
+        headers: {},
+        realm: testRealm({ id: 'realm-tenant', dynamicRegistrationAllowedScopes: [] }),
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    expect(fastify.repositories.realms.findById).toHaveBeenCalledWith('realm-tenant');
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
+    expect(result.scope).toBe('openid');
+    expect(state.createdClients[0].realmId).toBe('realm-tenant');
+  });
+
+  it('refuses a realm deleted within the resolver cache time, before the hash (#487)', async () => {
+    // The resolver can still hand out the row of a realm deleted since it
+    // cached it; the database no longer has it, so no client may be made.
+    const { fastify, ctx, state } = createFastifyStub();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(undefined);
+    await registerRoute(fastify);
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = createReply();
+    await expect(
+      handler(
+        {
+          body: {
+            redirect_uris: ['https://app.example/cb'],
+            scope: 'openid profile',
+            token_endpoint_auth_method: 'client_secret_basic',
+          },
+          ip: '127.0.0.1',
+          headers: {},
+        },
+        reply
+      )
+    ).rejects.toThrow(MisdirectedRequestError);
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    expect(state.createdClients).toHaveLength(0);
+  });
+
   describe('client JWKS is never self-registered (RFC 7591 §2 / #384)', () => {
     it('strips jwks / jwks_uri / private_key_jwt at the schema boundary', () => {
       // The primary control: the request schema does not define these fields,
@@ -631,7 +699,8 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       await registerRoute(fastify);
       const handler = ctx.handler;
       if (!handler) throw new Error('Handler missing');
-      return handler(registration, createReply().reply);
+      // A fresh request per call: the realm decoration is set on it.
+      return handler({ ...registration }, createReply().reply);
     }
 
     it('refuses an attributed registration once the developer owns the maximum', async () => {

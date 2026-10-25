@@ -16,6 +16,7 @@ import { env } from '../../../config/env';
 import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
+import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
@@ -76,7 +77,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.VERIFICATION_RATE_LIMIT,
           timeWindow: env.VERIFICATION_RATE_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },
@@ -139,11 +140,12 @@ export default async function (fastify: FastifyInstance) {
       //
       // Under the failed-login lockout (#115), keyed as the login routes key
       // it: external_sub IS the normalized registered address (#230), so the
-      // email hash matches theirs, and the address is the client address key
-      // (an IPv6 client by its /64). The attempt is counted before the
-      // password is compared; a wrong one stays counted.
+      // email hash matches theirs, the address is the client address key
+      // (an IPv6 client by its /64), and the realm is the account's (#487),
+      // the realm the login routes count it in. The attempt is counted before
+      // the password is compared; a wrong one stays counted.
       const emailIdentifier = `email:${hashEmail(credential.externalSub)}`;
-      const lockout = await registerLoginAttempt(fastify.redis, [
+      const lockout = await registerLoginAttempt(fastify.redis, credential.realmId, [
         emailIdentifier,
         `ip:${clientAddressKey(request)}`,
       ]);
@@ -162,7 +164,7 @@ export default async function (fastify: FastifyInstance) {
         throw new InvalidCredentialsError('Incorrect password for this account');
       }
       // The password is proved: settle the attempt as a successful login does.
-      await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
+      await recordSuccessfulLogin(fastify.redis, credential.realmId, lockout, [emailIdentifier]);
 
       // 5.-6. Completion write set (one transaction): consume the token and
       // flip credential_data.email_verified + the attribute's verified flag —

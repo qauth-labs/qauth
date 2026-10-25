@@ -26,7 +26,7 @@ import {
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { delegationChainColumn } from './agent-audit';
-import { getOrCreateDefaultRealm } from './realm';
+import { requestRealm } from './request-realm';
 
 /** The transaction an event commits in: the one of the change it records. */
 export type EventTransaction = Parameters<FastifyInstance['repositories']['events']['emit']>[0];
@@ -43,8 +43,10 @@ export interface UserEventOptions {
    */
   readonly tx?: EventTransaction;
   /**
-   * The realm the event happened in, as the handler resolved it: its client's,
-   * its user's, or the one it looked up. The default realm when absent.
+   * The realm the event happened in: the realm of the row it records, its
+   * client's or its user's, when the handler has one. The request's realm
+   * (`request.realm`, #487) when absent, so a request's events land in the
+   * realm of the rows they name and otherwise in the realm of its host.
    */
   readonly realmId?: string | null;
   /**
@@ -148,7 +150,7 @@ export function userEventFor<Type extends RegisteredEventType>(
  * a later release drops it.
  *
  * It fills what every event of a request carries (see {@link userEventFor}):
- * the realm (the handler's, else the default realm), the request, the
+ * the realm (the handler's, else the request's), the request, the
  * subject, the client the request came through and the actor, with the
  * RFC 8693 delegation chain of a delegated request (`delegationChainColumn`).
  *
@@ -172,7 +174,7 @@ export async function emitUserEvent<Type extends RegisteredEventType>(
   options: UserEventOptions = {}
 ): Promise<string> {
   const fastify = request.server;
-  const realmId = options.realmId ?? (await getOrCreateDefaultRealm(fastify)).id;
+  const realmId = options.realmId ?? requestRealm(request).id;
   const event = userEventFor(request, type, data, options, realmId);
   const events = fastify.repositories.events;
   return options.tx === undefined

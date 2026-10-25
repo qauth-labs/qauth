@@ -153,9 +153,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which use the session cookie (`/oauth/authorize`, `/ui/*`, `/consents`,
   `/auth/link/wallet`), answer only on the realm host; `api` and `meta` routes
   also answer on its endpoint hosts; `/health` answers on any host. The server
-  refuses to start when a route has no class. Handlers still find the default
-  realm by name until [#487] moves them onto the resolved realm. Problem
-  documents gain the code `misdirected_request` (421).
+  refuses to start when a route has no class. Every handler takes its realm
+  from the one resolved ([#487], below). Problem documents gain the code
+  `misdirected_request` (421).
 
 - **Schema**: migration 0026 adds the admin audit log ([#448], ADR-019
   Decision 7, ADR-020 §3). `admin_audit_log` keeps one hash chain per target
@@ -653,6 +653,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A reverse proxy must keep the client's `Host`, or set `X-Forwarded-Host`
   itself from an address listed in `TRUST_PROXY`. For local development, set
   `JWT_ISSUER=http://localhost:3000`.
+
+- **Every handler takes the realm of the request's host** ([#487], ADR-019
+  Decision 1). `getOrCreateDefaultRealm` is gone: the token, introspection,
+  revocation, registration, sign-in, consent and wallet routes and the
+  management API use the realm the host named, and `DEFAULT_REALM_NAME` only
+  names the default realm at boot (a lint rule refuses any other read). A
+  deployment with one realm behaves as before. With a second realm:
+  - clients and accounts are found in the host's realm only, so the same
+    `client_id` in two realms names two clients;
+  - `POST /auth/register` creates the account in the host's realm, and a body
+    `realmId` that names another realm answers 400;
+  - a developer-portal management token works only at the host of its user's
+    realm, and is refused with 401 elsewhere;
+  - failed-login counters and lockouts, and every rate-limit bucket, are kept
+    per realm: the same address and source in two realms count apart.
+
+  Realm settings read on the request path (the environment ceiling of ADR-008
+  and the rate-limit tier it sets) come from the row the host lookup cached, so
+  an operator's change applies within the host cache time (30 seconds) rather
+  than on the next request; the dynamic registration scope list is still read
+  from the database. The failed-login and rate-limit counters start from zero
+  after the upgrade, as their Redis keys now carry the realm id.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,

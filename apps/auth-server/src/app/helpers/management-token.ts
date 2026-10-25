@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { resolveAudience } from './client-auth';
 import { getOrCreateSystemClient } from './oauth-client';
-import { getOrCreateDefaultRealm } from './realm';
+import { type RealmRow, requestRealm } from './request-realm';
 
 /** The claims of a verified access token that decide whether it is a management token. */
 interface ManagementTokenClaims {
@@ -39,15 +39,22 @@ const uuidSubjectSchema = z.uuid();
  *   the login that minted it by up to its lifetime, and an account disabled
  *   in between must not keep managing its clients — the same gate every
  *   token grant applies to the user it would mint for.
+ * - The token belongs to `realm`, the realm of the request (#487). Its
+ *   `client_id`, audience and issuer read the same in every realm (the system
+ *   client is named by `SYSTEM_CLIENT_ID` in each), so the realm is its
+ *   subject's: `sub` must name a user of this realm. A management token from
+ *   realm A is refused at realm B.
  *
- * `requireActiveUser: false` skips that last check, for a caller that only
- * ends access (`/auth/logout`): a disabled user may still sign out.
+ * `requireActiveUser: false` skips the enabled check, for a caller that only
+ * ends access (`/auth/logout`): a disabled user may still sign out, in their
+ * own realm only. A subject that names no user is then left to the caller.
  *
  * Throws `JWTInvalidError` (401) on any mismatch, as RFC 6750 §3.1 prescribes
  * for a token that is not valid for the resource.
  */
 export async function assertManagementToken(
   fastify: FastifyInstance,
+  realm: Pick<RealmRow, 'id'>,
   claims: ManagementTokenClaims | undefined,
   options: { requireActiveUser?: boolean } = {}
 ): Promise<void> {
@@ -55,7 +62,6 @@ export async function assertManagementToken(
     throw new JWTInvalidError('Missing JWT payload');
   }
 
-  const realm = await getOrCreateDefaultRealm(fastify);
   const systemClient = await getOrCreateSystemClient(realm.id, fastify);
 
   if (claims.clientId !== systemClient.clientId) {
@@ -73,6 +79,10 @@ export async function assertManagementToken(
   }
 
   if (options.requireActiveUser === false) {
+    if (claims.sub && uuidSubjectSchema.safeParse(claims.sub).success) {
+      const user = await fastify.repositories.users.findById(claims.sub);
+      if (user) assertUserOfRealm(user, realm);
+    }
     return;
   }
   if (!claims.sub || !uuidSubjectSchema.safeParse(claims.sub).success) {
@@ -82,18 +92,26 @@ export async function assertManagementToken(
   if (!user || !user.enabled) {
     throw new JWTInvalidError('Access token subject is not an active user');
   }
+  assertUserOfRealm(user, realm);
+}
+
+/** Refuse a token whose subject is a user of another realm than the request's. */
+function assertUserOfRealm(user: { realmId: string }, realm: Pick<RealmRow, 'id'>): void {
+  if (user.realmId !== realm.id) {
+    throw new JWTInvalidError('Access token was not issued in this realm');
+  }
 }
 
 /**
  * Build the preHandler for developer-management routes: the shared
  * `requireJwt` verification (signature, `typ`, issuer, revocation) followed by
- * `assertManagementToken`.
+ * `assertManagementToken` against the request's realm.
  */
 export function createRequireManagementJwt(
   fastify: FastifyInstance
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
   return async function requireManagementJwt(request, reply) {
     await fastify.requireJwt(request, reply);
-    await assertManagementToken(fastify, request.jwtPayload);
+    await assertManagementToken(fastify, requestRealm(request), request.jwtPayload);
   };
 }

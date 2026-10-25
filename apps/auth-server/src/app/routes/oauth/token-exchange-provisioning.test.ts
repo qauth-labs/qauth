@@ -57,6 +57,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { testRealm } from '../../../testing/request-realm';
 import { cimdDocumentSchema, toCimdClientInsert } from '../../helpers/cimd';
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
 import { grantTypeSchema } from '../../schemas/clients';
@@ -72,6 +73,14 @@ const CIMD_CLIENT_ID = 'https://agent.example.com/.well-known/oauth-client';
 const SENTINEL_HASH = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
 const AGENT_CLIENT_ID = 'agent-client';
 const ISSUER = 'https://auth.example.com';
+/**
+ * The realm of both stages' requests (#487): the client registers in the realm
+ * of its request's host and exchanges a token in the same one.
+ */
+const REALM = testRealm({
+  id: 'realm-1',
+  dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
+});
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -102,13 +111,6 @@ function createRegisterStub() {
   const ctx: TestContext = {};
   const createdClients: any[] = [];
 
-  const realm = {
-    id: 'realm-1',
-    name: 'master',
-    enabled: true,
-    dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
-  };
-
   const fastify: any = {
     withTypeProvider: () => ({
       post: (_url: string, opts: any, handler: TestContext['handler']) => {
@@ -119,9 +121,9 @@ function createRegisterStub() {
     }),
     repositories: {
       realms: {
-        findByName: vi.fn().mockResolvedValue(realm),
-        update: vi.fn().mockResolvedValue({ ...realm }),
-        create: vi.fn(),
+        // The allowlist is read off the database row, not the request's.
+        findById: vi.fn().mockResolvedValue(REALM),
+        update: vi.fn().mockResolvedValue({ ...REALM }),
       },
       oauthClients: {
         create: vi.fn(async (row: any) => {
@@ -162,7 +164,7 @@ async function registerAgentThroughDcr(body: Record<string, unknown>) {
   }
 
   const response = (await ctx.handler(
-    { body: parsed.data, ip: '127.0.0.1', headers: {} },
+    { realm: REALM, body: parsed.data, ip: '127.0.0.1', headers: {} },
     createReply()
   )) as any;
   return { response, persisted: createdClients[0] };
@@ -224,10 +226,6 @@ function createTokenStub(persistedClient: {
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'default', enabled: true }),
-        create: vi.fn(),
-      },
       oauthClients: { findByClientId: vi.fn().mockResolvedValue(client) },
       authorizationCodes: { findByCode: vi.fn(), markUsed: vi.fn() },
       users: { findById: vi.fn().mockResolvedValue(user) },
@@ -276,6 +274,7 @@ async function exchange(fastify: FastifyInstance, ctx: TestContext) {
   if (!ctx.handler) throw new Error('token handler missing');
   return ctx.handler(
     {
+      realm: REALM,
       body: {
         grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
         client_id: AGENT_CLIENT_ID,

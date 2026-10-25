@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
-import { clientAddressKey } from '../helpers/client-address';
+import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 
 interface HealthResponse {
   status: 'ok' | 'unhealthy';
@@ -27,7 +27,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.HEALTH_RATE_LIMIT_MAX,
           timeWindow: env.HEALTH_RATE_LIMIT_WINDOW * 1000,
-          keyGenerator: clientAddressKey,
+          keyGenerator: realmRateLimitKey,
         },
       },
     },

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
 /**
@@ -56,6 +57,8 @@ beforeEach(() => {
 
 import authorizeRoute from './authorize';
 
+const REALM = testRealm({ id: 'realm-1' });
+
 const CLIENT = {
   id: 'client-uuid-1',
   clientId: 'app-123',
@@ -94,10 +97,6 @@ async function buildServer(): Promise<FastifyInstance> {
 
   const findActive = vi.fn();
   fastify.decorate('repositories', {
-    realms: {
-      findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
-      create: vi.fn(),
-    },
     oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
     oauthConsents: {
       findActive,
@@ -108,8 +107,8 @@ async function buildServer(): Promise<FastifyInstance> {
       upsertGrant: vi.fn(),
     },
     authorizationCodes: { create: vi.fn() },
-    // The Bearer path accepts only a user who is still enabled.
-    users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
+    // The Bearer path accepts only a user who is still enabled, of this realm.
+    users: { findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })) },
   } as never);
   fastify.decorate('db', {
     transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
@@ -125,6 +124,7 @@ async function buildServer(): Promise<FastifyInstance> {
     deleteSession: vi.fn().mockResolvedValue(undefined),
   } as never);
 
+  supplyRequestRealm(fastify, REALM);
   await fastify.register(authorizeRoute, { prefix: '/oauth' });
   await fastify.ready();
   return fastify;

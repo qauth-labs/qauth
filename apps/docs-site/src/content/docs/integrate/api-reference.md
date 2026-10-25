@@ -147,7 +147,7 @@ always sent.
 | ---------- | -------------- | -------- | --------------------------------------------- |
 | `email`    | string (email) | yes      | At most 254 characters (RFC 5321).            |
 | `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
-| `realmId`  | string (uuid)  | no       | Defaults to the server's default realm.       |
+| `realmId`  | string (uuid)  | no       | Must be the realm of the request's host.      |
 
 **`202 Accepted`** (`Cache-Control: no-store`)
 
@@ -162,7 +162,10 @@ inbox" screen, never "account created" or "address taken". With
 its owner has verified it; until then [`POST /auth/login`](#post-authlogin)
 answers it with the same `401` as a wrong password.
 
-Errors: `400` (validation, or an unknown or disabled `realmId`), `422`
+The account is created in the realm of the host the request names. A `realmId`
+in the body picks no other realm: any value but that realm's id is refused.
+
+Errors: `400` (validation, or a `realmId` that is not the host's realm), `422`
 (`WEAK_PASSWORD`, with `feedback`), `429` (rate limited). None of them depends on
 whether the address is registered. Before 2026-10-19 this endpoint answered `201`
 with the new user and `409` for a registered address (breaking change, listed in

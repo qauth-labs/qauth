@@ -10,15 +10,16 @@
         "default",
         "^default",
         { "json": "{workspaceRoot}/tsconfig.json", "fields": ["compilerOptions"] },
-        { "externalDependencies": ["vitest"] },
+        { "externalDependencies": ["vitest", "oxlint", "typescript"] },
         { "env": "CI" },
         { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
         "{workspaceRoot}/stable-surface/openapi.json",
         "{workspaceRoot}/apps/docs-site/public/openapi.json",
-        "{workspaceRoot}/apps/docs-site/src/content/docs/reference/api-conventions.md"
+        "{workspaceRoot}/apps/docs-site/src/content/docs/reference/api-conventions.md",
+        "{workspaceRoot}/.oxlintrc.json"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The API conventions tests (#506) read three files outside it: openapi-conventions.test.ts checks stable-surface/openapi.json and apps/docs-site/public/openapi.json, and problem.test.ts compares the code table of apps/docs-site/src/content/docs/reference/api-conventions.md with PROBLEM_CODES. Without them a change to one of those files would replay a cached pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The API conventions tests (#506) read three files outside it: openapi-conventions.test.ts checks stable-surface/openapi.json and apps/docs-site/public/openapi.json, and problem.test.ts compares the code table of apps/docs-site/src/content/docs/reference/api-conventions.md with PROBLEM_CODES. The realm-by-host lint guard test (default-realm-rule.test.ts, #487) lints samples with blocks of `.oxlintrc.json`, so that file and Oxlint itself (and TypeScript, which reads the configuration's comments) are inputs too. Without them a change to one of those files would replay a cached pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `oxlint` and `typescript` added to the external dependencies."
       }
     },
     "test-integration": {

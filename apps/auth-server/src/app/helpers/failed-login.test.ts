@@ -64,6 +64,9 @@ function createRedisStub() {
 }
 
 type RedisStub = ReturnType<typeof createRedisStub>;
+
+/** The realm the logins are for. */
+const REALM = '0190e3c4-0000-7000-8000-00000000000a';
 // The helper only calls the methods above; cast through unknown for the test.
 const asClient = (r: RedisStub) => r as unknown as Parameters<typeof registerLoginAttempt>[0];
 
@@ -76,7 +79,7 @@ describe('failed-login helper', () => {
   });
 
   it('is not locked out initially', async () => {
-    const status = await registerLoginAttempt(asClient(redis), ids);
+    const status = await registerLoginAttempt(asClient(redis), REALM, ids);
     expect(status.locked).toBe(false);
   });
 
@@ -84,10 +87,10 @@ describe('failed-login helper', () => {
     // max=3: three attempts are let through; the third arms the lockout on its
     // way in, so a fourth is refused before any password is looked at.
     for (let i = 0; i < 3; i++) {
-      expect((await registerLoginAttempt(asClient(redis), ids)).locked).toBe(false);
+      expect((await registerLoginAttempt(asClient(redis), REALM, ids)).locked).toBe(false);
     }
 
-    const status = await registerLoginAttempt(asClient(redis), ids);
+    const status = await registerLoginAttempt(asClient(redis), REALM, ids);
     expect(status.locked).toBe(true);
     expect(status.retryAfterSeconds).toBe(900);
   });
@@ -98,7 +101,7 @@ describe('failed-login helper', () => {
     // atomic INCR as the gate, exactly max attempts get through, whatever the
     // interleaving.
     const statuses = await Promise.all(
-      Array.from({ length: 30 }, () => registerLoginAttempt(asClient(redis), ids))
+      Array.from({ length: 30 }, () => registerLoginAttempt(asClient(redis), REALM, ids))
     );
 
     expect(statuses.filter((status) => !status.locked)).toHaveLength(3);
@@ -106,21 +109,21 @@ describe('failed-login helper', () => {
       expect(status.retryAfterSeconds).toBe(900);
     }
     // Refused attempts are not counted: the counters hold the three that ran.
-    expect(redis._store.get('failed-login:attempts:email:abc')).toBe('3');
-    expect(redis._store.get('failed-login:attempts:ip:127.0.0.1')).toBe('3');
+    expect(redis._store.get(`failed-login:attempts:${REALM}:email:abc`)).toBe('3');
+    expect(redis._store.get(`failed-login:attempts:${REALM}:ip:127.0.0.1`)).toBe('3');
   });
 
   it('caps one address across many accounts, and leaves no count on the refused accounts', async () => {
     const statuses = await Promise.all(
       Array.from({ length: 30 }, (_, i) =>
-        registerLoginAttempt(asClient(redis), [`email:user-${i}`, 'ip:127.0.0.1'])
+        registerLoginAttempt(asClient(redis), REALM, [`email:user-${i}`, 'ip:127.0.0.1'])
       )
     );
 
     const passed = statuses.flatMap((status, i) => (status.locked ? [] : [i]));
     expect(passed).toHaveLength(3);
     for (let i = 0; i < 30; i++) {
-      const count = redis._store.get(`failed-login:attempts:email:user-${i}`);
+      const count = redis._store.get(`failed-login:attempts:${REALM}:email:user-${i}`);
       // An attempt the address refused is withdrawn from its email too.
       expect(Number(count ?? '0')).toBe(passed.includes(i) ? 1 : 0);
     }
@@ -128,40 +131,43 @@ describe('failed-login helper', () => {
 
   it('does not count an attempt that a locked-out identifier refuses', async () => {
     for (let i = 0; i < 3; i++) {
-      await registerLoginAttempt(asClient(redis), ['ip:127.0.0.1']);
+      await registerLoginAttempt(asClient(redis), REALM, ['ip:127.0.0.1']);
     }
 
-    expect((await registerLoginAttempt(asClient(redis), ids)).locked).toBe(true);
-    expect(redis._store.get('failed-login:attempts:email:abc')).toBeUndefined();
+    expect((await registerLoginAttempt(asClient(redis), REALM, ids)).locked).toBe(true);
+    expect(redis._store.get(`failed-login:attempts:${REALM}:email:abc`)).toBeUndefined();
   });
 
   it('lets one attempt through per lockout once the lockout has expired inside the window', async () => {
     for (let i = 0; i < 3; i++) {
-      await registerLoginAttempt(asClient(redis), ids);
+      await registerLoginAttempt(asClient(redis), REALM, ids);
     }
     // The lockout markers expire while the attempt counters are still alive.
-    await redis.del('failed-login:lockout:email:abc', 'failed-login:lockout:ip:127.0.0.1');
+    await redis.del(
+      `failed-login:lockout:${REALM}:email:abc`,
+      `failed-login:lockout:${REALM}:ip:127.0.0.1`
+    );
 
-    expect((await registerLoginAttempt(asClient(redis), ids)).locked).toBe(false);
-    expect((await registerLoginAttempt(asClient(redis), ids)).locked).toBe(true);
+    expect((await registerLoginAttempt(asClient(redis), REALM, ids)).locked).toBe(false);
+    expect((await registerLoginAttempt(asClient(redis), REALM, ids)).locked).toBe(true);
   });
 
   it('sets the window TTL on the first attempt', async () => {
-    await registerLoginAttempt(asClient(redis), ['email:only']);
-    expect(redis._ttls.get('failed-login:attempts:email:only')).toBe(900);
+    await registerLoginAttempt(asClient(redis), REALM, ['email:only']);
+    expect(redis._ttls.get(`failed-login:attempts:${REALM}:email:only`)).toBe(900);
   });
 
   it('resets counters and lockout on success', async () => {
     for (let i = 0; i < 3; i++) {
-      await registerLoginAttempt(asClient(redis), ids);
+      await registerLoginAttempt(asClient(redis), REALM, ids);
     }
-    expect(redis._store.has('failed-login:lockout:email:abc')).toBe(true);
+    expect(redis._store.has(`failed-login:lockout:${REALM}:email:abc`)).toBe(true);
 
-    await resetFailedAttempts(asClient(redis), ids);
+    await resetFailedAttempts(asClient(redis), REALM, ids);
 
     // Counter keys are cleared.
-    expect(redis._store.get('failed-login:attempts:email:abc')).toBeUndefined();
-    expect((await registerLoginAttempt(asClient(redis), ids)).locked).toBe(false);
+    expect(redis._store.get(`failed-login:attempts:${REALM}:email:abc`)).toBeUndefined();
+    expect((await registerLoginAttempt(asClient(redis), REALM, ids)).locked).toBe(false);
   });
 
   describe('a successful login (GPU4YL6X)', () => {
@@ -169,62 +175,62 @@ describe('failed-login helper', () => {
 
     it('clears the email it proved, and gives back only its own count on the address', async () => {
       // Two wrong guesses at other people's accounts from one address (max=3).
-      await registerLoginAttempt(asClient(redis), ['email:victim-1', ip]);
-      await registerLoginAttempt(asClient(redis), ['email:victim-2', ip]);
+      await registerLoginAttempt(asClient(redis), REALM, ['email:victim-1', ip]);
+      await registerLoginAttempt(asClient(redis), REALM, ['email:victim-2', ip]);
 
       // A login to the caller's own account succeeds. Registration is open,
       // so anyone can produce one: it must not wipe the address's failures.
-      const own = await registerLoginAttempt(asClient(redis), ['email:me', ip]);
+      const own = await registerLoginAttempt(asClient(redis), REALM, ['email:me', ip]);
       expect(own.locked).toBe(false);
-      await recordSuccessfulLogin(asClient(redis), own, ['email:me']);
+      await recordSuccessfulLogin(asClient(redis), REALM, own, ['email:me']);
 
-      expect(redis._store.get('failed-login:attempts:email:me')).toBeUndefined();
-      expect(redis._store.get('failed-login:attempts:ip:127.0.0.1')).toBe('2');
+      expect(redis._store.get(`failed-login:attempts:${REALM}:email:me`)).toBeUndefined();
+      expect(redis._store.get(`failed-login:attempts:${REALM}:ip:127.0.0.1`)).toBe('2');
       // The own login reached the threshold and armed the address lockout on
       // its way in; as it did not fail, that lockout is lifted again.
-      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(false);
+      expect(redis._store.has(`failed-login:lockout:${REALM}:ip:127.0.0.1`)).toBe(false);
 
       // One more guess is the third failure; the address is then locked.
-      expect((await registerLoginAttempt(asClient(redis), ['email:victim-3', ip])).locked).toBe(
-        false
-      );
-      expect((await registerLoginAttempt(asClient(redis), ['email:victim-4', ip])).locked).toBe(
-        true
-      );
+      expect(
+        (await registerLoginAttempt(asClient(redis), REALM, ['email:victim-3', ip])).locked
+      ).toBe(false);
+      expect(
+        (await registerLoginAttempt(asClient(redis), REALM, ['email:victim-4', ip])).locked
+      ).toBe(true);
     });
 
     it('never counts against a shared address, however many there are', async () => {
       // An office NAT: many people sign in successfully from one address.
       for (let i = 0; i < 10; i++) {
-        const attempt = await registerLoginAttempt(asClient(redis), [`email:user-${i}`, ip]);
+        const attempt = await registerLoginAttempt(asClient(redis), REALM, [`email:user-${i}`, ip]);
         expect(attempt.locked).toBe(false);
-        await recordSuccessfulLogin(asClient(redis), attempt, [`email:user-${i}`]);
+        await recordSuccessfulLogin(asClient(redis), REALM, attempt, [`email:user-${i}`]);
       }
 
-      expect(redis._store.get('failed-login:attempts:ip:127.0.0.1')).toBe('0');
-      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(false);
+      expect(redis._store.get(`failed-login:attempts:${REALM}:ip:127.0.0.1`)).toBe('0');
+      expect(redis._store.has(`failed-login:lockout:${REALM}:ip:127.0.0.1`)).toBe(false);
     });
 
     it('keeps an address lockout armed by another attempt', async () => {
       // Three failures lock the address while this login was in flight.
-      const own = await registerLoginAttempt(asClient(redis), ['email:me', ip]);
+      const own = await registerLoginAttempt(asClient(redis), REALM, ['email:me', ip]);
       for (let i = 0; i < 2; i++) {
-        await registerLoginAttempt(asClient(redis), [`email:victim-${i}`, ip]);
+        await registerLoginAttempt(asClient(redis), REALM, [`email:victim-${i}`, ip]);
       }
-      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(true);
+      expect(redis._store.has(`failed-login:lockout:${REALM}:ip:127.0.0.1`)).toBe(true);
 
-      await recordSuccessfulLogin(asClient(redis), own, ['email:me']);
+      await recordSuccessfulLogin(asClient(redis), REALM, own, ['email:me']);
 
-      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(true);
+      expect(redis._store.has(`failed-login:lockout:${REALM}:ip:127.0.0.1`)).toBe(true);
     });
 
     it('does not leave a counter without a TTL when the window expired meanwhile', async () => {
-      const own = await registerLoginAttempt(asClient(redis), ['email:me', ip]);
-      await redis.del('failed-login:attempts:ip:127.0.0.1');
+      const own = await registerLoginAttempt(asClient(redis), REALM, ['email:me', ip]);
+      await redis.del(`failed-login:attempts:${REALM}:ip:127.0.0.1`);
 
-      await recordSuccessfulLogin(asClient(redis), own, ['email:me']);
+      await recordSuccessfulLogin(asClient(redis), REALM, own, ['email:me']);
 
-      expect(redis._store.has('failed-login:attempts:ip:127.0.0.1')).toBe(false);
+      expect(redis._store.has(`failed-login:attempts:${REALM}:ip:127.0.0.1`)).toBe(false);
     });
   });
 
@@ -234,7 +240,38 @@ describe('failed-login helper', () => {
         throw new Error('redis down');
       },
     } as unknown as Parameters<typeof registerLoginAttempt>[0];
-    const status = await registerLoginAttempt(broken, ids);
+    const status = await registerLoginAttempt(broken, REALM, ids);
     expect(status.locked).toBe(false);
+  });
+
+  describe('per realm (#487)', () => {
+    const OTHER_REALM = '0190e3c4-0000-7000-8000-00000000000b';
+
+    it('keys the same identifiers apart in two realms', async () => {
+      await registerLoginAttempt(asClient(redis), REALM, ids);
+      await registerLoginAttempt(asClient(redis), OTHER_REALM, ids);
+
+      expect(redis._store.get(`failed-login:attempts:${REALM}:email:abc`)).toBe('1');
+      expect(redis._store.get(`failed-login:attempts:${OTHER_REALM}:email:abc`)).toBe('1');
+    });
+
+    it('locks out an account in one realm and not the same address in another', async () => {
+      for (let i = 0; i < 3; i++) {
+        await registerLoginAttempt(asClient(redis), REALM, ids);
+      }
+
+      expect((await registerLoginAttempt(asClient(redis), REALM, ids)).locked).toBe(true);
+      expect((await registerLoginAttempt(asClient(redis), OTHER_REALM, ids)).locked).toBe(false);
+    });
+
+    it('settles a success in its own realm only', async () => {
+      await registerLoginAttempt(asClient(redis), OTHER_REALM, ['email:me']);
+      const own = await registerLoginAttempt(asClient(redis), REALM, ['email:me']);
+
+      await recordSuccessfulLogin(asClient(redis), REALM, own, ['email:me']);
+
+      expect(redis._store.has(`failed-login:attempts:${REALM}:email:me`)).toBe(false);
+      expect(redis._store.get(`failed-login:attempts:${OTHER_REALM}:email:me`)).toBe('1');
+    });
   });
 });

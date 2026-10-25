@@ -2,6 +2,7 @@ import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -37,6 +38,7 @@ interface TestContext {
 }
 
 const ISSUER = 'https://auth.example.com';
+const REALM = testRealm({ id: 'realm-1' });
 
 function createFastifyStub() {
   const ctx: TestContext = {};
@@ -48,15 +50,16 @@ function createFastifyStub() {
         _opts: unknown,
         handler: (request: any, reply: any) => Promise<unknown>
       ) => {
-        ctx.handler = handler;
+        ctx.handler = (request, reply) => {
+          // The realm resolver's decoration (#486): a request reaches its
+          // handler with the realm of its host.
+          request.realm ??= REALM;
+          return handler(request, reply);
+        };
         return fastify;
       },
     }),
     repositories: {
-      realms: {
-        findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'default', enabled: true }),
-        create: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'default', enabled: true }),
-      },
       oauthClients: {
         findByClientId: vi.fn(),
       },
@@ -145,6 +148,44 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
       'urn:qauth:event:token.revoked:v1-rc.0',
       {},
       expect.objectContaining({ realmId: 'realm-1', clientId: client.clientId, actor: 'client' })
+    );
+  });
+
+  it("authenticates the client in the request's realm and records that realm (#487)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await revokeRoute(fastify);
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({
+      id: 'rt-1',
+      oauthClientId: client.id,
+      familyId: 'fam-1',
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = makeReply();
+    await handler(
+      {
+        body: { token: 'rt-token', client_id: client.clientId, client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        realm: testRealm({ id: 'realm-tenant' }),
+      },
+      reply
+    );
+
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-tenant',
+      client.clientId
+    );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.revoked:v1-rc.0',
+      {},
+      expect.objectContaining({ realmId: 'realm-tenant' })
     );
   });
 
