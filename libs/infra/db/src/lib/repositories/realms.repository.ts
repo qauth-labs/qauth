@@ -292,6 +292,21 @@ function assertEventRetention(data: Partial<EventRetentionPolicy>): void {
   }
 }
 
+/**
+ * Refuse a maximum session length of zero or less (#552): it would end every
+ * session and every refresh-token family at its start. NULL means no limit.
+ * The CHECK `realms_sso_max_lifespan_positive` refuses the same.
+ */
+function assertSsoMaxLifespan(data: { ssoMaxLifespan?: number | null }): void {
+  const value = data.ssoMaxLifespan;
+  if (value === undefined || value === null) return;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new BadRequestError(
+      'Realm sso_max_lifespan must be a positive whole number of seconds, or null for no limit'
+    );
+  }
+}
+
 /** Map a duplicate key to {@link UniqueConstraintError}; rethrow anything else. */
 function rethrowUnique(error: unknown, fallbackConstraint: string): never {
   if (isUniqueConstraintError(error)) {
@@ -305,7 +320,7 @@ function rethrowUnique(error: unknown, fallbackConstraint: string): never {
  *
  * Every realm it creates gets `options.seeds` for the policies its creator
  * leaves out, and every create and update refuses event retention outside
- * its limits ({@link BadRequestError}).
+ * its limits and an `sso_max_lifespan` of zero or less ({@link BadRequestError}).
  *
  * @param defaultDb - Database client to use for queries
  * @param options - The realm policy seeds (ADR-019 Decision 10)
@@ -330,6 +345,7 @@ export function createRealmsRepository(
       if (row[key] === undefined) row[key] = value;
     }
     assertEventRetention(row);
+    assertSsoMaxLifespan(row);
     return row;
   }
 
@@ -638,6 +654,7 @@ export function createRealmsRepository(
      */
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       assertEventRetention(data);
+      assertSsoMaxLifespan(data);
       const invoker = tx ?? defaultDb;
       const updateData = {
         ...data,

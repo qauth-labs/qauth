@@ -6,7 +6,12 @@
  * earliest token of its family, so a realm's `sso_max_lifespan` counts from the
  * code exchange or sign-in that started the family. From then on an insert
  * without a value, as the previous release makes during a rolling upgrade,
- * takes the start of the family it joins, or now for a new family.
+ * takes the start and the session end of the family it joins, or now and no
+ * session end for a new family.
+ *
+ * The migration also records a code's and a family's browser-session end, and
+ * turns a realm's `sso_max_lifespan` of zero or less into no limit before a
+ * CHECK refuses such a value.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
  * and upgraded through 0037, then 0038, so a later migration cannot change
@@ -195,5 +200,107 @@ describe('migration 0038 — refresh-token family start (seed-then-migrate)', ()
       `SELECT family_created_at FROM refresh_tokens WHERE token_hash = repeat('d', 64)`
     );
     expect(rows).toEqual([{ family_created_at: '1700000004000' }]);
+  });
+
+  it('adds the session-end columns, nullable and without a default', async () => {
+    await migrate();
+
+    const { rows } = await db().query(
+      `SELECT table_name, data_type, is_nullable, column_default
+       FROM information_schema.columns
+       WHERE (table_name, column_name) IN
+         (('authorization_codes', 'session_expires_at'),
+          ('refresh_tokens', 'family_session_expires_at'))
+       ORDER BY table_name`
+    );
+    expect(rows).toEqual([
+      {
+        table_name: 'authorization_codes',
+        data_type: 'bigint',
+        is_nullable: 'YES',
+        column_default: null,
+      },
+      {
+        table_name: 'refresh_tokens',
+        data_type: 'bigint',
+        is_nullable: 'YES',
+        column_default: null,
+      },
+    ]);
+  });
+
+  it('leaves every family that existed with no session end', async () => {
+    const owner = await seedOwner();
+    await seedToken(owner, 'a', FAMILY_A, 1_700_000_000_000);
+    await migrate();
+
+    const { rows } = await db().query(
+      'SELECT family_session_expires_at FROM refresh_tokens WHERE family_id = $1',
+      [FAMILY_A]
+    );
+    expect(rows).toEqual([{ family_session_expires_at: null }]);
+  });
+
+  it('gives a token inserted without a start the session end of the family it joins', async () => {
+    const owner = await seedOwner();
+    await migrate();
+    // The current release starts a family from a code whose session ends at
+    // 1700000060000; the previous release then rotates it.
+    await db().query(
+      `INSERT INTO refresh_tokens
+         (token_hash, user_id, oauth_client_id, family_id, family_created_at,
+          family_session_expires_at, expires_at)
+       VALUES (repeat('a', 64), $1, $2, $3, 1700000000000, 1700000060000, 1)`,
+      [owner.userId, owner.clientId, FAMILY_A]
+    );
+    await seedToken(owner, 'b', FAMILY_A, 1_700_000_009_000);
+
+    const { rows } = await db().query(
+      `SELECT left(token_hash, 1) AS token_hash, family_created_at, family_session_expires_at
+       FROM refresh_tokens ORDER BY token_hash`
+    );
+    expect(rows).toEqual([
+      {
+        token_hash: 'a',
+        family_created_at: '1700000000000',
+        family_session_expires_at: '1700000060000',
+      },
+      {
+        token_hash: 'b',
+        family_created_at: '1700000000000',
+        family_session_expires_at: '1700000060000',
+      },
+    ]);
+  });
+
+  it('turns an sso_max_lifespan of zero or less into no limit, and keeps a positive one', async () => {
+    await db().query(
+      `INSERT INTO realms (name, sso_max_lifespan) VALUES ('zero', 0), ('negative', -60),
+       ('hour', 3600), ('none', NULL)`
+    );
+    await migrate();
+
+    const { rows } = await db().query(
+      `SELECT name, sso_max_lifespan FROM realms
+       WHERE name IN ('zero', 'negative', 'hour', 'none') ORDER BY name`
+    );
+    expect(rows).toEqual([
+      { name: 'hour', sso_max_lifespan: '3600' },
+      { name: 'negative', sso_max_lifespan: null },
+      { name: 'none', sso_max_lifespan: null },
+      { name: 'zero', sso_max_lifespan: null },
+    ]);
+  });
+
+  it('refuses an sso_max_lifespan of zero or less from then on', async () => {
+    await migrate();
+
+    await expect(
+      db().query(`INSERT INTO realms (name, sso_max_lifespan) VALUES ('zero', 0)`)
+    ).rejects.toThrow(/realms_sso_max_lifespan_positive/);
+    await db().query(`INSERT INTO realms (name, sso_max_lifespan) VALUES ('hour', 3600)`);
+    await expect(
+      db().query(`UPDATE realms SET sso_max_lifespan = -1 WHERE name = 'hour'`)
+    ).rejects.toThrow(/realms_sso_max_lifespan_positive/);
   });
 });

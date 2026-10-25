@@ -1578,6 +1578,10 @@
         "realms_admin_event_retention_days_range": {
           "name": "realms_admin_event_retention_days_range",
           "value": "\"realms\".\"admin_event_retention_days\" between 90 and 36500"
+        },
+        "realms_sso_max_lifespan_positive": {
+          "name": "realms_sso_max_lifespan_positive",
+          "value": "\"realms\".\"sso_max_lifespan\" IS NULL OR \"realms\".\"sso_max_lifespan\" > 0"
         }
       },
       "isRLSEnabled": false
@@ -3782,6 +3786,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "session_expires_at": {
+          "name": "session_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
         "scopes": {
           "name": "scopes",
           "type": "jsonb",
@@ -4113,6 +4123,12 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
+        },
+        "family_session_expires_at": {
+          "name": "family_session_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         },
         "scopes": {
           "name": "scopes",
