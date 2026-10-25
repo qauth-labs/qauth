@@ -14,9 +14,9 @@
  * not depend solely on AS-side configuration.
  */
 
-import type { FetchLike, IntrospectionClientCredentials, ValidatedToken } from '../types';
-import { IntrospectionError, InvalidTokenError } from './errors';
-import { parseScopes } from './scope';
+import type { FetchLike, IntrospectionClientCredentials, ValidatedToken } from '../types.js';
+import { IntrospectionError, InvalidTokenError } from './errors.js';
+import { parseScopes } from './scope.js';
 
 export interface IntrospectionValidatorOptions {
   /** Full URL of the AS introspection endpoint. */

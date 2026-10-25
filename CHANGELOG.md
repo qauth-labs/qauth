@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page (`operate/images`) shows how to pin the digests and verify them.
 - The auth-server image installs `tsx` at the exact version the lockfile
   resolves (4.23.15), not the floating `tsx@4`.
+- **npm releases of the SDK packages** ([#596], ADR-018 §6). A tag
+  `<sdk>@<version>` packs that SDK, checks the tarball (only `package.json`,
+  `README.md`, `LICENSE` and compiled `dist/`; no environment, test, source-map
+  or source file; no private key or build-machine path; complete metadata) and
+  installs it into an empty project, where every entry point must import and
+  type-check. It is then staged on npm through trusted publishing, with no
+  stored token and with provenance, in the `npm` environment. It goes live only
+  when a maintainer approves it with 2FA. Every pull request runs the same pack,
+  check and install as a dry run. `nx release` gives each SDK its own version
+  and `CHANGELOG.md`. Before 1.0, versions stay `0.x`; a release candidate goes
+  to the `next` dist-tag and a release to `latest`. `@qauth-labs/resource-guard`
+  is the first package: ESM with type declarations, an `exports` map,
+  `engines` and its licence. `RELEASING.md` is the maintainer guide for both
+  the images and the packages: release, rollback (deprecate, never unpublish)
+  and the version rule.
 - **A registry of configuration keys** ([#449], ADR-018 §5). Every environment
   key the auth server and the developer portal read has one entry in
   `libs/server/config/src/lib/registry/`: a tier (stable, advanced or
@@ -773,6 +788,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#595]: https://github.com/qauth-labs/qauth/issues/595
+[#596]: https://github.com/qauth-labs/qauth/issues/596
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21

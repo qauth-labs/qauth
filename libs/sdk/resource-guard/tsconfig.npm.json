@@ -1,0 +1,21 @@
+{
+  // The npm build (#596): ESM JavaScript and type declarations in ./dist,
+  // compiled the way Node loads them (nodenext). `pnpm pack` publishes only
+  // ./dist, README.md and LICENSE; see package.json `files` and `publishConfig`.
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "inlineSourceMap": false,
+    "composite": false,
+    "incremental": false,
+    "noEmit": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

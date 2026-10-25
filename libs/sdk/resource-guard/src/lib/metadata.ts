@@ -8,7 +8,7 @@
  * with — the entry point of the MCP authorization handshake.
  */
 
-import { advertisableScopes } from './scope';
+import { advertisableScopes } from './scope.js';
 
 /** Well-known suffix for Protected Resource Metadata (RFC 9728 §3.1). */
 export const PRM_WELL_KNOWN_PREFIX = '/.well-known/oauth-protected-resource';

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import * as ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -10,7 +11,7 @@ import { describe, expect, it } from 'vitest';
  * to the public API always shows in review as a change to that file.
  */
 
-const LIBRARY_ROOT = resolve(__dirname, '..');
+const LIBRARY_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REPORT = join(LIBRARY_ROOT, 'api-report.md');
 
 const ENTRIES: Record<string, string> = {

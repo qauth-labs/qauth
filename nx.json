@@ -211,5 +211,35 @@
   // a read-only token, and a run with no token (a fork, a contributor, a local
   // run) is anonymous and never stores. NX_NO_CLOUD=true turns it off for one
   // run or one shell; the Dockerfiles and the jobs with nothing to cache set it.
-  "nxCloudId": "68ed5766d0a8584639447f54"
+  "nxCloudId": "68ed5766d0a8584639447f54",
+  // npm releases of the SDK packages (#596): each SDK (tag `type:sdk`) has its
+  // own version and its own CHANGELOG.md, and is tagged `<project>@<version>`.
+  // A maintainer runs `nx release version` and `nx release changelog` on a
+  // branch; the commit lands through a pull request and the tag is pushed by
+  // hand, which starts the `release-npm` workflow. Nx neither commits, tags nor
+  // publishes here. See RELEASING.md.
+  "release": {
+    "projects": ["tag:type:sdk"],
+    "projectsRelationship": "independent",
+    "releaseTag": {
+      "pattern": "{projectName}@{version}"
+    },
+    "version": {
+      "git": {
+        "commit": false,
+        "tag": false
+      }
+    },
+    "changelog": {
+      "workspaceChangelog": false,
+      "projectChangelogs": {
+        "createRelease": false,
+        "file": "{projectRoot}/CHANGELOG.md"
+      },
+      "git": {
+        "commit": false,
+        "tag": false
+      }
+    }
+  }
 }

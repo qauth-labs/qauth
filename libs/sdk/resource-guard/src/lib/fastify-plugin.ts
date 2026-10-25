@@ -24,15 +24,15 @@ import type {
 } from 'fastify';
 import fp from 'fastify-plugin';
 
-import type { ResourceGuardConfig, ValidatedToken } from '../types';
-import { ResourceGuard } from './core';
+import type { ResourceGuardConfig, ValidatedToken } from '../types.js';
+import { ResourceGuard } from './core.js';
 import {
   InsufficientScopeError,
   MissingTokenError,
   ResourceGuardConfigError,
   ResourceGuardError,
-} from './errors';
-import { PRM_WELL_KNOWN_PREFIX } from './metadata';
+} from './errors.js';
+import { PRM_WELL_KNOWN_PREFIX } from './metadata.js';
 
 declare module 'fastify' {
   interface FastifyInstance {

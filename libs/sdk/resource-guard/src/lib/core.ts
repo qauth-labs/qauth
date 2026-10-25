@@ -13,24 +13,24 @@
  * a token minted for another resource cannot be replayed here.
  */
 
-import type { ResourceGuardConfig, ValidatedToken, ValidationMode } from '../types';
-import { challengeForError } from './challenge';
+import type { ResourceGuardConfig, ValidatedToken, ValidationMode } from '../types.js';
+import { challengeForError } from './challenge.js';
 import {
   InsufficientScopeError,
   InvalidTokenError,
   MissingTokenError,
   ResourceGuardConfigError,
   type ResourceGuardError,
-} from './errors';
-import { IntrospectionValidator } from './introspection-validator';
-import { JwtValidator } from './jwt-validator';
+} from './errors.js';
+import { IntrospectionValidator } from './introspection-validator.js';
+import { JwtValidator } from './jwt-validator.js';
 import {
   buildProtectedResourceMetadata,
   metadataPathForResource,
   metadataUrlForResource,
   type ProtectedResourceMetadata,
-} from './metadata';
-import { hasRequiredScopes, missingScopes } from './scope';
+} from './metadata.js';
+import { hasRequiredScopes, missingScopes } from './scope.js';
 
 function stripTrailingSlash(value: string): string {
   return value.length > 1 && value.endsWith('/') ? value.slice(0, -1) : value;
