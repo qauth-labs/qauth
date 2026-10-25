@@ -28,6 +28,13 @@ export const passwordHashConfigSchema = z.object({
     .int()
     .min(1, 'Parallelism must be at least 1')
     .max(255, 'Parallelism must not exceed 255'),
+  /**
+   * How many Argon2 jobs may wait for a free slot before a verification that
+   * asks to be shed (`shedWhenQueueFull`) is refused instead of queued
+   * (default: 32). `0` refuses it whenever every slot is busy. Jobs that do not
+   * ask to be shed always queue, and count toward the limit while they wait.
+   */
+  queueLimit: z.number().int().min(0, 'Queue limit must not be negative'),
 });
 
 /**
@@ -53,9 +60,49 @@ export interface PasswordHasher {
    *
    * @param hashedPassword - Previously hashed password string
    * @param plainPassword - Plain text password to verify
+   * @param options - See {@link VerifyPasswordOptions}
    * @returns True if password matches, false otherwise (including invalid hash format)
+   * @throws {Argon2QueueFullError} Only with `shedWhenQueueFull`, when the queue is full
    */
-  verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean>;
+  verifyPassword(
+    hashedPassword: string,
+    plainPassword: string,
+    options?: VerifyPasswordOptions
+  ): Promise<boolean>;
+}
+
+/**
+ * Options of {@link PasswordHasher.verifyPassword}.
+ */
+export interface VerifyPasswordOptions {
+  /**
+   * Refuse the verification with {@link Argon2QueueFullError}, before any hash
+   * is computed, when every Argon2 slot is busy and `queueLimit` jobs already
+   * wait for one. Without it the verification waits for its turn however long
+   * the queue is.
+   */
+  shedWhenQueueFull?: boolean;
+}
+
+/**
+ * Thrown by {@link PasswordHasher.verifyPassword} for a verification that
+ * asked to be shed (`shedWhenQueueFull`) while the Argon2 queue was full. No
+ * hash was computed and the verification holds no slot: the caller may answer
+ * at once, for example with `503 Service Unavailable`.
+ */
+export class Argon2QueueFullError extends Error {
+  /** The Argon2 jobs waiting for a slot when the verification was refused. */
+  readonly queued: number;
+  /** The configured `queueLimit`. */
+  readonly queueLimit: number;
+
+  constructor(queued: number, queueLimit: number) {
+    super('The Argon2 queue is full');
+    this.name = 'Argon2QueueFullError';
+    this.queued = queued;
+    this.queueLimit = queueLimit;
+    Object.setPrototypeOf(this, Argon2QueueFullError.prototype);
+  }
 }
 
 /**
@@ -66,6 +113,7 @@ export const DEFAULT_PASSWORD_CONFIG: PasswordHashConfig = {
   memoryCost: 65536, // 64MB
   timeCost: 3,
   parallelism: 4,
+  queueLimit: 32,
 };
 
 /**
@@ -78,7 +126,10 @@ export const DEFAULT_PASSWORD_CONFIG: PasswordHashConfig = {
  * unbounded, a burst of client secrets or passwords that stays inside the
  * per-route rate limits fills the pool and stalls every token check on the
  * server for seconds. Half the pool is kept free for everything else; the
- * surplus waits in a FIFO queue here instead of in libuv's.
+ * surplus waits in a FIFO queue here instead of in libuv's. A verification
+ * may ask to be refused rather than wait when that queue already holds
+ * `queueLimit` jobs (`shedWhenQueueFull`), so a burst of client secrets fails
+ * fast instead of waiting until its callers time out.
  *
  * The limit is process-wide, not per hasher, because the pool is. It reads
  * `UV_THREADPOOL_SIZE` directly because that is Node's own setting, which
@@ -91,11 +142,18 @@ const waitingArgon2Jobs: Array<() => void> = [];
 
 /**
  * Run `job` once an Argon2 slot is free. Slots are handed over in FIFO order.
+ *
+ * With a `queueLimit`, a job that would have to wait behind that many others
+ * is refused with {@link Argon2QueueFullError} instead, before it runs and
+ * without taking a slot or a place in the queue.
  */
-async function withArgon2Slot<T>(job: () => Promise<T>): Promise<T> {
+async function withArgon2Slot<T>(job: () => Promise<T>, queueLimit?: number): Promise<T> {
   if (runningArgon2Jobs < MAX_CONCURRENT_ARGON2_JOBS) {
     runningArgon2Jobs++;
   } else {
+    if (queueLimit !== undefined && waitingArgon2Jobs.length >= queueLimit) {
+      throw new Argon2QueueFullError(waitingArgon2Jobs.length, queueLimit);
+    }
     // The finishing job hands its slot straight over, so the count stays put.
     await new Promise<void>((resolve) => waitingArgon2Jobs.push(resolve));
   }
@@ -161,11 +219,21 @@ export function createPasswordHasher(config?: Partial<PasswordHashConfig>): Pass
       }
     },
 
-    async verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean> {
+    async verifyPassword(
+      hashedPassword: string,
+      plainPassword: string,
+      options?: VerifyPasswordOptions
+    ): Promise<boolean> {
       try {
-        return await withArgon2Slot(() => verify(hashedPassword, plainPassword));
-      } catch {
-        // Return false for all errors (incorrect password, invalid hash format, etc.)
+        return await withArgon2Slot(
+          () => verify(hashedPassword, plainPassword),
+          options?.shedWhenQueueFull ? validatedConfig.queueLimit : undefined
+        );
+      } catch (error) {
+        // A shed verification is no answer about the password: the caller
+        // must tell it apart from a wrong one.
+        if (error instanceof Argon2QueueFullError) throw error;
+        // Return false for all other errors (incorrect password, invalid hash format, etc.)
         return false;
       }
     },

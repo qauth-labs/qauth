@@ -25,6 +25,13 @@ export const passwordEnvSchema = z.object({
    * Argon2 parallelism / threads
    */
   PASSWORD_PARALLELISM: z.coerce.number().int().min(1).default(4),
+
+  /**
+   * How many Argon2 jobs may wait for a free slot before a client-secret
+   * check is refused with 503 and `Retry-After` instead of joining the queue
+   * (#751). `0` refuses one whenever every slot is busy.
+   */
+  PASSWORD_HASH_QUEUE_LIMIT: z.coerce.number().int().min(0).default(32),
 });
 
 /**

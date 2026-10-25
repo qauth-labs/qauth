@@ -7,6 +7,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   NotFoundError,
+  TemporarilyUnavailableError,
   TooManyRequestsError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -277,6 +278,7 @@ describe('oauthErrorCode', () => {
     [new ForbiddenError('no'), 'access_denied'],
     [new NotFoundError('Client', 'x'), 'invalid_request'],
     [new TooManyRequestsError('slow down'), 'temporarily_unavailable'],
+    [new TemporarilyUnavailableError(1), 'temporarily_unavailable'],
     [new Error('connection reset'), 'server_error'],
     ['not an error', 'server_error'],
   ])('maps %s to %s', (error, code) => {

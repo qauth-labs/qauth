@@ -24,6 +24,12 @@ export interface AppMetrics {
    */
   tokensIssued: Counter<'type' | 'grant_type'>;
   /**
+   * Client-secret checks refused with 503 before any hash was computed,
+   * because `PASSWORD_HASH_QUEUE_LIMIT` Argon2 jobs were already waiting
+   * (#751).
+   */
+  clientSecretChecksShed: Counter;
+  /**
    * Background job runs (ADR-019 Decision 8). Labelled by `job` (the job's
    * name) and `result` = `success` | `failure` | `timeout`. A run skipped
    * because another node holds the job's lock is not counted; a lock that
@@ -87,6 +93,12 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       name: 'qauth_tokens_issued_total',
       help: 'Total tokens issued by token type and grant type.',
       labelNames: ['type', 'grant_type'] as const,
+      registers: [registry],
+    });
+
+    const clientSecretChecksShed = new Counter({
+      name: 'qauth_client_secret_checks_shed_total',
+      help: 'Client-secret checks refused with 503 because the Argon2 queue was full.',
       registers: [registry],
     });
 
@@ -186,6 +198,7 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registry,
       loginAttempts,
       tokensIssued,
+      clientSecretChecksShed,
       jobRuns,
       eventsRetentionDeleted,
       sessionCacheLookups,

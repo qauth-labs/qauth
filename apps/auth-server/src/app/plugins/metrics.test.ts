@@ -258,6 +258,22 @@ describe('metrics + request-id', () => {
     await app.close();
   });
 
+  it('exposes the shed client-secret check counter (#751)', async () => {
+    const app = await buildApp();
+
+    const before = await app.inject({ method: 'GET', url: '/metrics' });
+    expect(before.body).toContain('# TYPE qauth_client_secret_checks_shed_total counter');
+    expect(before.body).toMatch(/^qauth_client_secret_checks_shed_total\{app="auth-server"\} 0$/m);
+
+    app.metrics.clientSecretChecksShed.inc();
+    app.metrics.clientSecretChecksShed.inc();
+
+    const after = await app.inject({ method: 'GET', url: '/metrics' });
+    expect(after.body).toMatch(/^qauth_client_secret_checks_shed_total\{app="auth-server"\} 2$/m);
+
+    await app.close();
+  });
+
   it('generates a request id and echoes it on the response header', async () => {
     const app = await buildApp();
     app.get('/ping', async () => ({ ok: true }));

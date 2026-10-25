@@ -976,7 +976,9 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       'realm-1',
       'client id with space'
     );
-    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('hash', 'p@ss:word');
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('hash', 'p@ss:word', {
+      shedWhenQueueFull: true,
+    });
   });
 
   it('accepts Basic auth with a matching body client_id (non-conflicting)', async () => {

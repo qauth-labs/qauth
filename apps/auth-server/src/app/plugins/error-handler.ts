@@ -15,6 +15,7 @@ import {
   JWTInvalidError,
   MisdirectedRequestError,
   NotFoundError,
+  TemporarilyUnavailableError,
   TokenAlreadyUsedError,
   TokenExpiredError,
   TooManyRequestsError,
@@ -300,6 +301,7 @@ const SimpleErrorClasses = [
   JWTInvalidError,
   MisdirectedRequestError,
   NotFoundError,
+  TemporarilyUnavailableError,
   TokenAlreadyUsedError,
   TokenExpiredError,
   TooManyRequestsError,
@@ -334,7 +336,9 @@ export default fp(async function (fastify: FastifyInstance) {
       //
       // 5xx is ours and stays `error`. 4xx is the caller's and is `warn`, which
       // keeps it queryable without letting it drown the level that pages
-      // someone.
+      // someone. A request shed under load (`TemporarilyUnavailableError`, 503
+      // with `Retry-After`, #751) is `warn` too: the server refused it as
+      // configured, and a burst a stranger sends must not flood `error`.
       //
       // The `url` is a plain string key on THIS line, so neither pino's
       // path-based `redact` (which cannot reach inside a string) nor the `req`
@@ -347,7 +351,8 @@ export default fp(async function (fastify: FastifyInstance) {
       // thrown from an `onRequest` hook before the route has run, a store
       // failure inside the redemption is a 500 before the row was updated. The
       // request line censors it; the error line beside it must not undo that.
-      request.log[statusCode >= 500 ? 'error' : 'warn'](
+      const shed = error instanceof TemporarilyUnavailableError;
+      request.log[statusCode >= 500 && !shed ? 'error' : 'warn'](
         {
           err: loggableError(error),
           url: redactLoggedUrl(request.url),
@@ -388,6 +393,12 @@ export default fp(async function (fastify: FastifyInstance) {
           'WWW-Authenticate',
           `DPoP error="invalid_dpop_proof"${dpopAlgs === undefined ? '' : `, algs="${dpopAlgs}"`}`
         );
+      }
+
+      // RFC 9110 §10.2.3: a request shed under load says when to try again, in
+      // either error format (#751; RFC 7009 §2.2.1 for revocation).
+      if (shed) {
+        reply.header('Retry-After', String(error.retryAfterSeconds));
       }
 
       // The API families, and any route that asks for it, answer with an RFC

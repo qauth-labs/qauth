@@ -275,7 +275,13 @@ describe('token endpoint — HARD FLOORS hold even for a development client (#19
     await tokenRoute(fastify);
     await ctx.handler!(authCodeRequest(), createReply());
     // The argon2 hash is compared — never a plaintext equality, in any environment.
-    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('argon2-hash', 'the-secret');
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith(
+      'argon2-hash',
+      'the-secret',
+      {
+        shedWhenQueueFull: true,
+      }
+    );
   });
 
   it('RFC 8707 audience binding still holds for a development client', async () => {

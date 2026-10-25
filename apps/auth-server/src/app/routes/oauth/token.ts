@@ -12,6 +12,7 @@ import {
   InvalidScopeError,
   InvalidTargetError,
   NotFoundError,
+  TemporarilyUnavailableError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -372,6 +373,8 @@ export default async function (fastify: FastifyInstance) {
         // Schema validation should have rejected this already, but guard anyway.
         throw new BadRequestError('unsupported_grant_type');
       } catch (error) {
+        // A client-secret check shed under load (#751) is thrown only by
+        // client authentication, whose catch above already recorded it.
         if (
           error instanceof InvalidGrantError ||
           error instanceof InvalidTargetError ||
@@ -381,7 +384,8 @@ export default async function (fastify: FastifyInstance) {
           error instanceof NotFoundError ||
           error instanceof BadRequestError ||
           error instanceof UnauthorizedClientError ||
-          error instanceof InvalidDpopProofError
+          error instanceof InvalidDpopProofError ||
+          error instanceof TemporarilyUnavailableError
         ) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           throw error;

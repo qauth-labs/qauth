@@ -759,15 +759,16 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > of a 302. An owner who changes the redirect URIs of an operator-provisioned
 > client through `PATCH /api/clients/{id}` removes that trust.
 
-| Code                     | Meaning                                                                    |
-| ------------------------ | -------------------------------------------------------------------------- |
-| `invalid_request`        | Missing/malformed parameter.                                               |
-| `invalid_client`         | Client authentication failed or client unknown.                            |
-| `invalid_grant`          | Bad/expired code, bad PKCE verifier, or invalid/replayed refresh token.    |
-| `unauthorized_client`    | Client not allowed to use this grant.                                      |
-| `invalid_scope`          | Requested scope outside the allowlist (or empty for `client_credentials`). |
-| `invalid_target`         | RFC 8707 `resource` outside the grant's bound audience.                    |
-| `unsupported_grant_type` | Unknown `grant_type`.                                                      |
+| Code                      | Meaning                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `invalid_request`         | Missing/malformed parameter.                                                                                 |
+| `invalid_client`          | Client authentication failed or client unknown.                                                              |
+| `invalid_grant`           | Bad/expired code, bad PKCE verifier, or invalid/replayed refresh token.                                      |
+| `unauthorized_client`     | Client not allowed to use this grant.                                                                        |
+| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                   |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                      |
+| `unsupported_grant_type`  | Unknown `grant_type`.                                                                                        |
+| `temporarily_unavailable` | HTTP `503` with `Retry-After`: the server is too busy to check the client secret now; retry after the delay. |
 
 ---
 

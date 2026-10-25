@@ -269,6 +269,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       memoryCost: env.PASSWORD_MEMORY_COST,
       timeCost: env.PASSWORD_TIME_COST,
       parallelism: env.PASSWORD_PARALLELISM,
+      // Client-secret checks beyond this many waiting Argon2 jobs are shed
+      // with 503 and `Retry-After` (#751); see `helpers/client-auth.ts`.
+      queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
     },
     validationConfig: {
       minScore: env.PASSWORD_MIN_SCORE,

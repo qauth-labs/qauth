@@ -1,4 +1,9 @@
-import { InvalidClientError, InvalidScopeError } from '@qauth-labs/shared-errors';
+import { Argon2QueueFullError } from '@qauth-labs/fastify-plugin-password';
+import {
+  InvalidClientError,
+  InvalidScopeError,
+  TemporarilyUnavailableError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -26,6 +31,7 @@ import {
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
+  SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS,
   toAgentScopeContext,
   validateScopes,
 } from './client-auth';
@@ -212,7 +218,79 @@ describe('authenticateClient', () => {
         method: 'client_secret_post',
       })
     ).rejects.toThrow(InvalidClientError);
-    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('hash', 'wrong');
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('hash', 'wrong', {
+      shedWhenQueueFull: true,
+    });
+  });
+
+  describe('with the Argon2 queue full (#751)', () => {
+    function makeShedStub(client: OAuthClientLike | null): {
+      fastify: FastifyInstance;
+      shed: Mock;
+    } {
+      const shed = vi.fn();
+      const fastify = {
+        repositories: {
+          oauthClients: { findByClientId: vi.fn().mockResolvedValue(client) },
+        },
+        passwordHasher: {
+          verifyPassword: vi.fn().mockRejectedValue(new Argon2QueueFullError(32, 32)),
+        },
+        metrics: { clientSecretChecksShed: { inc: shed } },
+      } as unknown as FastifyInstance;
+      return { fastify, shed };
+    }
+
+    const creds = {
+      clientId: 'cid',
+      clientSecret: 'secret',
+      method: 'client_secret_post',
+    } as const;
+
+    it('refuses with 503 and a retry delay, and counts the shed check', async () => {
+      const { fastify, shed } = makeShedStub(baseClient);
+
+      const refusal = authenticateClient(fastify, 'realm-1', creds);
+
+      await expect(refusal).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+      await expect(refusal).rejects.toMatchObject({
+        statusCode: 503,
+        retryAfterSeconds: SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS,
+        details: {
+          reason: 'argon2_queue_full',
+          realmId: 'realm-1',
+          clientId: 'cid',
+          queued: 32,
+          queueLimit: 32,
+        },
+      });
+      expect(shed).toHaveBeenCalledTimes(1);
+    });
+
+    it('still answers invalid_client, uncounted, for a client it never checks a secret for', async () => {
+      // Unknown, disabled and non-secret clients are refused before the hash,
+      // so a full queue changes nothing for them.
+      for (const client of [
+        null,
+        { ...baseClient, enabled: false },
+        { ...baseClient, tokenEndpointAuthMethod: 'private_key_jwt' },
+      ]) {
+        const { fastify, shed } = makeShedStub(client);
+        await expect(authenticateClient(fastify, 'realm', creds)).rejects.toThrow(
+          InvalidClientError
+        );
+        expect(shed).not.toHaveBeenCalled();
+      }
+    });
+
+    it('lets any other hasher failure through unchanged', async () => {
+      const { fastify, shed } = makeShedStub(baseClient);
+      const failure = new Error('hasher exploded');
+      vi.mocked(fastify.passwordHasher.verifyPassword).mockRejectedValueOnce(failure);
+
+      await expect(authenticateClient(fastify, 'realm', creds)).rejects.toBe(failure);
+      expect(shed).not.toHaveBeenCalled();
+    });
   });
 
   it('accepts a client whose auth method is unset (confidential by default)', async () => {
