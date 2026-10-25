@@ -10,10 +10,12 @@
 //              careless ceremony app would; the proxy must replace all three
 //
 // Request headers that shape the answer (they pass through the proxy):
-//   X-Stub-Status      the status code to answer with (default 200)
-//   X-Stub-Set-Cookie  a Set-Cookie value to send
-//   X-Stub-Hang-Up     close the connection without an answer, so the proxy
-//                      has to answer by itself (502)
+//   X-Stub-Status          the status code to answer with (default 200)
+//   X-Stub-Set-Cookie      a Set-Cookie value to send
+//   X-Stub-Hang-Up         close the connection without an answer, so the
+//                          proxy has to answer by itself (502)
+//   X-Stub-Accel-Redirect  an X-Accel-Redirect value to send, asking nginx to
+//                          fetch another location internally; it must not
 //
 // Plain Node, no dependencies: it runs in a stock node image.
 import { createServer } from 'node:http';
@@ -46,6 +48,8 @@ const server = createServer((request, response) => {
     }
     const setCookie = request.headers['x-stub-set-cookie'];
     if (typeof setCookie === 'string') headers['set-cookie'] = setCookie;
+    const accelRedirect = request.headers['x-stub-accel-redirect'];
+    if (typeof accelRedirect === 'string') headers['x-accel-redirect'] = accelRedirect;
 
     const body = JSON.stringify({
       upstream: name,

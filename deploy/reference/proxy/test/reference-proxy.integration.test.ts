@@ -451,6 +451,10 @@ describe('the reference proxy (#482)', () => {
       '/x/..%2Fui/login',
       '/ui/..%2Foauth/token',
       '/oauth%2Ftoken',
+      '/ui\\login',
+      '/oauth/..\\ui/login',
+      '/ui/..%5Coauth/token',
+      '/ui/..%5coauth/token',
     ])('answers %s with 404 from the proxy, reaching neither stub', async (path) => {
       if (!prerequisites) return;
       const response = await send(path, { headers: { cookie: QAUTH_COOKIES } });
@@ -513,6 +517,27 @@ describe('the reference proxy (#482)', () => {
       expect(headerValues(response, 'cache-control')).toEqual(['public, max-age=3600']);
     });
 
+    it.each([
+      ['the ceremony app', '/ui/login', 'ceremony-app', '/oauth/authorize'],
+      ['the auth server', '/oauth/authorize', 'auth-server', '/ui/login'],
+    ] as const)('ignores an X-Accel-Redirect from %s', async (_side, path, upstream, target) => {
+      if (!prerequisites || stack === undefined) return;
+      const response = await send(path, {
+        headers: { cookie: QAUTH_COOKIES, 'x-stub-accel-redirect': target },
+      });
+
+      expect(response.status).toBe(200);
+      expect(echoOf(response).upstream).toBe(upstream);
+      expect(response.headers).not.toHaveProperty('x-accel-redirect');
+      const other =
+        upstream === 'ceremony-app' ? stack.containers.authServer : stack.containers.ceremonyApp;
+      expect(await logsOf(other)).not.toContain(response.marker);
+      if (upstream === 'ceremony-app') {
+        expect(headerValues(response, 'content-security-policy')).toEqual([REFERENCE_CSP]);
+        expect(headerValues(response, 'cache-control')).toEqual(['no-store']);
+      }
+    });
+
     it.each(['GET', 'HEAD'])(
       'lets a cache keep a content-hashed asset answered to a %s',
       async (method) => {
@@ -537,6 +562,7 @@ describe('the reference proxy (#482)', () => {
       ],
       ['a name with no hash', '/ui/assets/logo.svg', {}],
       ['a source map', '/ui/assets/index-BxY2abcd.js.map', {}],
+      ['a name with a trailing newline', '/ui/assets/index-BxY2abcd.js%0A', {}],
       ['a path outside the asset prefix', '/ui/index-BxY2abcd.js', {}],
       ['a path below the asset prefix', '/ui/assets/sub/index-BxY2abcd.js', {}],
     ] as const)('keeps no-store on %s', async (_case, path, options) => {
@@ -563,6 +589,11 @@ describe('the reference proxy (#482)', () => {
               'x-forwarded-host': 'evil.example.net',
               'x-forwarded-proto': 'http',
               forwarded: 'for=203.0.113.9;host=evil.example.net;proto=http',
+              'x-real-ip': '203.0.113.9',
+              'x-forwarded-port': '8443',
+              'x-forwarded-prefix': '/evil',
+              'x-original-url': '/internal/signer/v1/sign',
+              'x-rewrite-url': '/metrics',
             },
           })
         );
@@ -574,7 +605,16 @@ describe('the reference proxy (#482)', () => {
         expect(forwardedFor).not.toBe('203.0.113.9');
         expect(echo.headers['x-forwarded-host']).toBe(REALM_HOST);
         expect(echo.headers['x-forwarded-proto']).toBe('https');
-        expect(echo.headers).not.toHaveProperty('forwarded');
+        for (const name of [
+          'forwarded',
+          'x-real-ip',
+          'x-forwarded-port',
+          'x-forwarded-prefix',
+          'x-original-url',
+          'x-rewrite-url',
+        ]) {
+          expect(echo.headers, name).not.toHaveProperty(name);
+        }
         expect(echo.headers.host).toBe(REALM_HOST);
       }
     );
