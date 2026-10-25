@@ -222,3 +222,42 @@ describe('authEnvSchema SESSION_LAST_SEEN_INTERVAL', () => {
     }
   });
 });
+
+/**
+ * The ID-JAG issuer key cache and its two bounds (#433, ADR-011 §4). The cache
+ * TTL has a hard ceiling of an hour, as `CIMD_CACHE_MAX_TTL` is for CIMD, and a
+ * larger value fails validation instead of being clamped. The refresh cooldown
+ * and the negative cache are short, and neither can be switched off.
+ */
+describe('authEnvSchema ID-JAG issuer key cache', () => {
+  const parse = (key: string, raw?: string) =>
+    (authEnvSchema.parse(raw === undefined ? {} : { [key]: raw }) as Record<string, unknown>)[key];
+
+  it('defaults to a 5-minute cache, a 30-second cooldown and a 30-second negative cache', () => {
+    expect(parse('ID_JAG_JWKS_CACHE_TTL')).toBe(300);
+    expect(parse('ID_JAG_JWKS_REFRESH_COOLDOWN')).toBe(30);
+    expect(parse('ID_JAG_JWKS_NEGATIVE_CACHE_TTL')).toBe(30);
+  });
+
+  it('accepts a cache TTL from 0 up to the one-hour ceiling', () => {
+    expect(parse('ID_JAG_JWKS_CACHE_TTL', '0')).toBe(0);
+    expect(parse('ID_JAG_JWKS_CACHE_TTL', '3600')).toBe(3600);
+  });
+
+  it('refuses a cache TTL above the ceiling, rather than clamping it', () => {
+    for (const raw of ['3601', '86400', '-1', '1.5', 'forever']) {
+      expect(() => parse('ID_JAG_JWKS_CACHE_TTL', raw), raw).toThrow();
+    }
+  });
+
+  it.each(['ID_JAG_JWKS_REFRESH_COOLDOWN', 'ID_JAG_JWKS_NEGATIVE_CACHE_TTL'])(
+    '%s accepts whole seconds from 1 to 300 and refuses 0, so it cannot be switched off',
+    (key) => {
+      expect(parse(key, '1')).toBe(1);
+      expect(parse(key, '300')).toBe(300);
+      for (const raw of ['0', '-1', '1.5', '301', 'off']) {
+        expect(() => parse(key, raw), raw).toThrow();
+      }
+    }
+  );
+});
