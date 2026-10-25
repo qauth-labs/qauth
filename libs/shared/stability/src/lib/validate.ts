@@ -3,6 +3,8 @@ import { evidenceKind } from './evidence';
 import {
   ADR_PATH_PATTERN,
   CONFIG_KEY_PATTERN,
+  DISCOVERY_MEMBER_PATTERN,
+  DOCS_PAGE_PATTERN,
   type ExperimentalItem,
   IMPORT_PATH_PATTERN,
   ITEM_ID_PATTERN,
@@ -58,8 +60,13 @@ export function registryShapeProblems(items: unknown): string[] {
         problems.push(`${at}: ${field} must be a string or null`);
       }
     }
-    if (!isStringArray(item['requires'])) {
-      problems.push(`${at}: requires must be an array of strings`);
+    for (const field of ['requires', 'discoveryMembers']) {
+      if (!isStringArray(item[field])) {
+        problems.push(`${at}: ${field} must be an array of strings`);
+      }
+    }
+    if (item['docsPage'] !== null && typeof item['docsPage'] !== 'string') {
+      problems.push(`${at}: docsPage must be a string or null`);
     }
     for (const field of ['built', 'stable']) {
       if (typeof item[field] !== 'boolean') problems.push(`${at}: ${field} must be true or false`);
@@ -107,6 +114,8 @@ export function validateExperimentalRegistry(items: readonly ExperimentalItem[])
   const problems: string[] = [];
   const seen = new Set<string>();
   const anchors = new Map<string, string>();
+  const members = new Map<string, string>();
+  const docsPages = new Map<string, string>();
 
   for (const item of items) {
     const at = isBlank(item.id) ? '(no id)' : item.id;
@@ -143,6 +152,8 @@ export function validateExperimentalRegistry(items: readonly ExperimentalItem[])
     }
 
     problems.push(...switchProblems(item, at));
+    problems.push(...discoveryProblems(item, at, members));
+    problems.push(...docsPageProblems(item, at, docsPages));
 
     if (isBlank(item.spec?.name)) problems.push(`${at}: the spec has no name`);
     if (!/^https:\/\/\S+$/.test(item.spec?.url ?? '')) {
@@ -199,6 +210,63 @@ function switchProblems(item: ExperimentalItem, at: string): string[] {
     problems.push(`${at}: only a server item can require other settings`);
   }
   return problems;
+}
+
+/**
+ * The discovery members of `item`. `claimed` maps each member already listed
+ * by an earlier item to that item, since discovery holds a member once.
+ */
+function discoveryProblems(
+  item: ExperimentalItem,
+  at: string,
+  claimed: Map<string, string>
+): string[] {
+  const problems: string[] = [];
+  if (item.surface === 'sdk' && item.discoveryMembers.length > 0) {
+    problems.push(`${at}: an SDK item adds nothing to the server's discovery documents`);
+  }
+  for (const member of item.discoveryMembers) {
+    if (!DISCOVERY_MEMBER_PATTERN.test(member)) {
+      problems.push(
+        `${at}: the discovery member "${member}" must be lower-case words joined by "_"`
+      );
+      continue;
+    }
+    const owner = claimed.get(member);
+    if (owner === undefined) {
+      claimed.set(member, item.id);
+    } else {
+      problems.push(
+        owner === item.id
+          ? `${at}: lists the discovery member ${member} twice`
+          : `${at}: the discovery member ${member} is listed by ${owner} too`
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * The docs page of `item`. `claimed` maps each page already named by an
+ * earlier item to that item: a flagged page documents one item (#477).
+ */
+function docsPageProblems(
+  item: ExperimentalItem,
+  at: string,
+  claimed: Map<string, string>
+): string[] {
+  if (item.docsPage === null) {
+    return item.built ? [`${at}: a built item needs the docs page that documents it`] : [];
+  }
+  if (!DOCS_PAGE_PATTERN.test(item.docsPage)) {
+    return [`${at}: the docs page must be a site route such as /integrate/wallet-login/`];
+  }
+  const owner = claimed.get(item.docsPage);
+  if (owner !== undefined) {
+    return [`${at}: the docs page ${item.docsPage} documents ${owner} already`];
+  }
+  claimed.set(item.docsPage, item.id);
+  return [];
 }
 
 function conditionProblems(item: ExperimentalItem, at: string): string[] {

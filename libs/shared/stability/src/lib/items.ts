@@ -30,6 +30,9 @@ export const EXPERIMENTAL_ITEMS = [
     switchKey: 'FIRST_PARTY_LOGIN_ENABLED',
     switchValue: 'true',
     requires: [],
+    // FiPA §8 "Authorization Server Metadata"; ADR-017 §11.
+    discoveryMembers: ['authorization_challenge_endpoint'],
+    docsPage: null,
     spec: FIPA_SPEC,
     built: false,
     stable: false,
@@ -50,6 +53,8 @@ export const EXPERIMENTAL_ITEMS = [
     switchKey: '@qauth-labs/node/first-party',
     switchValue: null,
     requires: [],
+    discoveryMembers: [],
+    docsPage: null,
     spec: FIPA_SPEC,
     built: false,
     stable: false,
@@ -70,6 +75,10 @@ export const EXPERIMENTAL_ITEMS = [
     switchKey: 'OID4VP_VERIFIER_PROFILE',
     switchValue: 'oid4vp-1.0-base',
     requires: ['WALLET_FEDERATION_ENABLED=true'],
+    // The profile changes how a wallet presentation is requested and checked;
+    // no discovery member describes it.
+    discoveryMembers: [],
+    docsPage: '/integrate/wallet-login/',
     spec: {
       name: 'OpenID for Verifiable Presentations 1.0',
       url: 'https://openid.net/specs/openid-4-verifiable-presentations-1_0.html',
@@ -101,6 +110,14 @@ export const EXPERIMENTAL_ITEMS = [
     switchKey: null,
     switchValue: null,
     requires: [],
+    // The attestation draft's §8 "Authorization Server and Resource Server
+    // Metadata"; ADR-017 §11. Its `attest_jwt_client_auth_dpop` method is a
+    // value of the stable `token_endpoint_auth_methods_supported`, not a member.
+    discoveryMembers: [
+      'client_attestation_signing_alg_values_supported',
+      'client_attestation_pop_signing_alg_values_supported',
+    ],
+    docsPage: null,
     spec: {
       name: 'OAuth 2.0 Attestation-Based Client Authentication',
       url: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-attestation-based-client-auth/',
@@ -125,6 +142,8 @@ export const EXPERIMENTAL_ITEMS = [
     switchKey: 'PASS_THROUGH_LEG_ENABLED',
     switchValue: 'true',
     requires: ['AUTHORITY_TREE_ENABLED=true'],
+    discoveryMembers: [],
+    docsPage: null,
     spec: {
       name: 'The pass-through leg, ADR-016 §4',
       url: 'https://docs.qauth.dev/reference/records/adr/016-agent-platform-bindings/',
@@ -149,6 +168,8 @@ export const EXPERIMENTAL_ITEMS = [
     switchKey: null,
     switchValue: null,
     requires: [],
+    discoveryMembers: [],
+    docsPage: null,
     spec: {
       name: 'The AuthMethod contract, ADR-018',
       url: 'https://docs.qauth.dev/reference/records/adr/018-1-0-scope-and-stability/',

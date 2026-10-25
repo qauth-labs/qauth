@@ -17,9 +17,9 @@ describe('validateExperimentalRegistry', () => {
   // The acceptance criteria of #476: a duplicate id, a missing ADR link, and a
   // built item with no switch key each fail the registry.
   it('fails on a duplicate id', () => {
-    expect(validateExperimentalRegistry([sampleItem(), sampleItem()])).toEqual([
-      'sample-feature: registered twice',
-    ]);
+    expect(
+      validateExperimentalRegistry([sampleItem(), sampleItem({ docsPage: '/integrate/other/' })])
+    ).toEqual(['sample-feature: registered twice']);
   });
 
   it.each([
@@ -150,7 +150,7 @@ describe('the docs anchor of an item', () => {
     expect(
       validateExperimentalRegistry([
         sampleItem({ id: 'oid4vp-1.0-base' }),
-        sampleItem({ id: 'oid4vp-10-base' }),
+        sampleItem({ id: 'oid4vp-10-base', docsPage: '/integrate/other/' }),
       ])
     ).toEqual([
       'oid4vp-10-base: its docs anchor #oid4vp-10-base is the anchor of oid4vp-1.0-base too',
@@ -165,6 +165,98 @@ describe('the docs anchor of an item', () => {
       ]);
     }
   );
+});
+
+// #477: an item lists the discovery members it adds, and a built item names
+// the docs page that documents it, which no other item names.
+describe('the discovery members of an item', () => {
+  it('accepts members named as RFC 8414 names them', () => {
+    expect(
+      validateExperimentalRegistry([
+        sampleItem({ discoveryMembers: ['sample_endpoint', 'sample_values_supported'] }),
+      ])
+    ).toEqual([]);
+  });
+
+  it.each(['Sample_endpoint', 'sample-endpoint', 'sample endpoint', '', '_sample'])(
+    'fails on the member name "%s"',
+    (member) => {
+      expect(validateExperimentalRegistry([sampleItem({ discoveryMembers: [member] })])).toEqual([
+        `sample-feature: the discovery member "${member}" must be lower-case words joined by "_"`,
+      ]);
+    }
+  );
+
+  it('fails on a member an item lists twice', () => {
+    expect(
+      validateExperimentalRegistry([
+        sampleItem({ discoveryMembers: ['sample_endpoint', 'sample_endpoint'] }),
+      ])
+    ).toEqual(['sample-feature: lists the discovery member sample_endpoint twice']);
+  });
+
+  it('fails on a member two items list', () => {
+    expect(
+      validateExperimentalRegistry([
+        sampleItem({ discoveryMembers: ['sample_endpoint'] }),
+        sampleItem({
+          id: 'other-feature',
+          docsPage: '/integrate/other/',
+          discoveryMembers: ['sample_endpoint'],
+        }),
+      ])
+    ).toEqual([
+      'other-feature: the discovery member sample_endpoint is listed by sample-feature too',
+    ]);
+  });
+
+  it('fails on an SDK item with a member', () => {
+    expect(
+      validateExperimentalRegistry([
+        sampleItem({
+          surface: 'sdk',
+          switchKey: '@qauth-labs/node/sample',
+          switchValue: null,
+          discoveryMembers: ['sample_endpoint'],
+        }),
+      ])
+    ).toEqual(["sample-feature: an SDK item adds nothing to the server's discovery documents"]);
+  });
+});
+
+describe('the docs page of an item', () => {
+  it('fails on a built item with no docs page', () => {
+    expect(validateExperimentalRegistry([sampleItem({ docsPage: null })])).toEqual([
+      'sample-feature: a built item needs the docs page that documents it',
+    ]);
+  });
+
+  it('accepts an item that is not built and has no docs page yet', () => {
+    expect(validateExperimentalRegistry([sampleItem({ built: false, docsPage: null })])).toEqual(
+      []
+    );
+  });
+
+  it.each([
+    'integrate/sample/',
+    '/integrate/sample',
+    '/integrate/Sample/',
+    'https://docs.qauth.dev/integrate/sample/',
+    '/integrate/sample.md/',
+    '/',
+  ])('fails on the docs page %s', (docsPage) => {
+    expect(validateExperimentalRegistry([sampleItem({ docsPage })])).toEqual([
+      'sample-feature: the docs page must be a site route such as /integrate/wallet-login/',
+    ]);
+  });
+
+  it('fails on a page two items name', () => {
+    expect(
+      validateExperimentalRegistry([sampleItem(), sampleItem({ id: 'other-feature' })])
+    ).toEqual([
+      'other-feature: the docs page /integrate/sample-feature/ documents sample-feature already',
+    ]);
+  });
 });
 
 describe('registryShapeProblems', () => {
@@ -187,6 +279,8 @@ describe('registryShapeProblems', () => {
       'item 1: switchKey must be a string or null',
       'item 1: switchValue must be a string or null',
       'item 1: requires must be an array of strings',
+      'item 1: discoveryMembers must be an array of strings',
+      'item 1: docsPage must be a string or null',
       'item 1: built must be true or false',
       'item 1: stable must be true or false',
       'item 1: spec must have a name, a url and a status, each a string',

@@ -16,6 +16,8 @@ export const sampleItem = (overrides: Partial<ExperimentalItem> = {}): Experimen
   switchKey: 'SAMPLE_FEATURE_ENABLED',
   switchValue: 'true',
   requires: [],
+  discoveryMembers: [],
+  docsPage: '/integrate/sample-feature/',
   spec: { name: 'A sample draft', url: 'https://example.com/sample', status: 'draft' },
   built: true,
   stable: false,

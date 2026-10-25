@@ -116,6 +116,25 @@ export interface ExperimentalItem {
   readonly switchValue: string | null;
   /** Other settings the switch needs before it does anything, as `KEY=value`. */
   readonly requires: readonly string[];
+  /**
+   * The members the item adds to the server's discovery documents (RFC 8414
+   * authorization server metadata and the OpenID configuration) while it is
+   * on, such as `authorization_challenge_endpoint`. While it is off they are
+   * absent: never `null`, never `false` (ADR-018 §5). Empty for an item that
+   * adds none, and always for an `sdk` item.
+   *
+   * A value the item adds to the list of a stable member, such as a client
+   * authentication method in `token_endpoint_auth_methods_supported`, is not
+   * a member; that member's own code adds it while the item is on.
+   */
+  readonly discoveryMembers: readonly string[];
+  /**
+   * The docs site page that documents the item, as its route:
+   * `/integrate/wallet-login/`. The page carries `experimental: true` in its
+   * frontmatter, so it shows the Experimental banner, and no other item names
+   * the same page. A built item always has one; `null` until then.
+   */
+  readonly docsPage: string | null;
   readonly spec: ImplementedSpec;
   /** It exists in code today. An item can be listed before it is built. */
   readonly built: boolean;
@@ -138,3 +157,9 @@ export const IMPORT_PATH_PATTERN = /^@qauth-labs\/[a-z0-9-]+(?:\/[a-z0-9-]+)*$/;
 
 /** The form of a `requires` entry: `KEY=value`. */
 export const REQUIRED_SETTING_PATTERN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*=\S+$/;
+
+/** The form of a discovery member name: lower-case words joined by `_`, as RFC 8414 names them. */
+export const DISCOVERY_MEMBER_PATTERN = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+
+/** The form of a docs page route: lower-case path segments, with a leading and a trailing `/`. */
+export const DOCS_PAGE_PATTERN = /^\/(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)+$/;

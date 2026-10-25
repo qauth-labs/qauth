@@ -100,6 +100,24 @@ describe('the experimental features page', () => {
     expect(anchors.has('oid4vp-10-base')).toBe(true);
   });
 
+  // #477: the page names what each server item adds to discovery, and the
+  // page that documents it.
+  it.each(EXPERIMENTAL_ITEMS.map((item) => [item.id, item] as const))(
+    'names the discovery members and the docs page of %s',
+    (id, item) => {
+      const section = sectionOf(id);
+      for (const member of item.discoveryMembers) expect(section).toContain(`\`${member}\``);
+      if (item.surface === 'server' && item.discoveryMembers.length === 0) {
+        expect(section).toContain('- Discovery members: none.');
+      }
+      expect(section).toContain(
+        item.docsPage === null
+          ? '- Documented in: no page yet.'
+          : `- Documented in: [\`${item.docsPage}\`](${item.docsPage}).`
+      );
+    }
+  );
+
   it('lists the four conditions of ADR-018 §5', () => {
     expect(page).toContain(
       PROMOTION_CONDITIONS.map((condition, index) => `${index + 1}. ${condition.text}`).join('\n')
