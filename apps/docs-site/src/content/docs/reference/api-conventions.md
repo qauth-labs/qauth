@@ -30,9 +30,11 @@ not: they keep the shapes their specifications define ([Errors](#errors)).
 - Each token carries one audience, and a family accepts only its own. The audience identifiers
   carry a version, as ADR-018 §5 requires for every QAuth-defined identifier, and it is the same
   release candidate as the path's.
-- The admin API's scopes are `admin:read`, `admin:write` and `admin:security`. The account and
-  developer families define no scopes here: their guards check the audience and the subject. A
-  route that needs a scope adds it in its own change.
+- The admin API's scopes are `admin:read`, `admin:write` and `admin:security`, intersected with
+  the caller's admin roles. The [admin permissions](/reference/admin-permissions/) page lists
+  them with every permission and the built-in roles. The account and developer families define
+  no scopes here: their guards check the audience and the subject. A route that needs a scope
+  adds it in its own change.
 
 No route is served under these prefixes yet. The developer routes at `/api/clients` and
 `/api/consents` and the account routes at `/consents` move under them, and their old paths are then
@@ -222,6 +224,9 @@ Each family is published as OpenAPI 3.1. Every operation of a family carries:
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                           |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                            |
 
+On the admin API every id in `x-qauth-permission` is a permission of the
+[admin catalog](/reference/admin-permissions/), and not a retired one.
+
 A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
 
 ```ts
@@ -298,9 +303,10 @@ their old paths are listed here.
 ## Enforcement
 
 - `apps/auth-server/src/app/api-conventions/openapi-conventions.ts` checks every operation under a
-  family prefix: the `operationId`, the security requirement, the five extensions, the names, the
-  id and time formats, closed request objects, the problem schema on error responses, cursor
-  paging, Merge Patch bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
+  family prefix: the `operationId`, the security requirement, the five extensions (an admin
+  operation's permissions come from the admin catalog), the names, the id and time formats,
+  closed request objects, the problem schema on error responses, cursor paging, Merge Patch
+  bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
   over `stable-surface/openapi.json` and `apps/docs-site/public/openapi.json`. CI's stable-surface
   check regenerates both files and fails when they differ from the committed copies, so the check
   reads what the server serves.

@@ -266,6 +266,21 @@ describe('the API conventions check — fixture document (#506)', () => {
       expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = [])))).toEqual(['permission']);
     });
 
+    // #507: an admin operation names permissions of the admin catalog.
+    it('MUTATION: an admin permission the catalog does not have', () => {
+      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = 'realms.delete')))).toEqual([
+        'permission',
+      ]);
+      expect(
+        rulesOf(
+          mutated(
+            (d) =>
+              (PATCH(d)['x-qauth-permission'] = ['realms.policies.write', 'realms.policies.admin'])
+          )
+        )
+      ).toEqual(['permission']);
+    });
+
     it('MUTATION: a security operation without effects, or without the two-admin marker', () => {
       expect(rulesOf(mutated((d) => delete PATCH(d)['x-qauth-effects']))).toEqual(['effects']);
       expect(rulesOf(mutated((d) => delete PATCH(d)['x-qauth-two-admin']))).toEqual(['two-admin']);
