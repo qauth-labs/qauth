@@ -197,8 +197,11 @@ export const refreshTokens = pgTable(
      * no token of the family lives past that limit. Migration 0038 filled it
      * from each family's earliest `created_at`.
      *
-     * No default on purpose: an insert that forgot to copy it would restart
-     * the family's clock.
+     * No default on purpose: a default would restart the family's clock for an
+     * insert that forgot to copy it. Instead the trigger
+     * `refresh_tokens_family_created_at_fill` (migration 0038) gives an insert
+     * without a value the start of the family it joins, or now for a new
+     * family, for the previous release during a rolling upgrade.
      */
     familyCreatedAt: bigint('family_created_at', { mode: 'number' }).notNull(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),

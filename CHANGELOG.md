@@ -767,12 +767,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowering it ends older families at their next refresh. A realm with no
   `sso_max_lifespan` keeps the sliding `REFRESH_TOKEN_LIFESPAN`. The migration
   gives each existing token the creation time of the earliest token of its
-  family.
+  family, in one statement over the whole table, so refresh-token traffic waits
+  for it. During a rolling upgrade the previous release does not write the
+  column: a trigger gives its insert the start of the family the token joins,
+  or the current time for a new family.
 
   **Action for operators**: none for a realm without `sso_max_lifespan`. In a
   realm that sets it, a family already older than the limit ends at its next
   refresh after the upgrade, and its client sends the user through
-  `/oauth/authorize` again.
+  `/oauth/authorize` again. Nodes of the previous release do not enforce the
+  limit, so it applies once the last of them is gone.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,

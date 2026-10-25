@@ -9,8 +9,9 @@
  * seconds after its start (`refresh_tokens.family_created_at`), and no token of
  * it expires later than that. A realm that sets none keeps the sliding expiry.
  *
- * The limit is read from the realm at each use, never stored on the token, so
- * a realm that lowers it ends its older families at their next use.
+ * The limit is read from the request's realm row at each use (the realm
+ * resolver's, at most its cache time old), never stored on the token, so a
+ * realm that lowers it ends its older families at their next use.
  */
 
 /**

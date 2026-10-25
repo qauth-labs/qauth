@@ -2671,6 +2671,21 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       ]);
     });
 
+    it('never lets a party without the DPoP key revoke a bound family past its end', async () => {
+      // RFC 9449 §5: a public client's refresh token bound to its key. Whoever
+      // holds a copy but not the key is refused before the family's end is
+      // looked at, so cannot end the family for the client.
+      const setup = setupFamily(61 * MINUTE, { cnfJkt: 'k'.repeat(43) });
+      Object.assign(setup.fastify, { dpop: { verifyRequest: vi.fn() } });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).rejects.toThrow();
+
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'refresh_token', error: 'invalid_dpop_proof', reason: 'dpop_missing_proof' },
+      ]);
+    });
+
     it("never lets another client's presentation revoke the family", async () => {
       const setup = setupFamily(61 * MINUTE, { oauthClientId: 'someone-else' });
 

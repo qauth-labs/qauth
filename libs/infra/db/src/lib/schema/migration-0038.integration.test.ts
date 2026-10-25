@@ -4,8 +4,9 @@
  *
  * Every refresh token from before the migration gets the `created_at` of the
  * earliest token of its family, so a realm's `sso_max_lifespan` counts from the
- * code exchange or sign-in that started the family. From then on the database
- * refuses a token without one.
+ * code exchange or sign-in that started the family. From then on an insert
+ * without a value, as the previous release makes during a rolling upgrade,
+ * takes the start of the family it joins, or now for a new family.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
  * and upgraded through 0037, then 0038, so a later migration cannot change
@@ -130,7 +131,6 @@ describe('migration 0038 — refresh-token family start (seed-then-migrate)', ()
   });
 
   it('adds a bigint column that is required and has no default', async () => {
-    const owner = await seedOwner();
     await migrate();
 
     const { rows } = await db().query(
@@ -139,12 +139,61 @@ describe('migration 0038 — refresh-token family start (seed-then-migrate)', ()
        WHERE table_name = 'refresh_tokens' AND column_name = 'family_created_at'`
     );
     expect(rows).toEqual([{ data_type: 'bigint', is_nullable: 'NO', column_default: null }]);
+  });
 
-    // No default: a token inserted without the family's start is refused, so
-    // a rotation that forgot to copy it cannot restart the family's clock.
-    await expect(seedToken(owner, 'e', FAMILY_A, 1_700_000_000_000)).rejects.toMatchObject({
-      code: '23502',
-      column: 'family_created_at',
-    });
+  it('gives a token inserted without a start the start of the family it joins', async () => {
+    const owner = await seedOwner();
+    await seedToken(owner, 'a', FAMILY_A, 1_700_000_000_000);
+    await migrate();
+
+    // The previous release's rotation, as it runs during a rolling upgrade:
+    // the same insert as before the migration, with no family_created_at.
+    await seedToken(owner, 'b', FAMILY_A, 1_700_000_009_000);
+
+    const { rows } = await db().query(
+      `SELECT left(token_hash, 1) AS token_hash, family_created_at
+       FROM refresh_tokens ORDER BY token_hash`
+    );
+    expect(rows).toEqual([
+      { token_hash: 'a', family_created_at: '1700000000000' },
+      { token_hash: 'b', family_created_at: '1700000000000' },
+    ]);
+  });
+
+  it('starts a new family now when the insert names neither a known family nor a start', async () => {
+    const owner = await seedOwner();
+    await migrate();
+
+    const before = Date.now();
+    await seedToken(owner, 'c', FAMILY_B, 1_700_000_000_000);
+    const after = Date.now();
+
+    const {
+      rows: [row],
+    } = await db().query<{ family_created_at: string }>(
+      'SELECT family_created_at FROM refresh_tokens WHERE family_id = $1',
+      [FAMILY_B]
+    );
+    // Whole seconds, rounded, as the schema's `created_at` defaults are.
+    expect(Number(row.family_created_at)).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
+    expect(Number(row.family_created_at)).toBeLessThanOrEqual(Math.ceil(after / 1000) * 1000);
+  });
+
+  it('keeps the start an insert names, even inside a known family', async () => {
+    const owner = await seedOwner();
+    await seedToken(owner, 'a', FAMILY_A, 1_700_000_000_000);
+    await migrate();
+
+    await db().query(
+      `INSERT INTO refresh_tokens
+         (token_hash, user_id, oauth_client_id, family_id, family_created_at, expires_at)
+       VALUES (repeat('d', 64), $1, $2, $3, 1700000004000, 1)`,
+      [owner.userId, owner.clientId, FAMILY_A]
+    );
+
+    const { rows } = await db().query(
+      `SELECT family_created_at FROM refresh_tokens WHERE token_hash = repeat('d', 64)`
+    );
+    expect(rows).toEqual([{ family_created_at: '1700000004000' }]);
   });
 });
