@@ -67,7 +67,11 @@ const NOTHING_ELSE = {
  *   `data_at_rest` key.
  * - `delivery` signs Security Event Tokens and logout tokens
  *   (`event_signing`) and webhook messages (#547). It holds no secret: it
- *   sends the message to the signer and gets the signature header back.
+ *   sends the message to the signer and gets the signature header back. It
+ *   may decrypt with the `data_at_rest` key, never encrypt: an SSF receiver's
+ *   `Authorization` header, which the api role stored encrypted, is sent with
+ *   each push (#410). What it can decrypt is bounded by its database grants,
+ *   which reach no other encrypted column.
  * - `admin` reads public keys. The key operations of the admin API (rotation
  *   and retirement, #544 and #551) add their own grants.
  * - Every role may read the realm's public keys, which hold no secret.
@@ -95,7 +99,13 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     decrypt: true,
     ...PUBLIC_READS,
   },
-  delivery: { ...NOTHING_ELSE, signJws: ['event_signing'], signWebhook: true, ...PUBLIC_READS },
+  delivery: {
+    ...NOTHING_ELSE,
+    signJws: ['event_signing'],
+    signWebhook: true,
+    decrypt: true,
+    ...PUBLIC_READS,
+  },
   admin: { ...NOTHING_ELSE, ...PUBLIC_READS },
 });
 

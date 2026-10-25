@@ -57,7 +57,8 @@ export interface Delivery {
  * signed and gets the signature back, and never sees a key. The signer role
  * makes the handle (`deliverySignerHandle` in
  * `@qauth-labs/fastify-plugin-event-delivery`), which calls the signer as the
- * `delivery` caller, so the signer's policy allows these two and nothing else.
+ * `delivery` caller, so the signer's policy allows these three and nothing
+ * else.
  */
 export interface DeliverySigner {
   /**
@@ -88,6 +89,19 @@ export interface DeliverySigner {
     /** The claims set, without `iss`; the signer adds the realm's issuer. */
     readonly claims: Readonly<Record<string, unknown>>;
   }): Promise<string>;
+
+  /**
+   * Decrypt a destination's secret that the realm's `data_at_rest` key
+   * encrypted, such as the `Authorization` header an SSF receiver asked QAuth
+   * to send (#410). The plaintext lives only for the attempt.
+   */
+  decrypt(request: {
+    readonly realmId: string;
+    /** The ciphertext as stored. */
+    readonly ciphertext: string;
+    /** The context it was encrypted under: it names the destination. */
+    readonly context: string;
+  }): Promise<Uint8Array>;
 }
 
 /** What a route gets beside the delivery and the event. */

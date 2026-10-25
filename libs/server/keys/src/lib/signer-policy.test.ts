@@ -57,6 +57,7 @@ describe('SIGNER_POLICY', () => {
       delivery: [
         'signJws:event_signing',
         'signWebhook',
+        'decrypt',
         'getVerificationKeys',
         'getJwks',
         'getUpstreamJwks',
@@ -83,6 +84,18 @@ describe('SIGNER_POLICY', () => {
 
   it('never lets web sign', () => {
     expect(grantsOf('web').filter((grant) => grant.startsWith('sign'))).toEqual([]);
+  });
+
+  it('lets delivery decrypt but never encrypt: it reads secrets the api role stored', () => {
+    expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'decrypt'))).toEqual([
+      'local',
+      'api',
+      'delivery',
+    ]);
+    expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'encrypt'))).toEqual([
+      'local',
+      'api',
+    ]);
   });
 
   it('gives the cookie secrets to web and local only', () => {

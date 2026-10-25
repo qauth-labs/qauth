@@ -82,6 +82,7 @@ function route(
 const signer: DeliverySigner = {
   signWebhook: async () => 'v1,signature',
   signEventToken: async () => 'header.payload.signature',
+  decrypt: async () => new Uint8Array(),
 };
 
 function logger() {

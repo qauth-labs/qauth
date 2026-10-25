@@ -383,7 +383,7 @@ What the signer guarantees:
   | `local`    | Everything. The caller inside the signer's own process, in a single deployment.           |
   | `web`      | `getCookieSecrets`. It never signs anything.                                              |
   | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt`. |
-  | `delivery` | `signJws` for `event_signing`, `signWebhook`.                                             |
+  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` (an SSF receiver's header).       |
   | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                   |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
