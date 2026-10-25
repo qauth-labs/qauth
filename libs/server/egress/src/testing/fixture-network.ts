@@ -5,6 +5,7 @@ import { type AddressInfo, connect, isIP, type Socket } from 'node:net';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 
 import type { ResolveHost } from '../lib/destination';
+import { type Dial, exchange } from '../lib/exchange';
 import type { EgressTransport } from '../lib/transport';
 import { createTestCertificate } from './test-certificate';
 
@@ -20,7 +21,9 @@ import { createTestCertificate } from './test-certificate';
  *   and records every address it is asked to dial.
  *
  * Everything between — the checks, TLS with SNI and certificate validation
- * against the URL's host, HTTP, redirects and caps — is the production code.
+ * against the URL's host, HTTP, redirects and caps — is the production code,
+ * except that each exchange runs in the test's process rather than in a fetch
+ * process.
  * The servers' certificate covers `egress.test` and `*.egress.test`, signed by
  * a CA the test thread trusts while the network is up.
  */
@@ -85,12 +88,15 @@ export async function createFixtureNetwork(): Promise<FixtureNetwork> {
     return addresses.map((address): LookupAddress => ({ address, family: isIP(address) }));
   };
 
+  const dial: Dial = (_hostname, addresses) => {
+    dialled.push(addresses.map(({ address }) => address));
+    return connect(ports.get(addresses[0].address) ?? CLOSED_PORT, '127.0.0.1');
+  };
+  // In this process, not in a fetch process: the fixture dialler cannot cross
+  // to one. `process-pool.test.ts` runs exchanges in real fetch processes.
   const transport: EgressTransport = {
     resolveHost,
-    dial: (_hostname, addresses) => {
-      dialled.push(addresses.map(({ address }) => address));
-      return connect(ports.get(addresses[0].address) ?? CLOSED_PORT, '127.0.0.1');
-    },
+    exchange: (job, signal) => exchange(job, dial, signal),
   };
 
   const serve = async (address: string, handler: FixtureHandler): Promise<FixtureServer> => {

@@ -26,7 +26,8 @@ vi.mock('node:dns/promises', async (importOriginal) => ({
   },
 }));
 
-import { dialPinned, resolveWithCares } from './transport';
+import { dialPinned } from './exchange';
+import { resolveWithCares } from './transport';
 
 const errno = (code: string) => Object.assign(new Error(`query ${code}`), { code });
 

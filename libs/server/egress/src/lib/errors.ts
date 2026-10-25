@@ -10,6 +10,8 @@
  * - `timeout`: the connect time or the total time ran out.
  * - `network`: the name did not resolve, or the connection, the TLS handshake
  *   or the HTTP exchange failed.
+ * - `busy`: the pool of fetch processes had no room for the call: its host
+ *   family holds its share of them, or too many calls already wait.
  *
  * A redirect target is checked by the same rules as the first URL, so a
  * redirect to `http` is refused with `scheme` and one to a private address with
@@ -22,12 +24,14 @@ export type EgressErrorReason =
   | 'redirect'
   | 'size'
   | 'timeout'
-  | 'network';
+  | 'network'
+  | 'busy';
 
 /**
  * `blocked`: a check refused the call, and nothing more was sent to the
  * destination it refused. `failed`: the destination was contacted, or tried,
- * and the call did not complete.
+ * and the call did not complete, or the client had no room for the call
+ * (`busy`).
  */
 export type EgressOutcome = 'blocked' | 'failed';
 

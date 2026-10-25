@@ -116,7 +116,7 @@ function parseIpv4(text: string): number[] | null {
  * anything else, and for a literal with a zone id (`fe80::1%eth0`): a zone is
  * only meaningful on a local link.
  */
-function parseIpv6(text: string): number[] | null {
+export function parseIpv6(text: string): number[] | null {
   if (text.includes('%') || isIP(text) !== 6) return null;
 
   let body = text.toLowerCase();

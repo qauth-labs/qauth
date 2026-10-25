@@ -24,7 +24,8 @@ import type { EgressTransport } from './transport';
  *
  * The library has no way to hand the client another network, so the tests
  * replace the transport module's NODE_TRANSPORT with one that delegates to
- * `network.current`.
+ * `network.current`. Its exchanges run in this process; the pool of fetch
+ * processes that runs them outside tests has its own suite.
  */
 
 const network = vi.hoisted(() => ({ current: undefined as EgressTransport | undefined }));
@@ -40,7 +41,7 @@ vi.mock('./transport', async (importOriginal) => {
     NODE_TRANSPORT: {
       resolveHost: (...args: Parameters<EgressTransport['resolveHost']>) =>
         current().resolveHost(...args),
-      dial: (...args: Parameters<EgressTransport['dial']>) => current().dial(...args),
+      exchange: (...args: Parameters<EgressTransport['exchange']>) => current().exchange(...args),
     },
   };
 });
@@ -678,8 +679,8 @@ describe('timeouts (local test servers)', () => {
 
 describe('validateDestination', () => {
   it('resolves and checks without sending anything', async () => {
-    const dial = vi.fn(net.transport.dial);
-    network.current = { ...net.transport, dial };
+    const exchange = vi.fn(net.transport.exchange);
+    network.current = { ...net.transport, exchange };
     await expect(
       client().validateDestination('https://api.egress.test/hook?token=abc', { purpose: 'webhook' })
     ).resolves.toEqual({
@@ -689,7 +690,8 @@ describe('validateDestination', () => {
       addresses: [PUBLIC_A],
     });
     expect(net.lookups).toEqual(['api.egress.test']);
-    expect(dial).not.toHaveBeenCalled();
+    expect(exchange).not.toHaveBeenCalled();
+    expect(net.dialled).toEqual([]);
     expect(serverA.connections).toBe(0);
   });
 
@@ -796,6 +798,22 @@ describe('counting and logging', () => {
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).not.toContain('secret');
     expect(logged).not.toContain('/path');
+  });
+
+  it('reports a call the fetch pool has no room for as busy, without dialling', async () => {
+    const inc = vi.fn();
+    network.current = {
+      ...net.transport,
+      exchange: async (job) => ({
+        kind: 'failed',
+        reason: 'busy',
+        message: `egress to ${job.hostname} failed: too many calls in progress`,
+      }),
+    };
+    const err = await refusal(get('https://api.egress.test/', {}, client({ counter: { inc } })));
+    expect(err).toMatchObject({ reason: 'busy', outcome: 'failed', host: 'api.egress.test' });
+    expect(inc).toHaveBeenCalledWith({ purpose: 'test', outcome: 'failed', reason: 'busy' });
+    expect(serverA.connections).toBe(0);
   });
 
   it('keeps headers and query strings out of error messages', async () => {
