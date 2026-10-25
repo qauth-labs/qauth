@@ -88,8 +88,8 @@ describe('SSF streams integration (real Postgres)', () => {
   async function client(realmId: string): Promise<{ id: string; clientId: string }> {
     const clientId = `receiver-${randomUUID()}`;
     const { rows } = await pool().query<{ id: string }>(
-      `INSERT INTO oauth_clients (realm_id, client_id, client_secret_hash, name, redirect_uris)
-       VALUES ($1, $2, 'x', 'receiver', '[]') RETURNING id`,
+      `INSERT INTO oauth_clients (realm_id, client_id, client_secret_hash, name, redirect_uris, scopes)
+       VALUES ($1, $2, 'x', 'receiver', '[]', '["ssf:stream"]') RETURNING id`,
       [realmId, clientId]
     );
     return { id: rows[0].id, clientId };
@@ -207,6 +207,10 @@ describe('SSF streams integration (real Postgres)', () => {
     await pool().query(`UPDATE oauth_clients SET enabled = false WHERE id = $1`, [
       clientOff.receiver.id,
     ]);
+    const scopeGone = await streamOf();
+    await pool().query(`UPDATE oauth_clients SET scopes = '["reports:read"]' WHERE id = $1`, [
+      scopeGone.receiver.id,
+    ]);
 
     await streams.addSubject(
       enabled.stream.id,
@@ -241,6 +245,7 @@ describe('SSF streams integration (real Postgres)', () => {
     expect(await streams.findForDelivery(realmOff.stream.id)).toMatchObject({ active: false });
     expect(await streams.findForDelivery(suspended.stream.id)).toMatchObject({ active: false });
     expect(await streams.findForDelivery(clientOff.stream.id)).toMatchObject({ active: false });
+    expect(await streams.findForDelivery(scopeGone.stream.id)).toMatchObject({ active: false });
     expect(await streams.findForDelivery(randomUUID())).toBeUndefined();
   });
 

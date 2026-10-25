@@ -73,7 +73,8 @@ export interface SsfStreamDestination {
 export interface SsfStreamForDelivery extends SsfStream {
   /**
    * Whether the stream may receive events at all: its realm's switch is on and
-   * its receiver is enabled and not suspended. Its own `status` comes on top.
+   * its receiver is enabled, not suspended and still holds the `ssf:stream`
+   * scope. Its own `status` comes on top.
    */
   readonly active: boolean;
 }
@@ -141,7 +142,8 @@ export interface SsfStreamsRepository {
   listSubjects(streamId: string): Promise<SsfStreamSubject[]>;
   /**
    * Every stream the delivery route serves: `enabled` and `paused` ones of an
-   * active receiver, in realms whose switch is on.
+   * active receiver (enabled, not suspended, holding `ssf:stream`), in realms
+   * whose switch is on.
    */
   listDestinations(): Promise<SsfStreamDestination[]>;
   /** One stream for a delivery attempt, whatever its status, or `undefined`. */

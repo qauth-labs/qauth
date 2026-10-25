@@ -150,15 +150,36 @@ function checkOutcome(outcome: EventDeliveryAttemptRecord): void {
   if (outcome.result === 'retry') checkTime(outcome.nextAttemptAt, 'nextAttemptAt');
 }
 
+/** A subject as one string, for a set lookup: its type and id joined by a NUL. */
+const subjectKey = (type: string, id: string) => `${type}\u0000${id}`;
+
+/** A destination with its subject filter as a set, built once per fan-out page. */
+interface FanOutFilter {
+  readonly destination: EventDeliveryDestination;
+  /** The subjects, by {@link subjectKey}; `undefined` when the destination takes any. */
+  readonly subjects: ReadonlySet<string> | undefined;
+}
+
+function fanOutFilter(destination: EventDeliveryDestination): FanOutFilter {
+  return {
+    destination,
+    subjects:
+      destination.subjects === undefined
+        ? undefined
+        : new Set(destination.subjects.map((subject) => subjectKey(subject.type, subject.id))),
+  };
+}
+
 /** Whether a destination's filters take an event of this type, category and subject. */
-function matches(destination: EventDeliveryDestination, event: FanOutEventRow): boolean {
+function matches(filter: FanOutFilter, event: FanOutEventRow): boolean {
+  const { destination, subjects } = filter;
   return (
     (destination.types === undefined || destination.types.includes(event.type)) &&
     (destination.categories === undefined || destination.categories.includes(event.category)) &&
-    (destination.subjects === undefined ||
-      destination.subjects.some(
-        (subject) => subject.type === event.subject_type && subject.id === event.subject_id
-      ))
+    (subjects === undefined ||
+      (event.subject_type !== null &&
+        event.subject_id !== null &&
+        subjects.has(subjectKey(event.subject_type, event.subject_id))))
   );
 }
 
@@ -336,9 +357,11 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         const xids: string[] = [];
         const seqs: string[] = [];
         const times: string[] = [];
+        const filters = destinations.map(fanOutFilter);
         for (const event of read) {
-          for (const destination of destinations) {
-            if (!matches(destination, event)) continue;
+          for (const filter of filters) {
+            if (!matches(filter, event)) continue;
+            const { destination } = filter;
             kinds.push(destination.kind);
             ids.push(destination.id);
             eventIds.push(event.id);

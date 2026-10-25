@@ -18,6 +18,12 @@ import { ssfStreams, ssfStreamSubjects } from '../schema/ssf';
  */
 export const SSF_DELIVERY_KIND = 'ssf';
 
+/**
+ * The scope that makes an OAuth client a receiver (issue #410). A client that
+ * loses it stops receiving: its stream is no longer listed or delivered to.
+ */
+export const SSF_RECEIVER_SCOPE = 'ssf:stream';
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Refuse an id that is not a UUID before it reaches Postgres (22P02 → 500). */
@@ -200,6 +206,7 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
           and ${realms.ssfTransmitterEnabled}
         join ${oauthClients} on ${oauthClients.id} = ${ssfStreams.receiverClientId}
           and ${oauthClients.enabled} and not ${oauthClients.suspended}
+          and ${oauthClients.scopes} ? ${SSF_RECEIVER_SCOPE}
         left join ${ssfStreamSubjects} on ${ssfStreamSubjects.streamId} = ${ssfStreams.id}
           and ${ssfStreamSubjects.eventSubjectType} is not null
         where ${ssfStreams.status} in ('enabled', 'paused')
@@ -233,7 +240,7 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
       const [row] = await db
         .select({
           stream: ssfStreams,
-          active: sql<boolean>`(${realms.ssfTransmitterEnabled} and ${oauthClients.enabled} and not ${oauthClients.suspended})`,
+          active: sql<boolean>`(${realms.ssfTransmitterEnabled} and ${oauthClients.enabled} and not ${oauthClients.suspended} and ${oauthClients.scopes} ? ${SSF_RECEIVER_SCOPE})`,
         })
         .from(ssfStreams)
         .innerJoin(realms, eq(realms.id, ssfStreams.realmId))

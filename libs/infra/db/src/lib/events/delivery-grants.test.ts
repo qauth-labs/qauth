@@ -22,7 +22,7 @@ describe('eventDeliveryGrantStatements', () => {
     });
     expect(EVENT_DELIVERY_COLUMNS).toEqual({
       realms: ['id', 'ssf_transmitter_enabled'],
-      oauth_clients: ['id', 'enabled', 'suspended'],
+      oauth_clients: ['id', 'enabled', 'suspended', 'scopes'],
     });
     expect(eventDeliveryGrantStatements('qauth_delivery')).toEqual([
       'REVOKE ALL ON TABLE "events" FROM "qauth_delivery"',
@@ -38,7 +38,7 @@ describe('eventDeliveryGrantStatements', () => {
       'GRANT SELECT ON TABLE "ssf_streams" TO "qauth_delivery"',
       'GRANT SELECT ON TABLE "ssf_stream_subjects" TO "qauth_delivery"',
       'GRANT SELECT ("id", "ssf_transmitter_enabled") ON TABLE "realms" TO "qauth_delivery"',
-      'GRANT SELECT ("id", "enabled", "suspended") ON TABLE "oauth_clients" TO "qauth_delivery"',
+      'GRANT SELECT ("id", "enabled", "suspended", "scopes") ON TABLE "oauth_clients" TO "qauth_delivery"',
     ]);
   });
 

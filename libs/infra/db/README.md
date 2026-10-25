@@ -595,7 +595,7 @@ to each destination of a route, at least once and with the same id, through
   `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, every row privilege
   on `event_delivery_positions`, `SELECT` on `ssf_streams` and
   `ssf_stream_subjects`, and `SELECT` on `realms (id, ssf_transmitter_enabled)`
-  and `oauth_clients (id, enabled, suspended)`. Nothing else.
+  and `oauth_clients (id, enabled, suspended, scopes)`. Nothing else.
 
 #### Base Repository Interface
 
