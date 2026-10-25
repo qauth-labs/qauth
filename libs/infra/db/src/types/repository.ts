@@ -920,6 +920,11 @@ export interface SessionsRepository {
    * `revoked_reason` on a row not yet revoked. An expired row may still be
    * revoked, with `expired` or any other reason.
    *
+   * In the same transaction it deletes the session's `session_clients` rows
+   * (issue #549): an ended session holds no client. A caller that must know
+   * which clients it served (back-channel logout) reads them first, in the
+   * transaction it passes.
+   *
    * @returns the ended row, or `undefined` when the realm holds no such session
    * or it was already revoked. A second call changes nothing and keeps the
    * first reason.
@@ -935,6 +940,54 @@ export interface SessionsRepository {
    * `expires_at`. Served by the partial index `idx_sessions_realm_user_active`.
    */
   listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]>;
+  /**
+   * Record that a live session served a client (issue #549): the
+   * `session_clients` row back-channel logout reads, written in the
+   * transaction that mints the authorization code. A session that served the
+   * client before keeps its one row and its first time.
+   *
+   * The session row is locked `FOR SHARE` until `tx` ends, so a concurrent
+   * {@link revoke} either waits and then deletes the row written here, or
+   * committed first and this call finds no live session. Hence `tx` is
+   * required: outside a transaction the lock would end with the statement.
+   *
+   * @returns `true` when the realm holds the session live (not revoked, before
+   * `expires_at`) and the row is stored; `false`, writing nothing, otherwise.
+   * The caller then issues no code: no ID token may name a session that
+   * back-channel logout would not reach.
+   */
+  recordClient(
+    realmId: string,
+    sessionId: string,
+    oauthClientId: string,
+    tx: DbClient
+  ): Promise<boolean>;
+  /**
+   * The clients one session of the realm served, oldest first. Empty for a
+   * session of another realm, and for a revoked one, whose rows
+   * {@link revoke} deleted.
+   */
+  listClientsForSession(
+    realmId: string,
+    sessionId: string,
+    tx?: DbClient
+  ): Promise<SessionClient[]>;
+  /**
+   * The registry rows of every session of one user in the realm, oldest
+   * first. A session past `expires_at` but not revoked keeps its rows until
+   * it is revoked or deleted; the caller judges the session.
+   */
+  listClientsForUser(realmId: string, userId: string, tx?: DbClient): Promise<SessionClient[]>;
+  /**
+   * The registry rows of one client (its `oauth_clients.id`) across the
+   * realm's sessions, oldest first. As with {@link listClientsForUser}, a
+   * session past its end keeps its rows until it is revoked or deleted.
+   */
+  listSessionsForClient(
+    realmId: string,
+    oauthClientId: string,
+    tx?: DbClient
+  ): Promise<SessionClient[]>;
 }
 
 /** A stored `admin_audit_log` row (ADR-019 Decision 7, issue #448). */

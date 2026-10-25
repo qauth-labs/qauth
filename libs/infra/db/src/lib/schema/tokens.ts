@@ -14,6 +14,7 @@ import {
 import { oauthClients, users } from './core';
 import { codeChallengeMethodEnum } from './enums';
 import { userCredentials } from './identity';
+import { sessions } from './sessions';
 import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
 
 export const emailVerificationTokens = pgTable(
@@ -121,6 +122,20 @@ export const authorizationCodes = pgTable(
      * for a code minted by a release before migration 0038.
      */
     sessionExpiresAt: bigint('session_expires_at', { mode: 'number' }),
+    /**
+     * The browser session that backs this code (ADR-019 Decisions 3 and 4,
+     * issue #549): its `sid`, which the code exchange puts in the ID token's
+     * `sid` claim and back-channel logout names.
+     *
+     * NULL when no browser session backs the code (the legacy Bearer path,
+     * whose ID token then has no `sid`), and for a code minted by a release
+     * before migration 0039. Deleting the session sets it to NULL and keeps
+     * the code, so a session purge never removes a code mid-flight.
+     *
+     * Not to be confused with the Authority Tree's `tree_id` (ADR-014): `sid`
+     * names the browser session and nothing else.
+     */
+    sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * RFC 8707 `resource` parameter(s) from /oauth/authorize. Absolute URIs
@@ -158,6 +173,9 @@ export const authorizationCodes = pgTable(
     index('idx_authorization_codes_expires_at').on(t.expiresAt),
     index('idx_authorization_codes_user_id').on(t.userId),
     index('idx_authorization_codes_oauth_client_id').on(t.oauthClientId),
+    // Serves the session foreign key's ON DELETE SET NULL, which would
+    // otherwise scan the table once per deleted session.
+    index('idx_authorization_codes_session_id').on(t.sessionId),
     /**
      * Only the two levels that BEAR an `acr` claim may be stored. `'low'` is
      * excluded deliberately: NULL is the single representation of "no assurance
@@ -288,6 +306,7 @@ export const authorizationCodesRelations = relations(authorizationCodes, ({ one 
     fields: [authorizationCodes.oauthClientId],
     references: [oauthClients.id],
   }),
+  session: one(sessions, { fields: [authorizationCodes.sessionId], references: [sessions.id] }),
 }));
 
 export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({

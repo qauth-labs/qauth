@@ -24,10 +24,18 @@ interface CapturedQuery {
 const REALM_ID = '0190a000-0000-7000-8000-000000000001';
 const SESSION_ID = '0190a000-0000-7000-8000-0000000000aa';
 const USER_ID = '0190a000-0000-7000-8000-0000000000bb';
+const CLIENT_ID = '0190a000-0000-7000-8000-0000000000cc';
 const NOW = 1_800_000_000_000;
 
-/** A `pg` client that records queries instead of running them. */
-function createRecordingDb(): { db: DbClient; queries: CapturedQuery[] } {
+/**
+ * A `pg` client that records queries instead of running them. Every query
+ * answers no rows, unless `respond` gives rows (in drizzle's array row mode)
+ * for its text.
+ */
+function createRecordingDb(respond: (text: string) => unknown[][] | undefined = () => undefined): {
+  db: DbClient;
+  queries: CapturedQuery[];
+} {
   const queries: CapturedQuery[] = [];
 
   const client = {
@@ -35,12 +43,38 @@ function createRecordingDb(): { db: DbClient; queries: CapturedQuery[] } {
       const text = typeof config === 'string' ? config : (config.text ?? '');
       const params = typeof config === 'string' ? (values ?? []) : (config.values ?? values ?? []);
       queries.push({ text, values: params });
-      return Promise.resolve({ rows: [], rowCount: 0, fields: [], command: '', oid: 0 });
+      const rows = respond(text) ?? [];
+      return Promise.resolve({ rows, rowCount: rows.length, fields: [], command: '', oid: 0 });
     },
   };
 
   return { db: drizzle(client as unknown as Pool) as unknown as DbClient, queries };
 }
+
+/** Transaction control, which {@link run} leaves out. */
+const TRANSACTION_CONTROL = /^(begin|commit|rollback)\b/i;
+
+/** The statements of a recording, without transaction control. */
+function statementsOf(queries: readonly CapturedQuery[]): CapturedQuery[] {
+  return queries.filter((query) => !TRANSACTION_CONTROL.test(query.text.trim()));
+}
+
+/** A `sessions` row as `RETURNING *` gives it, in column order. */
+const SESSION_ROW: unknown[] = [
+  SESSION_ID,
+  REALM_ID,
+  USER_ID,
+  String(NOW - 5_000),
+  ['pwd'],
+  null,
+  '192.0.2.1',
+  'test-agent',
+  String(NOW + 86_400_000),
+  String(NOW),
+  'sign_out',
+  String(NOW - 10_000),
+  String(NOW - 10_000),
+];
 
 const NEW_SESSION: NewSession = {
   realmId: REALM_ID,
@@ -64,13 +98,27 @@ const CALLS: Record<keyof SessionsRepository, (repo: SessionsRepository) => Prom
   updateLastSeen: (repo) => repo.updateLastSeen(REALM_ID, SESSION_ID, { minIntervalMs: 60_000 }),
   revoke: (repo) => repo.revoke(REALM_ID, SESSION_ID, 'sign_out'),
   listActiveForUser: (repo) => repo.listActiveForUser(REALM_ID, USER_ID),
+  // The recording client stands in for the transaction it requires.
+  recordClient: (repo) => repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID, recordingTx),
+  listClientsForSession: (repo) => repo.listClientsForSession(REALM_ID, SESSION_ID),
+  listClientsForUser: (repo) => repo.listClientsForUser(REALM_ID, USER_ID),
+  listSessionsForClient: (repo) => repo.listSessionsForClient(REALM_ID, CLIENT_ID),
 };
 
+/** Set by {@link run} to the recording client of the call it makes. */
+let recordingTx: DbClient;
+
+/**
+ * Make one call against a recording client that answers no rows, and return
+ * its one statement (transaction control left out).
+ */
 async function run(method: keyof SessionsRepository): Promise<CapturedQuery> {
   const { db, queries } = createRecordingDb();
+  recordingTx = db;
   await CALLS[method](createSessionsRepository(db));
-  expect(queries).toHaveLength(1);
-  return queries[0];
+  const statements = statementsOf(queries);
+  expect(statements).toHaveLength(1);
+  return statements[0];
 }
 
 /**
@@ -86,6 +134,21 @@ export function bareIdsDoNotCompile(repo: SessionsRepository): void {
   void repo.revoke(SESSION_ID, 'sign_out');
   // @ts-expect-error a user id alone does not list sessions
   void repo.listActiveForUser(USER_ID);
+  // @ts-expect-error a session id alone does not list its clients
+  void repo.listClientsForSession(SESSION_ID);
+  // @ts-expect-error a user id alone does not list the clients of their sessions
+  void repo.listClientsForUser(USER_ID);
+  // @ts-expect-error a client id alone does not list its sessions
+  void repo.listSessionsForClient(CLIENT_ID);
+}
+
+/**
+ * Never called: `recordClient` takes the transaction that mints the code, and
+ * one without it does not compile.
+ */
+export function recordClientNeedsATransaction(repo: SessionsRepository): void {
+  // @ts-expect-error the share lock must last until the code's transaction ends
+  void repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID);
 }
 
 describe('createSessionsRepository', () => {
@@ -98,7 +161,7 @@ describe('createSessionsRepository', () => {
     vi.useRealTimers();
   });
 
-  it('exposes create, find by id, update last seen, revoke and list, and nothing else', () => {
+  it('exposes the session methods and the client registry methods, and nothing else', () => {
     const { db } = createRecordingDb();
     const methods = Object.keys(createSessionsRepository(db)).sort();
 
@@ -170,6 +233,87 @@ describe('createSessionsRepository', () => {
     expect(text).toContain('"sessions"."revoked_at" is null');
     expect(query.values).toEqual([NOW, 'sign_out', REALM_ID, SESSION_ID]);
   });
+
+  it('revoke deletes the ended session’s registry rows in the same transaction, in a later statement', async () => {
+    const { db, queries } = createRecordingDb((text) =>
+      text.toLowerCase().startsWith('update "sessions"') ? [SESSION_ROW] : undefined
+    );
+
+    const ended = await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
+
+    expect(ended?.id).toBe(SESSION_ID);
+    expect(
+      queries.map((query) => query.text.toLowerCase().split(' ').slice(0, 3).join(' '))
+    ).toEqual(['begin', 'update "sessions" set', 'delete from "session_clients"', 'commit']);
+    const remove = queries[2];
+    expect(remove.text.toLowerCase()).toContain('where "session_clients"."session_id" = $1');
+    expect(remove.values).toEqual([SESSION_ID]);
+  });
+
+  it('revoke deletes nothing when it ended no session', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
+
+    expect(queries.some((query) => query.text.toLowerCase().includes('session_clients'))).toBe(
+      false
+    );
+  });
+
+  it('recordClient locks the live session for share, then adds the row once', async () => {
+    const { db, queries } = createRecordingDb((text) =>
+      text.toLowerCase().startsWith('select') ? [[SESSION_ID]] : undefined
+    );
+
+    const recorded = await createSessionsRepository(db).recordClient(
+      REALM_ID,
+      SESSION_ID,
+      CLIENT_ID,
+      db
+    );
+
+    expect(recorded).toBe(true);
+    expect(queries).toHaveLength(2);
+    const [lock, insert] = queries.map((query) => ({ ...query, text: query.text.toLowerCase() }));
+    expect(lock.text).toMatch(/"sessions"\."realm_id" = \$1 and "sessions"\."id" = \$2/);
+    expect(lock.text).toContain('"sessions"."revoked_at" is null');
+    expect(lock.text).toContain('"sessions"."expires_at" > $3');
+    expect(lock.text.trim()).toMatch(/for share$/);
+    expect(lock.values).toEqual([REALM_ID, SESSION_ID, NOW]);
+    expect(insert.text).toContain('insert into "session_clients"');
+    expect(insert.text).toContain('on conflict do nothing');
+    expect(insert.values).toEqual([SESSION_ID, CLIENT_ID]);
+  });
+
+  it('recordClient writes nothing and answers false when no live session matches', async () => {
+    const { db, queries } = createRecordingDb();
+
+    expect(
+      await createSessionsRepository(db).recordClient(REALM_ID, SESSION_ID, CLIENT_ID, db)
+    ).toBe(false);
+    expect(queries).toHaveLength(1);
+  });
+
+  it.each([
+    ['listClientsForSession', '"session_clients"."session_id" = $2', SESSION_ID],
+    ['listClientsForUser', '"sessions"."user_id" = $2', USER_ID],
+    ['listSessionsForClient', '"session_clients"."oauth_client_id" = $2', CLIENT_ID],
+  ] as const)(
+    '%s reads the registry of the realm’s sessions only, oldest first',
+    async (method, filter, id) => {
+      const query = await run(method);
+      const text = query.text.toLowerCase();
+
+      expect(text).toContain(
+        'from "session_clients" inner join "sessions" on "sessions"."id" = "session_clients"."session_id"'
+      );
+      expect(text).toContain(`where ("sessions"."realm_id" = $1 and ${filter})`);
+      expect(text).toContain(
+        'order by "session_clients"."first_seen_at" asc, "session_clients"."session_id" asc, "session_clients"."oauth_client_id" asc'
+      );
+      expect(query.values).toEqual([REALM_ID, id]);
+    }
+  );
 
   it('listActiveForUser lists the live sessions of one user in one realm, newest first', async () => {
     const query = await run('listActiveForUser');

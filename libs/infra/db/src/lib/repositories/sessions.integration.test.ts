@@ -8,6 +8,11 @@
  * list-by-user query runs on. The sibling unit suite pins the SQL each
  * repository method sends.
  *
+ * The client registry (issue #549) is proven here too: one row per session and
+ * client, none for a session that is not live, revocation deleting the rows,
+ * and the share lock that keeps a code minted during a revocation from
+ * leaving a row behind.
+ *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
@@ -433,6 +438,194 @@ describe('sessions integration (real Postgres)', () => {
 
       expect(indexNames(plan)).toEqual(['idx_sessions_realm_user_active']);
       expect(nodeTypes(plan)).not.toContain('Seq Scan');
+    });
+  });
+
+  describe('client registry (#549)', () => {
+    function db(): DbClient {
+      if (!ctx) throw new Error('no ctx');
+      return ctx.database.db;
+    }
+
+    /** `recordClient` in a transaction of its own, as a code mint runs it. */
+    function record(realmId: string, sessionId: string, clientId: string): Promise<boolean> {
+      return db().transaction((tx) => repo.recordClient(realmId, sessionId, clientId, tx));
+    }
+
+    async function registry(sessionId: string): Promise<{ oauth_client_id: string }[]> {
+      const { rows } = await pool().query(
+        `SELECT oauth_client_id FROM session_clients WHERE session_id = $1 ORDER BY oauth_client_id`,
+        [sessionId]
+      );
+      return rows;
+    }
+
+    it('records a client once per live session and keeps the first time', async () => {
+      const realm = await seedRealm();
+      const created = await repo.create(session(realm, await seedUser(realm)));
+      const client = await seedClient(realm);
+
+      expect(await record(realm, created.id, client)).toBe(true);
+      const [first] = await repo.listClientsForSession(realm, created.id);
+      expect(await record(realm, created.id, client)).toBe(true);
+
+      expect(await repo.listClientsForSession(realm, created.id)).toEqual([first]);
+      expect(first).toEqual({
+        sessionId: created.id,
+        oauthClientId: client,
+        firstSeenAt: expect.any(Number),
+      });
+    });
+
+    it('records nothing for a revoked or expired session, or one of another realm', async () => {
+      const realm = await seedRealm();
+      const other = await seedRealm();
+      const user = await seedUser(realm);
+      const client = await seedClient(realm);
+      const revoked = await repo.create(session(realm, user));
+      await repo.revoke(realm, revoked.id, 'sign_out');
+      const expired = await repo.create(session(realm, user, { expiresAt: Date.now() - 1 }));
+      const live = await repo.create(session(realm, user));
+
+      expect(await record(realm, revoked.id, client)).toBe(false);
+      expect(await record(realm, expired.id, client)).toBe(false);
+      expect(await record(other, live.id, client)).toBe(false);
+      expect(await count('session_clients', 'true', [])).toBe(0);
+    });
+
+    it('revoking a session deletes its rows and leaves other sessions’ rows', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm);
+      const clientA = await seedClient(realm);
+      const clientB = await seedClient(realm);
+      const ended = await repo.create(session(realm, user));
+      const kept = await repo.create(session(realm, user));
+      await record(realm, ended.id, clientA);
+      await record(realm, ended.id, clientB);
+      await record(realm, kept.id, clientA);
+
+      expect(await repo.revoke(realm, ended.id, 'sign_out')).toMatchObject({ id: ended.id });
+
+      expect(await registry(ended.id)).toEqual([]);
+      expect(await registry(kept.id)).toEqual([{ oauth_client_id: clientA }]);
+      // The session row stays, soft-ended, until a purge deletes it.
+      expect(await repo.findById(realm, ended.id)).toMatchObject({ revokedReason: 'sign_out' });
+    });
+
+    it('a revocation that waits on a code mint deletes the row the mint wrote', async () => {
+      const realm = await seedRealm();
+      const created = await repo.create(session(realm, await seedUser(realm)));
+      const client = await seedClient(realm);
+      let revocation: Promise<unknown> | undefined;
+
+      await db().transaction(async (tx) => {
+        expect(await repo.recordClient(realm, created.id, client, tx)).toBe(true);
+        revocation = repo.revoke(realm, created.id, 'sign_out');
+        // The revocation's UPDATE queues behind the share lock this
+        // transaction holds.
+        await waitForLockWait();
+      });
+      expect(await revocation).toMatchObject({ id: created.id });
+
+      expect(await registry(created.id)).toEqual([]);
+    });
+
+    it('a code mint that waits on a revocation records nothing', async () => {
+      const realm = await seedRealm();
+      const created = await repo.create(session(realm, await seedUser(realm)));
+      const client = await seedClient(realm);
+      let mint: Promise<boolean> | undefined;
+
+      await db().transaction(async (tx) => {
+        expect(await repo.revoke(realm, created.id, 'sign_out', tx)).toMatchObject({
+          id: created.id,
+        });
+        mint = record(realm, created.id, client);
+        await waitForLockWait();
+      });
+
+      expect(await mint).toBe(false);
+      expect(await registry(created.id)).toEqual([]);
+    });
+
+    /** Resolve once some backend is waiting on a row lock. */
+    async function waitForLockWait(): Promise<void> {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const { rows } = await pool().query(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock'`
+        );
+        if ((rows[0].n as number) > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error('no backend waited on a lock');
+    }
+
+    it('looks the registry up by session, by user and by client, within the realm', async () => {
+      const realm = await seedRealm();
+      const other = await seedRealm();
+      const alice = await seedUser(realm);
+      const bob = await seedUser(realm);
+      const app = await seedClient(realm);
+      const tool = await seedClient(realm);
+      const aliceFirst = await repo.create(session(realm, alice));
+      const aliceSecond = await repo.create(session(realm, alice));
+      const bobs = await repo.create(session(realm, bob));
+      const elsewhere = await repo.create(session(other, await seedUser(other)));
+      const foreignClient = await seedClient(other);
+      // Explicit times, so the order is the registry's and not the clock's.
+      await pool().query(
+        `INSERT INTO session_clients (session_id, oauth_client_id, first_seen_at)
+         VALUES ($1, $4, 1000), ($1, $5, 2000), ($2, $4, 3000), ($3, $4, 4000), ($6, $7, 500)`,
+        [aliceFirst.id, aliceSecond.id, bobs.id, app, tool, elsewhere.id, foreignClient]
+      );
+      const row = (sessionId: string, oauthClientId: string, firstSeenAt: number) => ({
+        sessionId,
+        oauthClientId,
+        firstSeenAt,
+      });
+
+      expect(await repo.listClientsForSession(realm, aliceFirst.id)).toEqual([
+        row(aliceFirst.id, app, 1000),
+        row(aliceFirst.id, tool, 2000),
+      ]);
+      expect(await repo.listClientsForUser(realm, alice)).toEqual([
+        row(aliceFirst.id, app, 1000),
+        row(aliceFirst.id, tool, 2000),
+        row(aliceSecond.id, app, 3000),
+      ]);
+      expect(await repo.listSessionsForClient(realm, app)).toEqual([
+        row(aliceFirst.id, app, 1000),
+        row(aliceSecond.id, app, 3000),
+        row(bobs.id, app, 4000),
+      ]);
+
+      // Another realm's session and client are never found from this realm.
+      expect(await repo.listClientsForSession(realm, elsewhere.id)).toEqual([]);
+      expect(await repo.listSessionsForClient(realm, foreignClient)).toEqual([]);
+      expect(await repo.listClientsForSession(other, aliceFirst.id)).toEqual([]);
+      expect(await repo.listClientsForUser(other, alice)).toEqual([]);
+    });
+
+    it('deleting a session clears the session of its codes and keeps the codes', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm);
+      const client = await seedClient(realm);
+      const created = await repo.create(session(realm, user));
+      const code = await one(
+        `INSERT INTO authorization_codes
+           (code, oauth_client_id, user_id, redirect_uri, code_challenge, session_id, expires_at)
+         VALUES ('code-1', $1, $2, 'https://app.example.com/cb', 'c', $3, $4) RETURNING id`,
+        [client, user, created.id, Date.now() + 60_000]
+      );
+
+      await pool().query(`DELETE FROM sessions WHERE id = $1`, [created.id]);
+
+      const { rows } = await pool().query(
+        `SELECT id, session_id FROM authorization_codes WHERE id = $1`,
+        [code]
+      );
+      expect(rows).toEqual([{ id: code, session_id: null }]);
     });
   });
 });
