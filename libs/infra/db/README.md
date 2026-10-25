@@ -290,6 +290,11 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `fanOut({ kinds, destinations, now })` writes the rows for the events after each position, one per realm and route kind, and moves the position on, one stream at a time per node. It touches only the positions of the `kinds` the caller serves.
   - `dueDestinations(kinds, now)`, `claim({ picks, now, leaseMs, maxAttempts })`, `record(claim, outcome, now)` and `release(claims, now)` run the claims.
   - `minOffered(realmId)` returns the lowest position every destination has finished, for the retention job (#536).
+- **`createSsfStreamsRepository(db)`**: The streams of the Shared Signals Framework transmitter (#410): `ssf_streams`, one per receiver and realm, and the subjects each receiver added (`ssf_stream_subjects`).
+  - `create`, `find`, `list`, `update`, `remove` and `setStatus` name the realm and the receiver's client row, so a receiver reaches only its own stream; `create` returns `null` when the receiver already has one.
+  - `addSubject(streamId, subject, maxSubjects)` returns `added`, `present` or `full` (the count and the insert run under the stream's row lock); `removeSubject` and `listSubjects` complete the set.
+  - `listDestinations()` and `findForDelivery(streamId)` serve the SSF delivery route: streams of active receivers in realms whose `ssf_transmitter_enabled` is on, with the event store subjects of their subjects. `deliveryStatus(streamId)` reads the pending deliveries and the latest failed attempt.
+  - `enqueueForEvent(tx, { streamId, eventId, now })` writes the delivery of an event addressed to one stream (a verification event) in the transaction that wrote the event, for a stream of the event's realm only.
   - `pendingByKind()` and `deliveryLagSeconds(now)` feed the metrics; `listForEvent(eventId)` returns an event's deliveries.
 - **`createEventRetentionRepository(db)`**: The retention job's access to the event store (ADR-020 §3, #536). It needs the retention role's grants (`eventRetentionGrantStatements`), the only `DELETE` on `events`.
   - `realms(fallback)` lists every realm that has events with its retention from the realm row, or `fallback` for a realm whose row is gone.
@@ -584,9 +589,13 @@ to each destination of a route, at least once and with the same id, through
 - **Retention.** `minOffered(realmId)` is the lowest position every
   destination has finished: before the realm's oldest unfinished row, and at
   most the lowest of its positions. A row is deleted with its event (`ON DELETE CASCADE`).
+- **Subjects.** A destination may list `subjects`: it then gets only events
+  whose `subject` (type and id) is one of them; an empty list matches none.
 - **Grants.** `eventDeliveryGrantStatements(role)`: `SELECT` on `events`,
-  `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, and every row privilege
-  on `event_delivery_positions`. Nothing else.
+  `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, every row privilege
+  on `event_delivery_positions`, `SELECT` on `ssf_streams` and
+  `ssf_stream_subjects`, and `SELECT` on `realms (id, ssf_transmitter_enabled)`
+  and `oauth_clients (id, enabled, suspended)`. Nothing else.
 
 #### Base Repository Interface
 
