@@ -75,8 +75,10 @@ export const SSF_STATUS_REASON_MAX = 255;
 /**
  * The `context` the receiver's `authorization_header` is encrypted under with
  * the realm's `data_at_rest` key: it names the stream, so a ciphertext copied
- * to another stream's row does not decrypt.
+ * to another stream's row does not decrypt. It starts with `delivery:`, the
+ * one prefix the delivery role may decrypt (`DELIVERY_SECRET_CONTEXT_PREFIX`
+ * of the signer's policy).
  */
 export function authorizationHeaderContext(streamId: string): string {
-  return `ssf_streams.authorization_header:${streamId}`;
+  return `delivery:ssf_streams.authorization_header:${streamId}`;
 }

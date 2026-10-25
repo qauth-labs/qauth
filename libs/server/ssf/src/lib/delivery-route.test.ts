@@ -142,7 +142,7 @@ describe('createSsfDeliveryRoute', () => {
     expect(signer.decrypt).toHaveBeenCalledWith({
       realmId: REALM,
       ciphertext: 'v1.k.i.c',
-      context: `ssf_streams.authorization_header:${STREAM}`,
+      context: `delivery:ssf_streams.authorization_header:${STREAM}`,
     });
     expect(requests[0].headers).toMatchObject({ authorization: 'Bearer t' });
   });

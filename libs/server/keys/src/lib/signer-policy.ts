@@ -38,7 +38,12 @@ export interface SignerGrant {
   readonly signClientAssertion: boolean;
   readonly getCookieSecrets: boolean;
   readonly encrypt: boolean;
-  readonly decrypt: boolean;
+  /**
+   * `true`: any `data_at_rest` ciphertext. A list: only ciphertexts whose
+   * `context` starts with one of these prefixes, so a role that needs one kind
+   * of stored secret cannot decrypt the others.
+   */
+  readonly decrypt: boolean | readonly string[];
   readonly getVerificationKeys: boolean;
   readonly getJwks: boolean;
   readonly getUpstreamJwks: boolean;
@@ -46,6 +51,14 @@ export interface SignerGrant {
 
 /** Public keys only: what every role may read. */
 const PUBLIC_READS = { getVerificationKeys: true, getJwks: true, getUpstreamJwks: true } as const;
+
+/**
+ * The `context` prefix of a secret a delivery destination stores, such as an
+ * SSF receiver's `Authorization` header (#410): the only `data_at_rest`
+ * ciphertexts the `delivery` role may decrypt. Any other stored secret must
+ * use a context outside it.
+ */
+export const DELIVERY_SECRET_CONTEXT_PREFIX = 'delivery:';
 
 const NOTHING_ELSE = {
   signJws: [],
@@ -68,10 +81,10 @@ const NOTHING_ELSE = {
  * - `delivery` signs Security Event Tokens and logout tokens
  *   (`event_signing`) and webhook messages (#547). It holds no secret: it
  *   sends the message to the signer and gets the signature header back. It
- *   may decrypt with the `data_at_rest` key, never encrypt: an SSF receiver's
- *   `Authorization` header, which the api role stored encrypted, is sent with
- *   each push (#410). What it can decrypt is bounded by its database grants,
- *   which reach no other encrypted column.
+ *   may decrypt, never encrypt, and only a ciphertext whose `context` starts
+ *   with {@link DELIVERY_SECRET_CONTEXT_PREFIX}: a destination's secret, such
+ *   as an SSF receiver's `Authorization` header that the api role stored
+ *   encrypted and that each push sends (#410).
  * - `admin` reads public keys. The key operations of the admin API (rotation
  *   and retirement, #544 and #551) add their own grants.
  * - Every role may read the realm's public keys, which hold no secret.
@@ -103,7 +116,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     ...NOTHING_ELSE,
     signJws: ['event_signing'],
     signWebhook: true,
-    decrypt: true,
+    decrypt: [DELIVERY_SECRET_CONTEXT_PREFIX],
     ...PUBLIC_READS,
   },
   admin: { ...NOTHING_ELSE, ...PUBLIC_READS },
@@ -114,6 +127,7 @@ function freezePolicy(
 ): Readonly<Record<SignerCaller, SignerGrant>> {
   for (const grant of Object.values(policy)) {
     Object.freeze(grant.signJws);
+    if (Array.isArray(grant.decrypt)) Object.freeze(grant.decrypt);
     Object.freeze(grant);
   }
   return Object.freeze(policy);
@@ -125,20 +139,30 @@ export function isSignerCaller(value: unknown): value is SignerCaller {
 }
 
 /**
- * Whether `caller` may call `operation`. For `signJws`, `purpose` names the
+ * Whether `caller` may call `operation`. For `signJws`, `detail` names the
  * purpose to sign with, and the call is allowed only when the role's grant
- * lists it. An unknown role, operation or purpose is never allowed.
+ * lists it. For `decrypt`, `detail` is the ciphertext's `context`: a role
+ * whose grant is a list of prefixes may decrypt only a context that starts
+ * with one of them, and is refused when none is given. An unknown role,
+ * operation or purpose is never allowed.
  */
 export function isSignerCallAllowed(
   caller: unknown,
   operation: SignerOperation,
-  purpose?: string
+  detail?: string
 ): boolean {
   if (!isSignerCaller(caller)) return false;
   const grant: SignerGrant = SIGNER_POLICY[caller];
   if (!Object.hasOwn(grant, operation)) return false;
   if (operation === 'signJws') {
-    return purpose !== undefined && (grant.signJws as readonly string[]).includes(purpose);
+    return detail !== undefined && (grant.signJws as readonly string[]).includes(detail);
+  }
+  if (operation === 'decrypt' && Array.isArray(grant.decrypt)) {
+    const context = detail;
+    return (
+      context !== undefined &&
+      (grant.decrypt as readonly string[]).some((prefix) => context.startsWith(prefix))
+    );
   }
   return grant[operation] === true;
 }

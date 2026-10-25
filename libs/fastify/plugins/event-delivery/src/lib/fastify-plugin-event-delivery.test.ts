@@ -59,7 +59,8 @@ describe('deliverySignerHandle', () => {
   it('asks for nothing the signer policy refuses the delivery caller', () => {
     expect(isSignerCallAllowed('delivery', 'signWebhook')).toBe(true);
     expect(isSignerCallAllowed('delivery', 'signJws', 'event_signing')).toBe(true);
-    expect(isSignerCallAllowed('delivery', 'decrypt')).toBe(true);
+    expect(isSignerCallAllowed('delivery', 'decrypt', 'delivery:ssf_streams.x:1')).toBe(true);
+    expect(isSignerCallAllowed('delivery', 'decrypt', 'another_table.secret:1')).toBe(false);
     // What the handle never offers.
     expect(isSignerCallAllowed('delivery', 'signJws', 'token_signing')).toBe(false);
     expect(isSignerCallAllowed('delivery', 'encrypt')).toBe(false);
