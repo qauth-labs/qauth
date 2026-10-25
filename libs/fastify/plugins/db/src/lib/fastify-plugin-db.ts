@@ -7,6 +7,7 @@ import {
   createDatabase,
   createEmailVerificationTokensRepository,
   createEventDeliveriesRepository,
+  createEventRetentionRepository,
   createEventsRepository,
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
@@ -21,6 +22,7 @@ import {
   type DatabasePool,
   type EmailVerificationTokensRepository,
   type EventDeliveriesRepository,
+  type EventRetentionRepository,
   type EventsRepository,
   OAuthClientsRepository,
   type OAuthConsentsRepository,
@@ -75,6 +77,14 @@ declare module 'fastify' {
        */
       eventDeliveries: EventDeliveriesRepository;
       /**
+       * The retention job's access to the event store (#536): the realms
+       * with events and their retention, the offered bound, the batch
+       * delete that keeps the admin chain's anchor, and the oldest event of
+       * each category for `/metrics`. Deleting needs the retention role's
+       * grants (`eventRetentionGrantStatements`).
+       */
+      eventRetention: EventRetentionRepository;
+      /**
        * Browser sessions (ADR-019 Decision 3, #468). Routes reach them through
        * `fastify.sessionService` (#469), which adds the cache, the realm's
        * lifetimes and the last-seen throttle.
@@ -116,7 +126,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
     fastify.decorate('dbPool', database.pool);
     fastify.decorate('repositories', {
       users: createUsersRepository(database.db),
-      realms: createRealmsRepository(database.db),
+      realms: createRealmsRepository(database.db, { seeds: options.realmPolicySeeds }),
       emailVerificationTokens: createEmailVerificationTokensRepository(database.db),
       oauthClients: createOAuthClientsRepository(database.db),
       oauthConsents: createOAuthConsentsRepository(database.db),
@@ -129,6 +139,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       oid4vpRequestStates: createOid4vpRequestStatesRepository(database.db),
       events: createEventsRepository(database.db, { telemetry: options.eventTelemetry }),
       eventDeliveries: createEventDeliveriesRepository(database.db),
+      eventRetention: createEventRetentionRepository(database.db),
       sessions: createSessionsRepository(database.db),
     });
 

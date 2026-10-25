@@ -342,5 +342,38 @@ describe('default realm boot step on a real Postgres', () => {
         await server.close();
       }
     });
+
+    it('seeds the new realm with the event retention keys, and a later boot changes nothing (#536)', async () => {
+      if (!infra) throw new Error('database not started');
+      const environment = baseEnvironment(infra, await generateJwtPem());
+      const first = await bootAuthServer({
+        ...environment,
+        EVENT_RETENTION_USER_DAYS: '30',
+        EVENT_RETENTION_ADMIN_DAYS: '120',
+      });
+      try {
+        expect(await first.app.repositories.realms.findByName('master')).toMatchObject({
+          userEventRetentionDays: 30,
+          adminEventRetentionDays: 120,
+        });
+      } finally {
+        await first.close();
+      }
+
+      // The realm row owns the policy once the realm exists (ADR-019 Decision 10).
+      const second = await bootAuthServer({
+        ...environment,
+        EVENT_RETENTION_USER_DAYS: '60',
+        EVENT_RETENTION_ADMIN_DAYS: '200',
+      });
+      try {
+        expect(await second.app.repositories.realms.findByName('master')).toMatchObject({
+          userEventRetentionDays: 30,
+          adminEventRetentionDays: 120,
+        });
+      } finally {
+        await second.close();
+      }
+    });
   });
 });

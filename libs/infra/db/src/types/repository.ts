@@ -1216,7 +1216,11 @@ export type EventChainBreakReason =
   | 'hash_mismatch'
   /** The row cannot be read back into an envelope that hashes. */
   | 'unreadable_row'
-  /** No admin row of the realm is at the point verified from: it was removed. */
+  /**
+   * No admin row of the realm is at the point verified from: it was removed
+   * by something other than retention, which keeps the point it deletes as
+   * the realm's anchor.
+   */
   | 'anchor_missing'
   /**
    * The row at the point verified from no longer carries the point's hash,
@@ -1373,14 +1377,21 @@ export interface EventsRepository {
    * cannot produce a false break. They read the table, so run it as a role
    * that may: a writing role holds no `SELECT` on `events` (#827).
    *
-   * The retention job (#536) removes the oldest rows, a point it starts from
-   * included; it will keep that point as an anchor of its own and check it
-   * there.
+   * The retention job (#536) deletes the oldest admin rows and keeps the
+   * last one it deleted as the realm's anchor (`event_chain_anchors`), in the
+   * same transaction. A run starts from the anchor when it is given no point,
+   * or a point at or before the anchor, which retention has deleted: the
+   * report's `from` is then the anchor, and the oldest row left must carry
+   * the anchor's hash as its `prev_hash`, so a changed anchor breaks the
+   * chain there. A point at the anchor's `seq` with another hash is an
+   * `anchor_mismatch`. The anchor's own row is gone, so it is not read; one
+   * still there must match it. The reading role needs `SELECT` on
+   * `event_chain_anchors` too.
    *
    * @param realmId - the realm whose chain to check
-   * @param from - where to start: the head an earlier verification returned,
-   *   or the anchor retention left (#536). Defaults to the chain's start,
-   *   `seq` 0 and 32 zero bytes.
+   * @param from - where to start: the head an earlier verification returned.
+   *   Defaults to the realm's anchor, or, before retention has deleted any
+   *   admin row, the chain's start, `seq` 0 and 32 zero bytes.
    * @throws {TypeError} on a realm id that is not a UUID, or a point whose
    *   hash is not 64 hex digits
    */

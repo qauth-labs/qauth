@@ -131,6 +131,7 @@ export function appendQauthMigration(migrationsFolder: string, tag: string, sql:
 export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'api_keys',
   'audit_logs',
+  'event_chain_anchors',
   'event_deliveries',
   'event_delivery_positions',
   'events',

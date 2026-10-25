@@ -36,7 +36,7 @@ import {
   type EventPositionParts,
 } from '../events/position';
 import { uuidv7 } from '../events/uuidv7';
-import { events } from '../schema/events';
+import { eventChainAnchors, events } from '../schema/events';
 
 /**
  * The layout of the rows this release writes (`events.schema_version`): how
@@ -196,8 +196,12 @@ export interface EnvelopeRow extends Record<string, unknown> {
 /** A row of the read: the horizon, and a row's columns, all `null` when none qualified. */
 type ReadRow = Record<string, unknown> & { horizon: string; seq: string | null };
 
-/** An admin row with its chain columns. */
-interface ChainRow extends EnvelopeRow {
+/**
+ * An admin row with its chain columns.
+ *
+ * @internal
+ */
+export interface ChainRow extends EnvelopeRow {
   prev_hash: Buffer;
   hash: Buffer;
 }
@@ -304,8 +308,16 @@ async function appendToChain(tx: DbTransaction, { row, envelope }: BuiltEvent): 
   return row.id;
 }
 
-/** Why an admin row does not continue the chain after `expectedPrev`, if it does not. */
-function checkChainRow(row: ChainRow, expectedPrev: Buffer): EventChainBreakReason | undefined {
+/**
+ * Why an admin row does not continue the chain after `expectedPrev`, if it
+ * does not. The retention job (#536) checks each row it deletes with it.
+ *
+ * @internal
+ */
+export function checkChainRow(
+  row: ChainRow,
+  expectedPrev: Buffer
+): EventChainBreakReason | undefined {
   if (!Buffer.isBuffer(row.prev_hash) || !row.prev_hash.equals(expectedPrev)) {
     return 'prev_hash_mismatch';
   }
@@ -451,11 +463,39 @@ export function createEventsRepository(
 
     async verifyChain(realmId, from): Promise<EventChainReport> {
       const realm = checkRealmId(realmId);
-      const start = checkChainPoint(
-        from ?? { seq: 0n, hash: EVENT_CHAIN_GENESIS_HASH.toString('hex') }
-      );
+      const asked = from === undefined ? undefined : checkChainPoint(from);
       return defaultDb.transaction(
         async (tx) => {
+          // Where retention left the chain (#536): the last admin row it
+          // deleted, read in the snapshot the rows are read in.
+          const [stored] = await tx
+            .select({ seq: eventChainAnchors.seq, hash: eventChainAnchors.hash })
+            .from(eventChainAnchors)
+            .where(eq(eventChainAnchors.realmId, realm));
+          const anchor: EventChainPoint | undefined = stored && {
+            seq: stored.seq,
+            hash: stored.hash.toString('hex'),
+          };
+
+          // The start: the point asked for, unless retention has deleted it,
+          // and then the anchor, which the oldest row left must follow.
+          let start: EventChainPoint = asked ??
+            anchor ?? { seq: 0n, hash: EVENT_CHAIN_GENESIS_HASH.toString('hex') };
+          let pruned = asked === undefined && anchor !== undefined;
+          if (asked !== undefined && anchor !== undefined && asked.seq <= anchor.seq) {
+            if (asked.seq === anchor.seq && asked.hash !== anchor.hash) {
+              return {
+                ok: false,
+                realmId: realm,
+                from: asked,
+                rowsChecked: 0,
+                break: { id: null, seq: asked.seq, reason: 'anchor_mismatch' },
+              };
+            }
+            start = anchor;
+            pruned = true;
+          }
+
           let expectedPrev: Buffer = Buffer.from(start.hash, 'hex');
           let after = start.seq;
           let rowsChecked = 0;
@@ -463,16 +503,19 @@ export function createEventsRepository(
 
           // A point after the start is a row the caller saw: it must still be
           // there, unchanged, or cutting the chain back to before it, or
-          // rewriting it, would verify.
+          // rewriting it, would verify. Retention's anchor names a row it
+          // deleted, so that row may be gone; a row still there must match.
           if (start.seq > 0n) {
-            const { rows: anchor } = await tx.execute<ChainRow>(sql`
+            const { rows: anchorRows } = await tx.execute<ChainRow>(sql`
               select ${ENVELOPE_COLUMNS}, ${events.prevHash} as "prev_hash", ${events.hash} as "hash"
               from ${events}
               where ${events.realmId} = ${realm} and ${events.seq} = ${start.seq.toString()}::bigint
             `);
-            const [point] = anchor;
+            const [point] = anchorRows;
             const reason: EventChainBreakReason | undefined = !point
-              ? 'anchor_missing'
+              ? pruned
+                ? undefined
+                : 'anchor_missing'
               : !Buffer.isBuffer(point.hash) || !point.hash.equals(expectedPrev)
                 ? 'anchor_mismatch'
                 : checkChainRow(point, point.prev_hash) && 'anchor_mismatch';

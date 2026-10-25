@@ -35,10 +35,21 @@ const OTLP_LOGS_VARIABLE =
 const EVENT_DELIVERY_SCHEDULE =
   'Sets how many times and how often the delivery role retries an event delivery (#460). Every event, admin events included, is stored and chained whatever it says, and a delivery that runs out of attempts stays in the queue as failed.';
 
+/**
+ * A realm's event retention (#536): how long its events are kept, never
+ * whether one is stored. The admin value cannot go below 90 days.
+ */
+const EVENT_RETENTION =
+  'Seeds how many days a new realm keeps its events before the retention job (#536) deletes the oldest, once every enabled delivery destination has finished them. Every event, admin events included, is stored and chained whatever it says, and admin events are kept at least 90 days.';
+
 const ALLOWED: Readonly<Record<string, string>> = {
   EVENT_DELIVERY_MAX_ATTEMPTS: EVENT_DELIVERY_SCHEDULE,
   EVENT_DELIVERY_RETRY_INITIAL_DELAY: EVENT_DELIVERY_SCHEDULE,
   EVENT_DELIVERY_RETRY_MAX_DELAY: EVENT_DELIVERY_SCHEDULE,
+  EVENT_RETENTION_USER_DAYS: EVENT_RETENTION,
+  EVENT_RETENTION_ADMIN_DAYS: EVENT_RETENTION,
+  userEventDays: EVENT_RETENTION,
+  adminEventDays: EVENT_RETENTION,
   LOG_LEVEL:
     "The lowest level of the server's own process log. Events are not written to that log, and no level stops one.",
   LOG_PRETTY:

@@ -20,6 +20,12 @@ export default defineConfig({
       // registers duplicate Fastify routes ("Method 'POST' already declared for
       // route '/register'"), failing a run that has nothing wrong with it.
       '**/.claude/**',
+      // The gitignored scratch directory. The upgrade test (#475) unpacks the
+      // baseline release's whole tree into `tmp/upgrade-test/baseline-src/`,
+      // tests included, which this run would otherwise glob in after a local
+      // `scripts/upgrade-test/upgrade-test.sh` run, against packages the
+      // workspace no longer has.
+      'tmp/**',
       // Docker-backed repository integration suite (#167). Kept out of the
       // fast unit run so CI needs no Postgres/Redis; run it via the dedicated
       // `test-integration` target instead.

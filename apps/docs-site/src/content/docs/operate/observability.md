@@ -159,6 +159,8 @@ process/runtime metrics plus QAuth counters and gauges:
 | `qauth_events_pending`                   | gauge   | `kind`               | Event deliveries not finished yet, by delivery route.               |
 | `qauth_events_delivery_lag_seconds`      | gauge   | none                 | Seconds the oldest event that waits for a delivery has waited.      |
 | `qauth_events_delivery_attempts_total`   | counter | `kind`, `result`     | Event delivery attempts by route and result.                        |
+| `qauth_events_retention_deleted_total`   | counter | `category`           | Events the retention job deleted, by category.                      |
+| `qauth_events_oldest_age_seconds`        | gauge   | `category`           | Seconds since each category's oldest stored event was written.      |
 | `qauth_session_cache_lookups_total`      | counter | `result`             | Browser session cache reads; `hit` over all is the cache hit rate.  |
 | `qauth_session_postgres_reads_total`     | counter | `result`             | Postgres reads of a browser session.                                |
 | `qauth_session_last_seen_writes_total`   | counter | `result`             | Conditional writes of a browser session's last-seen time.           |
@@ -276,6 +278,49 @@ GROUP BY 1, 2, 3
 ORDER BY 4 DESC;
 ```
 
+### Event retention
+
+A realm keeps its user events 90 days and its admin events 365 days by
+default. Admin events are never kept fewer than 90 days. Both values are realm
+policy, stored on the realm row (`realms.user_event_retention_days`,
+`realms.admin_event_retention_days`). `EVENT_RETENTION_USER_DAYS` and
+`EVENT_RETENTION_ADMIN_DAYS` only seed a new realm's values: changing them
+later leaves existing realms as they are (see
+[Configuration](/operate/configuration/)). Until the admin API exists, change
+an existing realm's retention with SQL; the row refuses an admin retention
+below 90 days.
+
+The `event-retention` job runs every hour, on one node at a time. It deletes a
+realm's events once they are older than the realm's retention and every
+enabled delivery destination has finished them, as `delivered` or `failed`. A
+destination that is down holds its events back only until its retries run out.
+A disabled destination holds nothing back. Readers of the event API are not
+waited for: one that falls behind retention has to start again. The job
+deletes the oldest events first, at most 1000 per transaction.
+
+Admin events go only from the start of a realm's chain, and the newest one
+always stays. Before the job deletes admin events, it checks each one against
+the one before it. In the same transaction, it stores the last one it deletes
+as the realm's chain anchor (`event_chain_anchors`). The chain check then
+starts from the anchor. If an old admin event was changed, the job keeps it and
+every admin event after it, and logs an error. The chain check reports the
+change.
+
+- `qauth_events_retention_deleted_total{category}` counts the events deleted.
+- `qauth_events_oldest_age_seconds{category}` is how old each category's
+  oldest event is. With the default retention it stays near 90 days for `user`
+  and 365 days for `admin`. A value well past the retention means the job does
+  not run, or a destination holds events back:
+  `qauth_job_runs_total{job="event-retention"}` and the delivery metrics above
+  tell which. It is read from the database at each scrape. A failed read shows
+  `NaN` and logs a warning.
+
+Only the retention role may delete from `events`.
+`eventRetentionGrantStatements()` in `@qauth-labs/infra-db` gives the database
+user that runs the job that grant, and the reads it needs. While a deployment
+runs every role as one database user, that user owns the tables and holds
+every grant.
+
 ### Admin event chain
 
 An admin event records a change made by an administrator, a service account or
@@ -299,8 +344,11 @@ check, but Nx reports every failure as exit code `1` and prints lines of its
 own, so a monitor uses the command above.
 
 The command only reads, so run it as a database role that may read the
-`events` table, such as its owner; a role given only the event writer's grants
-cannot. `--realm-id=<uuid>` names a realm that no longer exists, and `--json`
+`events` and `event_chain_anchors` tables, such as their owner; a role given
+only the event writer's grants cannot. Once the retention job has deleted a
+realm's oldest admin events, a full check starts from the realm's chain anchor
+and prints it as the point it verified from. A kept head that retention has
+since deleted is replaced by the anchor in the same way. `--realm-id=<uuid>` names a realm that no longer exists, and `--json`
 prints the report as JSON. Its exit code tells a broken chain from a check
 that could not run, so a monitor does not report a database outage as
 tampering:

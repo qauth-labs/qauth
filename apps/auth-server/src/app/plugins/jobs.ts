@@ -8,14 +8,15 @@ import {
   type JobLock,
   JobRunner,
   serverJobs,
+  type ServerJobSettings,
   SERVICE_ROLES,
   type ServiceRole,
 } from '../jobs';
 import { METRICS_PLUGIN_NAME } from './metrics';
 
 /** Options for {@link jobsPlugin}. Each defaults to what the server runs with. */
-export interface JobsPluginOptions extends FastifyPluginOptions {
-  /** Defaults to {@link serverJobs}. */
+export interface JobsPluginOptions extends FastifyPluginOptions, ServerJobSettings {
+  /** Defaults to {@link serverJobs}, built with the settings of {@link ServerJobSettings}. */
   jobs?: readonly JobDefinition[];
   /** The roles this node holds. Defaults to every role: one process runs every job. */
   roles?: readonly ServiceRole[];
@@ -51,7 +52,16 @@ export const jobsPlugin = fp<JobsPluginOptions>(
     }
 
     const runner = new JobRunner({
-      jobs: options.jobs ?? serverJobs(fastify),
+      jobs:
+        options.jobs ??
+        serverJobs(fastify, {
+          ...(options.deliveryRoutes === undefined
+            ? {}
+            : { deliveryRoutes: options.deliveryRoutes }),
+          ...(options.eventRetentionFallback === undefined
+            ? {}
+            : { eventRetentionFallback: options.eventRetentionFallback }),
+        }),
       roles: options.roles ?? SERVICE_ROLES,
       lock: options.lock ?? createAdvisoryJobLock(fastify.dbPool, fastify.log),
       log: fastify.log,

@@ -336,6 +336,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position every destination has finished. No route exists yet, so the role
   does nothing but publish its metrics.
 
+- **Event retention** ([#536], ADR-020 §3, ADR-019 Decisions 7 and 10). A realm
+  keeps its user events 90 days and its admin events 365 days by default, and
+  never fewer than 90 days of admin events. Migration 0036 stores both on the
+  realm row (`user_event_retention_days`, `admin_event_retention_days`, whose
+  CHECKs refuse an admin value below 90), and `EVENT_RETENTION_USER_DAYS` and
+  `EVENT_RETENTION_ADMIN_DAYS` seed a new realm's values; the realms
+  repository applies the seeds to every realm it creates and refuses a value
+  out of range. The hourly `event-retention` job, on one node at a time,
+  deletes a realm's oldest events once they are past its retention and every
+  enabled delivery destination has finished them, `delivered` or `failed`; a
+  disabled destination holds nothing back, and cursor readers are not waited
+  for. It deletes in batches of 1000, each a short transaction under the
+  realm's lock, so two instances never delete a row twice. Admin events go
+  only from the start of the chain, never its head, and only while each
+  verifies; the last one deleted becomes the realm's anchor in the new
+  `event_chain_anchors` table, written in the same transaction, and
+  `verifyChain` starts from it. A changed old admin event stops the deletions
+  and is logged. `eventRetentionGrantStatements()` gives the retention role
+  the only `DELETE` on `events`. `/metrics` gains
+  `qauth_events_retention_deleted_total` and
+  `qauth_events_oldest_age_seconds`. The migration replaces
+  `idx_events_time`, which no query used, with
+  `idx_events_retention (realm_id, category, time)`.
+
 - **The migration runner is one small command** ([#474], ADR-018 §5). The
   `migration-runner` image holds Node and one bundled program,
   `dist/apps/migration-runner/main.js`, with the migrations beside it, and no
@@ -703,6 +727,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577

@@ -15,8 +15,17 @@ import { realmHosts, realms } from './core';
  */
 const REALM_TABLES: readonly Table[] = [realms, realmHosts];
 
-/** Realm fields that hold an event word but turn nothing off, with the reason. None today. */
-const ALLOWED: Readonly<Record<string, string>> = {};
+/** How long a realm keeps its events (#536), never whether one is stored. */
+const EVENT_RETENTION =
+  'How many days the realm keeps its events before the retention job (#536) deletes the oldest, once every enabled delivery destination has finished them. Every event, admin events included, is stored and chained whatever it says, and a CHECK keeps admin events at least 90 days.';
+
+/** Realm fields that hold an event word but turn nothing off, with the reason. */
+const ALLOWED: Readonly<Record<string, string>> = {
+  userEventRetentionDays: EVENT_RETENTION,
+  user_event_retention_days: EVENT_RETENTION,
+  adminEventRetentionDays: EVENT_RETENTION,
+  admin_event_retention_days: EVENT_RETENTION,
+};
 
 type RealmRow = typeof realms.$inferSelect;
 

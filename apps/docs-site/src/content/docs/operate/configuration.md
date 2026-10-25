@@ -47,6 +47,13 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `LOG_LEVEL`       | deployment | `info`  | 0.1.0 | The lowest level the server logs: `fatal`, `error`, `warn`, `info`, `debug` or `trace`. |
 | `METRICS_ENABLED` | deployment | `true`  | 0.1.0 | Serve Prometheus metrics at `GET /metrics`.                                             |
 
+### Events
+
+| Key                          | Role                                   | Default | Since | Description                                                                                                                                                                                                                        |
+| ---------------------------- | -------------------------------------- | ------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVENT_RETENTION_ADMIN_DAYS` | realm-seed: `retention.adminEventDays` | `365`   | 0.2.0 | The days a new realm keeps its admin events, at least 90, before the retention job deletes the oldest of them; it seeds the realm row, so a later change leaves existing realms' retention as it is.                               |
+| `EVENT_RETENTION_USER_DAYS`  | realm-seed: `retention.userEventDays`  | `90`    | 0.2.0 | The days a new realm keeps its user events before the retention job deletes them, once every enabled delivery destination has finished them; it seeds the realm row, so a later change leaves existing realms' retention as it is. |
+
 ### Database and Redis
 
 | Key              | Role       | Default     | Since | Description                                                                                                          |
@@ -175,7 +182,7 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `OTEL_SERVICE_NAME`                          | deployment | `qauth-auth-server`                                               | 0.2.0 | The `service.name` resource attribute of every exported event record.                                                                                                                       |
 | `REQUEST_ID_HEADER`                          | deployment | `x-request-id`                                                    | 0.1.0 | The HTTP header that carries the request id, taken from the request when present and echoed on the response.                                                                                |
 
-### Event delivery
+### Events
 
 | Key                                  | Role       | Default | Since | Description                                                                                                                                 |
 | ------------------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |

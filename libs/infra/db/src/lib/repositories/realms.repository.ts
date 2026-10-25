@@ -6,6 +6,8 @@ import {
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import {
+  type EventRetentionPolicy,
+  eventRetentionProblems,
   InvalidRealmHostError,
   normaliseRealmHost,
   resolveRpId,
@@ -53,6 +55,23 @@ export interface RealmWithHost {
 /** Input of {@link RealmsRepository.createWithPrimaryHost}: a new realm that has its issuer. */
 export type NewRealmWithIssuer = NewRealm & { issuer: string };
 
+/**
+ * The realm policies the environment seeds into a new realm (ADR-019
+ * Decision 10): the values a realm gets for the policies its creator leaves
+ * out. The realm row owns them from then on; a later change of a seed leaves
+ * existing realms as they are.
+ */
+export type RealmPolicySeeds = Partial<EventRetentionPolicy>;
+
+/** Options of {@link createRealmsRepository}. */
+export interface RealmsRepositoryOptions {
+  /**
+   * The seeds every new realm gets, whichever call creates it. A policy left
+   * out of the seeds takes the column default.
+   */
+  readonly seeds?: RealmPolicySeeds;
+}
+
 /** Constraint behind a duplicate host: `host` is the primary key of `realm_hosts`. */
 const REALM_HOSTS_PKEY = 'realm_hosts_pkey';
 
@@ -93,8 +112,11 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * trailing slash, query or fragment. Its host must be the primary host: the
    * two are the realm's permanent identity.
    *
+   * The realm gets the repository's seeds for the policies `data` leaves out.
+   *
    * @throws InvalidRealmHostError if the host cannot be a primary host
-   * @throws BadRequestError if the issuer is not a URL on the primary host
+   * @throws BadRequestError if the issuer is not a URL on the primary host, or
+   *   the event retention is out of range
    * @throws UniqueConstraintError if the host, name or issuer is taken
    */
   createWithPrimaryHost(
@@ -256,6 +278,20 @@ function assertIssuerOnPrimaryHost(issuer: string, primaryHost: string): void {
   }
 }
 
+/**
+ * Refuse event retention outside its limits (#536): user events 1 to 36500
+ * days, admin events 90 to 36500. The row's CHECK constraints refuse the same.
+ */
+function assertEventRetention(data: Partial<EventRetentionPolicy>): void {
+  const problems = eventRetentionProblems({
+    userEventRetentionDays: data.userEventRetentionDays,
+    adminEventRetentionDays: data.adminEventRetentionDays,
+  });
+  if (problems.length > 0) {
+    throw new BadRequestError(`Realm event retention is out of range: ${problems.join('; ')}`);
+  }
+}
+
 /** Map a duplicate key to {@link UniqueConstraintError}; rethrow anything else. */
 function rethrowUnique(error: unknown, fallbackConstraint: string): never {
   if (isUniqueConstraintError(error)) {
@@ -267,23 +303,51 @@ function rethrowUnique(error: unknown, fallbackConstraint: string): never {
 /**
  * Factory function that creates a realms repository with CRUD operations
  *
+ * Every realm it creates gets `options.seeds` for the policies its creator
+ * leaves out, and every create and update refuses event retention outside
+ * its limits ({@link BadRequestError}).
+ *
  * @param defaultDb - Database client to use for queries
+ * @param options - The realm policy seeds (ADR-019 Decision 10)
  * @returns Repository object with CRUD methods implementing BaseRepository
+ * @throws TypeError when a seed is out of range, so a bad environment fails
+ *   the boot rather than the first realm's creation
  */
-export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
+export function createRealmsRepository(
+  defaultDb: DbClient,
+  options: RealmsRepositoryOptions = {}
+): RealmsRepository {
+  const seeds: RealmPolicySeeds = { ...options.seeds };
+  const seedProblems = eventRetentionProblems(seeds);
+  if (seedProblems.length > 0) {
+    throw new TypeError(`createRealmsRepository: ${seedProblems.join('; ')}`);
+  }
+
+  /** A new realm's row: the seeds, overridden by what the creator set. */
+  function seeded<T extends NewRealm>(data: T): T {
+    const row = { ...data };
+    for (const [key, value] of Object.entries(seeds) as [keyof RealmPolicySeeds, number][]) {
+      if (row[key] === undefined) row[key] = value;
+    }
+    assertEventRetention(row);
+    return row;
+  }
+
   return {
     /**
      * Create a new realm
      *
      * @param data - Realm data to create
      * @param tx - Optional transaction client
-     * @returns Created realm
+     * @returns Created realm, with the seeds for the policies `data` leaves out
+     * @throws BadRequestError if its event retention is out of range
      * @throws UniqueConstraintError if realm name already exists
      */
     async create(data: NewRealm, tx?: DbClient): Promise<Realm> {
+      const row = seeded(data);
       const invoker = tx ?? defaultDb;
       try {
-        const [realm] = await invoker.insert(realms).values(data).returning();
+        const [realm] = await invoker.insert(realms).values(row).returning();
         return realm;
       } catch (error) {
         if (isUniqueConstraintError(error)) {
@@ -356,12 +420,13 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
     ): Promise<RealmWithHost> {
       const host = normaliseRealmHost(primaryHost, 'primary');
       assertIssuerOnPrimaryHost(data.issuer, host);
+      const row = seeded(data);
       const invoker = tx ?? defaultDb;
       try {
         // A savepoint inside an outer transaction, so a realm is never left
         // without its primary host when the caller catches the error and goes on.
         return await invoker.transaction(async (innerTx) => {
-          const [realm] = await innerTx.insert(realms).values(data).returning();
+          const [realm] = await innerTx.insert(realms).values(row).returning();
           const [realmHost] = await innerTx
             .insert(realmHosts)
             .values({ host, realmId: realm.id, kind: 'primary' })
@@ -562,6 +627,8 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
      * @param tx - Optional transaction client
      * @returns Updated realm
      * @throws NotFoundError if realm is not found
+     * @throws BadRequestError if a new event retention is out of range
+     *   (admin events fewer than 90 days, for one)
      * @throws UniqueConstraintError if realm name or issuer would violate uniqueness
      *
      * `issuer` may be set where it is NULL. Changing a set issuer fails in the
@@ -570,6 +637,7 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
      * a {@link UniqueConstraintError}).
      */
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
+      assertEventRetention(data);
       const invoker = tx ?? defaultDb;
       const updateData = {
         ...data,
