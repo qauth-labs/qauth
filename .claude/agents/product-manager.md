@@ -17,7 +17,7 @@ When invoked:
 2. **Clarify scope** — the roadmap was resequenced MCP-first ([ADR-007](../../docs/adr/007-mcp-first-positioning.md)) into near-term **tracks (T0–T5)**; the original linear **Phases** are retained in MVP-PRD as the long-term plan. Both vocabularies are in play, so map between them.
    - **Near-term tracks — COMPLETE:**
      - **T0 — Trust floor**: real-DB repository tests, logout endpoint test, CI typecheck + coverage gate.
-     - **T1 — MCP productization**: `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up), Client ID Metadata Documents (CIMD), MCP quickstart, RFC 7009 revocation.
+     - **T1 — MCP productization**: `@qauth-labs/resource-guard` (RFC 9728 metadata + token validation + step-up), Client ID Metadata Documents (CIMD), MCP quickstart, RFC 7009 revocation.
      - **T2 — Agent-native authZ**: agent client type (`is_agent`), RFC 8693 on-behalf-of token exchange (`act` claim), scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit.
      - **T3 — OIDC conformance + hardening**: CSRF/Helmet/secure cookies/XSS, pino logging + `/metrics` + request-id + failed-login lockout, ID token/nonce/claims, developer-portal Docker image.
      - **T5 — Environment-aware authZ** ([ADR-008](../../docs/adr/008-environment-aware-authorization.md)): `environment` as a fail-safe policy dimension driving TTLs/PKCE/localhost redirects/rate-limit tier/agent step-up/T3 bundle; environment-gated developer API keys.

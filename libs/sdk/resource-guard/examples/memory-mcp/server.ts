@@ -1,13 +1,13 @@
 /**
  * Runnable example — a minimal MCP-style resource server protected by
- * `@qauth-labs/mcp-guard` against a self-hosted QAuth authorization server.
+ * `@qauth-labs/resource-guard` against a self-hosted QAuth authorization server.
  *
  * This doubles as the T1 quickstart (ADR-007): it is the resource-server half
  * of the Claude Code → QAuth → MCP handshake. Point Claude Code (or any MCP
  * client) at this server's URL; on a 401 the client reads the RFC 9728
  * Protected Resource Metadata, discovers the QAuth AS, runs
  * authorization_code + PKCE against it, and retries with a bearer token that
- * `mcp-guard` validates here.
+ * `resource-guard` validates here.
  *
  * Run (from the lib directory):
  *   QAUTH_ISSUER=https://localhost:3000 \
@@ -28,7 +28,7 @@
 
 import Fastify from 'fastify';
 
-import { mcpGuardPlugin } from '../../src';
+import { resourceGuardPlugin } from '../../src/fastify';
 
 const ISSUER = process.env['QAUTH_ISSUER'] ?? 'http://localhost:3000';
 const RESOURCE = process.env['MCP_RESOURCE'] ?? 'http://localhost:8088';
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   // against the QAuth JWKS — no per-request call to the AS. Switch to
   // `introspection` mode (with `introspectionClient` credentials) if you need
   // near-real-time revocation.
-  await app.register(mcpGuardPlugin, {
+  await app.register(resourceGuardPlugin, {
     resource: RESOURCE,
     authorizationServer: ISSUER,
     // Any read of the memory store needs `mcp:read`; writes additionally
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   app.log.info(
     { resource: RESOURCE, authorizationServer: ISSUER },
     'memory-mcp resource server listening; PRM at %s',
-    app.mcpGuard.getMetadataUrl()
+    app.resourceGuard.getMetadataUrl()
   );
 }
 

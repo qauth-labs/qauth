@@ -457,7 +457,7 @@ catalog:
   tsx: '^4.23.15'
   typescript: '~6.0.3'
   # TypeScript 7 (the native port) as the `tsgo` command, which the `typecheck`
-  # targets and the ui and mcp-guard builds run (`"compiler": "tsgo"` in
+  # targets and the ui and resource-guard builds run (`"compiler": "tsgo"` in
   # nx.json). Nx's option runs this package's binary. The `typescript` 7.x
   # package ships the same compiler as `tsc` and would replace the 6.0 package
   # above, which Nx's plugins, the @nx/esbuild type-check, astro check and the

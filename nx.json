@@ -24,7 +24,7 @@
     // Both @nx/js/typescript entries run TypeScript 7's `tsgo`
     // (@typescript/native-preview) in place of `tsc`: `tsgo -p <config>
     // --noEmit` for `typecheck`, and `tsgo --build tsconfig.lib.json` for the
-    // two builds this entry infers (ui and mcp-guard), whose JavaScript is
+    // two builds this entry infers (ui and resource-guard), whose JavaScript is
     // byte-identical to tsc's. Two typecheck targets are declared in
     // project.json instead: auth-server's runs tsgo too, docs-site's runs
     // `astro check`.

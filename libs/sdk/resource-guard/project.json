@@ -1,0 +1,8 @@
+{
+  "name": "resource-guard",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/sdk/resource-guard/src",
+  "projectType": "library",
+  "tags": ["scope:sdk", "type:sdk"],
+  "// targets": "to see all targets run: nx show project resource-guard --web"
+}

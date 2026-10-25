@@ -7,7 +7,7 @@
  *
  * The modes are expressed as **reserved scopes** so the EXISTING scope
  * machinery enforces them unchanged — `validateScopes` / the realm allowlist
- * / `filterRequestedScopes` / `mcp-guard`'s scope checks all keep working
+ * / `filterRequestedScopes` / `resource-guard`'s scope checks all keep working
  * with no parallel claim system. This module only adds the agent-mode CAP
  * check that sits in front of that machinery.
  *
@@ -23,7 +23,7 @@
  *
  * The ordering is a REQUEST ceiling only, never a scope implication. The
  * three reserved scopes are independent OAuth scopes: `agent:admin` does NOT
- * satisfy a requirement for `agent:readonly` (`mcp-guard` matches scopes
+ * satisfy a requirement for `agent:readonly` (`resource-guard` matches scopes
  * exactly and case-sensitively per RFC 6749 §3.3). A client that needs both
  * must request both. See `docs/agent-authorization.md` §3.
  *

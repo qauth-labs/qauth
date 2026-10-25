@@ -252,7 +252,7 @@ another.
 The modes are plain OAuth scopes (`agent:*`), so the **existing** scope
 machinery enforces them with no new claim system — the per-client allowlist and
 `validateScopes` at the token endpoint, scope filtering at the authorize /
-consent screens, and `@qauth-labs/mcp-guard`'s resource-server scope checks. The
+consent screens, and `@qauth-labs/resource-guard`'s resource-server scope checks. The
 granted mode is therefore already visible to resource servers in the token's
 `scope` set.
 
@@ -265,9 +265,9 @@ granted mode is therefore already visible to resource servers in the token's
 The three reserved scopes are three ordinary, **independent** OAuth scopes. A
 broader mode does **not** imply a narrower one:
 
-- `@qauth-labs/mcp-guard` matches scopes **exactly and case-sensitively** per
+- `@qauth-labs/resource-guard` matches scopes **exactly and case-sensitively** per
   RFC 6749 §3.3, with no hierarchical or prefix semantics (`missingScopes` in
-  `libs/fastify/plugins/mcp-guard/src/lib/scope.ts`). This is deliberate and is
+  `libs/sdk/resource-guard/src/lib/scope.ts`). This is deliberate and is
   not changing.
 - A token carrying only `agent:admin` therefore **does not** satisfy a route
   that requires `agent:readonly` — it gets a `403 insufficient_scope`, exactly
@@ -348,7 +348,7 @@ DATABASE_URL="postgresql://qauth:${DB_PASSWORD}@localhost:5432/qauth" \
 
 ## 4. Step-up authentication before dangerous operations
 
-`mcp-guard` emits the runtime `403 insufficient_scope` + `WWW-Authenticate`
+`resource-guard` emits the runtime `403 insufficient_scope` + `WWW-Authenticate`
 challenge when a resource needs a scope the presented token lacks (shipped in
 T1). The authorization-server half of that loop lives in `/oauth/authorize`:
 when a client returns asking for an **increased** scope set, QAuth must not
@@ -387,7 +387,7 @@ plus the standard OIDC `prompt` / `max_age` request parameters:
 
 ```
 1. Agent calls the resource with a token lacking the needed (e.g. write/exec) scope.
-   → mcp-guard returns 403 insufficient_scope + WWW-Authenticate scope hint.
+   → resource-guard returns 403 insufficient_scope + WWW-Authenticate scope hint.
 2. Agent re-runs /oauth/authorize requesting the larger scope set.
    → the agent scope-mode cap is checked first; an over-cap agent:* scope
      yields an invalid_scope redirect.
@@ -470,5 +470,5 @@ since then; the upgrade copied its rows into the event store.
 - [MCP Quickstart](/integrate/mcp-quickstart/) — end-to-end QAuth → MCP handshake.
 - [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — why the
   agent-native layer is QAuth's differentiation.
-- [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) — the
+- [`@qauth-labs/resource-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md) — the
   resource-server SDK that emits the `403 insufficient_scope` step-up challenge.

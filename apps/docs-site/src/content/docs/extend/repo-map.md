@@ -71,8 +71,8 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/fastify/plugins/pkce`       | `@qauth-labs/fastify-plugin-pkce`       | `scope:fastify`                        |
 | `libs/fastify/plugins/email`      | `@qauth-labs/fastify-plugin-email`      | `scope:fastify`                        |
 | `libs/fastify/plugins/federation` | `@qauth-labs/fastify-plugin-federation` | `scope:fastify`                        |
-| `libs/fastify/plugins/mcp-guard`  | `@qauth-labs/mcp-guard`                 | `scope:fastify`                        |
 | `libs/fastify/plugins/signer`     | `@qauth-labs/fastify-plugin-signer`     | `scope:fastify`                        |
+| `libs/sdk/resource-guard`         | `@qauth-labs/resource-guard`            | `scope:sdk` + `type:sdk`               |
 
 ## The layering
 
@@ -95,6 +95,7 @@ import **from inside the workspace**; external npm packages are never restricted
 | `scope:wire-suite`       | nothing — and nothing may import it                                              | `.oxlintrc.json:187` |
 | `scope:upgrade-test`     | nothing — and nothing may import it                                              | `.oxlintrc.json:298` |
 | `type:kek-adapter`       | `scope:core`, `scope:shared`, `type:key-custody` — and nothing may import it     | `.oxlintrc.json:284` |
+| `scope:sdk`              | nothing — an SDK is installed outside the workspace                              | `.oxlintrc.json:309` |
 
 ### Key custody has a second, path-based rule
 

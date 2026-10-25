@@ -1,0 +1,29 @@
+{
+  "name": "@qauth-labs/resource-guard",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fastify": "./src/fastify.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "fastify-plugin": "catalog:",
+    "jose": "catalog:"
+  },
+  "peerDependencies": {
+    "fastify": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "fastify": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "fastify": "catalog:",
+    "vitest": "catalog:"
+  }
+}

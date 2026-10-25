@@ -9,7 +9,7 @@
  * QAuth contract (auth-server introspect route): returns
  * `{ active, sub, client_id, exp, iat, iss, aud, scope, token_type }` and
  * `{ active: false }` for invalid / cross-audience tokens. The AS itself
- * already enforces audience-authoritative introspection; `mcp-guard`
+ * already enforces audience-authoritative introspection; `resource-guard`
  * additionally re-checks `aud` locally so the no-passthrough guarantee does
  * not depend solely on AS-side configuration.
  */

@@ -31,7 +31,7 @@ signature. This guide describes the behavior you will observe **once an
 operator enables hybrid signing**.
 
 What is _not_ shipped yet: a first-party SDK that performs the PQC signature
-check for you. [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md),
+check for you. [`@qauth-labs/resource-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md),
 QAuth's own resource-server SDK, verifies the classical Ed25519 signature only.
 The "If you want to validate the post-quantum signature" checklist below is
 something you implement yourself today.
@@ -175,7 +175,7 @@ That's it. Your integration is unaffected by the rollout.
 ### If you want to validate the post-quantum signature
 
 Opt-in, for verifiers that want forward-secure assurance. There is no
-first-party SDK support for this yet (`mcp-guard` verifies Ed25519 only), so
+first-party SDK support for this yet (`resource-guard` verifies Ed25519 only), so
 this is a checklist for building it yourself:
 
 - [ ] Read the `AKP` / `ML-DSA-65` public key from JWKS, selecting it by the
@@ -201,6 +201,6 @@ this is a checklist for building it yourself:
   reviewed behavior and the pre-default-on checklist.
 - [OAuth 2.1 Flow → Introspection](/integrate/oauth-flow/#token-introspection-rfc-7662) — the introspection endpoint
   used as the PQC delivery channel.
-- [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) —
+- [`@qauth-labs/resource-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md) —
   the resource-server SDK that performs (classical) token validation.
 - [Keys](/operate/keys/) — generating the ML-DSA seed this feature needs.

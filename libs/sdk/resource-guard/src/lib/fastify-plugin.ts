@@ -1,14 +1,14 @@
 /**
- * Fastify adapter for `mcp-guard`.
+ * Fastify adapter for `resource-guard`.
  *
  * Registering this plugin:
  *
  * 1. serves the RFC 9728 Protected Resource Metadata document at the
  *    resource's well-known path (and, for a path-bearing resource, also at the
  *    bare `/.well-known/oauth-protected-resource` for discovery convenience);
- * 2. decorates the instance with `mcpGuard` (the core), a `requireBearer`
+ * 2. decorates the instance with `resourceGuard` (the core), a `requireBearer`
  *    preHandler, and a `requireScopes(...)` preHandler factory for step-up;
- * 3. converts `McpGuardError`s thrown anywhere in the encapsulation context
+ * 3. converts `ResourceGuardError`s thrown anywhere in the encapsulation context
  *    into RFC 6750 §3.1 responses with the correct `WWW-Authenticate` header.
  *
  * Because the guard is exposed to parent/sibling contexts, the plugin is
@@ -24,20 +24,20 @@ import type {
 } from 'fastify';
 import fp from 'fastify-plugin';
 
-import type { McpGuardConfig, ValidatedToken } from '../types';
-import { McpGuard } from './core';
+import type { ResourceGuardConfig, ValidatedToken } from '../types';
+import { ResourceGuard } from './core';
 import {
   InsufficientScopeError,
-  McpGuardConfigError,
-  McpGuardError,
   MissingTokenError,
+  ResourceGuardConfigError,
+  ResourceGuardError,
 } from './errors';
 import { PRM_WELL_KNOWN_PREFIX } from './metadata';
 
 declare module 'fastify' {
   interface FastifyInstance {
     /** The framework-agnostic guard core. */
-    mcpGuard: McpGuard;
+    resourceGuard: ResourceGuard;
     /**
      * preHandler that requires a valid, audience-bound bearer carrying the
      * guard's default `requiredScopes`. On success, `request.tokenClaims` is
@@ -62,7 +62,7 @@ declare module 'fastify' {
  * Configuration for the Fastify plugin. Extends the core config with route
  * options.
  */
-export interface McpGuardPluginOptions extends McpGuardConfig {
+export interface ResourceGuardPluginOptions extends ResourceGuardConfig {
   /**
    * `Cache-Control` for the PRM document. RFC 9728 documents are highly
    * cacheable. Defaults to `public, max-age=3600`.
@@ -70,7 +70,7 @@ export interface McpGuardPluginOptions extends McpGuardConfig {
   metadataCacheControl?: string;
 }
 
-const PLUGIN_NAME = '@qauth-labs/mcp-guard';
+const PLUGIN_NAME = '@qauth-labs/resource-guard';
 
 /**
  * Which guard validated `request.tokenClaims`. `requireScopes` may reuse
@@ -78,13 +78,17 @@ const PLUGIN_NAME = '@qauth-labs/mcp-guard';
  * validated (e.g. a parent scope's `requireBearer` hook) carry that
  * resource's audience, not this one's.
  */
-const claimsValidatedBy = new WeakMap<FastifyRequest, McpGuard>();
+const claimsValidatedBy = new WeakMap<FastifyRequest, ResourceGuard>();
 
 /**
  * Send the RFC 6750 §3.1 response for a guard error, including the
  * `WWW-Authenticate` challenge with the `resource_metadata` pointer.
  */
-function sendChallenge(guard: McpGuard, reply: FastifyReply, error: McpGuardError): FastifyReply {
+function sendChallenge(
+  guard: ResourceGuard,
+  reply: FastifyReply,
+  error: ResourceGuardError
+): FastifyReply {
   const body: Record<string, unknown> = { error: error.bearerError ?? 'invalid_request' };
   if (error instanceof InsufficientScopeError) {
     body['error_description'] = error.message;
@@ -98,18 +102,18 @@ function sendChallenge(guard: McpGuard, reply: FastifyReply, error: McpGuardErro
     .send(error instanceof MissingTokenError ? {} : body);
 }
 
-const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
+const plugin: FastifyPluginAsync<ResourceGuardPluginOptions> = async (
   fastify: FastifyInstance,
-  options: McpGuardPluginOptions
+  options: ResourceGuardPluginOptions
 ) => {
-  const guard = new McpGuard(options);
+  const guard = new ResourceGuard(options);
   const cacheControl = options.metadataCacheControl ?? 'public, max-age=3600';
 
   // --- Guard preHandlers ----------------------------------------------------
   // The preHandlers reply with the Bearer challenge directly (returning the
   // reply halts the lifecycle) rather than throwing, so the plugin is fully
   // self-contained and never has to take over the host app's error handler.
-  // `McpGuardError`s that still escape into the host's error path (e.g. thrown
+  // `ResourceGuardError`s that still escape into the host's error path (e.g. thrown
   // deep inside a route handler) can be mapped with the exported
   // `sendBearerChallenge` helper.
   const requireBearer: preHandlerHookHandler = async (request, reply) => {
@@ -117,7 +121,7 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
       request.tokenClaims = await guard.authenticate(request.headers.authorization);
       claimsValidatedBy.set(request, guard);
     } catch (error) {
-      if (error instanceof McpGuardError) {
+      if (error instanceof ResourceGuardError) {
         return sendChallenge(guard, reply, error);
       }
       throw error;
@@ -137,7 +141,7 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
         request.tokenClaims = await guard.authenticate(request.headers.authorization, scopes);
         claimsValidatedBy.set(request, guard);
       } catch (error) {
-        if (error instanceof McpGuardError) {
+        if (error instanceof ResourceGuardError) {
           return sendChallenge(guard, reply, error);
         }
         throw error;
@@ -159,15 +163,15 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
   // A second guard on the same scope could never be reached through the
   // decorators, and its routes would look guarded while checking the first
   // resource's audience and scopes. Refuse it at boot rather than warn.
-  if (Object.hasOwn(fastify, 'mcpGuard')) {
-    throw new McpGuardConfigError(
-      `another guard (resource=${fastify.mcpGuard.resource}) is already registered on this ` +
-        `scope, and \`mcpGuard\`/\`requireBearer\`/\`requireScopes\` can reference only one. ` +
+  if (Object.hasOwn(fastify, 'resourceGuard')) {
+    throw new ResourceGuardConfigError(
+      `another guard (resource=${fastify.resourceGuard.resource}) is already registered on this ` +
+        `scope, and \`resourceGuard\`/\`requireBearer\`/\`requireScopes\` can reference only one. ` +
         `Register the guard for resource=${guard.resource}, and the routes it protects, in an ` +
         `encapsulated child scope of their own.`
     );
   }
-  fastify.decorate('mcpGuard', guard);
+  fastify.decorate('resourceGuard', guard);
   fastify.decorate('requireBearer', requireBearer);
   fastify.decorate('requireScopes', requireScopes);
 
@@ -195,47 +199,47 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
       fastify.get(PRM_WELL_KNOWN_PREFIX, metadataHandler);
     } else {
       fastify.log.debug(
-        'mcp-guard: bare %s already served by an earlier guard; not re-registering for resource=%s',
+        'resource-guard: bare %s already served by an earlier guard; not re-registering for resource=%s',
         PRM_WELL_KNOWN_PREFIX,
         guard.resource
       );
     }
   }
 
-  fastify.log.debug('mcp-guard plugin registered (resource=%s)', guard.resource);
+  fastify.log.debug('resource-guard plugin registered (resource=%s)', guard.resource);
 };
 
 /**
  * Reply to `reply` with the RFC 6750 §3.1 Bearer challenge for `error`, using
  * `guard`'s `resource_metadata` pointer. Exposed so host apps that throw
- * `McpGuardError` from their own handlers can wire it into their error handler:
+ * `ResourceGuardError` from their own handlers can wire it into their error handler:
  *
  * @example
  * ```ts
  * fastify.setErrorHandler((err, req, reply) => {
- *   if (err instanceof McpGuardError) {
- *     return sendBearerChallenge(fastify.mcpGuard, reply, err);
+ *   if (err instanceof ResourceGuardError) {
+ *     return sendBearerChallenge(fastify.resourceGuard, reply, err);
  *   }
  *   // ...fall through to the app's own handling
  * });
  * ```
  */
 export function sendBearerChallenge(
-  guard: McpGuard,
+  guard: ResourceGuard,
   reply: FastifyReply,
-  error: McpGuardError
+  error: ResourceGuardError
 ): FastifyReply {
   return sendChallenge(guard, reply, error);
 }
 
 /**
- * `@qauth-labs/mcp-guard` Fastify plugin. Wrapped with `fastify-plugin` so the
- * `mcpGuard` decorator and the `requireBearer` / `requireScopes` preHandlers
+ * `@qauth-labs/resource-guard` Fastify plugin. Wrapped with `fastify-plugin` so the
+ * `resourceGuard` decorator and the `requireBearer` / `requireScopes` preHandlers
  * are visible to the parent app and sibling plugins.
  */
-export const mcpGuardPlugin = fp(plugin, {
+export const resourceGuardPlugin = fp(plugin, {
   name: PLUGIN_NAME,
   fastify: '5.x',
 });
 
-export default mcpGuardPlugin;
+export default resourceGuardPlugin;

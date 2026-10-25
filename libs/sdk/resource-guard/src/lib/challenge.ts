@@ -5,10 +5,10 @@
  * resource. RFC 9728 §5.1 adds the `resource_metadata` parameter so the client
  * can discover the AS. Under MCP 2026-07-28 this header is OPTIONAL when the
  * resource exposes the `.well-known` PRM document, but emitting it is the
- * fastest path for a client and is recommended — `mcp-guard` always emits it.
+ * fastest path for a client and is recommended — `resource-guard` always emits it.
  */
 
-import type { McpGuardError } from './errors';
+import type { ResourceGuardError } from './errors';
 import { advertisableScopes } from './scope';
 
 export interface ChallengeParams {
@@ -57,7 +57,7 @@ export function buildWwwAuthenticate(params: ChallengeParams): string {
  * consistent. `InsufficientScopeError` and `MissingTokenError` both contribute
  * the `scope` challenge (see below).
  */
-export function challengeForError(error: McpGuardError, resourceMetadataUrl: string): string {
+export function challengeForError(error: ResourceGuardError, resourceMetadataUrl: string): string {
   const params: ChallengeParams = { resourceMetadataUrl };
   if (error.bearerError) {
     params.error = error.bearerError;

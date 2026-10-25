@@ -21,7 +21,7 @@ The parts that matter:
 - `apps/auth-server` — the server: every route, the hosted pages, all policy.
 - `apps/developer-portal` — a separate web app where developers manage their
   clients. It talks to the auth-server's management API.
-- `libs/fastify/plugins/mcp-guard` — a library a resource server uses to
+- `libs/sdk/resource-guard` — a library a resource server uses to
   validate QAuth tokens.
 
 ## Deployment assumptions
@@ -97,7 +97,7 @@ Most:
 - `libs/server/jwt`, `libs/server/password`, `libs/server/pkce`.
 - `libs/server/federation` — OID4VP, SD-JWT VC, trust, status lists, `x509`.
 - `libs/core/crypto` and `libs/core/crypto-native` — the signing backends.
-- `libs/fastify/plugins/` — including `mcp-guard`, which resource servers use
+- `libs/fastify/plugins/` — including `resource-guard`, which resource servers use
   to accept QAuth tokens.
 - Session and token handling in `apps/developer-portal/src/server/`.
 

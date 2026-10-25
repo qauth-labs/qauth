@@ -55,7 +55,7 @@ export interface JwtValidatorOptions {
  * discriminator between them, checked before any claim is read.
  *
  * Duplicated as a literal rather than imported from `@qauth-labs/server-jwt`
- * on purpose: `mcp-guard` is the resource-server-side library and depends only
+ * on purpose: `resource-guard` is the resource-server-side library and depends only
  * on `jose`. Its value is fixed by RFC 9068, not by QAuth.
  */
 const ACCESS_TOKEN_TYP = 'at+jwt';
