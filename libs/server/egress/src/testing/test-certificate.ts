@@ -16,14 +16,14 @@ function derLength(length: number): Buffer {
   return Buffer.from([0x80 | bytes.length, ...bytes]);
 }
 
-function der(tag: number, ...content: Buffer[]): Buffer {
+export function der(tag: number, ...content: Buffer[]): Buffer {
   const body = Buffer.concat(content);
   return Buffer.concat([Buffer.from([tag]), derLength(body.length), body]);
 }
 
-const sequence = (...content: Buffer[]): Buffer => der(0x30, ...content);
+export const sequence = (...content: Buffer[]): Buffer => der(0x30, ...content);
 
-function oid(dotted: string): Buffer {
+export function oid(dotted: string): Buffer {
   const [first, second, ...rest] = dotted.split('.').map(Number);
   const bytes = [first * 40 + second];
   for (const part of rest) {
@@ -34,7 +34,7 @@ function oid(dotted: string): Buffer {
   return der(0x06, Buffer.from(bytes));
 }
 
-function integer(value: number): Buffer {
+export function integer(value: number): Buffer {
   const bytes: number[] = [];
   let rest = value;
   do {
@@ -47,10 +47,10 @@ function integer(value: number): Buffer {
 
 const ecdsaWithSha256 = (): Buffer => sequence(oid('1.2.840.10045.4.3.2'));
 
-const commonName = (cn: string): Buffer =>
+export const commonName = (cn: string): Buffer =>
   sequence(der(0x31, sequence(oid('2.5.4.3'), der(0x0c, Buffer.from(cn, 'utf8')))));
 
-function utcTime(date: Date): Buffer {
+export function utcTime(date: Date): Buffer {
   const text = date
     .toISOString()
     .replace(/[-:T]/g, '')
