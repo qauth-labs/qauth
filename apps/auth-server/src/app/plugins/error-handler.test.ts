@@ -185,6 +185,9 @@ async function buildApp(): Promise<FastifyInstance> {
   app.post('/oauth/conflict', OAUTH, async () => {
     throw new UniqueConstraintError('oauth_clients_client_id_key');
   });
+  app.post('/oauth/not-found', OAUTH, async () => {
+    throw new NotFoundError('User', '0b9f7d4e-5c1a-4f7e-9d2b-3a6c8e1f0a42');
+  });
   app.post('/oauth/forbidden', OAUTH, async () => {
     throw new ForbiddenError('Developer has reached the client limit');
   });
@@ -688,6 +691,17 @@ describe('error-handler plugin (#513)', () => {
       const response = await app.inject({ method: 'POST', url: '/oauth/conflict' });
 
       expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: 'invalid_request' });
+
+      await app.close();
+    });
+
+    it('names no internal row id: a NotFoundError carries no description', async () => {
+      const app = await buildApp();
+
+      const response = await app.inject({ method: 'POST', url: '/oauth/not-found' });
+
+      expect(response.statusCode).toBe(404);
       expect(response.json()).toEqual({ error: 'invalid_request' });
 
       await app.close();

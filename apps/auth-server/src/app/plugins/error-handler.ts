@@ -3,6 +3,7 @@ import {
   InvalidDpopProofError,
   JWTExpiredError,
   JWTInvalidError,
+  NotFoundError,
   TemporarilyUnavailableError,
   UniqueConstraintError,
   WeakPasswordError,
@@ -346,7 +347,7 @@ function describeValidation(validation: unknown): string {
  * - Any other class answers the `oauthError` of its registry entry, with its
  *   message as the description; an error no entry lists answers by status.
  * - A 5xx and a `UniqueConstraintError` carry no description, for the reasons
- *   {@link problemDetail} gives.
+ *   {@link problemDetail} gives, and nor does a `NotFoundError`.
  */
 export function oauthErrorBody(error: FastifyError | Error, status: number): OAuthErrorBody {
   let code: OAuthErrorCode;
@@ -360,7 +361,13 @@ export function oauthErrorBody(error: FastifyError | Error, status: number): OAu
     description = describeValidation(error.validation);
   } else {
     code = errorClassEntryOf(error)?.oauthError ?? oauthErrorForStatus(status);
-    description = error instanceof UniqueConstraintError ? undefined : error.message;
+    // A NotFoundError names the row it did not find (`User with id …`): on an
+    // OAuth endpoint that is an internal id, such as the user an authorization
+    // code was issued for, never one the caller sent.
+    description =
+      error instanceof UniqueConstraintError || error instanceof NotFoundError
+        ? undefined
+        : error.message;
   }
 
   if (status >= 500) description = undefined;
