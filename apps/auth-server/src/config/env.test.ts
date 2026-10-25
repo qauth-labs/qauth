@@ -69,6 +69,7 @@ beforeEach(() => {
     DB_POOL_MAX: undefined,
     WEBAUTHN_ENABLED: undefined,
     DPOP_ENABLED: undefined,
+    ID_JAG_JWKS_CACHE_TTL: undefined,
   });
 });
 
@@ -261,6 +262,28 @@ describe('private-address switches are refused in production (#435)', () => {
     const mod = await import('./env');
 
     expect(mod.env[name]).toBe(true);
+  });
+});
+
+/**
+ * The ceiling on the ID-JAG issuer key cache (#433). A TTL above an hour would
+ * keep a key the issuer has withdrawn usable for that long, so it fails the
+ * boot instead of being clamped, and the error names the variable.
+ */
+describe('ID_JAG_JWKS_CACHE_TTL above its ceiling is refused at boot (#433)', () => {
+  it('ID_JAG_JWKS_CACHE_TTL=3601 fails the boot, naming the variable', async () => {
+    setEnv({ ID_JAG_JWKS_CACHE_TTL: '3601' });
+
+    await expect(import('./env')).rejects.toThrow('ID_JAG_JWKS_CACHE_TTL');
+  });
+
+  it('ID_JAG_JWKS_CACHE_TTL=3600 boots, with the refresh bounds at their defaults', async () => {
+    setEnv({ ID_JAG_JWKS_CACHE_TTL: '3600' });
+    const mod = await import('./env');
+
+    expect(mod.env.ID_JAG_JWKS_CACHE_TTL).toBe(3600);
+    expect(mod.env.ID_JAG_JWKS_REFRESH_COOLDOWN).toBe(30);
+    expect(mod.env.ID_JAG_JWKS_NEGATIVE_CACHE_TTL).toBe(30);
   });
 });
 

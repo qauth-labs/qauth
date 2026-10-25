@@ -590,15 +590,47 @@ export const authEnvSchema = z.object({
 
   /**
    * TTL (seconds) for a cached trusted-issuer OIDC discovery document and its
-   * JWK Set. Bounds how long a rotated-away key stays usable; a verification
-   * failure on an unknown `kid` SHOULD force one bounded refresh rather than
-   * waiting out the TTL. Default 5 minutes.
+   * JWK Set. Bounds how long a rotated-away key stays usable; an unknown `kid`
+   * forces a refresh rather than waiting out the TTL, at most once per
+   * `ID_JAG_JWKS_REFRESH_COOLDOWN`. Default 5 minutes.
+   *
+   * Hard ceiling of 1 hour, as `CIMD_CACHE_MAX_TTL` is for CIMD. A larger value
+   * fails validation rather than being clamped: it would keep a key the issuer
+   * has withdrawn usable for that long, and an operator should learn that at
+   * boot, not after a compromise.
+   *
+   * `0` turns the cache off. Every assertion then fetches both documents on its
+   * own, so the refresh cooldown bounds nothing and only the negative cache
+   * still limits how often the issuer is dialled.
    */
   ID_JAG_JWKS_CACHE_TTL: z.coerce
     .number()
     .int()
     .min(0)
+    .max(60 * 60)
     .default(5 * 60),
+
+  /**
+   * Per-issuer cooldown (seconds) on the refresh an unknown `kid` forces. The
+   * refresh runs before the assertion's signature is checked, so any client
+   * holding the `jwt-bearer` grant could otherwise make every request cost the
+   * issuer two fetches by sending a random `kid`. Inside the cooldown a `kid`
+   * miss fails closed without a fetch; the marker is a Redis `SET NX EX`, so the
+   * bound holds across every auth-server process. A rotated key is picked up at
+   * the latest one cooldown after it is first presented. Default 30 seconds,
+   * 1 to 300.
+   */
+  ID_JAG_JWKS_REFRESH_COOLDOWN: z.coerce.number().int().min(1).max(300).default(30),
+
+  /**
+   * How long (seconds) a failed fetch of a trusted issuer's discovery document
+   * or JWK Set is remembered. Inside that window no fetch is made for the
+   * issuer and resolution fails closed, so an issuer outage costs one attempt
+   * per window instead of two fetches, each up to `ID_JAG_FETCH_TIMEOUT_MS`, on
+   * every token request. A key already in the cache keeps working. Default
+   * 30 seconds, 1 to 300.
+   */
+  ID_JAG_JWKS_NEGATIVE_CACHE_TTL: z.coerce.number().int().min(1).max(300).default(30),
 
   /**
    * Maximum size in bytes accepted for a fetched OIDC discovery document or

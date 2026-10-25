@@ -65,6 +65,31 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
  * timeout. Non-200 is rejected by this module (the fetcher reports status; it
  * does not judge it). See `fetchAndValidateCimdDocument` for the reference
  * shape this mirrors.
+ *
+ * ## How often an issuer is dialled
+ *
+ * Three bounds, all per issuer and all held in Redis so they apply across every
+ * auth-server process (#433):
+ *
+ *  - the cache: both documents for `ID_JAG_JWKS_CACHE_TTL`, which config
+ *    validation caps at one hour;
+ *  - the refresh cooldown: an unknown `kid` forces a refresh at most once per
+ *    `ID_JAG_JWKS_REFRESH_COOLDOWN`. The refresh happens BEFORE any signature is
+ *    checked, so without it a client holding the grant could make every request
+ *    cost the issuer two fetches by sending a random `kid`;
+ *  - the negative cache: a failed fetch is remembered for
+ *    `ID_JAG_JWKS_NEGATIVE_CACHE_TTL`, and no fetch is made for the issuer
+ *    until it lapses, so an outage costs one attempt per window rather than
+ *    two timeouts on every token request. Concurrent requests in one process
+ *    share a fetch that is already running, so a fetch that hangs until its
+ *    timeout is still one attempt.
+ *
+ * The cooldown bounds forced refreshes only. With `ID_JAG_JWKS_CACHE_TTL=0`
+ * nothing is cached, every assertion fetches both documents on the ordinary
+ * path, and only the negative cache and the in-flight sharing still bound it.
+ *
+ * Every bound fails closed: inside it, resolution answers `undefined` exactly as
+ * it does for an unknown key.
  */
 
 /**
@@ -242,9 +267,13 @@ export interface IdJagIssuerKeyRequest {
   /**
    * Bypass the cache for exactly this attempt. Set on the ONE retry a caller
    * makes after a `kid` miss, so a key rotation is picked up without waiting out
-   * `ID_JAG_JWKS_CACHE_TTL` — and without letting an attacker turn every forged
-   * `kid` into an outbound fetch, because the retry happens at most once per
-   * request and only after the allowlist check has already passed.
+   * `ID_JAG_JWKS_CACHE_TTL`.
+   *
+   * A request for a refresh, not a guarantee of one: the resolver refreshes an
+   * issuer at most once per `ID_JAG_JWKS_REFRESH_COOLDOWN`, across all requests
+   * and processes, and not at all while the negative cache holds the issuer.
+   * A refused refresh resolves `undefined` without a fetch. That is what stops
+   * an attacker turning every forged `kid` into an outbound fetch.
    */
   readonly forceRefresh?: boolean;
 }
@@ -298,6 +327,134 @@ async function writeCache(fastify: FastifyInstance, key: string, value: unknown)
   } catch {
     // Best-effort cache; a write failure only costs a re-fetch.
   }
+}
+
+/** Whether the negative cache holds `issuer`: a fetch for it failed recently. */
+async function fetchRecentlyFailed(fastify: FastifyInstance, issuer: string): Promise<boolean> {
+  try {
+    return (await fastify.redis.get(REDIS_KEYS.ID_JAG_FETCH_FAILED(issuer))) !== null;
+  } catch {
+    // Read as "no failure on record", as an unreachable positive cache reads
+    // as a miss: the fetch still goes through the guarded path. With the store
+    // down every request fetches, and is then refused at the `jti` burn, which
+    // fails closed; those fetches are the cost of an unavailable store.
+    return false;
+  }
+}
+
+/**
+ * Document fetches in flight, per server instance, keyed by document and
+ * issuer.
+ *
+ * The negative cache can only hold a failure once a fetch has failed, and
+ * against an issuer that drops packets that takes the whole
+ * `ID_JAG_FETCH_TIMEOUT_MS`. Without this map every request arriving in that
+ * time would start a fetch of its own; with it, concurrent requests in one
+ * process wait on the one fetch already running and share its answer. Unlike a
+ * Redis "fetching" marker, a joiner is never refused, so the requests that
+ * meet a cache expiry are not failed while the refetch runs. Across processes
+ * the bound is one fetch per process.
+ */
+const fetchesInFlight = new WeakMap<FastifyInstance, Map<string, Promise<unknown>>>();
+
+/** Run `fetch` unless the same `key` is already being fetched, then share that. */
+function shareInFlight<T>(
+  fastify: FastifyInstance,
+  key: string,
+  fetch: () => Promise<T | undefined>
+): Promise<T | undefined> {
+  let inFlight = fetchesInFlight.get(fastify);
+  if (!inFlight) {
+    inFlight = new Map();
+    fetchesInFlight.set(fastify, inFlight);
+  }
+  const running = inFlight.get(key) as Promise<T | undefined> | undefined;
+  if (running) return running;
+
+  const started = fetch().finally(() => inFlight.delete(key));
+  inFlight.set(key, started);
+  return started;
+}
+
+/**
+ * Run one document fetch for `issuer` through the negative cache: skip it while
+ * a recent failure is on record, and record a failure when it yields nothing.
+ * Concurrent calls for the same document share one run ({@link shareInFlight}),
+ * so the failure is on record before any of them returns.
+ *
+ * Every way a fetch can fail counts, not only a transport error: a non-200, a
+ * body that does not parse or validate, a discovery document naming another
+ * issuer. Each would fail the same way on the next request, and each costs the
+ * issuer a request to find out.
+ */
+function fetchUnlessRecentlyFailed<T>(
+  fastify: FastifyInstance,
+  issuer: string,
+  what: 'discovery' | 'jwks',
+  fetch: () => Promise<T | undefined>
+): Promise<T | undefined> {
+  return shareInFlight(fastify, `${what} ${issuer}`, async () => {
+    if (await fetchRecentlyFailed(fastify, issuer)) {
+      fastify.log.debug({ issuer, what }, 'ID-JAG issuer fetch skipped: a recent fetch failed');
+      return undefined;
+    }
+
+    const document = await fetch();
+    if (document === undefined) {
+      try {
+        await fastify.redis.set(
+          REDIS_KEYS.ID_JAG_FETCH_FAILED(issuer),
+          '1',
+          'EX',
+          env.ID_JAG_JWKS_NEGATIVE_CACHE_TTL
+        );
+      } catch {
+        // Best-effort: an unwritten entry only costs the next request a fetch.
+      }
+    }
+    return document;
+  });
+}
+
+/**
+ * Claim the issuer's refresh cooldown. `true` means this request may refresh;
+ * `false` means it must fail closed without a fetch.
+ *
+ * `SET NX EX` makes the claim atomic across processes: of N concurrent `kid`
+ * misses, at most one refreshes. An unreachable store refuses rather than
+ * allows — this is the bound on attacker-driven traffic, so it does not open
+ * when it cannot be checked. That costs nothing a working store would give: a
+ * store that cannot take this write cannot take the `jti` burn either, which
+ * refuses the assertion. A key that is in the cache is unaffected, and so is a
+ * cache miss, which fetches on the ordinary path.
+ *
+ * The negative cache is consulted first, so a refresh that would not fetch
+ * anyway does not spend the cooldown.
+ */
+async function claimRefresh(fastify: FastifyInstance, issuer: string): Promise<boolean> {
+  if (await fetchRecentlyFailed(fastify, issuer)) {
+    fastify.log.debug({ issuer }, 'ID-JAG issuer key refresh skipped: a recent fetch failed');
+    return false;
+  }
+
+  let claimed;
+  try {
+    claimed = await fastify.redis.set(
+      REDIS_KEYS.ID_JAG_KEY_REFRESH(issuer),
+      '1',
+      'EX',
+      env.ID_JAG_JWKS_REFRESH_COOLDOWN,
+      'NX'
+    );
+  } catch {
+    fastify.log.debug({ issuer }, 'ID-JAG issuer key refresh refused: cooldown store unreachable');
+    return false;
+  }
+  if (claimed !== 'OK') {
+    fastify.log.debug({ issuer }, 'ID-JAG issuer key refresh refused: inside the cooldown');
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -376,6 +533,20 @@ async function resolveIssuerMetadata(
     if (cached) return cached;
   }
 
+  const metadata = await fetchUnlessRecentlyFailed(fastify, issuer, 'discovery', () =>
+    fetchIssuerMetadata(fastify, issuer)
+  );
+  if (!metadata) return undefined;
+
+  await writeCache(fastify, cacheKey, metadata);
+  return metadata;
+}
+
+/** Fetch and validate an issuer's discovery document, uncached. */
+async function fetchIssuerMetadata(
+  fastify: FastifyInstance,
+  issuer: string
+): Promise<IssuerMetadata | undefined> {
   const metadata = await fetchJsonDocument(
     fastify,
     `${issuer}/.well-known/openid-configuration`,
@@ -409,7 +580,6 @@ async function resolveIssuerMetadata(
     return undefined;
   }
 
-  await writeCache(fastify, cacheKey, metadata);
   return metadata;
 }
 
@@ -426,7 +596,9 @@ async function resolveIssuerJwks(
     if (cached) return cached;
   }
 
-  const jwks = await fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks');
+  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', () =>
+    fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks')
+  );
   if (!jwks) return undefined;
 
   await writeCache(fastify, cacheKey, jwks);
@@ -465,7 +637,11 @@ export function createIdJagIssuerKeyResolver(fastify: FastifyInstance): IdJagIss
     const identifier = resolveTrustedIdJagIssuer(request.issuer);
     if (identifier === undefined) return undefined;
 
+    // A forced refresh is the one fetch an assertion's `kid` can cause on a
+    // warm cache, and it happens before any signature check: hold it to the
+    // per-issuer cooldown, and fail closed inside it.
     const forceRefresh = request.forceRefresh === true;
+    if (forceRefresh && !(await claimRefresh(fastify, identifier))) return undefined;
 
     const metadata = await resolveIssuerMetadata(fastify, identifier, forceRefresh);
     if (!metadata) return undefined;
