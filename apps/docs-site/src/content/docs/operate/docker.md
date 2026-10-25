@@ -440,6 +440,28 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/refere
 
 > **Note:** the `CIMD_*` variables are optional and default-safe, so the stack runs without them, and `.env.docker.example` does not list them. The `auth-server` `environment:` map does, so setting them in `.env` takes effect. Be deliberate about `CIMD_TRUST_POLICY`: it defaults to `accept-any-https`, which returns before `CIMD_TRUSTED_DOMAINS` is consulted — so populating the domain list alone changes nothing until you also set `CIMD_TRUST_POLICY=allowlist`.
 
+#### Hostile document hosts
+
+Under `accept-any-https`, anyone can make the server fetch a document from a host they choose, by
+sending its URL as a `client_id`. The fetch includes a TLS handshake with that host, and a hostile
+host can keep the TLS library busy for seconds per handshake, in one call nothing interrupts. QAuth
+never runs that handshake on the thread that serves requests:
+
+- The CIMD and `jwks_uri` fetches run on worker threads, at most 8 at a time and 2 per host name. A
+  thread a host keeps busy holds its slot until the handshake ends, so a caller with many host names
+  can fill all 8. Other documents that are not cached then fail to load, and their clients are
+  refused, until the slots free.
+- The SSRF-safe egress client, which these fetches move to (#481), runs each exchange in a fetch
+  process of its own instead. A process is killed at its deadline and a fresh one takes its place,
+  so a hostile host holds a slot for no longer than the deadline. At most 8 processes run, and the
+  host names under one registrable domain (`a.example.com`, `b.example.com`) share 2 of them. A
+  process starts with an empty environment and none of the server's open files.
+
+Neither makes a hostile host free: a caller who names enough domains still keeps fetches busy until
+their deadlines. The mitigation is `CIMD_TRUST_POLICY=allowlist`: the server then fetches a Client
+ID Metadata Document only from the hosts in `CIMD_TRUSTED_DOMAINS`, so an unauthenticated caller
+can no longer pick the host.
+
 #### Granting scopes to a CIMD client
 
 A CIMD client starts with no scopes, so it is granted none of the scopes it asks for. Its document owns its name, redirect URIs and grant types; which scopes it may receive is the operator's decision, which a document cannot make. Grant them in the `cimd_clients` section of the seed manifest, and run `db:seed-oauth-clients` as for any other manifest:

@@ -7,7 +7,7 @@ It is SSRF-safe by construction and has no switch that lets it reach a private a
 
 > **Status:** the library is complete, but nothing calls it yet. #481 moves the CIMD, client JWKS
 > and ID-JAG fetches onto it and adds the deployment-level allowlist for operator-set private
-> destinations. #749 moves its TLS work into a pool of child processes.
+> destinations.
 
 ## Usage
 
@@ -66,6 +66,8 @@ most.
 - **Proxies.** None. The client opens its own connection and uses no agent, so `HTTP_PROXY`,
   `HTTPS_PROXY` and a proxy-aware global agent (`NODE_USE_ENV_PROXY`) have no effect. A proxy would
   hide the real destination from the address checks.
+- **Where the connection is made.** Not in the server's process: see
+  [Fetch processes](#fetch-processes).
 
 Refused addresses (`isPublicUnicastAddress`, `addressKind`):
 
@@ -103,6 +105,66 @@ extensions and trailers are not body bytes, so it also caps everything it reads 
 at twice `maxResponseBytes` plus room for the heads; a host cannot stream framing until the total
 timeout.
 
+## Fetch processes
+
+The client resolves names and runs every check in the server's process. The exchange itself — the
+TCP connection to a checked address, the TLS handshake, the HTTP request and the byte caps — runs in
+a fetch process, a Node process of its own (`src/lib/process-pool.ts`, program
+`src/lib/exchange.ts`). OpenSSL works through a handshake message in one synchronous call that
+nothing interrupts, and a host can make that call last seconds (a Certificate message of
+certificates whose EC keys use an explicit curve). On the server's own thread that would stop every
+route and timer; on a worker thread it would hold the thread, and its slot, until OpenSSL returned.
+A process can be killed.
+
+- **Deadlines stay in the server's process.** The connect time runs until the process reports the
+  end of the TLS handshake; the total time runs for the whole call. A process that passes either is
+  killed with `SIGKILL`, the call fails with `timeout`, and a fresh process starts when a call next
+  needs one. A process holds its slot until it has exited.
+- **Nothing of the server's.** A process starts with an empty environment (Node adds the two
+  variables of its IPC channel and removes them at start), `/dev/null` for its standard streams, no
+  file descriptor of the server's but that channel, none of the server's Node flags, a 64 MiB heap
+  and the lowest CPU priority. It trusts the certificates the server's process trusts — Node's
+  bundled roots, `NODE_EXTRA_CA_CERTS`, the system store when Node uses it — sent over the channel
+  when it starts.
+- **Bounds.** At most 8 processes run at once, and the calls to one host family hold at most 2 of
+  them. A host name counts under its registrable domain, by the Public Suffix List with its private
+  section: `a.example.com` and `b.example.com` share a family, `alice.eu.org` and `bob.eu.org` do
+  not. An IPv4 literal is its own family, an IPv6 literal counts under its /64. At most 64 calls
+  wait for a process, 8 per family; any more fail at once with `busy`. A waiting call's time counts
+  against its total time.
+- **One exchange at a time.** A process runs one exchange, sends back the status, the headers and
+  the body, and waits for the next; it keeps nothing between them. An idle process exits after a
+  minute. The pool checks every answer — its shape, the body against `maxResponseBytes`, a failure
+  message kept to one line that names the host — and kills a process that answers out of turn.
+- **Loaded from source.** Node does not strip the types of a file under `node_modules`, where a
+  deployment keeps this library, so the pool reads `exchange.ts` and hands it to Node with
+  `--input-type=module-typescript --eval`. That file therefore imports `node:` builtins only.
+
+`egressPoolStats()` returns what the pool is doing, for `/metrics`:
+
+| Field           | Meaning                                                                |
+| --------------- | ---------------------------------------------------------------------- |
+| `processes`     | Fetch processes alive, busy or idle; a killed one until it has exited. |
+| `busy`          | Processes running an exchange.                                         |
+| `waiting`       | Calls waiting for a process.                                           |
+| `deadlineKills` | Processes killed because their exchange passed a deadline (a counter). |
+| `maxProcesses`  | The most processes that run at once.                                   |
+
+With prom-client, read it at each scrape:
+
+```typescript
+import { egressPoolStats } from '@qauth-labs/server-egress';
+
+new Gauge({
+  name: 'qauth_egress_processes',
+  help: 'Egress fetch processes alive.',
+  registers: [registry],
+  collect() {
+    this.set(egressPoolStats().processes);
+  },
+});
+```
+
 ## Errors, counts and logs
 
 `EgressError.reason` is one of:
@@ -116,9 +178,10 @@ timeout.
 | `size`        | The request body or the response body is above its cap.                       |
 | `timeout`     | The connect time or the total time ran out.                                   |
 | `network`     | The name did not resolve, or the connection, TLS or the HTTP exchange failed. |
+| `busy`        | The fetch processes had no room for the call (see Fetch processes).           |
 
 `EgressError.outcome` is `blocked` when a check refused the call (nothing more was sent to the
-refused destination) and `failed` otherwise. The message names the host and never the path, the
+refused destination) and `failed` otherwise, `busy` included. The message names the host and never the path, the
 query string or a header.
 
 Every blocked or failed call is counted by purpose, outcome and reason. `egress.counts()` returns
@@ -131,9 +194,16 @@ message)`) gets one line per call with `purpose`, `host`, `reason` and `outcome`
 `src/lib/egress-client.test.ts` runs the production path against local HTTPS servers.
 `src/testing/fixture-network.ts` replaces only the two network edges: a resolver that answers from a
 table, and a dialler that routes the public addresses the test hands out to local servers. The
+dialler cannot cross to a fetch process, so there the exchanges run in the test's process. The
 library exports no way to hand the client another network, so the test swaps them in by mocking
 the transport module (`vi.mock('./transport')`). The resolver (`resolveWithCares`) and the dialler
 (`dialPinned`) the client uses outside tests have their own tests in `src/lib/transport.test.ts`.
+
+`src/lib/process-pool.test.ts` starts real fetch processes against local TLS servers: a server that
+stalls mid-handshake and one that keeps OpenSSL busy for seconds (`src/testing/hostile-handshake.ts`)
+are killed at the deadline while another host is served; many host names of one server hold no
+more than the family's share; and on Linux `/proc` shows what a process inherits: its environment
+and its file descriptors.
 Run them with:
 
 ```console
