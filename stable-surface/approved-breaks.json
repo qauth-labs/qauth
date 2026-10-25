@@ -21,6 +21,17 @@
       },
       "ref": "#480",
       "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "request-property-pattern-added",
+        "operation": "POST /ui/consent",
+        "fingerprint": "4855ccac3969",
+        "text": "added the pattern `^[A-Za-z0-9._~-]+$` to the request property `code_challenge`"
+      },
+      "ref": "#627",
+      "release": "v0.2.0"
     }
   ]
 }

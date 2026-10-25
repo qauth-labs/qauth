@@ -856,7 +856,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /ui/consent` with a challenge outside that character set was given a
   code that could never be redeemed; it now answers `400`. A consent screen the
   server rendered always carries a valid challenge, so nothing a browser sends
-  changes.
+  changes. The published OpenAPI document gains the same `pattern` on that
+  form's `code_challenge`, an approved stable-surface break.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,

@@ -3523,7 +3523,8 @@
                   "code_challenge": {
                     "type": "string",
                     "minLength": 43,
-                    "maxLength": 128
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._~-]+$"
                   },
                   "code_challenge_method": {
                     "type": "string",
