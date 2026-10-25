@@ -1079,6 +1079,34 @@ importers:
         specifier: workspace:*
         version: link:../../shared/events
 
+  libs/server/dpop:
+    dependencies:
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.12
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+    devDependencies:
+      '@qauth-labs/shared-test-vectors':
+        specifier: workspace:*
+        version: link:../../shared/test-vectors
+      '@qauth-labs/shared-testing':
+        specifier: workspace:*
+        version: link:../../shared/testing
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      ioredis:
+        specifier: 'catalog:'
+        version: 5.11.1(supports-color@8.1.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+
   libs/server/egress:
     dependencies:
       tslib:

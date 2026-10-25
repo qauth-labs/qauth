@@ -21,9 +21,10 @@ test-vectors/
 | `webhooks/signature.json` | Standard Webhooks signatures, HMAC-SHA256 over `id.timestamp.body` | Generated with the reference library `standardwebhooks@1.1.1` (npm) |
 | `agent/act-chain.json`    | Reading an RFC 8693 `act` chain, and QAuth's depth cap of 4        | RFC 8693 §4.1, ADR-007 §2                                           |
 | `jwt/access-token.json`   | The access token checks of RFC 9068 §4                             | Generated from fixed-seed throwaway Ed25519 keys                    |
+| `dpop/proof.json`         | The DPoP proof checks of RFC 9449 §4.3, nonces and replay          | RFC 9449 Figures 2, 7 and 13, and fixed-seed throwaway Ed25519 keys |
 
-The server's tests run `pkce/s256` in `libs/server/pkce`, `jwt/access-token` in `libs/server/jwt`
-and `agent/act-chain` in `apps/auth-server`. QAuth has no webhook signer yet, so
+The server's tests run `pkce/s256` in `libs/server/pkce`, `jwt/access-token` in `libs/server/jwt`,
+`dpop/proof` in `libs/server/dpop` and `agent/act-chain` in `apps/auth-server`. QAuth has no webhook signer yet, so
 `libs/shared/test-vectors` checks `webhooks/signature` against `node:crypto` until it has one.
 
 ## The format
@@ -49,9 +50,11 @@ Values follow three rules:
   `whsec_` secret, a `webhook-signature` header, a PKCE challenge.
 - **Every key is a throwaway test key**, made for its file and used nowhere else. A JWK says so in
   its `kid`, which starts with `throwaway-test-`; the validator rejects a JWK without it. A webhook
-  secret decodes to ASCII that says it is a throwaway test secret. The one exception is the
-  reference libraries' own example secret in `webhooks/signature.json`, which is public. Files hold
-  public keys only.
+  secret decodes to ASCII that says it is a throwaway test secret. The exceptions are public
+  examples: the reference libraries' own example secret in `webhooks/signature.json`, and the
+  example key of RFC 9449 inside the RFC's own proofs in `dpop/proof.json`, which has no `kid`.
+  Files hold public keys only, except in a case that tests the refusal of a private or symmetric
+  key, whose proof carries a throwaway one in its header on purpose.
 
 ## Reading the files from another language
 
@@ -103,15 +106,17 @@ TypeScript tests read a file with `loadVectors(id)` from `@qauth-labs/shared-tes
 (`libs/shared/test-vectors`), which validates it first. A test fails when a committed vector file is
 loaded by no test.
 
-The two generated files have their generators in `generators/`. Neither runs at test time; run one
+The three generated files have their generators in `generators/`. None runs at test time; run one
 by hand after adding a case, and commit what it writes:
 
 ```bash
 node test-vectors/generators/access-token.mjs
+node test-vectors/generators/dpop-proof.mjs
 node test-vectors/generators/webhooks-signature.mjs <path to the standardwebhooks@1.1.1 package>
 ```
 
-`access-token.mjs` derives its keys from fixed seeds and rewrites the committed file byte for byte.
+`access-token.mjs` and `dpop-proof.mjs` derive their keys from fixed seeds and rewrite the committed
+files byte for byte; `dpop-proof.mjs` copies the RFC 9449 proofs from the RFC.
 `webhooks-signature.mjs` refuses any version of the reference library other than the pinned one;
 its header says how to fetch it.
 
