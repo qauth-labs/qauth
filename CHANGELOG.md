@@ -318,8 +318,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     returns `cnf` and `token_type: DPoP` for a bound token.
   - `userinfo` and the other routes that read an access token from the
     `Authorization` header accept the `DPoP` scheme with a valid proof (its
-    `ath` the token's hash), and refuse a DPoP-bound token sent as Bearer,
-    with a `WWW-Authenticate: DPoP` challenge.
+    `ath` the token's hash), and refuse a DPoP-bound token sent as Bearer
+    (`401 invalid_token`). A refusal under the `DPoP` scheme carries a
+    `WWW-Authenticate: DPoP` challenge with the accepted algorithms.
+  - a token exchange whose subject token is DPoP-bound needs a proof under
+    that token's key; another key is refused with `invalid_request` until
+    ADR-014's spawn assertion exists.
+  - a proof's `htu` must name the endpoint URL discovery publishes, built from
+    `JWT_ISSUER` (path included), also for a request sent to one of
+    `DEFAULT_REALM_ENDPOINT_HOSTS`.
 
   With `DPOP_ENABLED` off the server reads no `DPoP` header and no `dpop_jkt`,
   and every response is the one it gave before. `token_type` in the token and

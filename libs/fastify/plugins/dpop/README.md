@@ -8,7 +8,7 @@ client and decorates `fastify.dpop`.
 ```typescript
 await fastify.register(dpopPlugin, {
   enabled: env.DPOP_ENABLED, // off: fastify.dpop is null, and no route reads a DPoP header
-  origin: env.JWT_ISSUER, // htu is compared with this origin and the request path
+  baseUrl: env.JWT_ISSUER, // htu is this URL, path included, and the request path
 });
 
 if (fastify.dpop) {

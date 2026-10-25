@@ -481,7 +481,8 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
         scopes: SCOPES,
         grantTypes: ['authorization_code', 'refresh_token', TOKEN_EXCHANGE],
         isAgent: true,
-        dpopBoundAccessTokens: true,
+        // Not marked DPoP-bound: what refuses the exchange below without a
+        // proof is the subject token's own binding.
         enabled: true,
       });
       await app.repositories.oauthConsents.upsertGrant(userId, agent.id, realm, SCOPES);
@@ -530,10 +531,26 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
         client_id: AGENT_CLIENT_ID,
         client_secret: AGENT_SECRET,
       };
-      // RFC 9449 §5 "regardless of grant type": the exchange carries the proof.
+      // A bound subject token is exchanged only with a proof under its key:
+      // the agent's secret and a copy of the token buy nothing.
       const exchangeWithoutProof = await tokenRequest(app, exchangeForm);
       expect(exchangeWithoutProof.statusCode).toBe(400);
       expect(exchangeWithoutProof.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+      const exchangeOtherKey = await tokenRequest(
+        app,
+        exchangeForm,
+        await proof(await dpopKey(), 'POST', '/oauth/token')
+      );
+      expect(exchangeOtherKey.statusCode).toBe(400);
+      expect(exchangeOtherKey.json()).toMatchObject({ error: 'invalid_request' });
+      expect(await tokenFailureReasons(app)).toEqual([
+        { grantType: TOKEN_EXCHANGE, error: 'invalid_dpop_proof', reason: 'dpop_missing_proof' },
+        {
+          grantType: TOKEN_EXCHANGE,
+          error: 'invalid_request',
+          reason: 'subject_token_key_mismatch',
+        },
+      ]);
       const exchanged = await tokenRequest(
         app,
         exchangeForm,
@@ -663,6 +680,32 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
           codeBinding: row.rows[0]?.dpop_jkt,
           accessToken: body.access_token,
         };
+      }
+
+      // Before DPoP the parameter was stripped unread, so a repeated or
+      // over-long one did not stop the request; it still does not.
+      for (const query of [
+        `dpop_jkt=${key.thumbprint}&dpop_jkt=${key.thumbprint}`,
+        `dpop_jkt=${'x'.repeat(3000)}`,
+      ]) {
+        const pkce = pkcePair();
+        const response = await app.inject({
+          method: 'GET',
+          url: `/oauth/authorize?${new URLSearchParams({
+            response_type: 'code',
+            client_id: PUBLIC_CLIENT_ID,
+            redirect_uri: REDIRECT_URI,
+            scope: SCOPES.join(' '),
+            code_challenge: pkce.challenge,
+            code_challenge_method: 'S256',
+            state: 'dpop-state',
+          }).toString()}&${query}`,
+          headers: { cookie: jar.header() as string },
+        });
+        expect(response.statusCode).toBe(302);
+        expect(
+          new URL(response.headers['location'] as string).searchParams.get('code')
+        ).not.toBeNull();
       }
 
       const plain = await codeFlow(false);

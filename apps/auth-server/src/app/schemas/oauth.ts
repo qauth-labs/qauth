@@ -213,6 +213,24 @@ const clientAuthenticationFields = {
 } as const;
 
 /**
+ * RFC 9449 §10 `dpop_jkt` (#480): the base64url SHA-256 thumbprint of the DPoP
+ * key the authorization request binds its code to.
+ *
+ * Accepted in ANY shape here and read only while `DPOP_ENABLED` is on, where
+ * `readAuthorizationDpopJkt` refuses anything but a thumbprint. Before DPoP the
+ * schema stripped the unknown parameter, so a request carrying it, repeated or
+ * of any length, went on; with DPoP off it still does, and the response is the
+ * one it was. The published schema says what a valid value is.
+ *
+ * Shared by `authorizeQuerySchema` and the `/ui/consent` form mirror.
+ */
+export const dpopJktParamSchema = z.unknown().optional().meta({
+  type: 'string',
+  description:
+    'RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on.',
+});
+
+/**
  * OAuth 2.1 authorize query parameters (GET /oauth/authorize).
  * RFC 6749 4.1.1, RFC 7636 PKCE, RFC 8707 Resource Indicators.
  */
@@ -249,10 +267,7 @@ export const authorizeQuerySchema = z.object({
   max_age: maxAgeParamSchema,
   resource: resourceParamSchema,
   // RFC 9449 §10 (#480): the thumbprint of the DPoP key to bind the code to.
-  // Read only while DPOP_ENABLED is on, and its form checked there, so with
-  // DPoP off a request carrying it goes on exactly as before. Bounded like the
-  // other parameters that reach the pending-authorization stash.
-  dpop_jkt: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
+  dpop_jkt: dpopJktParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;

@@ -2597,7 +2597,7 @@ describe('GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 94
   const JKT = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
 
   /** A signed-in user whose stored consent covers the request, so a code is minted. */
-  async function issueCode(dpopOn: boolean, dpopJkt: string) {
+  async function issueCode(dpopOn: boolean, dpopJkt: unknown) {
     const { fastify, ctx } = makeFastify();
     (fastify as unknown as { dpop: unknown }).dpop = dpopOn
       ? { algorithms: ['ES256'], verifyRequest: vi.fn() }
@@ -2651,7 +2651,9 @@ describe('GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 94
   });
 
   it('reads no dpop_jkt while DPoP is off: the code is unbound, whatever the value', async () => {
-    for (const value of [JKT, 'not-a-thumbprint']) {
+    // Before DPoP the schema stripped the parameter, so a repeated one or one
+    // of any length went through; with DPoP off it still does.
+    for (const value of [JKT, 'not-a-thumbprint', [JKT, JKT], 'x'.repeat(5000)]) {
       const { fastify, state } = await issueCode(false, value);
       const [created] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
         .calls[0];

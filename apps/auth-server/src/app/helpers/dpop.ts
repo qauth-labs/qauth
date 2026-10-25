@@ -80,7 +80,12 @@ export async function verifyResourceRequestProof(
     });
   } catch (error) {
     if (!(error instanceof DpopProofError)) throw error;
-    request.log.warn({ reason: error.reason }, 'DPoP proof refused at a protected resource');
+    // A replay store outage refuses every proof: the server's error, not the
+    // caller's.
+    request.log[error.reason === 'replay-store-unavailable' ? 'error' : 'warn'](
+      { reason: error.reason },
+      'DPoP proof refused at a protected resource'
+    );
     const refusal =
       error.reason === 'key-mismatch'
         ? new JWTInvalidError('Invalid DPoP key binding')
@@ -111,8 +116,11 @@ export type AuthorizationDpopJkt =
  */
 export function readAuthorizationDpopJkt(
   fastify: FastifyInstance,
-  value: string | undefined
+  value: unknown
 ): AuthorizationDpopJkt {
   if (!fastify.dpop || value === undefined) return { kind: 'unbound' };
-  return DPOP_JKT.test(value) ? { kind: 'bound', jkt: value } : { kind: 'malformed' };
+  // A repeated parameter arrives as a list: one key per code, so malformed.
+  return typeof value === 'string' && DPOP_JKT.test(value)
+    ? { kind: 'bound', jkt: value }
+    : { kind: 'malformed' };
 }

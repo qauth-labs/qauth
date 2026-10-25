@@ -147,10 +147,15 @@ describe('readAuthorizationDpopJkt (RFC 9449 §10)', () => {
 
   it('is unbound without the parameter, or with DPoP off whatever its value', () => {
     expect(readAuthorizationDpopJkt(on, undefined)).toEqual({ kind: 'unbound' });
-    expect(readAuthorizationDpopJkt(fastifyWith(), JKT)).toEqual({ kind: 'unbound' });
-    expect(readAuthorizationDpopJkt(fastifyWith(), 'not a thumbprint')).toEqual({
-      kind: 'unbound',
-    });
+    for (const value of [JKT, 'not a thumbprint', [JKT, JKT], 'x'.repeat(5000), 42]) {
+      expect(readAuthorizationDpopJkt(fastifyWith(), value)).toEqual({ kind: 'unbound' });
+    }
+  });
+
+  it('refuses a repeated or non-string value while DPoP is on', () => {
+    expect(readAuthorizationDpopJkt(on, [JKT, JKT])).toEqual({ kind: 'malformed' });
+    expect(readAuthorizationDpopJkt(on, [JKT])).toEqual({ kind: 'malformed' });
+    expect(readAuthorizationDpopJkt(on, 42)).toEqual({ kind: 'malformed' });
   });
 
   it.each([

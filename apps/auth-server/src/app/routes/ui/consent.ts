@@ -44,7 +44,12 @@ import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers
 import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
 import { clientIdParamSchema, exactUrl } from '../../schemas/common';
-import { authorizeQuerySchema, maxAgeParamSchema, resourceParamSchema } from '../../schemas/oauth';
+import {
+  authorizeQuerySchema,
+  dpopJktParamSchema,
+  maxAgeParamSchema,
+  resourceParamSchema,
+} from '../../schemas/oauth';
 
 /**
  * Order-independent equality of two scope sets. Used by the consent POST to
@@ -111,9 +116,9 @@ const consentFormSchema = z.object({
   // populates an array on `body.resource`.
   resource: resourceParamSchema,
   // RFC 9449 §10 (#480): the DPoP key the code is bound to, as
-  // `authorizeQuerySchema` bounds it. Rendered, and read, only while DPoP is
+  // `authorizeQuerySchema` takes it. Rendered, and read, only while DPoP is
   // on.
-  dpop_jkt: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
+  dpop_jkt: dpopJktParamSchema,
 });
 
 type ConsentForm = z.infer<typeof consentFormSchema>;
@@ -377,7 +382,16 @@ export default async function (fastify: FastifyInstance) {
         // #316 follow-up: the rebuilt authorize URL is parked server-side and
         // the browser only carries a short handle, so a 2048-char `state` can
         // no longer inflate this Location header past a proxy's header buffer.
-        return redirectToLoginWithPendingAuthorization(fastify, reply, buildAuthorizeUrl(query));
+        return redirectToLoginWithPendingAuthorization(
+          fastify,
+          reply,
+          // `dpop_jkt` is taken in any shape (`dpopJktParamSchema`); only a
+          // single value goes back to /oauth/authorize, which checks it again.
+          buildAuthorizeUrl({
+            ...query,
+            dpop_jkt: typeof query.dpop_jkt === 'string' ? query.dpop_jkt : undefined,
+          })
+        );
       }
 
       const realm = requestRealm(request);
@@ -599,7 +613,7 @@ export default async function (fastify: FastifyInstance) {
           prompt: body.prompt,
           max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
           // RFC 9449 §10 (#480): /oauth/authorize reads and checks it again.
-          dpop_jkt: body.dpop_jkt,
+          dpop_jkt: typeof body.dpop_jkt === 'string' ? body.dpop_jkt : undefined,
         });
         // #316 follow-up: short handle in the URL, full authorize URL in Redis.
         return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);

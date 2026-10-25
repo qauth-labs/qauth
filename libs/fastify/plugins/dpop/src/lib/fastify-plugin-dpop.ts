@@ -46,7 +46,7 @@ export interface DpopService {
   readonly algorithms: readonly DpopAlgorithm[];
   /**
    * Check the request's `DPoP` header (RFC 9449 §4.3) against its method and
-   * its URL at this server's own origin, and record the proof so it cannot be
+   * its URL under this server's base URL, and record the proof so it cannot be
    * used again. Resolves with the proof's key thumbprint; rejects with a
    * `DpopProofError` when the proof fails a check, including when the request
    * has none.
@@ -59,11 +59,12 @@ export interface DpopPluginOptions extends FastifyPluginOptions {
   /** `DPOP_ENABLED`. Off, the plugin decorates `fastify.dpop` with `null`. */
   readonly enabled: boolean;
   /**
-   * The server's own origin, from its configuration (the issuer). A proof's
-   * `htu` is compared with this origin and the request path, never with the
-   * request's `Host` header.
+   * The server's public base URL, from its configuration: the issuer, path
+   * included, as discovery builds every endpoint URL from it. A proof's `htu`
+   * is compared with this base and the request path, so it names the endpoint
+   * URL discovery publishes. Never the request's `Host` header.
    */
-  readonly origin: string;
+  readonly baseUrl: string;
   /** The allowlist; default the verifier's `DEFAULT_DPOP_ALGORITHMS`. */
   readonly algorithms?: readonly DpopAlgorithm[];
   /** The clock, in epoch milliseconds. Defaults to `Date.now`. */
@@ -71,6 +72,22 @@ export interface DpopPluginOptions extends FastifyPluginOptions {
 }
 
 export const DPOP_PLUGIN_NAME = packageJson.name;
+
+/**
+ * The URL a request was sent to, as a client that read discovery addresses
+ * it: the configured base URL (which may carry a path, such as
+ * `https://host/auth`) and the request path as the request line gave it,
+ * without query or fragment.
+ *
+ * `dpopRequestUrl` refuses a target that is not in origin form first: an
+ * absolute-form target would let the client choose what `htu` is compared
+ * with. The path is not normalized here; the verifier refuses a dot segment
+ * or a backslash in it.
+ */
+function requestUrlUnder(baseUrl: string, target: string): string {
+  dpopRequestUrl(baseUrl, target);
+  return `${baseUrl}${target.split(/[?#]/, 1)[0]}`;
+}
 
 /**
  * The Redis key prefix of the auth server's used proofs. The verifier hashes
@@ -93,9 +110,10 @@ export const dpopPlugin = fp<DpopPluginOptions>(
       fastify.decorate('dpop', null);
       return;
     }
-    // Refused here, at boot, rather than on the first proof.
-    dpopRequestUrl(options.origin, '/');
-    const { origin } = options;
+    // Refused here, at boot, rather than on the first proof. A trailing slash
+    // is dropped, as discovery drops it from the issuer (RFC 8414 §2).
+    dpopRequestUrl(options.baseUrl, '/');
+    const baseUrl = options.baseUrl.endsWith('/') ? options.baseUrl.slice(0, -1) : options.baseUrl;
 
     const verifier = createDpopVerifier({
       // ioredis's `set` overloads include `SET key value PX ms NX`, the one
@@ -113,11 +131,7 @@ export const dpopPlugin = fp<DpopPluginOptions>(
         return verifier.verify({
           proof: request.headers.dpop,
           method: request.method,
-          // The origin from the configuration and the request target as the
-          // request line gave it. `dpopRequestUrl` refuses an absolute-form
-          // target, which would let the client choose what `htu` is compared
-          // with.
-          url: dpopRequestUrl(origin, request.url),
+          url: requestUrlUnder(baseUrl, request.url),
           ...(check.accessToken === undefined ? {} : { accessToken: check.accessToken }),
           ...(check.expectedThumbprint === undefined
             ? {}

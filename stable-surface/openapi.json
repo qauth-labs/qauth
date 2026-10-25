@@ -1952,12 +1952,12 @@
           },
           {
             "schema": {
-              "type": "string",
-              "maxLength": 2048
+              "type": "string"
             },
             "in": "query",
             "name": "dpop_jkt",
-            "required": false
+            "required": false,
+            "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
           }
         ],
         "x-qauth-stability": "stable",
@@ -2054,7 +2054,7 @@
                   },
                   "dpop_jkt": {
                     "type": "string",
-                    "maxLength": 2048
+                    "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
                   }
                 },
                 "required": [
@@ -3135,12 +3135,12 @@
           },
           {
             "schema": {
-              "type": "string",
-              "maxLength": 2048
+              "type": "string"
             },
             "in": "query",
             "name": "dpop_jkt",
-            "required": false
+            "required": false,
+            "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
           }
         ],
         "x-qauth-stability": "stable",
@@ -3249,7 +3249,7 @@
                   },
                   "dpop_jkt": {
                     "type": "string",
-                    "maxLength": 2048
+                    "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
                   }
                 },
                 "required": [

@@ -262,9 +262,10 @@ export default async function (fastify: FastifyInstance) {
         // key (`cnf.jkt`, `token_type: DPoP`), whatever the grant ("regardless
         // of grant type"), and a client registered with
         // `dpop_bound_access_tokens` must send one (§5.2). Checked after client
-        // authentication, so an unauthenticated caller never reaches the
-        // replay store. While DPoP is off no header is read and every access
-        // token is a Bearer token, as before.
+        // authentication, so the event names the client and a confidential
+        // client with a wrong secret never reaches the replay store (a public
+        // client proves nothing but its `client_id`). While DPoP is off no
+        // header is read and every access token is a Bearer token, as before.
         let dpopThumbprint: string | undefined;
         try {
           dpopThumbprint = await verifyTokenRequestProof(
@@ -275,8 +276,9 @@ export default async function (fastify: FastifyInstance) {
         } catch (err) {
           if (!(err instanceof DpopProofError)) throw err;
           // Which check failed goes to the operator's log and the event, never
-          // to the wire: it would help tune a forged proof.
-          fastify.log.warn(
+          // to the wire: it would help tune a forged proof. A replay store
+          // outage refuses every proof, so it is logged as the server's error.
+          fastify.log[err.reason === 'replay-store-unavailable' ? 'error' : 'warn'](
             { reqId: request.id, grantType: body.grant_type, reason: err.reason },
             'token endpoint: DPoP proof refused'
           );
@@ -1432,6 +1434,29 @@ async function handleTokenExchange(
     throw new InvalidRequestError('subject_token was not issued for this client');
   }
 
+  // A DPoP-bound subject token (RFC 9449, #480) is exchanged only by the
+  // holder of its key: the request must carry a proof under the key its
+  // `cnf.jkt` names, whether the exchange mints a delegated token or an
+  // ID-JAG. Otherwise the agent's secret and a copied subject token would buy
+  // a bearer credential, the downgrade the binding exists to prevent. A proof
+  // under another key is refused too: moving a token to a new key takes the
+  // spawn assertion of ADR-014 P1b, which this server does not accept yet.
+  // While DPoP is off the binding cannot be checked, so the token is refused.
+  if (subjectPayload.cnf !== undefined) {
+    if (!fastify.dpop) {
+      await emitRequestFailed(ctx, 'invalid_request', 'subject_token_dpop_disabled');
+      throw new InvalidRequestError('subject_token is bound to a DPoP key');
+    }
+    if (ctx.dpopThumbprint === undefined) {
+      await emitRequestFailed(ctx, 'invalid_dpop_proof', 'dpop_missing_proof');
+      throw new InvalidDpopProofError();
+    }
+    if (ctx.dpopThumbprint !== subjectPayload.cnf.jkt) {
+      await emitRequestFailed(ctx, 'invalid_request', 'subject_token_key_mismatch');
+      throw new InvalidRequestError('subject_token is bound to another DPoP key');
+    }
+  }
+
   // A `client_credentials` token names no user: its `sub` is its own
   // `client_id` (handleClientCredentials). An agent's own machine token
   // passes GATE 3c, since its `aud` falls back to that `client_id`, but there
@@ -1595,10 +1620,9 @@ async function handleTokenExchange(
     scope: scopeString,
     aud,
     act,
-    // RFC 9449 §5 (#480): the delegated token is bound to the AGENT's proof
-    // key. A subject token's own `cnf` is not carried over: it names the key
-    // of whoever holds the subject token, which ADR-014 P1b ties to the
-    // agent's key with a spawn assertion.
+    // RFC 9449 §5 (#480): the delegated token is bound to the agent's proof
+    // key, which for a bound subject token is the subject's own key (checked
+    // above).
     ...dpopConfirmation(ctx),
     expiresInOverride: accessTokenExpiresIn,
   });

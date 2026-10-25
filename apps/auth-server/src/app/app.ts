@@ -258,9 +258,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the
   // shared verifier over the cache plugin's Redis, which records used proofs.
   // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
-  // a `DPoP` header. A proof's `htu` is compared with the issuer's origin and
-  // the request path, never the `Host` header.
-  await fastify.register(dpopPlugin, { enabled: env.DPOP_ENABLED, origin: env.JWT_ISSUER });
+  // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
+  // included) and the request path, the endpoint URL discovery publishes,
+  // never the `Host` header. A request to one of DEFAULT_REALM_ENDPOINT_HOSTS
+  // must therefore name the published URL in `htu` too.
+  await fastify.register(dpopPlugin, { enabled: env.DPOP_ENABLED, baseUrl: env.JWT_ISSUER });
 
   await fastify.register(passwordPlugin, {
     hashConfig: {

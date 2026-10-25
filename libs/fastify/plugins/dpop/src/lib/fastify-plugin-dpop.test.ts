@@ -29,6 +29,7 @@ async function buildApp(options: {
   enabled: boolean;
   redis?: ReturnType<typeof fakeRedis>;
   check?: DpopRequestCheck;
+  baseUrl?: string;
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(
@@ -39,7 +40,10 @@ async function buildApp(options: {
       { name: CACHE_PLUGIN_NAME }
     )
   );
-  await app.register(dpopPlugin, { enabled: options.enabled, origin: ORIGIN });
+  await app.register(dpopPlugin, {
+    enabled: options.enabled,
+    baseUrl: options.baseUrl ?? ORIGIN,
+  });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof DpopProofError) {
       return reply.code(400).send({ error: error.error, reason: error.reason });
@@ -149,6 +153,27 @@ describe('dpopPlugin (#480)', () => {
     }
   });
 
+  it('compares htu with an issuer that carries a path, as discovery publishes the endpoint', async () => {
+    const app = await buildApp({ enabled: true, baseUrl: `${ORIGIN}/tenant/` });
+    try {
+      const key = await proofKey();
+      const withPath = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: { dpop: await proof(key, { htu: `${ORIGIN}/tenant/oauth/token` }) },
+      });
+      expect(withPath.json()).toEqual({ thumbprint: key.thumbprint });
+      const withoutPath = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: { dpop: await proof(key) },
+      });
+      expect(withoutPath.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('refuses a request without a proof', async () => {
     const app = await buildApp({ enabled: true });
     try {
@@ -223,7 +248,7 @@ describe('dpopPlugin (#480)', () => {
     );
     await expect(
       (async () => {
-        await app.register(dpopPlugin, { enabled: true, origin: 'auth.example.com' });
+        await app.register(dpopPlugin, { enabled: true, baseUrl: 'auth.example.com' });
         await app.ready();
       })()
     ).rejects.toThrow('must be an absolute http(s) URL');
