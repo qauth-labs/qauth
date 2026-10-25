@@ -26,6 +26,58 @@ export const API_FAMILY_PREFIXES: Readonly<Record<ApiFamily, string>> = {
 };
 
 /**
+ * The audience of each family's access tokens (ADR-019 Decision 7, #509). A
+ * family accepts a token whose `aud` holds exactly its own audience and no
+ * other value, so a token for one family never works on another.
+ *
+ * The version is the path's release candidate (ADR-018 §5): the release that
+ * ships 1.0.0 issues `urn:qauth:aud:admin:v1`, and a breaking change before it
+ * raises both together. The token endpoint issues an audience only to a client
+ * whose `audience` lists it, and the client asks for it with the RFC 8707
+ * `resource` parameter, whose value is the audience itself.
+ */
+export const API_FAMILY_AUDIENCES: Readonly<Record<ApiFamily, string>> = {
+  admin: 'urn:qauth:aud:admin:v1-rc.0',
+  account: 'urn:qauth:aud:account:v1-rc.0',
+  developer: 'urn:qauth:aud:developer:v1-rc.0',
+};
+
+/**
+ * The namespace of the audiences QAuth defines (#509). No client registers a
+ * value in it for itself: dynamic registration and Client ID Metadata
+ * Documents refuse it as an `audience` or a `resource`, and the token endpoint
+ * issues one only to a client whose `audience` an operator set to list it.
+ */
+export const RESERVED_AUDIENCE_PREFIX = 'urn:qauth:aud:';
+
+/**
+ * `urn:qauth:aud:` at the start, after any leading whitespace, ASCII letters in
+ * any case. RFC 8141 makes `urn` and the namespace id case-insensitive, and
+ * QAuth owns the rest of the prefix, so `URN:QAuth:aud:` is the same reserved
+ * name. Without the `u` flag, `i` folds no character outside ASCII onto an
+ * ASCII letter.
+ */
+const RESERVED_AUDIENCE = /^\s*urn:qauth:aud:/i;
+
+/** Whether `value` is an audience in QAuth's reserved namespace, in any case. */
+export function isReservedAudience(value: string): boolean {
+  return RESERVED_AUDIENCE.test(value);
+}
+
+/**
+ * The reserved audiences in a client metadata value: a string, or a list whose
+ * string entries are checked. Any other value holds none. For metadata a
+ * client wrote about itself (`audience`, `resource`), which QAuth otherwise
+ * ignores, so its shape is not validated here.
+ */
+export function reservedAudiencesIn(value: unknown): string[] {
+  const values: unknown[] = Array.isArray(value) ? value : [value];
+  return values.filter(
+    (entry): entry is string => typeof entry === 'string' && isReservedAudience(entry)
+  );
+}
+
+/**
  * `/<family>/v<major>` or `/<family>/v<major>-rc.<M>` at the start of a path,
  * followed by `/` or the end.
  */
