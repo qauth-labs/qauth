@@ -14,7 +14,10 @@ import {
   checkFileList,
   checkManifest,
   distTagFor,
+  hasReleaseSection,
+  latestReleasedVersion,
   parseReleaseTag,
+  releaseNotes,
   SdkReleaseError,
   valueExportsFromReport,
 } from './lib.mjs';
@@ -77,17 +80,61 @@ describe('distTagFor', () => {
 });
 
 describe('parseReleaseTag', () => {
-  it('splits <project>@<version> for a known SDK', () => {
-    expect(parseReleaseTag('resource-guard@0.1.0-rc.0', ['resource-guard'])).toEqual({
-      project: 'resource-guard',
-      version: '0.1.0-rc.0',
-    });
+  it("reads the version from QAuth's release tag", () => {
+    expect(parseReleaseTag('v0.2.0')).toBe('0.2.0');
+    expect(parseReleaseTag('v0.2.0-rc.1')).toBe('0.2.0-rc.1');
   });
 
-  it('refuses an unknown project, a missing version or a server tag', () => {
-    expect(() => parseReleaseTag('auth-server@0.1.0', ['resource-guard'])).toThrow(/not an SDK/);
-    expect(() => parseReleaseTag('resource-guard@', ['resource-guard'])).toThrow(SdkReleaseError);
-    expect(() => parseReleaseTag('v0.1.0', ['resource-guard'])).toThrow(SdkReleaseError);
+  it('refuses an SDK-style tag, a tag without the v and 1.x', () => {
+    expect(() => parseReleaseTag('resource-guard@0.1.0')).toThrow(SdkReleaseError);
+    expect(() => parseReleaseTag('0.2.0')).toThrow(SdkReleaseError);
+    expect(() => parseReleaseTag('v1.0.0')).toThrow(/stays on 0\.x/);
+  });
+});
+
+const CHANGELOG = `# Changelog
+
+## [Unreleased]
+
+### Added
+
+- Coming next.
+
+## [0.1.3] - 2026-10-21
+
+### Fixed
+
+- The 0.1.3 fix.
+
+## [0.1.2] - 2026-10-21
+
+- The 0.1.2 fix.
+
+[0.1.3]: https://example.com/compare/v0.1.2...v0.1.3
+`;
+
+describe("QAuth's CHANGELOG", () => {
+  it('names the newest released version, never Unreleased', () => {
+    expect(latestReleasedVersion(CHANGELOG)).toBe('0.1.3');
+    expect(() => latestReleasedVersion('# Changelog\n\n## [Unreleased]\n')).toThrow(
+      SdkReleaseError
+    );
+  });
+
+  it('knows which versions have a section', () => {
+    expect(hasReleaseSection(CHANGELOG, '0.1.2')).toBe(true);
+    expect(hasReleaseSection(CHANGELOG, '0.1.4')).toBe(false);
+  });
+
+  it('gives a release its own section and a release candidate the Unreleased one', () => {
+    expect(releaseNotes(CHANGELOG, '0.1.3')).toBe('### Fixed\n\n- The 0.1.3 fix.');
+    expect(releaseNotes(CHANGELOG, '0.2.0-rc.0')).toBe('### Added\n\n- Coming next.');
+    expect(() => releaseNotes(CHANGELOG, '0.1.4')).toThrow(SdkReleaseError);
+  });
+
+  it('as committed, gives the dry run a version every SDK can be stamped with', () => {
+    const committed = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+    expect(() => distTagFor(latestReleasedVersion(committed))).not.toThrow();
   });
 });
 

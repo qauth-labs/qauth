@@ -1,61 +1,57 @@
 #!/usr/bin/env node
 /**
- * What the `release-npm` workflow packs and whether it publishes (#596):
+ * What the `release-npm` workflow packs, at which version, and whether it
+ * publishes (#596):
  *
- *   node scripts/sdk-release/plan.mjs tag <project>@<version>   # a release tag
- *   node scripts/sdk-release/plan.mjs all                       # every SDK, dry run
+ *   node scripts/sdk-release/plan.mjs tag vX.Y.Z[-rc.N]   # QAuth's release tag
+ *   node scripts/sdk-release/plan.mjs dry-run             # a pull request
  *
- * Prints one JSON line: `{ "publish": bool, "packages": [{ project, version,
- * distTag }] }`. A tag names one SDK in `libs/sdk/`, and its version must be the
- * version in that SDK's package.json and have a section in its CHANGELOG.md.
+ * Prints one JSON line: `{ "publish": bool, "version", "distTag", "packages":
+ * [{ project, version, distTag }] }`. Every SDK in `libs/sdk/` is packed at the
+ * same version: the tag's, or for a dry run the newest version in
+ * CHANGELOG.md, so the dry run stamps a real version just as a release does. A
+ * stable tag needs its `## [X.Y.Z]` section in CHANGELOG.md, as the image
+ * release does; a release candidate has none.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { distTagFor, parseReleaseTag, SdkReleaseError } from './lib.mjs';
+import {
+  distTagFor,
+  hasReleaseSection,
+  latestReleasedVersion,
+  parseReleaseTag,
+  SdkReleaseError,
+} from './lib.mjs';
 
 const SDK_ROOT = 'libs/sdk';
 const projects = readdirSync(SDK_ROOT, { withFileTypes: true })
   .filter((entry) => entry.isDirectory() && existsSync(join(SDK_ROOT, entry.name, 'package.json')))
   .map((entry) => entry.name)
   .sort();
-const versionOf = (project) =>
-  JSON.parse(readFileSync(join(SDK_ROOT, project, 'package.json'), 'utf8')).version;
+const changelog = readFileSync('CHANGELOG.md', 'utf8');
 
 const [mode, tag] = process.argv.slice(2);
 try {
+  let version;
+  let publish;
   if (mode === 'tag') {
-    const { project, version } = parseReleaseTag(tag ?? '', projects);
-    const manifestVersion = versionOf(project);
-    if (manifestVersion !== version) {
-      throw new SdkReleaseError(
-        `${tag}: ${SDK_ROOT}/${project}/package.json says ${manifestVersion}; run nx release version first`
-      );
+    version = parseReleaseTag(tag ?? '');
+    if (!version.includes('-rc.') && !hasReleaseSection(changelog, version)) {
+      throw new SdkReleaseError(`${tag}: CHANGELOG.md has no '## [${version}]' section`);
     }
-    const changelog = join(SDK_ROOT, project, 'CHANGELOG.md');
-    const sections = existsSync(changelog) ? readFileSync(changelog, 'utf8') : '';
-    // `## 0.1.0 (2026-10-26)` as nx release writes it, or `## [0.1.0]`. Plain
-    // string comparison: the version never becomes part of a pattern.
-    const isSection = (line) =>
-      [`## ${version}`, `## [${version}]`].some(
-        (heading) => line === heading || line.startsWith(`${heading} `)
-      );
-    if (!sections.split('\n').some(isSection)) {
-      throw new SdkReleaseError(`${tag}: ${changelog} has no section for ${version}`);
-    }
-    const plan = { publish: true, packages: [{ project, version, distTag: distTagFor(version) }] };
-    console.log(JSON.stringify(plan));
-  } else if (mode === 'all') {
-    const packages = projects.map((project) => ({
-      project,
-      version: versionOf(project),
-      distTag: 'dry-run',
-    }));
-    console.log(JSON.stringify({ publish: false, packages }));
+    publish = true;
+  } else if (mode === 'dry-run') {
+    version = latestReleasedVersion(changelog);
+    publish = false;
   } else {
-    console.error('usage: plan.mjs tag <project>@<version> | plan.mjs all');
+    console.error('usage: plan.mjs tag vX.Y.Z[-rc.N] | plan.mjs dry-run');
     process.exit(2);
   }
+  const distTag = distTagFor(version);
+  if (projects.length === 0) throw new SdkReleaseError(`${SDK_ROOT} holds no SDK package`);
+  const packages = projects.map((project) => ({ project, version, distTag }));
+  console.log(JSON.stringify({ publish, version, distTag, packages }));
 } catch (error) {
   if (!(error instanceof SdkReleaseError)) throw error;
   console.error(error.message);

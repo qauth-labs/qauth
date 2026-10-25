@@ -14,6 +14,9 @@
 # VITE_AUTH_SERVER_URL into the client bundle at build time (default
 # http://localhost:3000), so one image cannot serve another host.
 #
+# The same tag starts release-npm.yml, which stages every SDK package at the
+# same version: one tag releases QAuth's images and packages together.
+#
 # Releases are the maintainer's: the publish job runs in the `release`
 # environment, which holds it for a required reviewer. A pull request that
 # changes this file, and a manual run, build both images and push nothing.
