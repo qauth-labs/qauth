@@ -78,6 +78,7 @@ interface PasswordHashConfig {
   memoryCost?: number; // Memory cost in KB (default: 65536 = 64MB)
   timeCost?: number; // Time cost / iterations (default: 3)
   parallelism?: number; // Parallelism / threads (default: 4)
+  queueLimit?: number; // Waiting Argon2 jobs before a shed verification is refused (default: 32)
 }
 ```
 
@@ -101,9 +102,42 @@ interface PasswordHasher {
    * Verify a password against a hash
    * @param hashedPassword - Previously hashed password string
    * @param plainPassword - Plain text password to verify
+   * @param options - `{ shedWhenQueueFull: true }` refuses instead of queueing when the queue is full
    * @returns True if password matches, false otherwise (including invalid hash format)
+   * @throws Argon2QueueFullError only with `shedWhenQueueFull`, when the queue is full
    */
-  verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean>;
+  verifyPassword(
+    hashedPassword: string,
+    plainPassword: string,
+    options?: { shedWhenQueueFull?: boolean }
+  ): Promise<boolean>;
+}
+```
+
+### Concurrency and the queue
+
+Argon2 jobs run on Node's libuv thread pool, which WebCrypto (every JWT
+signature and verification) and the database driver's SCRAM handshake share.
+At most half of `UV_THREADPOOL_SIZE` (4 unless set, so 2) jobs run at once,
+process-wide; the rest wait in a FIFO queue.
+
+A verification that passes `{ shedWhenQueueFull: true }` is refused with
+`Argon2QueueFullError` when every slot is busy and `queueLimit` jobs already
+wait. No hash is computed, and the error carries `queued` and `queueLimit`.
+The auth server sheds client-secret checks this way and answers them with
+`503 Service Unavailable` and `Retry-After`. Verifications without the option,
+and every `hashPassword`, always queue.
+
+```typescript
+import { Argon2QueueFullError } from '@qauth-labs/server-password';
+
+try {
+  const valid = await hasher.verifyPassword(hash, secret, { shedWhenQueueFull: true });
+} catch (error) {
+  if (error instanceof Argon2QueueFullError) {
+    // Busy: refuse now, ask the caller to retry.
+  }
+  throw error;
 }
 ```
 
@@ -118,6 +152,7 @@ Default password hashing configuration:
   memoryCost: 65536, // 64MB
   timeCost: 3,
   parallelism: 4,
+  queueLimit: 32,
 }
 ```
 
@@ -148,6 +183,7 @@ When using with `@qauth-labs/server-config`, these environment variables are val
 PASSWORD_MEMORY_COST=65536  # Memory cost in KB
 PASSWORD_TIME_COST=3        # Time cost / iterations
 PASSWORD_PARALLELISM=4      # Parallelism / threads
+PASSWORD_HASH_QUEUE_LIMIT=32 # Waiting Argon2 jobs before a client-secret check is shed
 ```
 
 ## Examples

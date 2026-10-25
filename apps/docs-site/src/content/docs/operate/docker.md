@@ -786,8 +786,35 @@ This Docker setup is designed for **local development**. For production:
    caps the auth-server at 1 GiB and the developer portal at 512 MiB and
    restarts both after a crash (`restart: unless-stopped`); size the limits to
    your load. The portal also reads at most 1 MiB of any request body.
-6. **Set up monitoring** (Prometheus, Grafana)
-7. **Enable logging aggregation** (ELK, Loki)
+6. **Size the Argon2 thread pool to the host.** Every presented
+   `client_secret`, password and API key is checked with Argon2id on Node's
+   libuv thread pool, which also verifies and signs every JWT (through
+   WebCrypto) and runs the database's SCRAM handshake. The pool has
+   `UV_THREADPOOL_SIZE` threads, 4 unless set, and QAuth lets Argon2 use at
+   most half of them, so that token checks keep threads during a burst of
+   logins or client secrets. With the default, two Argon2 checks run at once
+   whatever the host has. **On a host with four or more cores, raise
+   `UV_THREADPOOL_SIZE`**, for example to the core count, so that more checks
+   run at once. It is Node's setting, not QAuth's: set it in the process
+   environment (`docker-compose.yml` forwards it from `.env`). Each
+   concurrent check holds `PASSWORD_MEMORY_COST` (64 MiB by default), so raise
+   the memory limit with it.
+
+   Checks beyond the running ones wait in a queue. A client-secret check
+   (`/oauth/token`, `/oauth/introspect`, `/oauth/revoke`) that would wait
+   behind `PASSWORD_HASH_QUEUE_LIMIT` others (32 by default) is refused at
+   once, before any hash, with `503 Service Unavailable`,
+   `"error": "temporarily_unavailable"` and `Retry-After: 1`, rather than
+   waiting until its caller times out. Each refusal is logged at `warn` with
+   the client and the queue length, and counted in
+   `qauth_client_secret_checks_shed_total` (see
+   [Observability](/operate/observability/#metrics-get-metrics)). Sign-ins and
+   registrations are not refused: they wait their turn, and count toward the
+   queue while they wait. Raise the limit if legitimate clients see these
+   refusals while the host has CPU to spare; lower it to fail faster.
+
+7. **Set up monitoring** (Prometheus, Grafana)
+8. **Enable logging aggregation** (ELK, Loki)
 
 See [ADR-001: JWT Key Management](/reference/records/adr/001-jwt-key-management/) for production key management strategy, and the [Keys guide](/operate/keys/) for how to generate each key type today.
 

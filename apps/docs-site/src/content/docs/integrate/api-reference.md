@@ -70,14 +70,15 @@ separate `error_description`:
 `error_description` is omitted where describing the failure would be an
 enumeration oracle — client authentication failures answer with the bare token.
 
-| Status | Meaning                                                   |
-| ------ | --------------------------------------------------------- |
-| `400`  | Malformed request / validation error                      |
-| `401`  | Missing, malformed, or invalid bearer token / session     |
-| `403`  | Authenticated but not permitted (e.g. insufficient scope) |
-| `404`  | Resource not found                                        |
-| `409`  | Conflict (e.g. a resource that must be unique)            |
-| `429`  | Rate limited                                              |
+| Status | Meaning                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------- |
+| `400`  | Malformed request / validation error                                                                |
+| `401`  | Missing, malformed, or invalid bearer token / session                                               |
+| `403`  | Authenticated but not permitted (e.g. insufficient scope)                                           |
+| `404`  | Resource not found                                                                                  |
+| `409`  | Conflict (e.g. a resource that must be unique)                                                      |
+| `429`  | Rate limited                                                                                        |
+| `503`  | Too busy to check a client secret now; `Retry-After` says when to retry (`temporarily_unavailable`) |
 
 ---
 
@@ -418,8 +419,10 @@ if not sent via HTTP Basic.
 revokes its whole rotation family; an access token is denylisted by `jti` for
 its remaining lifetime. A token the caller doesn't own, or an unknown/invalid
 token, is a silent no-op (not an error), so the endpoint cannot be used to
-probe whether a token exists. The only non-`200` outcome is a client
-authentication failure (`invalid_client`).
+probe whether a token exists. The only non-`200` outcomes are a client
+authentication failure (`invalid_client`) and `503` with `Retry-After` when the
+server is too busy to check the client secret (`temporarily_unavailable`; RFC
+7009 §2.2.1: the token still exists, retry after the delay).
 
 ---
 
