@@ -11,7 +11,8 @@
  *   - tags:   requires `x-qauth-stability` on every OpenAPI operation, and
  *             `experimental` on every operation only a switch registers;
  *   - breaks: compares a `stable` surface with the same file at the latest
- *             release tag (`git show <tag>:<path>`), through oasdiff, and fails
+ *             release tag, release candidates skipped
+ *             (`git show <tag>:<path>`), through oasdiff, and fails
  *             on a break `stable-surface/approved-breaks.json` does not approve.
  *
  * The logic lives in `lib.mjs` and is unit-tested there; this file is the glue

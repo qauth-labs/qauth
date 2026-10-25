@@ -103,6 +103,12 @@ OIDC identity, and npm accepts the packages through trusted publishing.
      npm install @qauth-labs/resource-guard@X.Y.Z && npm audit signatures
      ```
 
+6. After a release tag `vX.Y.Z` (not a release candidate), empty
+   `stable-surface/approved-breaks.json` in a pull request. The release is now
+   the stable-surface baseline, so every approval it shipped matches no break and
+   fails the check on every pull request until it is removed. Release candidates
+   are never the baseline, so their approvals stay until the release.
+
 Every pull request runs the npm workflow as a dry run: it stamps the newest
 version `CHANGELOG.md` names into each SDK, packs, checks and installs it, and
 publishes nothing.

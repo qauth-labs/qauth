@@ -56,9 +56,14 @@ every switch that registers a route turned on to `apps/docs-site/public/openapi.
 only the second has sits behind a switch, so it must be `experimental` (ADR-018 §5). An operation
 both have carries the same tag in both.
 
-**Breaks.** Each `stable` surface is compared with the same file at the baseline release. Until a
-1.0 release exists, the baseline is the latest release tag of any kind. From then on it is the
-latest release of 1.0 or later that is not a pre-release. The tag decides, not `info.version`.
+**Breaks.** Each `stable` surface is compared with the same file at the baseline release: the
+latest release tag that is not a pre-release, among the tags reachable from the commit under check
+(a patch release tagged on a release branch is not; today that leaves `v0.1.0` for `main`, since
+`v0.1.1` to `v0.1.3` were tagged on a release branch). A release candidate (`vX.Y.Z-rc.N`) never becomes
+the baseline, because operators upgrade from releases. A break a release candidate shipped is
+still measured against the last release until the release that contains it is tagged. Only a
+history with no release at all falls back to the latest pre-release. The tag decides, not
+`info.version`.
 
 Experimental operations are left out of both sides. A stable operation that turns experimental is
 therefore reported as removed, and an experimental one that turns stable as added.
@@ -175,7 +180,9 @@ will ship it:
   summary, with its release and reference.
 - `ref` is an issue (`#123`) or an ADR (`ADR-018`, `ADR-018 §5`).
 - `release` must not be tagged yet, and must come after the baseline. Once the release is tagged it
-  becomes the baseline, the break is part of it, and the entry is refused: delete it.
+  becomes the baseline, the break is part of it, and the entry is refused: delete it. Release
+  candidates do not count, so an entry stays valid across them. After a release tag, empty this file
+  in a pull request (`RELEASING.md`).
 - An entry that matches no break is refused, so a stale or mistyped entry cannot linger.
 
 Before 1.0 this is how the breaks of a 0.x release are recorded. After 1.0, ADR-018 §5 allows a
