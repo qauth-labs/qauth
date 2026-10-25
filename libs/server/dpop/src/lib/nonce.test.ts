@@ -57,6 +57,12 @@ describe('createHmacDpopNonceSource', () => {
     expect(nonces.current()).toBe(nonce);
   });
 
+  it('throws when its clock gives no time, rather than never rotate', () => {
+    const nonces = source({ now: Number.NaN });
+    expect(() => nonces.current()).toThrow(TypeError);
+    expect(() => nonces.accepts('x')).toThrow(TypeError);
+  });
+
   it(`refuses a secret under ${MIN_NONCE_SECRET_BYTES} bytes and a period that is not positive`, () => {
     expect(() => source({ now: START }, Buffer.alloc(MIN_NONCE_SECRET_BYTES - 1))).toThrow(
       TypeError

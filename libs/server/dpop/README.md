@@ -15,7 +15,11 @@ to a DPoP key will read; until the token endpoint does, the server refuses to st
 ## Verify a proof
 
 ```typescript
-import { createDpopVerifier, createRedisDpopReplayStore } from '@qauth-labs/server-dpop';
+import {
+  createDpopVerifier,
+  createRedisDpopReplayStore,
+  dpopRequestUrl,
+} from '@qauth-labs/server-dpop';
 
 const dpop = createDpopVerifier({
   // Used proofs are remembered in Redis; with Redis unavailable, every proof is refused.
@@ -25,7 +29,9 @@ const dpop = createDpopVerifier({
 const { thumbprint } = await dpop.verify({
   proof: request.headers.dpop, // the DPoP header: a string, a list, or undefined
   method: request.method,
-  url: new URL(request.url, publicOrigin).href, // the server's own origin, never the proof or Host
+  // The server's own origin from its configuration, and the request path. Never the proof,
+  // the Host header or an absolute-form request target, which dpopRequestUrl refuses.
+  url: dpopRequestUrl(publicOrigin, request.url),
   accessToken, // at a protected resource only: ath must be its hash
   expectedThumbprint: token.cnf?.jkt, // when the token, code or session is bound to a key
 });
@@ -47,20 +53,24 @@ In this order (RFC 9449 §4.3):
    default, `DEFAULT_DPOP_ALGORITHMS`, is ES256, ES384, ES512, EdDSA, Ed25519, PS256, PS384 and
    PS512; an endpoint may also allow RS256, RS384 and RS512.
 4. The `jwk` header is a public key of the type `alg` needs, with no private or symmetric key
-   member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, `k`, `priv`), and the signature verifies under
-   it.
+   member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, `k`, `priv`), its members in canonical
+   base64url (so one key has one thumbprint) and an RSA modulus of at most 4096 bits, and the
+   signature verifies under it. Only the members RFC 7638 hashes reach the import and the result.
 5. No `sub`, `cnf` or `events` claim, so a proof can never pass for a spawn assertion or a security
    event token signed by the same key (ADR-014 §4).
 6. `jti` is a string of 1 to 256 characters.
 7. `htm` and `htu` match the method and URL the **caller** passes. `htu` is compared after
-   RFC 3986 syntax- and scheme-based normalization, ignoring query and fragment.
+   RFC 3986 syntax- and scheme-based normalization, ignoring query and fragment. The caller's URL
+   is not normalized: a path with a `.` or `..` segment or a backslash is refused, because a
+   router serves it as written, not at the path it would normalize to.
 8. `iat` is within the window around the server's clock, 60 seconds either way by default.
 9. With an access token, `ath` is its base64url SHA-256.
 10. With an expected thumbprint, the key has it.
 11. With `requireNonce`, the proof carries a nonce the nonce source accepts.
-12. Last, the replay store: the proof's key and `jti` are recorded for two windows and a second,
-    under a SHA-256 hash, and a proof already recorded is refused. A store that fails or takes
-    longer than 250 ms refuses the proof.
+12. Last, the replay store: the proof's key and `jti` are recorded for three windows and a second,
+    under a SHA-256 hash, and a proof already recorded is refused. That covers every node whose
+    clock is within one window of the recording node's. A store that fails or takes longer than
+    250 ms, or answers anything but a first use, refuses the proof.
 
 A proof that fails an earlier check never reaches the store.
 
@@ -91,6 +101,10 @@ try {
   throw error;
 }
 ```
+
+`nextNonce` is set only when the call required a nonce. An endpoint that hands a nonce out, through
+`nextNonce` or `dpop.nonce()`, requires it from then on: accepting a proof without it would be the
+downgrade RFC 9449 §11.3 forbids.
 
 `createHmacDpopNonceSource` keeps no state: the nonce of each 60-second period is an HMAC of the
 period's number, accepted in that period and the next. An authorization server and a resource

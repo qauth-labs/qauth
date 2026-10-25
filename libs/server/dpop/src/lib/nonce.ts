@@ -69,7 +69,11 @@ export function createHmacDpopNonceSource(
   const secret = Buffer.from(options.secret);
   const now = options.now ?? Date.now;
 
-  const period = (): number => Math.floor(now() / 1000 / rotateSeconds);
+  const period = (): number => {
+    const time = now();
+    if (!Number.isFinite(time)) throw new TypeError('The DPoP nonce clock gave no time');
+    return Math.floor(time / 1000 / rotateSeconds);
+  };
   const nonceOf = (index: number): Buffer =>
     createHmac('sha256', secret).update(`dpop-nonce:${index}`).digest();
 

@@ -16,13 +16,15 @@
  * - `alg` — `none`, a MAC algorithm, an unknown name, or an algorithm the
  *   endpoint does not allow (§4.3 step 5, §11.6).
  * - `jwk` — no `jwk` header, or one that is not a public key of the type
- *   `alg` needs (an RSA key under 2048 bits included).
+ *   `alg` needs: a member missing or not in canonical base64url, or an RSA
+ *   key under 2048 or over 4096 bits.
  * - `private-key` — the `jwk` header carries private key members, or is a
  *   symmetric key (§4.3 step 7).
  * - `signature` — the signature does not verify under the `jwk` (§4.3 step 6).
  * - `htm` — `htm` is missing or is not the request's method (§4.3 step 8).
  * - `htu` — `htu` is missing or is not the request's URL, ignoring query and
- *   fragment (§4.3 step 9).
+ *   fragment (§4.3 step 9); or the request's own path has a dot segment or a
+ *   backslash, or its target is not in origin form, so it cannot be compared.
  * - `iat` — `iat` is missing, not a number, or outside the window (§4.3
  *   step 11, §11.1).
  * - `jti` — `jti` is missing, empty or longer than the verifier stores

@@ -16,7 +16,7 @@ import {
   keyFitsAlgorithm,
 } from './algorithms';
 import { DpopProofError, type DpopRejectionReason } from './dpop-error';
-import { normalizeHtu } from './htu';
+import { hasPlainPath, normalizeHtu } from './htu';
 import type { DpopNonceSource } from './nonce';
 import type { DpopReplayStore } from './replay-store';
 
@@ -37,6 +37,18 @@ export const MAX_DPOP_PROOF_LENGTH = 8192;
 
 /** The longest `jti` the verifier accepts (RFC 9449 §11.1: refuse large ones). */
 export const MAX_DPOP_JTI_LENGTH = 256;
+
+/**
+ * The largest RSA modulus a proof key may have, in bits. Anyone may send a
+ * proof, and verifying under a larger key costs several times as much.
+ */
+export const MAX_DPOP_RSA_MODULUS_BITS = 4096;
+
+/** The longest RSA public exponent a proof key may have, in bytes. */
+const MAX_RSA_EXPONENT_BYTES = 4;
+
+/** Base64url with no padding (RFC 7515 §2). */
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 /** A compact JWS: three base64url parts, none empty. */
 const COMPACT_JWS = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -83,9 +95,12 @@ export interface DpopProofCheck {
   /** The request's method, as received, such as `POST`. Compared with `htm` exactly. */
   readonly method: string;
   /**
-   * The URL the request was sent to, built from the server's own configuration
-   * (its issuer or the realm's host) and the request path, never from the
-   * proof or an unchecked `Host`. Query and fragment are ignored.
+   * The URL the request was sent to: the server's own origin, from its
+   * configuration (the issuer or the realm's host), and the request's path.
+   * Never the proof's `htu`, the `Host` header, or a request target in
+   * absolute form; `dpopRequestUrl(origin, request.url)` builds it. Query and
+   * fragment are ignored. A path with a dot segment or a backslash is refused
+   * with `htu`, since a router does not serve it at the path it normalizes to.
    */
   readonly url: string;
   /**
@@ -114,14 +129,20 @@ export interface VerifiedDpopProof {
    */
   readonly thumbprint: string;
   readonly algorithm: DpopAlgorithm;
-  /** The proof's public key, as its `jwk` header gave it. */
+  /**
+   * The proof's public key: the members RFC 7638 §3.2 hashes for its type
+   * (`crv`, `kty`, `x`, `y`; `e`, `kty`, `n`; or `crv`, `kty`, `x`), nothing
+   * else from the client's `jwk` header.
+   */
   readonly jwk: Readonly<JWK>;
   readonly jti: string;
   /** The proof's `iat`, in seconds. */
   readonly issuedAt: number;
   /**
-   * A nonce for the response's `DPoP-Nonce` header (RFC 9449 §8.2), when the
-   * verifier has a nonce source; the client uses it for its next proof.
+   * A nonce for the response's `DPoP-Nonce` header (RFC 9449 §8.2), set only
+   * when the call required one; the client uses it for its next proof. An
+   * endpoint that does not require nonces gets none, because handing one out
+   * and then accepting a proof without it is the downgrade §11.3 forbids.
    */
   readonly nextNonce?: string;
 }
@@ -136,7 +157,11 @@ export interface DpopVerifier {
    * with a {@link DpopProofError} otherwise.
    */
   verify(check: DpopProofCheck): Promise<VerifiedDpopProof>;
-  /** A fresh nonce for a `DPoP-Nonce` header, or `undefined` without a nonce source. */
+  /**
+   * A fresh nonce for a `DPoP-Nonce` header, or `undefined` without a nonce
+   * source. An endpoint that hands one out requires it from then on
+   * (`requireNonce`), or the nonce protects nothing (RFC 9449 §11.3).
+   */
   nonce(): Promise<string | undefined>;
 }
 
@@ -153,6 +178,47 @@ function sameText(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8');
   const right = Buffer.from(b, 'utf8');
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/** A base64url value in its one canonical form, decoded: no padding, no stray bits. */
+function canonicalBytes(value: unknown): Buffer | undefined {
+  if (typeof value !== 'string' || !BASE64URL.test(value)) return undefined;
+  const bytes = Buffer.from(value, 'base64url');
+  return bytes.toString('base64url') === value ? bytes : undefined;
+}
+
+/**
+ * The members RFC 7638 §3.2 hashes for the key's type, or `undefined` when one
+ * is missing or not in canonical base64url, or an RSA key is over
+ * {@link MAX_DPOP_RSA_MODULUS_BITS} bits or has a longer exponent than four
+ * bytes. Base64url that decodes to the same bytes in several spellings would
+ * give one key several thumbprints; only the canonical spelling is accepted,
+ * and nothing else the client put in the `jwk` reaches the import or the
+ * caller.
+ */
+function publicKeyMembers(jwk: Record<string, unknown>): JWK | undefined {
+  const { kty, crv, x, y, n, e } = jwk;
+  switch (kty) {
+    case 'EC':
+      return typeof crv === 'string' && canonicalBytes(x) && canonicalBytes(y)
+        ? { crv, kty, x: x as string, y: y as string }
+        : undefined;
+    case 'OKP':
+      return typeof crv === 'string' && canonicalBytes(x)
+        ? { crv, kty, x: x as string }
+        : undefined;
+    case 'RSA': {
+      const modulus = canonicalBytes(n);
+      const exponent = canonicalBytes(e);
+      if (modulus === undefined || exponent === undefined) return undefined;
+      const first = modulus.findIndex((byte) => byte !== 0);
+      if (first === -1 || modulus.length - first > MAX_DPOP_RSA_MODULUS_BITS / 8) return undefined;
+      if (exponent.length > MAX_RSA_EXPONENT_BYTES) return undefined;
+      return { e: e as string, kty, n: n as string };
+    }
+    default:
+      return undefined;
+  }
 }
 
 function refuse(reason: DpopRejectionReason, cause?: unknown): never {
@@ -179,10 +245,11 @@ function singleProof(proof: DpopProofCheck['proof']): string {
  *
  * Checks, in this order (RFC 9449 §4.3): exactly one header holding one
  * compact JWS; `typ` exactly `dpop+jwt`; `alg` on the allowlist; a public
- * `jwk` header of the type `alg` needs, with no private members; the
- * signature under that key; no `sub`, `cnf` or `events` claim; `jti`; `htm`
- * and `htu` against the method and URL the CALLER passes; `iat` within the
- * window; `ath` when an access token is presented; the thumbprint when one is
+ * `jwk` header of the type `alg` needs, with no private members, canonical
+ * base64url members and an RSA modulus of at most 4096 bits; the signature
+ * under that key; no `sub`, `cnf` or `events` claim; `jti`; `htm` and `htu`
+ * against the method and URL the CALLER passes; `iat` within the window;
+ * `ath` when an access token is presented; the thumbprint when one is
  * expected; the nonce when one is required; and last, the replay store. A
  * proof that fails an earlier check never reaches the store.
  *
@@ -221,11 +288,12 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
    * itself is left to finish or fail on its own; its late failure is ignored.
    */
   async function recordOnce(key: string): Promise<boolean> {
-    // A proof passes while the clock is within the window of its iat, edges
-    // included, and its iat is at most one window ahead of the clock now. So
-    // it passes at most two windows from now; one second more keeps the
-    // record past the last moment it does.
-    const call = replayStore.record(key, (2 * iatWindowSeconds + 1) * 1000);
+    // A proof passes while a node's clock is within the window of its iat,
+    // edges included, and its iat is at most one window ahead of this clock
+    // now. On this node it passes at most two windows from now; on a node
+    // whose clock is up to one window behind, three. One second more keeps the
+    // record past the last moment any such node accepts it.
+    const call = replayStore.record(key, (3 * iatWindowSeconds + 1) * 1000);
     call.catch(() => undefined);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -246,10 +314,13 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
   }
 
   async function verify(check: DpopProofCheck): Promise<VerifiedDpopProof> {
+    const nowMs = now();
+    if (!Number.isFinite(nowMs)) throw new TypeError('The DPoP verifier clock gave no time');
     const expectedUrl = normalizeHtu(check.url);
     if (expectedUrl === undefined) {
       throw new TypeError('The URL to check a DPoP proof against must be an absolute http(s) URL');
     }
+    const plainPath = hasPlainPath(check.url);
     if (check.requireNonce && nonces === undefined) {
       throw new TypeError('A DPoP verifier without a nonce source cannot require a nonce');
     }
@@ -278,10 +349,12 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
     // jose's import refuses such a key too; checked here so the rule does not
     // depend on the crypto library.
     if (!keyFitsAlgorithm(alg, jwk)) refuse('jwk');
+    const publicJwk = publicKeyMembers(jwk);
+    if (publicJwk === undefined) refuse('jwk');
 
     let key: Awaited<ReturnType<typeof importJWK>>;
     try {
-      key = await importJWK(jwk as JWK, alg);
+      key = await importJWK(publicJwk, alg);
     } catch (error) {
       refuse('jwk', error);
     }
@@ -300,8 +373,9 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
     let claims: unknown;
     try {
       claims = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(payloadBytes));
-    } catch (error) {
-      refuse('malformed', error);
+    } catch {
+      // No cause: a JSON.parse message quotes the payload.
+      refuse('malformed');
     }
     if (!isObject(claims)) refuse('malformed');
     if (CLAIMS_NOT_ALLOWED.some((claim) => claim in claims)) refuse('claims-not-allowed');
@@ -314,14 +388,13 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
     if (typeof claims['htm'] !== 'string' || claims['htm'] !== check.method) refuse('htm');
 
     const htu = claims['htu'];
-    if (typeof htu !== 'string' || normalizeHtu(htu) !== expectedUrl) refuse('htu');
+    if (!plainPath || typeof htu !== 'string' || normalizeHtu(htu) !== expectedUrl) refuse('htu');
 
     const iat = claims['iat'];
-    const nowSeconds = now() / 1000;
     if (
       typeof iat !== 'number' ||
       !Number.isFinite(iat) ||
-      Math.abs(nowSeconds - iat) > iatWindowSeconds
+      !(Math.abs(nowMs / 1000 - iat) <= iatWindowSeconds)
     ) {
       refuse('iat');
     }
@@ -333,11 +406,12 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
       }
     }
 
-    const thumbprint = await calculateJwkThumbprint(jwk as JWK, 'sha256');
+    const thumbprint = await calculateJwkThumbprint(publicJwk, 'sha256');
     if (check.expectedThumbprint !== undefined && !sameText(thumbprint, check.expectedThumbprint)) {
       refuse('key-mismatch');
     }
 
+    let nextNonce: string | undefined;
     if (check.requireNonce && nonces !== undefined) {
       const nonce = claims['nonce'];
       if (nonce === undefined) {
@@ -346,6 +420,8 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
       if (typeof nonce !== 'string' || !(await nonces.accepts(nonce))) {
         throw new DpopProofError('nonce-invalid', await nonces.current());
       }
+      // Before the record, so a nonce source that fails burns no jti.
+      nextNonce = await nonces.current();
     }
 
     // The key and the jti, hashed: a proof is replayed only by its own key,
@@ -360,16 +436,16 @@ export function createDpopVerifier(options: DpopVerifierOptions): DpopVerifier {
     } catch (error) {
       refuse('replay-store-unavailable', error);
     }
-    if (!firstUse) refuse('replayed');
+    // Only an explicit first use passes; any other answer is a replay.
+    if (firstUse !== true) refuse('replayed');
 
-    const publicJwk: JWK = { ...(jwk as JWK) };
     return {
       thumbprint,
       algorithm: alg,
       jwk: Object.freeze(publicJwk),
       jti,
       issuedAt: iat,
-      nextNonce: await freshNonce(),
+      nextNonce,
     };
   }
 

@@ -6,7 +6,7 @@ import {
   sign as nodeSign,
 } from 'node:crypto';
 
-import { calculateJwkThumbprint, CompactSign } from 'jose';
+import { calculateJwkThumbprint, CompactSign, exportJWK, generateKeyPair } from 'jose';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -94,11 +94,16 @@ describe('a valid proof', () => {
     expect(result.algorithm).toBe('ES256');
     expect(result.jti).toBe('jti-0001');
     expect(result.issuedAt).toBe(NOW);
-    expect(result.jwk).toEqual(es256.publicJwk);
+    expect(result.jwk).toEqual({
+      crv: 'P-256',
+      kty: 'EC',
+      x: es256.publicJwk.x,
+      y: es256.publicJwk.y,
+    });
     expect(result.nextNonce).toBeUndefined();
-    // Held for two windows and a second, under a hash that names neither the key nor the jti.
+    // Held for three windows and a second, under a hash that names neither the key nor the jti.
     expect(store.calls).toEqual([
-      { key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), ttlMs: 121_000 },
+      { key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), ttlMs: 181_000 },
     ]);
     expect(store.calls[0].key).not.toContain('jti-0001');
   });
@@ -167,6 +172,14 @@ describe('the DPoP header (RFC 9449 §4.3 steps 1 and 2)', () => {
       .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: es256.publicJwk })
       .sign(es256.privateKey);
     await expectRefused(verifier().verify(check(value)), 'malformed');
+  });
+
+  it('refuses a payload that is not JSON, without quoting it in the cause', async () => {
+    const value = await new CompactSign(new TextEncoder().encode('{"jti": secret-value'))
+      .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: es256.publicJwk })
+      .sign(es256.privateKey);
+    const error = await expectRefused(verifier().verify(check(value)), 'malformed');
+    expect(error.cause).toBeUndefined();
   });
 
   it('refuses a crit header, which names an extension it cannot honour', async () => {
@@ -283,6 +296,57 @@ describe('jwk (RFC 9449 §4.3 steps 6 and 7)', () => {
     await expectRefused(verifier().verify(check(await proof({ header: { jwk } }))), 'jwk');
   });
 
+  it('refuses a key member that is not canonical base64url, so one key has one thumbprint', async () => {
+    const x = es256.publicJwk.x as string;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    // The last character of a 32-byte value carries two unused bits; flipping
+    // one decodes to the same bytes.
+    const sameBytes = x.slice(0, -1) + alphabet[alphabet.indexOf(x.slice(-1)) ^ 1];
+    expect(Buffer.from(sameBytes, 'base64url')).toEqual(Buffer.from(x, 'base64url'));
+
+    for (const spelling of [sameBytes, `${x}=`, ` ${x}`, `${x.slice(0, 20)}.${x.slice(20)}`]) {
+      const jwk = { ...es256.publicJwk, x: spelling };
+      await expectRefused(verifier().verify(check(await proof({ header: { jwk } }))), 'jwk');
+    }
+  });
+
+  it('returns and hashes only the RFC 7638 members, whatever else the jwk carries', async () => {
+    const jwk = { ...es256.publicJwk, kid: 'client-kid', use: 'sig', x5u: 'https://x.example/' };
+    const result = await verifier().verify(check(await proof({ header: { jwk } })));
+
+    expect(Object.keys(result.jwk).sort()).toEqual(['crv', 'kty', 'x', 'y']);
+    expect(result.thumbprint).toBe(await calculateJwkThumbprint(es256.publicJwk, 'sha256'));
+  });
+
+  it('refuses an RSA key over 4096 bits or with an exponent over four bytes, before verifying', async () => {
+    const big = Buffer.alloc(513, 0xff).toString('base64url');
+    const jwk = { kty: 'RSA', n: big, e: 'AQAB' };
+    await expectRefused(
+      verifier().verify(check(rawJws({ typ: 'dpop+jwt', alg: 'PS256', jwk }, {}))),
+      'jwk'
+    );
+
+    const key = await testKey('PS256');
+    const longExponent = { ...key.publicJwk, e: Buffer.alloc(5, 1).toString('base64url') };
+    await expectRefused(
+      verifier().verify(check(await signProof({ key, iat: NOW, header: { jwk: longExponent } }))),
+      'jwk'
+    );
+  });
+
+  it('accepts a 4096-bit RSA key', async () => {
+    const pair = await generateKeyPair('PS256', { modulusLength: 4096, extractable: true });
+    const key: TestKey = {
+      alg: 'PS256',
+      privateKey: pair.privateKey,
+      publicJwk: await exportJWK(pair.publicKey),
+      privateJwk: await exportJWK(pair.privateKey),
+    };
+    await expect(
+      verifier().verify(check(await signProof({ key, iat: NOW })))
+    ).resolves.toMatchObject({ algorithm: 'PS256' });
+  }, 30_000);
+
   it('refuses an RSA key under 2048 bits', async () => {
     const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
     const header = { typ: 'dpop+jwt', alg: 'PS256', jwk: publicKey.export({ format: 'jwk' }) };
@@ -394,6 +458,19 @@ describe('htu (RFC 9449 §4.3 step 9)', () => {
     await expect(verifier().verify(check(value))).resolves.toBeDefined();
   });
 
+  it.each([
+    ['a dot-dot segment', 'https://auth.example.com/oauth/x/../token'],
+    ['an encoded dot-dot segment', 'https://auth.example.com/oauth/x/%2e%2E/token'],
+    ['a dot segment', 'https://auth.example.com/oauth/./token'],
+    ['a backslash', 'https://auth.example.com/oauth\\token'],
+  ])(
+    'refuses a request URL with %s, which a router does not serve as normalized',
+    async (_label, url) => {
+      // A proof made for the path the URL would normalize to.
+      await expectRefused(verifier().verify(check(await proof(), { url })), 'htu');
+    }
+  );
+
   it('throws when the caller passes a URL it cannot check against', async () => {
     await expect(verifier().verify(check(await proof(), { url: '/oauth/token' }))).rejects.toThrow(
       TypeError
@@ -426,6 +503,13 @@ describe('iat (RFC 9449 §4.3 step 11, §11.1)', () => {
     ['a string', String(NOW)],
   ])('refuses an iat that is %s', async (_label, iat) => {
     await expectRefused(verifier().verify(check(await proof({ claims: { iat } }))), 'iat');
+  });
+
+  it('throws when its clock gives no time, rather than pass every iat', async () => {
+    const value = await proof({ claims: { iat: 1 } });
+    await expect(verifier({ now: () => Number.NaN }).verify(check(value))).rejects.toThrow(
+      TypeError
+    );
   });
 
   it('refuses at creation a window that is not a positive whole number', () => {
@@ -514,6 +598,26 @@ describe('the server-provided nonce (RFC 9449 §8, §9, §11.3)', () => {
     expect(result.nextNonce).toBe(nonce);
   });
 
+  it('hands out no next nonce when the call does not require one (RFC 9449 §11.3)', async () => {
+    const result = await verifier({ nonces: nonces() }).verify(check(await proof()));
+    expect(result.nextNonce).toBeUndefined();
+  });
+
+  it('burns no jti when the nonce source fails after the nonce was accepted', async () => {
+    const failing = {
+      current: () => {
+        throw new Error('nonce source down');
+      },
+      accepts: () => true,
+    };
+    await expect(
+      verifier({ nonces: failing }).verify(
+        check(await proof({ claims: { nonce: 'accepted' } }), { requireNonce: true })
+      )
+    ).rejects.toThrow('nonce source down');
+    expect(store.calls).toEqual([]);
+  });
+
   it('ignores a nonce when the endpoint does not require one', async () => {
     const value = await proof({ claims: { nonce: 'from-another-server' } });
     await expect(verifier({ nonces: nonces() }).verify(check(value))).resolves.toBeDefined();
@@ -576,6 +680,21 @@ describe('replay (RFC 9449 §11.1)', () => {
   });
 });
 
+describe('replay across nodes whose clocks differ', () => {
+  it('refuses a replay at a node whose clock is up to one window behind', async () => {
+    // Node A runs 30 seconds ahead of node B; both share one store.
+    const nodeA = verifier({ now: () => clock + 30_000 });
+    const nodeB = verifier();
+    const value = await proof({ claims: { iat: NOW + 90 } });
+
+    await expect(nodeA.verify(check(value))).resolves.toBeDefined();
+
+    // The last moment B still accepts the proof's iat.
+    clock = NOW_MS + 150_000;
+    await expectRefused(nodeB.verify(check(value)), 'replayed');
+  });
+});
+
 describe('the replay store unavailable', () => {
   it('refuses every proof when the store fails', async () => {
     const dpop = createDpopVerifier({
@@ -596,6 +715,14 @@ describe('the replay store unavailable', () => {
     const started = Date.now();
     await expectRefused(dpop.verify(check(await proof())), 'replay-store-unavailable');
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('refuses the proof when the store answers anything but true', async () => {
+    const dpop = createDpopVerifier({
+      replayStore: { record: async () => 'OK' as unknown as boolean },
+      now: () => clock,
+    });
+    await expectRefused(dpop.verify(check(await proof())), 'replayed');
   });
 
   it('ignores a late failure of a call it gave up on', async () => {

@@ -55,7 +55,7 @@ describe('the DPoP replay store on a real Redis', () => {
     await redis?.stop();
   });
 
-  it('accepts a proof once, refuses it after, and keeps it for two windows and a second', async (ctx) => {
+  it('accepts a proof once, refuses it after, and keeps it for three windows and a second', async (ctx) => {
     if (!dockerUp || !client) return ctx.skip();
     const dpop = createDpopVerifier({ replayStore: createRedisDpopReplayStore(client) });
     const proof = await signProof({ key, iat: nowSeconds() });
@@ -66,8 +66,8 @@ describe('the DPoP replay store on a real Redis', () => {
     const keys = await client.keys(`${DEFAULT_DPOP_REPLAY_KEY_PREFIX}*`);
     expect(keys).toHaveLength(1);
     const ttl = await client.pttl(keys[0]);
-    expect(ttl).toBeGreaterThan(110_000);
-    expect(ttl).toBeLessThanOrEqual(121_000);
+    expect(ttl).toBeGreaterThan(170_000);
+    expect(ttl).toBeLessThanOrEqual(181_000);
   });
 
   it('lets exactly one of several racing uses of one proof through', async (ctx) => {
