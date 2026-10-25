@@ -1,0 +1,188 @@
+import {
+  BadRequestError,
+  EmailAlreadyVerifiedError,
+  EmailNotVerifiedError,
+  ForbiddenError,
+  InvalidClientError,
+  InvalidClientMetadataError,
+  InvalidConfigurationError,
+  InvalidCredentialsError,
+  InvalidCsrfTokenError,
+  InvalidDpopProofError,
+  InvalidGrantError,
+  InvalidRedirectUriError,
+  InvalidRequestError,
+  InvalidScopeError,
+  InvalidTargetError,
+  InvalidTokenError,
+  JWTExpiredError,
+  JWTInvalidError,
+  MisdirectedRequestError,
+  NotFoundError,
+  ProviderAlreadyRegisteredError,
+  ProviderNotRegisteredError,
+  TemporarilyUnavailableError,
+  TokenAlreadyUsedError,
+  TokenExpiredError,
+  TooManyRequestsError,
+  UnauthorizedClientError,
+  UniqueConstraintError,
+  UnsupportedGrantTypeError,
+  WeakPasswordError,
+} from '@qauth-labs/shared-errors';
+
+import type { OAuthErrorCode } from './oauth-error';
+import { PROBLEM_CODES, type ProblemCode, problemTypeUri } from './problem';
+
+/**
+ * THE ERROR REGISTRY (#513): what each domain error class of
+ * `@qauth-labs/shared-errors` answers, in either error format.
+ *
+ * - `code` is the class's problem code, and through {@link PROBLEM_CODES} its
+ *   status, problem type and title. A problem document carries exactly these.
+ * - `oauthError` is the `error` an OAuth protocol endpoint answers when the
+ *   class reaches it. An OAuth error class names its own token.
+ *
+ * One table keeps the codes stable: they are part of the 1.0 promise (ADR-018
+ * §5), so a class is mapped here once, never at a throw site. A test fails
+ * when a class of the package has no entry.
+ *
+ * A class's own `code` member, in upper case, is the code of the body the
+ * routes answered before #513, and is lower-cased here where it is published.
+ * The exceptions are the server-side failures, whose code says nothing a
+ * caller may act on (`internal_error`), and the shed request
+ * (`service_unavailable`).
+ */
+
+/** A class of `@qauth-labs/shared-errors`, whatever its constructor takes. */
+export type DomainErrorClass = abstract new (...args: never[]) => Error;
+
+/** What one domain error class answers. */
+export interface ErrorClassEntry {
+  readonly errorClass: DomainErrorClass;
+  readonly code: ProblemCode;
+  readonly oauthError: OAuthErrorCode;
+}
+
+/** The registry, one entry per class, in the package's order. */
+export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
+  // Common errors.
+  { errorClass: BadRequestError, code: 'bad_request', oauthError: 'invalid_request' },
+  { errorClass: ForbiddenError, code: 'forbidden', oauthError: 'access_denied' },
+  {
+    errorClass: InvalidConfigurationError,
+    code: 'internal_error',
+    oauthError: 'server_error',
+  },
+  {
+    errorClass: InvalidCsrfTokenError,
+    code: 'invalid_csrf_token',
+    oauthError: 'invalid_request',
+  },
+  {
+    errorClass: MisdirectedRequestError,
+    code: 'misdirected_request',
+    oauthError: 'invalid_request',
+  },
+  { errorClass: NotFoundError, code: 'not_found', oauthError: 'invalid_request' },
+  {
+    errorClass: TemporarilyUnavailableError,
+    code: 'service_unavailable',
+    oauthError: 'temporarily_unavailable',
+  },
+  {
+    errorClass: TooManyRequestsError,
+    code: 'too_many_requests',
+    oauthError: 'temporarily_unavailable',
+  },
+
+  // Database errors.
+  {
+    errorClass: UniqueConstraintError,
+    code: 'unique_constraint_violation',
+    oauthError: 'invalid_request',
+  },
+
+  // Authentication errors.
+  {
+    errorClass: EmailAlreadyVerifiedError,
+    code: 'email_already_verified',
+    oauthError: 'invalid_request',
+  },
+  { errorClass: EmailNotVerifiedError, code: 'email_not_verified', oauthError: 'access_denied' },
+  { errorClass: InvalidClientError, code: 'invalid_client', oauthError: 'invalid_client' },
+  {
+    errorClass: InvalidClientMetadataError,
+    code: 'invalid_client_metadata',
+    oauthError: 'invalid_client_metadata',
+  },
+  {
+    errorClass: InvalidCredentialsError,
+    code: 'invalid_credentials',
+    oauthError: 'invalid_grant',
+  },
+  {
+    errorClass: InvalidDpopProofError,
+    code: 'invalid_dpop_proof',
+    oauthError: 'invalid_dpop_proof',
+  },
+  { errorClass: InvalidGrantError, code: 'invalid_grant', oauthError: 'invalid_grant' },
+  {
+    errorClass: InvalidRedirectUriError,
+    code: 'invalid_redirect_uri',
+    oauthError: 'invalid_redirect_uri',
+  },
+  { errorClass: InvalidRequestError, code: 'invalid_request', oauthError: 'invalid_request' },
+  { errorClass: InvalidScopeError, code: 'invalid_scope', oauthError: 'invalid_scope' },
+  { errorClass: InvalidTargetError, code: 'invalid_target', oauthError: 'invalid_target' },
+  { errorClass: InvalidTokenError, code: 'invalid_token', oauthError: 'invalid_request' },
+  { errorClass: JWTExpiredError, code: 'jwt_expired', oauthError: 'invalid_token' },
+  { errorClass: JWTInvalidError, code: 'jwt_invalid', oauthError: 'invalid_token' },
+  {
+    errorClass: ProviderAlreadyRegisteredError,
+    code: 'internal_error',
+    oauthError: 'server_error',
+  },
+  {
+    errorClass: ProviderNotRegisteredError,
+    code: 'internal_error',
+    oauthError: 'server_error',
+  },
+  { errorClass: TokenAlreadyUsedError, code: 'token_already_used', oauthError: 'invalid_request' },
+  { errorClass: TokenExpiredError, code: 'token_expired', oauthError: 'invalid_request' },
+  {
+    errorClass: UnauthorizedClientError,
+    code: 'unauthorized_client',
+    oauthError: 'unauthorized_client',
+  },
+  {
+    errorClass: UnsupportedGrantTypeError,
+    code: 'unsupported_grant_type',
+    oauthError: 'unsupported_grant_type',
+  },
+  { errorClass: WeakPasswordError, code: 'weak_password', oauthError: 'invalid_request' },
+];
+
+/** What a problem document says about one error class. */
+export interface ProblemDescription {
+  readonly code: ProblemCode;
+  readonly status: number;
+  readonly type: string;
+  readonly title: string;
+}
+
+/** The registry entry for `error`'s class, or `undefined` for an error no entry lists. */
+export function errorClassEntryOf(error: unknown): ErrorClassEntry | undefined {
+  if (!(error instanceof Error)) return undefined;
+  // Exact class first, so a subclass registered after its parent still wins.
+  return (
+    ERROR_CLASSES.find((entry) => error.constructor === entry.errorClass) ??
+    ERROR_CLASSES.find((entry) => error instanceof entry.errorClass)
+  );
+}
+
+/** The status, type, title and code a problem document carries for `code`. */
+export function describeProblem(code: ProblemCode): ProblemDescription {
+  const { status, title } = PROBLEM_CODES[code];
+  return { code, status, type: problemTypeUri(code), title };
+}

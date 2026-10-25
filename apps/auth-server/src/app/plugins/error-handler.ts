@@ -1,105 +1,102 @@
 import {
-  BadRequestError,
-  EmailAlreadyVerifiedError,
-  EmailNotVerifiedError,
-  ForbiddenError,
   InvalidClientError,
-  InvalidCredentialsError,
   InvalidDpopProofError,
-  InvalidGrantError,
-  InvalidRequestError,
-  InvalidScopeError,
-  InvalidTargetError,
-  InvalidTokenError,
   JWTExpiredError,
   JWTInvalidError,
-  MisdirectedRequestError,
-  NotFoundError,
   TemporarilyUnavailableError,
-  TokenAlreadyUsedError,
-  TokenExpiredError,
-  TooManyRequestsError,
-  UnauthorizedClientError,
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
-import { env } from '../../config/env';
 import { redactLoggedUrl } from '../../config/logger';
+import { describeProblem, errorClassEntryOf } from '../api-conventions/error-classes';
 import { apiFamilyOf } from '../api-conventions/families';
 import {
-  DEFAULT_PROBLEM_TYPE,
+  OAUTH_ERROR_CODES,
+  type OAuthErrorBody,
+  type OAuthErrorCode,
+} from '../api-conventions/oauth-error';
+import {
+  codeForStatus,
+  PROBLEM_CODES,
   PROBLEM_MEDIA_TYPE,
+  type ProblemCode,
   problemCodeFor,
   type ProblemDocument,
-  statusTitle,
 } from '../api-conventions/problem';
 
 /**
- * How a route answers an error (ADR-019 Decision 7, #506):
+ * How a route answers an error (ADR-019 Decision 7, #506, #513):
  *
- *   - `problem`: an RFC 9457 problem details document, sent as
+ *   - `problem`, the default: an RFC 9457 problem details document, sent as
  *     `application/problem+json`, with a stable `code` and a `trace_id`;
- *   - `oauth`: the error shape of the specification the endpoint implements,
- *     such as RFC 6749 §5.2 on the token endpoint.
+ *   - `oauth`: the error body of the specification the endpoint implements,
+ *     `error` with an optional `error_description` (RFC 6749 §5.2), and no
+ *     other member.
  *
- * A route under an API family prefix (`/admin/v1-rc.0`, `/account/v1-rc.0`,
- * `/developer/v1-rc.0`) answers `problem` unless it says otherwise. Every other
- * route keeps the body this handler sent before the API families existed,
- * until #513 makes `problem` the default and sets `oauth` on the OAuth
- * protocol endpoints.
+ * The OAuth protocol endpoints set `oauth` in their route `config`: token,
+ * authorization, introspection, revocation, dynamic registration, userinfo
+ * and the wallet-facing OID4VP endpoints. Every other route answers `problem`
+ * without saying so. Which class answers which code is set once, in
+ * `api-conventions/error-classes.ts`.
  */
 export type ErrorFormat = 'problem' | 'oauth';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
-    /** The route's error format; see {@link ErrorFormat}. */
+    /** The route's error format; see {@link ErrorFormat}. `problem` when unset. */
     errorFormat?: ErrorFormat;
   }
 }
 
-interface ErrorResponse {
-  error: string;
-  error_description?: string;
-  code?: string;
-  statusCode: number;
-  feedback?: string[];
-  retryAfter?: number;
+/** The error format of the route that failed; `problem` unless it says `oauth`. */
+export function errorFormatOf(request: FastifyRequest): ErrorFormat {
+  return request.routeOptions.config?.errorFormat ?? 'problem';
 }
 
 /**
- * Sanitize a message for use as an RFC 6750 §3 `error_description` inside a
- * `WWW-Authenticate` header. That grammar's quoted-string permits only
- * `%x20-21 / %x23-5B / %x5D-7E` — i.e. no double-quote and no backslash — so we
- * strip anything outside that set to keep the header well-formed and prevent a
- * message from breaking out of the quoted value.
+ * Sanitize a message for an RFC 6749 `error_description`, in the body or in a
+ * `WWW-Authenticate` header. The grammar permits only `%x20-21 / %x23-5B /
+ * %x5D-7E` — no double-quote and no backslash — so anything outside that set
+ * becomes a space: the body stays what the specification allows, and a
+ * message cannot break out of the header's quoted value.
  */
-function sanitizeChallengeDescription(message: string): string {
-  return message.replace(/[^\x20-\x21\x23-\x5b\x5d-\x7e]/g, ' ').slice(0, 200);
+function sanitizeDescription(message: string, maxLength: number): string {
+  return message.replace(/[^\x20-\x21\x23-\x5b\x5d-\x7e]/g, ' ').slice(0, maxLength);
 }
+
+/** The longest `error_description` inside a `WWW-Authenticate` challenge. */
+const MAX_CHALLENGE_DESCRIPTION = 200;
+
+/** The longest `error_description` in an OAuth error body. */
+const MAX_BODY_DESCRIPTION = 500;
 
 /**
  * The status this handler is about to answer with, decided BEFORE any branch
  * runs so the log line and the response can never disagree (#365).
  *
- * Every branch below either sends `error.statusCode` or falls through to a
- * fixed status, so reading it once up front is exact rather than approximate.
- * The two fixed cases mirror the branches: a Fastify validation failure is
- * always 400, and anything with no usable `statusCode` is always 500.
+ * Both formats send `error.statusCode`, or a fixed status: a Fastify
+ * validation failure is always 400, and anything with no usable `statusCode`
+ * is always 500.
  *
  * `error.validation` is checked FIRST because Fastify's validation errors carry
- * a `statusCode` of their own and it agrees (400) — but only the shape check
- * distinguishes them from a domain error that happens to be a 400, and the
- * ordering here has to match the ordering of the branches.
+ * a `statusCode` of their own and it agrees (400). A route's
+ * `schemaErrorFormatter` may return a domain error, and Fastify attaches the
+ * issues to it as `validation`: its status is still 400.
  */
 function intendedStatusCode(error: FastifyError | Error): number {
-  if ('validation' in error && error.validation) return 400;
+  if (isValidationError(error)) return 400;
 
   const declared = (error as { statusCode?: unknown }).statusCode;
 
   return typeof declared === 'number' && declared >= 100 && declared <= 599 ? declared : 500;
+}
+
+/** Whether `error` is a schema validation failure Fastify raised. */
+function isValidationError(error: FastifyError | Error): error is FastifyError {
+  return 'validation' in error && Boolean(error.validation);
 }
 
 /**
@@ -110,24 +107,22 @@ function intendedStatusCode(error: FastifyError | Error): number {
  * `POST /oauth/token` the emitted array carried, per issue, a `keyword`, an
  * `instancePath`, a `schemaPath` (`#/grant_type/invalid_union`) and a `params`
  * bag holding the discriminator name and the full option list — the internal
- * shape of the schema, handed to an unauthenticated caller. That was invisible
- * for as long as the handler was unreachable and became the wire contract the
- * moment it was not.
+ * shape of the schema, handed to an unauthenticated caller.
  *
- * `path` and `message` are what a client needs to fix its request, and they are
- * all it needs: which field, and what is wrong with it. Everything else
- * describes how QAuth is BUILT rather than what it accepts.
+ * `pointer` and `message` are what a client needs to fix its request, and they
+ * are all it needs: which field (an RFC 6901 JSON Pointer into the body, or
+ * into the object of query or path parameters), and what is wrong with it.
+ * Everything else describes how QAuth is BUILT rather than what it accepts.
  *
  * The `message` is kept INTACT, including the constraint it quotes (`must match
  * pattern "…"`, or the list of permitted discriminator values). Those are the
  * schemas, and the schemas are published in `openapi.json` — documentation
  * rather than disclosure. Genericising them would leave a caller a field path
- * and no way to learn what is wrong with it, which is the failure mode of every
- * error message that has been sanitised past usefulness. The distinction that
- * matters is structural-vs-contractual, not verbose-vs-terse.
+ * and no way to learn what is wrong with it. The distinction that matters is
+ * structural-vs-contractual, not verbose-vs-terse.
  */
 interface ValidationDetail {
-  path: string;
+  pointer: string;
   message: string;
 }
 
@@ -142,16 +137,19 @@ interface ValidationDetail {
  */
 const MAX_VALIDATION_DETAILS = 20;
 
+/** How many issues an OAuth `error_description` names: it is one line of text. */
+const MAX_DESCRIBED_ISSUES = 5;
+
 /**
  * Project the compiler's issues into {@link ValidationDetail}s.
  *
  * Tolerant by construction: the input is typed `unknown` by Fastify and its
  * shape depends on which validator compiler is installed, so an issue this
- * function cannot read degrades to an empty path and a generic message rather
- * than throwing out of the error handler — the one place a throw becomes an
- * unhandled rejection with no response at all.
+ * function cannot read degrades to an empty pointer and a generic message
+ * rather than throwing out of the error handler — the one place a throw
+ * becomes an unhandled rejection with no response at all.
  */
-function projectValidationDetails(validation: unknown): ValidationDetail[] {
+export function projectValidationDetails(validation: unknown): ValidationDetail[] {
   if (!Array.isArray(validation)) return [];
 
   return validation.slice(0, MAX_VALIDATION_DETAILS).map((issue: unknown) => {
@@ -160,7 +158,7 @@ function projectValidationDetails(validation: unknown): ValidationDetail[] {
     const message = record['message'];
 
     return {
-      path: typeof path === 'string' ? path : '',
+      pointer: typeof path === 'string' ? path : '',
       message: typeof message === 'string' ? message : 'Invalid value',
     };
   });
@@ -176,47 +174,31 @@ function projectValidationDetails(validation: unknown): ValidationDetail[] {
  * projection the caller receives; any other error is logged as it is.
  */
 function loggableError(error: FastifyError | Error): unknown {
-  if (!('validation' in error) || !error.validation) return error;
+  if (!isValidationError(error)) return error;
 
   return {
     type: 'ValidationError',
-    validationContext: (error as FastifyError).validationContext,
+    validationContext: error.validationContext,
     issues: Array.isArray(error.validation) ? error.validation.length : undefined,
     details: projectValidationDetails(error.validation),
   };
 }
 
 /**
- * Whether the route that failed answers with a problem document: it says so in
- * `config.errorFormat`, or it sits under an API family prefix. A request that
- * matched no route has no `routeOptions.url` and keeps today's shape.
+ * An error whose `message` is a registered OAuth `error` value and whose
+ * human-readable detail lives on `errorDescription`: the OAuth error classes
+ * of `@qauth-labs/shared-errors`.
  */
-function answersWithProblem(request: FastifyRequest): boolean {
-  const declared = request.routeOptions.config?.errorFormat;
-  if (declared !== undefined) return declared === 'problem';
-  const url = request.routeOptions.url;
-  return url !== undefined && apiFamilyOf(url) !== undefined;
+interface OAuthTokenError extends Error {
+  readonly message: OAuthErrorCode;
+  readonly errorDescription?: string;
 }
 
-/** The OAuth error classes whose `message` is the registered token, not prose. */
-function isOAuthTokenError(
-  error: unknown
-): error is
-  | InvalidScopeError
-  | InvalidGrantError
-  | InvalidRequestError
-  | InvalidTargetError
-  | InvalidClientError
-  | UnauthorizedClientError
-  | InvalidDpopProofError {
+function isOAuthTokenError(error: unknown): error is OAuthTokenError {
   return (
-    error instanceof InvalidScopeError ||
-    error instanceof InvalidGrantError ||
-    error instanceof InvalidRequestError ||
-    error instanceof InvalidTargetError ||
-    error instanceof InvalidClientError ||
-    error instanceof UnauthorizedClientError ||
-    error instanceof InvalidDpopProofError
+    error instanceof Error &&
+    'errorDescription' in error &&
+    Object.hasOwn(OAUTH_ERROR_CODES, error.message)
   );
 }
 
@@ -229,58 +211,101 @@ function usedDpopScheme(request: FastifyRequest): boolean {
 }
 
 /**
+ * Whether the route that failed takes a bearer access token: it is a route of
+ * an API family (ADR-019 Decision 7), or its schema declares the `bearerAuth`
+ * security requirement, as the developer API at `/api/clients` does.
+ */
+function isBearerProtected(request: FastifyRequest): boolean {
+  const url = request.routeOptions.url;
+  if (url !== undefined && apiFamilyOf(url) !== undefined) return true;
+  const security = (request.routeOptions.schema as { security?: unknown } | undefined)?.security;
+  return (
+    Array.isArray(security) &&
+    security.some(
+      (requirement) =>
+        typeof requirement === 'object' &&
+        requirement !== null &&
+        Object.hasOwn(requirement, 'bearerAuth')
+    )
+  );
+}
+
+/** The problem code of `error` at `status`. */
+function problemCodeOf(error: FastifyError | Error, status: number): ProblemCode {
+  if (isValidationError(error)) return 'validation_error';
+  const entry = errorClassEntryOf(error);
+  if (entry !== undefined) {
+    // A class thrown with a status its entry does not list (an
+    // InvalidDpopProofError meant for a token request) gets the code of the
+    // status, so a code is never sent with another status than its own.
+    return PROBLEM_CODES[entry.code].status === status ? entry.code : codeForStatus(status);
+  }
+  // An error no entry lists: a framework error, the rate limiter's, a route's
+  // own class. Its own code counts only when it is published for the status.
+  return problemCodeFor((error as { code?: unknown }).code, status);
+}
+
+/**
  * The `detail` of a problem document: what a caller may read about this
  * failure, or nothing.
  *
  * A 5xx never carries one. The message of an unexpected error is ours, not the
  * caller's, and the `trace_id` already leads an operator to it. Nor does a
- * `UniqueConstraintError`'s own message, which embeds the constraint name (the
- * enumeration oracle the legacy branch below guards against). An OAuth error
- * class carries its token as the message, so its description is the detail.
+ * `UniqueConstraintError`, whose message embeds the constraint name: once an
+ * enumeration oracle (a duplicate-email registration reached the wire with the
+ * credentials index in it, PR #212). An OAuth error class carries its token as
+ * the message, so its description is the detail.
  */
 function problemDetail(error: FastifyError | Error, status: number): string | undefined {
   if (status >= 500) return undefined;
-  if ('validation' in error && error.validation) return 'The request is not valid.';
-  if (error instanceof UniqueConstraintError) return 'Resource already exists';
+  if (isValidationError(error)) return 'The request is not valid.';
+  if (error instanceof UniqueConstraintError) return undefined;
   if (isOAuthTokenError(error)) return error.errorDescription || undefined;
   return error.message || undefined;
 }
 
 /**
- * Build the RFC 9457 document for `error` (#506).
+ * The request path without its query, as the document's `instance`.
  *
- * `type` is `about:blank` and `title` the status phrase (RFC 9457 §4.2.1);
- * `code` is one of the published codes (`api-conventions/problem.ts`), never a
- * framework code such as `FST_ERR_VALIDATION`; `trace_id` is the request id the
- * request logger carries as `reqId`, so an operator finds the log line by it. A
- * validation failure lists each field in `errors`, from the same projection
- * the legacy shape uses, and a weak password lists its feedback under
- * `/password`.
+ * The query is left out because it can carry a secret: on
+ * `/ui/wallet-login/return?response_code=…` it holds the same-device Response
+ * Code (OID4VP 1.0 §14.2), which the request logger censors too.
  */
-function problemDocument(
+function instanceOf(request: FastifyRequest): string {
+  const queryAt = request.url.indexOf('?');
+  return queryAt === -1 ? request.url : request.url.slice(0, queryAt);
+}
+
+/**
+ * Build the RFC 9457 document for `error` (#506, #513).
+ *
+ * `type`, `title` and `code` come from the registry: a class's entry, or the
+ * code of the status for an error no entry lists. A framework code such as
+ * `FST_ERR_VALIDATION` never reaches the wire. `trace_id` is the request id the
+ * request logger carries as `reqId`, so an operator finds the log line by it.
+ * A validation failure lists each field in `errors`, and a weak password lists
+ * its feedback under `/password`.
+ */
+export function problemDocument(
   error: FastifyError | Error,
   request: FastifyRequest,
   status: number
 ): ProblemDocument {
-  const isValidation = 'validation' in error && Boolean(error.validation);
+  const { code, type, title } = describeProblem(problemCodeOf(error, status));
   const document: ProblemDocument = {
-    type: DEFAULT_PROBLEM_TYPE,
-    title: statusTitle(status),
+    type,
+    title,
     status,
-    code: isValidation
-      ? 'validation_error'
-      : problemCodeFor((error as { code?: unknown }).code, status),
+    instance: instanceOf(request),
+    code,
     trace_id: request.id,
   };
 
   const detail = problemDetail(error, status);
   if (detail) document.detail = detail;
 
-  const errors = isValidation
-    ? projectValidationDetails((error as FastifyError).validation).map(({ path, message }) => ({
-        pointer: path,
-        message,
-      }))
+  const errors = isValidationError(error)
+    ? projectValidationDetails(error.validation)
     : error instanceof WeakPasswordError
       ? (error.feedback ?? []).map((message) => ({ pointer: '/password', message }))
       : [];
@@ -289,27 +314,85 @@ function problemDocument(
   return document;
 }
 
-/** Simple errors that only need message and statusCode */
-const SimpleErrorClasses = [
-  BadRequestError,
-  EmailAlreadyVerifiedError,
-  EmailNotVerifiedError,
-  ForbiddenError,
-  InvalidCredentialsError,
-  InvalidTokenError,
-  JWTExpiredError,
-  JWTInvalidError,
-  MisdirectedRequestError,
-  NotFoundError,
-  TemporarilyUnavailableError,
-  TokenAlreadyUsedError,
-  TokenExpiredError,
-  TooManyRequestsError,
-] as const;
+/**
+ * The `error` an OAuth protocol endpoint answers for an error no registry
+ * entry lists: a framework error (a body that is not JSON, an unsupported
+ * media type), the rate limiter's 429, or an unexpected failure.
+ */
+function oauthErrorForStatus(status: number): OAuthErrorCode {
+  if (status === 429 || status === 503) return 'temporarily_unavailable';
+  if (status >= 500) return 'server_error';
+  return 'invalid_request';
+}
+
+/** The fields a validation failure names, as one line for `error_description`. */
+function describeValidation(validation: unknown): string {
+  return projectValidationDetails(validation)
+    .slice(0, MAX_DESCRIBED_ISSUES)
+    .map(({ pointer, message }) => (pointer ? `${pointer}: ${message}` : message))
+    .join('; ');
+}
 
 /**
- * Global error handler plugin
- * Handles all unhandled errors and converts them to appropriate HTTP responses
+ * Build the OAuth error body for `error` (RFC 6749 §5.2; #513): `error`, and an
+ * `error_description` when there is one to give. No other member is sent.
+ *
+ * - An OAuth error class names its own token, and its description is its
+ *   `errorDescription`. A route's `schemaErrorFormatter` may raise one for a
+ *   body its schema refuses (`/oauth/register` answers `invalid_client_metadata`,
+ *   RFC 7591 §3.2.2).
+ * - Any other validation failure is `invalid_request`, and the description
+ *   names the fields.
+ * - Any other class answers the `oauthError` of its registry entry, with its
+ *   message as the description; an error no entry lists answers by status.
+ * - A 5xx and a `UniqueConstraintError` carry no description, for the reasons
+ *   {@link problemDetail} gives.
+ */
+export function oauthErrorBody(error: FastifyError | Error, status: number): OAuthErrorBody {
+  let code: OAuthErrorCode;
+  let description: string | undefined;
+
+  if (isOAuthTokenError(error)) {
+    code = error.message;
+    description = error.errorDescription;
+  } else if (isValidationError(error)) {
+    code = 'invalid_request';
+    description = describeValidation(error.validation);
+  } else {
+    code = errorClassEntryOf(error)?.oauthError ?? oauthErrorForStatus(status);
+    description = error instanceof UniqueConstraintError ? undefined : error.message;
+  }
+
+  if (status >= 500) description = undefined;
+  // A message that only repeats the token says nothing more.
+  if (description === code) description = undefined;
+  return description
+    ? { error: code, error_description: sanitizeDescription(description, MAX_BODY_DESCRIPTION) }
+    : { error: code };
+}
+
+/**
+ * The challenge for a 401 or 403 problem answer on a bearer-protected route
+ * that no earlier branch gave one (RFC 6750 §3, RFC 9449 §7.1; #513).
+ *
+ * A request that presented no credentials gets a challenge with no error code,
+ * as RFC 6750 §3.1 asks; a 401 for credentials that were presented says
+ * `invalid_token`, and a 403 `insufficient_scope`. A request that used the
+ * `DPoP` scheme while DPoP is on is answered in that scheme, with the proof
+ * algorithms in `algs`.
+ */
+function bearerChallenge(request: FastifyRequest, status: number, dpopAlgs?: string): string {
+  const presented = (request.headers.authorization ?? '') !== '';
+  const error = status === 403 ? 'insufficient_scope' : presented ? 'invalid_token' : undefined;
+  if (dpopAlgs !== undefined && usedDpopScheme(request)) {
+    return `DPoP ${error === undefined ? '' : `error="${error}", `}algs="${dpopAlgs}"`;
+  }
+  return `Bearer realm="OAuth"${error === undefined ? '' : `, error="${error}"`}`;
+}
+
+/**
+ * Global error handler plugin: turns every error a route throws into the
+ * answer its error format defines.
  */
 export default fp(async function (fastify: FastifyInstance) {
   fastify.setErrorHandler(
@@ -362,6 +445,21 @@ export default fp(async function (fastify: FastifyInstance) {
         'Error occurred'
       );
 
+      // The offending constraint name can be an enumeration oracle (a
+      // duplicate-email registration once reached the wire with the
+      // credentials index in it), so it is logged for operators and never
+      // returned: neither format sends the message of this class. `POST
+      // /auth/register` no longer gets here at all: there the status alone
+      // told a registered address from a free one, so the route answers a
+      // duplicate with the same 202 as any address (ANT-2026-SPEMY9GU). The
+      // `url` is censored for the reason given above.
+      if (error instanceof UniqueConstraintError) {
+        fastify.log.warn(
+          { constraint: error.constraint, url: redactLoggedUrl(request.url) },
+          'Unique constraint violation'
+        );
+      }
+
       // RFC 6750 §3: a bearer-protected resource (e.g. /oauth/userinfo) that
       // rejects an access token MUST answer with a `WWW-Authenticate: Bearer`
       // challenge carrying the `invalid_token` error code. This is scoped to the
@@ -369,9 +467,8 @@ export default fp(async function (fastify: FastifyInstance) {
       // verification on bearer-protected routes — and is DISTINCT from the
       // client-authentication Basic case below (`InvalidClientError`).
       // `InvalidTokenError` (email-verification tokens, etc.) is intentionally
-      // NOT included: it is not a bearer resource failure. We only set the
-      // header here and fall through so the normal body/status handling runs,
-      // in either error format: an API family route is bearer-protected too.
+      // NOT included: it is not a bearer resource failure. The header is set in
+      // either error format.
       //
       // RFC 9449 §7.1 (#480): with DPoP on, a token refused under the `DPoP`
       // scheme gets a `DPoP` challenge instead, with the proof algorithms in
@@ -380,7 +477,7 @@ export default fp(async function (fastify: FastifyInstance) {
       // every challenge stays the Bearer one above.
       const dpopAlgs = fastify.dpop ? fastify.dpop.algorithms.join(' ') : undefined;
       if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) {
-        const description = sanitizeChallengeDescription(error.message);
+        const description = sanitizeDescription(error.message, MAX_CHALLENGE_DESCRIPTION);
         reply.header(
           'WWW-Authenticate',
           dpopAlgs !== undefined && usedDpopScheme(request)
@@ -395,142 +492,41 @@ export default fp(async function (fastify: FastifyInstance) {
         );
       }
 
-      // RFC 9110 §10.2.3: a request shed under load says when to try again, in
-      // either error format (#751; RFC 7009 §2.2.1 for revocation).
-      if (shed) {
-        reply.header('Retry-After', String(error.retryAfterSeconds));
-      }
-
-      // The API families, and any route that asks for it, answer with an RFC
-      // 9457 problem document (ADR-019 Decision 7, #506). Every branch below is
-      // the shape the other routes keep until #513 converts them.
-      if (answersWithProblem(request)) {
-        const status = statusCode >= 400 ? statusCode : 500;
-        return reply
-          .code(status)
-          .type(PROBLEM_MEDIA_TYPE)
-          .send(problemDocument(error, request, status));
-      }
-
       // RFC 6749 §5.2: if the client attempted Basic auth, the 401 response
       // MUST include a `WWW-Authenticate` header matching the scheme used.
-      // Set here and fallen through, so the body below is built in ONE place
-      // for every §5.2 error rather than once per error class.
       if (error instanceof InvalidClientError) {
         if (/^basic\s/i.test(request.headers.authorization ?? '')) {
           reply.header('WWW-Authenticate', 'Basic realm="OAuth"');
         }
       }
 
-      // OAuth errors, whose `message` IS the registered §5.2 token and whose
-      // human-readable detail lives on `errorDescription` (RFC 6749 §5.2, RFC
-      // 8707 §2.2 for `invalid_target`).
-      //
-      // `InvalidClientError` and `UnauthorizedClientError` joined this branch
-      // with #365. They took prose as their MESSAGE, so a call site that
-      // described the failure — `new InvalidClientError('CIMD document is not
-      // valid JSON')` — put that sentence in `error`, where the specification
-      // requires the bare token and where every OAuth client library looks for
-      // one. The response shape therefore depended on which call site threw.
-      if (isOAuthTokenError(error)) {
-        const response: ErrorResponse = {
-          error: error.message,
-          statusCode: error.statusCode,
-          code: error.code,
-          ...(error.errorDescription ? { error_description: error.errorDescription } : {}),
-        };
-        return reply.code(error.statusCode).send(response);
+      // RFC 9110 §10.2.3: a request shed under load says when to try again, in
+      // either error format (#751; RFC 7009 §2.2.1 for revocation).
+      if (shed) {
+        reply.header('Retry-After', String(error.retryAfterSeconds));
       }
 
-      // Handle simple error types (message + statusCode + optional code)
-      for (const ErrorClass of SimpleErrorClasses) {
-        if (error instanceof ErrorClass) {
-          const response: ErrorResponse = {
-            error: error.message,
-            statusCode: error.statusCode,
-            ...('code' in error && error.code ? { code: error.code } : {}),
-          };
-          return reply.code(error.statusCode).send(response);
-        }
+      // The OAuth protocol endpoints answer the body their specification
+      // defines (RFC 6749 §5.2), and nothing QAuth adds to it (#513).
+      const status = statusCode >= 400 ? statusCode : 500;
+      if (errorFormatOf(request) === 'oauth') {
+        return reply.code(status).send(oauthErrorBody(error, status));
       }
 
-      // Handle WeakPasswordError (includes feedback)
-      if (error instanceof WeakPasswordError) {
-        const response: ErrorResponse = {
-          error: error.message,
-          code: error.code,
-          statusCode: error.statusCode,
-          feedback: error.feedback,
-        };
-        return reply.code(error.statusCode).send(response);
+      // Every other route answers an RFC 9457 problem document (ADR-019
+      // Decision 7, #506, #513). A 401 or 403 on a bearer-protected route also
+      // carries a challenge, when no branch above set one.
+      if (
+        (status === 401 || status === 403) &&
+        !reply.hasHeader('WWW-Authenticate') &&
+        isBearerProtected(request)
+      ) {
+        reply.header('WWW-Authenticate', bearerChallenge(request, status, dpopAlgs));
       }
-
-      // Handle UniqueConstraintError. The offending constraint name can be an
-      // enumeration oracle (a duplicate-email registration once reached this
-      // branch with the credentials index in it), so it is logged for
-      // operators but NEVER returned to the caller. `POST /auth/register` no
-      // longer gets here at all: there the status alone told a registered
-      // address from a free one, so the route answers a duplicate with the
-      // same 202 as any address (ANT-2026-SPEMY9GU). The wire `error`
-      // message is genericised for the same reason — `error.message` embeds the
-      // constraint name. `code` + `statusCode` are preserved so legitimate
-      // clients can still branch on the conflict. The `url` is censored for the
-      // same reason as on the line above: a plain key the `req` serializer
-      // never sees.
-      if (error instanceof UniqueConstraintError) {
-        fastify.log.warn(
-          { constraint: error.constraint, url: redactLoggedUrl(request.url) },
-          'Unique constraint violation'
-        );
-        const response: ErrorResponse = {
-          error: 'Resource already exists',
-          code: error.code,
-          statusCode: error.statusCode,
-        };
-        return reply.code(error.statusCode).send(response);
-      }
-
-      // Handle Fastify validation errors. `details` is PROJECTED, never
-      // forwarded — see {@link projectValidationDetails} for what the raw
-      // issues carried and why an unauthenticated caller must not receive it.
-      if ('validation' in error && error.validation) {
-        return reply.code(400).send({
-          error: 'Validation error',
-          code: 'VALIDATION_ERROR',
-          statusCode: 400,
-          details: projectValidationDetails(error.validation),
-        });
-      }
-
-      // Handle HTTP errors with statusCode property
-      if ('statusCode' in error && typeof error.statusCode === 'number') {
-        const statusCode = error.statusCode;
-        const response: ErrorResponse = {
-          error: error.message || 'An error occurred',
-          statusCode,
-        };
-        return reply.code(statusCode).send(response);
-      }
-
-      // Handle unknown errors. Use the validated `env.NODE_ENV` (not the raw
-      // `process.env.NODE_ENV`) so a misconfigured environment can't silently
-      // flip this branch — the schema defaults to `development` and rejects
-      // anything outside the enum.
-      const isDevelopment = env.NODE_ENV !== 'production';
-      const response: ErrorResponse = {
-        error: isDevelopment ? error.message : 'Internal server error',
-        statusCode: 500,
-      };
-
-      // Include error details in development
-      if (isDevelopment && error.stack) {
-        return reply.code(500).send({
-          ...response,
-          stack: error.stack,
-        });
-      }
-
-      return reply.code(500).send(response);
+      return reply
+        .code(status)
+        .type(PROBLEM_MEDIA_TYPE)
+        .send(problemDocument(error, request, status));
     }
   );
 });

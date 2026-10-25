@@ -1,5 +1,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import { describeProblem } from '../api-conventions/error-classes';
+import { PROBLEM_MEDIA_TYPE, type ProblemDocument } from '../api-conventions/problem';
+
 /** Node's default `headersTimeout`: the deadline for a request's headers. */
 const NODE_HEADERS_TIMEOUT_MS = 60_000;
 
@@ -36,17 +39,31 @@ export function requestDeadlineOptions(requestTimeoutMs: number) {
  * caller could therefore park unfinished 1 MiB bodies on unknown paths at any
  * rate, and about 2000 of them ran the process out of heap in seconds.
  *
- * The answer is the one Fastify's own handler sends, with the same log line,
- * so 404 responses do not change.
+ * The log line is the one Fastify's own handler writes. The answer is the
+ * `not_found` problem document every route that is not an OAuth protocol
+ * endpoint answers with (ADR-019 Decision 7, #513): a path no route serves is
+ * no protocol endpoint. Its `instance` and `detail` leave out the query, which
+ * can carry a secret a client sent to the wrong path.
  */
 export async function answerUnknownRouteBeforeBody(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<FastifyReply | undefined> {
   if (!request.is404) return undefined;
-  const { method, url } = request.raw;
-  const message = `Route ${method}:${url} not found`;
-  request.log.info(message);
+  const { method, url = '/' } = request.raw;
+  request.log.info(`Route ${method}:${url} not found`);
+  const queryAt = url.indexOf('?');
+  const path = queryAt === -1 ? url : url.slice(0, queryAt);
+  const { code, type, title } = describeProblem('not_found');
+  const document: ProblemDocument = {
+    type,
+    title,
+    status: 404,
+    detail: `No route serves ${method} ${path}.`,
+    instance: path,
+    code,
+    trace_id: request.id,
+  };
   // Returning the reply is how an async hook tells Fastify it has answered.
-  return reply.code(404).send({ message, error: 'Not Found', statusCode: 404 });
+  return reply.code(404).type(PROBLEM_MEDIA_TYPE).send(document);
 }

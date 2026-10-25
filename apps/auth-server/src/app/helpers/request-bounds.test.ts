@@ -48,21 +48,31 @@ describe('answerUnknownRouteBeforeBody', () => {
     expect(parser).not.toHaveBeenCalled();
   });
 
-  it('answers with the same body as Fastify’s own 404', async () => {
+  it('answers with the not_found problem document, the query left out (#513)', async () => {
     const { instance } = build();
     app = instance;
-    const vanilla = Fastify();
 
     for (const options of [
       { method: 'GET' as const, url: '/nope' },
-      { method: 'POST' as const, url: '/nope?a=b', payload: { x: 1 } },
+      { method: 'POST' as const, url: '/nope?response_code=secret', payload: { x: 1 } },
     ]) {
-      const ours = await instance.inject(options);
-      const theirs = await vanilla.inject(options);
-      expect(ours.statusCode).toBe(theirs.statusCode);
-      expect(ours.json()).toEqual(theirs.json());
+      const res = await instance.inject(options);
+      expect(res.statusCode).toBe(404);
+      expect(res.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+      const body = res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        type: 'https://docs.qauth.dev/reference/problem-types/#not-found',
+        status: 404,
+        instance: '/nope',
+        code: 'not_found',
+      });
+      expect(typeof body['title']).toBe('string');
+      expect(typeof body['trace_id']).toBe('string');
+      expect(res.body).not.toContain('secret');
+      for (const member of ['error', 'statusCode', 'message']) {
+        expect(body).not.toHaveProperty(member);
+      }
     }
-    await vanilla.close();
   });
 
   it('leaves a registered route alone', async () => {
