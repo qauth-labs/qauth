@@ -64,6 +64,8 @@ interface FanOutEventRow extends Record<string, unknown> {
   time: string;
   type: string;
   category: EventCategory;
+  subject_type: string | null;
+  subject_id: string | null;
 }
 
 /** A claimed row, with its event's columns. */
@@ -148,15 +150,15 @@ function checkOutcome(outcome: EventDeliveryAttemptRecord): void {
   if (outcome.result === 'retry') checkTime(outcome.nextAttemptAt, 'nextAttemptAt');
 }
 
-/** Whether a destination's filters take an event of this type and category. */
-function matches(
-  destination: EventDeliveryDestination,
-  type: string,
-  category: EventCategory
-): boolean {
+/** Whether a destination's filters take an event of this type, category and subject. */
+function matches(destination: EventDeliveryDestination, event: FanOutEventRow): boolean {
   return (
-    (destination.types === undefined || destination.types.includes(type)) &&
-    (destination.categories === undefined || destination.categories.includes(category))
+    (destination.types === undefined || destination.types.includes(event.type)) &&
+    (destination.categories === undefined || destination.categories.includes(event.category)) &&
+    (destination.subjects === undefined ||
+      destination.subjects.some(
+        (subject) => subject.type === event.subject_type && subject.id === event.subject_id
+      ))
   );
 }
 
@@ -316,7 +318,8 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
           from (select pg_snapshot_xmin(pg_current_snapshot()) as "xmin") as "horizon"
           left join lateral (
             select ${events.id} as "id", ${events.xid}::text as "xid", ${events.seq}::text as "seq",
-              ${events.time}::text as "time", ${events.type} as "type", ${events.category} as "category"
+              ${events.time}::text as "time", ${events.type} as "type", ${events.category} as "category",
+              ${events.subjectType} as "subject_type", ${events.subjectId} as "subject_id"
             from ${events}
             where ${events.realmId} = ${realmId}
               and (${events.xid}, ${events.seq}) > (${position.xid}::xid8, ${position.seq}::bigint)
@@ -335,7 +338,7 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         const times: string[] = [];
         for (const event of read) {
           for (const destination of destinations) {
-            if (!matches(destination, event.type, event.category)) continue;
+            if (!matches(destination, event)) continue;
             kinds.push(destination.kind);
             ids.push(destination.id);
             eventIds.push(event.id);

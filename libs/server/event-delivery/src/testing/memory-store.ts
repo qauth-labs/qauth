@@ -41,7 +41,11 @@ export interface MemoryStore extends DeliveryStore {
 function matches(destination: DeliveryDestination, event: EventEnvelope): boolean {
   return (
     (destination.types === undefined || destination.types.includes(event.type)) &&
-    (destination.categories === undefined || destination.categories.includes(event.category))
+    (destination.categories === undefined || destination.categories.includes(event.category)) &&
+    (destination.subjects === undefined ||
+      destination.subjects.some(
+        (subject) => subject.type === event.subject?.type && subject.id === event.subject.id
+      ))
   );
 }
 

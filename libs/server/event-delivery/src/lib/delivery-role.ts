@@ -19,6 +19,7 @@ import type {
   DeliveryRoute,
   DeliverySigner,
   DeliveryStore,
+  EventSubjectRef,
 } from './types';
 
 /**
@@ -406,9 +407,18 @@ class Runner implements DeliveryRole {
   /** A route's destination with its kind, or `undefined` (logged once) when it is malformed. */
   private checkDestination(kind: string, value: unknown): DeliveryDestination | undefined {
     const candidate = (value ?? {}) as Partial<DeliveryDestination>;
-    const { id, realmId, types, categories } = candidate;
+    const { id, realmId, types, categories, subjects } = candidate;
     const listOf = (list: unknown): boolean =>
       Array.isArray(list) && list.every((item) => typeof item === 'string');
+    const subjectsOf = (list: unknown): boolean =>
+      Array.isArray(list) &&
+      list.every(
+        (item: unknown) =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as EventSubjectRef).type === 'string' &&
+          typeof (item as EventSubjectRef).id === 'string'
+      );
     if (
       typeof id !== 'string' ||
       id.length === 0 ||
@@ -416,7 +426,8 @@ class Runner implements DeliveryRole {
       typeof realmId !== 'string' ||
       !UUID_PATTERN.test(realmId) ||
       (types !== undefined && !listOf(types)) ||
-      (categories !== undefined && !listOf(categories))
+      (categories !== undefined && !listOf(categories)) ||
+      (subjects !== undefined && !subjectsOf(subjects))
     ) {
       const key = destinationKey(kind, String(id));
       if (!this.reported.has(key)) {
@@ -434,6 +445,9 @@ class Runner implements DeliveryRole {
       realmId,
       ...(types === undefined ? {} : { types: [...types] }),
       ...(categories === undefined ? {} : { categories: [...categories] }),
+      ...(subjects === undefined
+        ? {}
+        : { subjects: subjects.map((subject) => ({ type: subject.type, id: subject.id })) }),
     };
   }
 

@@ -20,6 +20,18 @@ export interface RouteDestination {
   readonly types?: readonly string[];
   /** Only events of these categories. Absent: both. An empty list matches none. */
   readonly categories?: readonly EventCategory[];
+  /**
+   * Only events about one of these subjects: the envelope's `subject`, by
+   * type and id. Absent: any subject, or none. An empty list matches none,
+   * and an event without a subject never matches a list.
+   */
+  readonly subjects?: readonly EventSubjectRef[];
+}
+
+/** An event's subject, as a destination's filter names it. */
+export interface EventSubjectRef {
+  readonly type: string;
+  readonly id: string;
 }
 
 /** A destination with the kind of the route that delivers to it. */

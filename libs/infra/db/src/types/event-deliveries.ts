@@ -22,6 +22,12 @@ export interface EventDeliveryDestination {
   readonly types?: readonly string[];
   /** Only events of these categories. Absent: both. An empty list matches none. */
   readonly categories?: readonly EventCategory[];
+  /**
+   * Only events about one of these subjects (`subject.type` and
+   * `subject.id`). Absent: any subject, or none. An empty list matches none,
+   * and an event without a subject never matches a list.
+   */
+  readonly subjects?: ReadonlyArray<{ readonly type: string; readonly id: string }>;
 }
 
 /**

@@ -34,5 +34,6 @@ export type {
   DeliveryRoute,
   DeliverySigner,
   DeliveryStore,
+  EventSubjectRef,
   RouteDestination,
 } from './lib/types';

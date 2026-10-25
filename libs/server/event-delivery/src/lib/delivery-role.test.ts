@@ -366,12 +366,39 @@ describe('startDeliveryRole', () => {
     );
   });
 
+  it('gives a destination with a subject list only the events about those subjects', async () => {
+    const { clock, store } = await setup((clock) => [
+      route(clock, [
+        { id: 'user-a', realmId: REALM, subjects: [{ type: 'user', id: 'a' }] },
+        { id: 'nobody', realmId: REALM, subjects: [] },
+        { id: 'anyone', realmId: REALM },
+      ]),
+    ]);
+    const aboutA = { ...envelope(), subject: { type: 'user', id: 'a' } } as EventEnvelope;
+    const aboutB = { ...envelope(), subject: { type: 'user', id: 'b' } } as EventEnvelope;
+    const aboutNone = envelope();
+    store.append(aboutA);
+    store.append(aboutB);
+    store.append(aboutNone);
+    await clock.advanceBy(POLL);
+    await vi.waitFor(() => expect(store.rows).toHaveLength(4));
+    const rowsOf = (id: string) =>
+      store.rows
+        .filter((row) => row.destinationId === id)
+        .map((row) => row.eventId)
+        .sort();
+    expect(rowsOf('user-a')).toEqual([aboutA.id]);
+    expect(rowsOf('nobody')).toEqual([]);
+    expect(rowsOf('anyone')).toEqual([aboutA.id, aboutB.id, aboutNone.id].sort());
+  });
+
   it('leaves out a malformed destination and says so once', async () => {
     const { clock, store, log } = await setup((clock) => [
       route(clock, [
         { id: 'ok', realmId: REALM },
         { id: '', realmId: REALM },
         { id: 'bad-realm', realmId: 'not-a-uuid' },
+        { id: 'bad-subjects', realmId: REALM, subjects: [{ type: 'user' }] as never },
       ]),
     ]);
     store.append(envelope());
@@ -382,7 +409,7 @@ describe('startDeliveryRole', () => {
       ([, message]) =>
         message === 'a delivery route listed a malformed destination; it receives nothing'
     );
-    expect(malformed).toHaveLength(2);
+    expect(malformed).toHaveLength(3);
   });
 
   it('fails an event the store cannot read, without calling the route', async () => {
