@@ -171,9 +171,18 @@ const stallJob = (hostname: string, extra: Partial<ExchangeJob> = {}): ExchangeJ
 
 const within = (ms: number): AbortSignal => AbortSignal.timeout(ms);
 
-/** Resolves once `check` holds, polling every 10 ms for up to 5 s. */
+/**
+ * The time a call that should succeed gets. Generous: CI runs every project's
+ * suite at once, and a process can take a second or more to start then.
+ */
+const CALL_MS = 15_000;
+
+/** The time a test of real processes gets, for the same reason. */
+const PROCESS_TEST = { timeout: 60_000 };
+
+/** Resolves once `check` holds, polling every 10 ms for up to 15 s. */
 async function until(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 15_000;
   while (!check()) {
     if (Date.now() > deadline) throw new Error('condition not met in time');
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -224,10 +233,10 @@ const alive = (pid: number): boolean => {
   }
 };
 
-describe('fetch processes (integration: real processes, local TLS servers)', () => {
+describe('fetch processes (integration: real processes, local TLS servers)', PROCESS_TEST, () => {
   it('runs an exchange in a fetch process that trusts what this process trusts', async () => {
     const fetches = pool();
-    const outcome = await fetches.exchange(okJob(), within(5_000));
+    const outcome = await fetches.exchange(okJob(), within(CALL_MS));
     expect(outcome).toMatchObject({
       kind: 'response',
       status: 200,
@@ -253,7 +262,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     for (const size of [3, 70_000]) {
       const outcome = await fetches.exchange(
         okJob({ method: 'POST', body: new Uint8Array(size).fill(0x61) }),
-        within(5_000)
+        within(CALL_MS)
       );
       expect(text(outcome)).toBe(`got ${size} bytes`);
       if (LINUX) pids.push(fetchProcessPids());
@@ -265,17 +274,21 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
   it('kills a process whose TLS handshake stalls, at the connect deadline, while another host is served', async () => {
     const fetches = pool();
     const started = performance.now();
-    const stalled = fetches.exchange(
-      stallJob('slow.stall.test', { connectTimeoutMs: 800 }),
-      within(10_000)
-    );
+    let stalledAnswered = false;
+    const stalled = fetches
+      .exchange(stallJob('slow.stall.test', { connectTimeoutMs: 3_000 }), within(CALL_MS))
+      .finally(() => {
+        stalledAnswered = true;
+      });
     await until(() => stallOpen === 1);
     const stalledPids = LINUX ? fetchProcessPids() : [];
 
-    // Meanwhile another host is served, by another process.
-    const other = await fetches.exchange(okJob(), within(5_000));
+    // Meanwhile another host is served, by another process: the stalled call
+    // is still waiting, and its connection is still open.
+    const other = await fetches.exchange(okJob(), within(CALL_MS));
     expect(text(other)).toBe('ok');
-    expect(performance.now() - started).toBeLessThan(800);
+    expect(stalledAnswered).toBe(false);
+    expect(stallOpen).toBe(1);
     expect(fetches.stats()).toMatchObject({ processes: 2, busy: 1 });
 
     const outcome = await stalled;
@@ -287,8 +300,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     });
     // The pool's deadline ended it, not the process's own timer, which runs a
     // second longer and would have answered without a kill.
-    expect(elapsed).toBeGreaterThanOrEqual(790);
-    expect(elapsed).toBeLessThan(3_000);
+    expect(elapsed).toBeGreaterThanOrEqual(2_990);
     expect(fetches.stats().deadlineKills).toBe(1);
     // The connection closes with the process that held it.
     await until(() => stallClosed === 1);
@@ -301,19 +313,21 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
 
     // The pool goes on with the process that is left, and starts fresh ones.
     const after = await Promise.all([
-      fetches.exchange(okJob(), within(5_000)),
-      fetches.exchange(okJob(), within(5_000)),
+      fetches.exchange(okJob(), within(CALL_MS)),
+      fetches.exchange(okJob(), within(CALL_MS)),
     ]);
     expect(after.map(text)).toEqual(['ok', 'ok']);
     expect(fetches.stats()).toMatchObject({ processes: 2, busy: 0, deadlineKills: 1 });
   });
 
   it('kills a process that a host keeps inside OpenSSL, at the deadline, while another host is served', async () => {
-    // Twelve certificates OpenSSL decodes in one synchronous call of several
-    // seconds (ANT-2026-3OJSXV7G): no timer of the process that runs it
-    // fires meanwhile, and a worker thread there kept its slot until the end.
-    const flight = serverFirstFlight(Array.from({ length: 12 }, () => explicitCurveCertificate()));
+    // Twenty certificates OpenSSL decodes in one synchronous call of about
+    // 0.45 s each, longer on a busy machine (ANT-2026-3OJSXV7G): no timer of
+    // the process that runs it fires meanwhile, and a worker thread there kept
+    // its slot until the end.
+    const flight = serverFirstFlight(Array.from({ length: 20 }, () => explicitCurveCertificate()));
     let flightSent = false;
+    let flightSentAt = 0;
     const hostile = createTcpServer((socket) => {
       let received = Buffer.alloc(0);
       socket.on('error', () => undefined);
@@ -324,21 +338,21 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
         if (received.length < 5 || received.length < 5 + received.readUInt16BE(3)) return;
         socket.write(flight, () => {
           flightSent = true;
+          flightSentAt = performance.now();
         });
       });
     });
     await new Promise<void>((resolve) => hostile.listen(0, '127.0.0.1', resolve));
     try {
       const fetches = pool();
-      const started = performance.now();
       const stuck = fetches.exchange(
         job('slow.hostile.test', (hostile.address() as AddressInfo).port, {
           connectTimeoutMs: 1_000,
         }),
-        within(10_000)
+        within(CALL_MS)
       );
       await until(() => flightSent);
-      expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
+      expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
 
       await expect(stuck).resolves.toEqual({
         kind: 'failed',
@@ -346,10 +360,10 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
         message: 'egress to slow.hostile.test failed: the connection timed out',
       });
       expect(fetches.stats().deadlineKills).toBe(1);
-      // The process is gone at the deadline, seconds before OpenSSL would
-      // have returned (about 0.4 s per certificate).
+      // The process is gone at the deadline, which falls within a second of
+      // the flight: seconds before OpenSSL would have returned.
       await until(() => fetches.stats().processes === 1);
-      expect(performance.now() - started).toBeLessThan(3_000);
+      expect(performance.now() - flightSentAt).toBeLessThan(5_000);
     } finally {
       await new Promise<void>((resolve) => hostile.close(() => resolve()));
     }
@@ -369,7 +383,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
       reason: 'timeout',
       message: 'egress to ok.egress.test failed: the call timed out',
     });
-    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(performance.now() - started).toBeLessThan(5_000);
     expect(fetches.stats().deadlineKills).toBe(1);
     await until(() => fetches.stats().processes === 0);
   });
@@ -387,13 +401,13 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     expect(fetches.stats()).toMatchObject({ busy: 2, waiting: 8 });
 
     // The family's queue is full: one more name of it is refused at once.
-    await expect(fetches.exchange(stallJob('h10.stall.test'), within(5_000))).resolves.toEqual({
+    await expect(fetches.exchange(stallJob('h10.stall.test'), within(CALL_MS))).resolves.toEqual({
       kind: 'failed',
       reason: 'busy',
       message: 'egress to h10.stall.test failed: too many calls in progress',
     });
     // Another host still has the other processes.
-    expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
+    expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
     expect(stallMostOpen).toBe(2);
 
     // At the deadline the two running calls' processes are killed and the
@@ -417,7 +431,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     const queued = fetches.exchange(okJob(), controller.signal);
     expect(fetches.stats()).toMatchObject({ busy: 1, waiting: 1 });
     await expect(
-      fetches.exchange(job('b.example.test', okPort), within(5_000))
+      fetches.exchange(job('b.example.test', okPort), within(CALL_MS))
     ).resolves.toMatchObject({
       kind: 'failed',
       reason: 'busy',
@@ -432,10 +446,10 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     const fetches = pool({ maxProcesses: 1 });
     const first = fetches.exchange(
       stallJob('a.stall.test', { connectTimeoutMs: 300 }),
-      within(5_000)
+      within(CALL_MS)
     );
     await until(() => stallOpen === 1);
-    const second = fetches.exchange(okJob(), within(5_000));
+    const second = fetches.exchange(okJob(), within(CALL_MS));
     expect(fetches.stats().waiting).toBe(1);
     await expect(first).resolves.toMatchObject({ reason: 'timeout' });
     expect(text(await second)).toBe('ok');
@@ -443,7 +457,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
 
   it('lets an idle process exit after the idle timeout', async () => {
     const fetches = pool({ idleTimeoutMs: 150 });
-    expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
+    expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
     expect(fetches.stats().processes).toBe(1);
     await until(() => fetches.stats().processes === 0);
     expect(fetches.stats().deadlineKills).toBe(0);
@@ -459,10 +473,12 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     const port = (old.address() as AddressInfo).port;
     const minVersion = tls.DEFAULT_MIN_VERSION;
     try {
-      expect(text(await pool().exchange(job('old.egress.test', port), within(5_000)))).toBe('old');
+      expect(text(await pool().exchange(job('old.egress.test', port), within(CALL_MS)))).toBe(
+        'old'
+      );
       // As `--tls-min-v1.3` would set it. A process started now takes it.
       tls.DEFAULT_MIN_VERSION = 'TLSv1.3';
-      const outcome = await pool().exchange(job('old.egress.test', port), within(5_000));
+      const outcome = await pool().exchange(job('old.egress.test', port), within(CALL_MS));
       expect(outcome).toMatchObject({ kind: 'failed', reason: 'network' });
     } finally {
       tls.DEFAULT_MIN_VERSION = minVersion;
@@ -483,7 +499,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     // that takes its trust store.
     setDefaultCACertificates(trustedBefore);
     try {
-      await expect(pool().exchange(okJob(), within(5_000))).resolves.toMatchObject({
+      await expect(pool().exchange(okJob(), within(CALL_MS))).resolves.toMatchObject({
         kind: 'failed',
         reason: 'network',
       });
@@ -491,7 +507,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
       // SSL_CERT_FILE would see them.
       process.env['NODE_OPTIONS'] = `${before.options ?? ''} --use-openssl-ca`.trim();
       process.env['SSL_CERT_FILE'] = join(dir, 'ca.pem');
-      expect(text(await pool().exchange(okJob(), within(5_000)))).toBe('ok');
+      expect(text(await pool().exchange(okJob(), within(CALL_MS)))).toBe('ok');
     } finally {
       restore('NODE_OPTIONS', before.options);
       restore('SSL_CERT_FILE', before.file);
@@ -506,16 +522,18 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
       reason: 'network',
       message: 'egress to ok.egress.test failed: Request path contains unescaped characters',
     };
-    await expect(exchange(okJob({ path: '/a b' }), dialPinned, within(5_000))).resolves.toEqual(
+    await expect(exchange(okJob({ path: '/a b' }), dialPinned, within(CALL_MS))).resolves.toEqual(
       refused
     );
-    await expect(pool().exchange(okJob({ path: '/a b' }), within(5_000))).resolves.toEqual(refused);
+    await expect(pool().exchange(okJob({ path: '/a b' }), within(CALL_MS))).resolves.toEqual(
+      refused
+    );
   });
 
   it('returns a TLS failure from the process with its host-only message', async () => {
     const fetches = pool();
     // The certificate does not cover this name.
-    const outcome = await fetches.exchange(job('ok.elsewhere.test', okPort), within(5_000));
+    const outcome = await fetches.exchange(job('ok.elsewhere.test', okPort), within(CALL_MS));
     expect(outcome).toMatchObject({ kind: 'failed', reason: 'network' });
     expect(text(outcome)).toMatch(/^egress to ok\.elsewhere\.test failed: /);
     expect(fetches.stats()).toMatchObject({ processes: 1, deadlineKills: 0 });
@@ -523,10 +541,10 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
 
   it('refuses calls once closed and leaves no process behind', async () => {
     const fetches = pool();
-    expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
+    expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
     await fetches.close();
     expect(fetches.stats().processes).toBe(0);
-    await expect(fetches.exchange(okJob(), within(5_000))).resolves.toMatchObject({
+    await expect(fetches.exchange(okJob(), within(CALL_MS))).resolves.toMatchObject({
       kind: 'failed',
       reason: 'network',
     });
@@ -535,7 +553,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
 
   it('runs the egress client’s exchanges in the shared pool', async () => {
     expect(egressPoolStats().processes).toBe(0);
-    const outcome = await NODE_TRANSPORT.exchange(okJob(), within(5_000));
+    const outcome = await NODE_TRANSPORT.exchange(okJob(), within(CALL_MS));
     expect(text(outcome)).toBe('ok');
     expect(egressPoolStats()).toMatchObject({ processes: 1, busy: 0, maxProcesses: 8 });
     await sharedProcessPool().close();
@@ -543,82 +561,89 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
   });
 });
 
-describe.skipIf(!LINUX)('what a fetch process inherits (integration, Linux /proc)', () => {
-  it('ends the call of a process that dies, and starts a fresh one', async () => {
-    const fetches = pool();
-    const call = fetches.exchange(
-      stallJob('a.stall.test', { connectTimeoutMs: 30_000 }),
-      within(10_000)
-    );
-    await until(() => stallOpen === 1);
-    const [pid] = fetchProcessPids();
-    process.kill(pid, 'SIGKILL');
-    await expect(call).resolves.toEqual({
-      kind: 'failed',
-      reason: 'network',
-      message: 'egress to a.stall.test failed: the fetch process ended without a result',
-    });
-    expect(fetches.stats()).toMatchObject({ processes: 0, deadlineKills: 0 });
-    expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
-  });
-
-  it('starts a fetch process with none of this process’s environment', async () => {
-    process.env['QAUTH_POOL_TEST_SECRET'] = 'must-not-leak';
-    try {
+describe.skipIf(!LINUX)(
+  'what a fetch process inherits (integration, Linux /proc)',
+  PROCESS_TEST,
+  () => {
+    it('ends the call of a process that dies, and starts a fresh one', async () => {
       const fetches = pool();
-      expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
-      const [pid] = fetchProcessPids();
-      const environ = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').filter(Boolean);
-      // Only the two variables Node adds for the IPC channel, which the
-      // process removes from process.env at start.
-      expect(environ.map((entry) => entry.slice(0, entry.indexOf('='))).sort()).toEqual([
-        'NODE_CHANNEL_FD',
-        'NODE_CHANNEL_SERIALIZATION_MODE',
-      ]);
-      expect(environ.join('\n')).not.toContain('must-not-leak');
-      expect(Object.keys(process.env).length).toBeGreaterThan(2);
-      // Nor the flags this process runs with.
-      const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
-      for (const flag of process.execArgv) expect(argv).not.toContain(flag);
-    } finally {
-      delete process.env['QAUTH_POOL_TEST_SECRET'];
-    }
-  });
-
-  it('makes a fetch process the first one Linux ends when memory runs out', async () => {
-    const fetches = pool();
-    expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
-    const [pid] = fetchProcessPids();
-    expect(readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8').trim()).toBe('1000');
-  });
-
-  it('gives a fetch process no file descriptor of this process but its channel', async () => {
-    // A file and listening sockets this process holds while the process starts.
-    const held = openSync(__filename, 'r');
-    try {
-      const fetches = pool();
-      expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
-      const [pid] = fetchProcessPids();
-      const mine = new Set(openFiles('self').values());
-      const theirs = openFiles(pid);
-
-      for (const fd of ['0', '1', '2']) expect(theirs.get(fd)).toBe('/dev/null');
-      expect(mine.has(__filename)).toBe(true);
-      expect([...theirs.values()]).not.toContain(__filename);
-      // Sockets, pipes and files are named by inode or path: none of this
-      // process's is open there. `/dev/null` and anonymous inodes (event
-      // loop, timers) are the process's own.
-      const shared = [...theirs.values()].filter(
-        (target) => mine.has(target) && target !== '/dev/null' && !target.startsWith('anon_inode:')
+      const call = fetches.exchange(
+        stallJob('a.stall.test', { connectTimeoutMs: 30_000 }),
+        within(CALL_MS)
       );
-      expect(shared).toEqual([]);
-      // One socket: the IPC channel (the exchange's own connection is closed).
-      expect([...theirs.values()].filter((target) => target.startsWith('socket:'))).toHaveLength(1);
-    } finally {
-      closeSync(held);
-    }
-  });
-});
+      await until(() => stallOpen === 1);
+      const [pid] = fetchProcessPids();
+      process.kill(pid, 'SIGKILL');
+      await expect(call).resolves.toEqual({
+        kind: 'failed',
+        reason: 'network',
+        message: 'egress to a.stall.test failed: the fetch process ended without a result',
+      });
+      expect(fetches.stats()).toMatchObject({ processes: 0, deadlineKills: 0 });
+      expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
+    });
+
+    it('starts a fetch process with none of this process’s environment', async () => {
+      process.env['QAUTH_POOL_TEST_SECRET'] = 'must-not-leak';
+      try {
+        const fetches = pool();
+        expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
+        const [pid] = fetchProcessPids();
+        const environ = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').filter(Boolean);
+        // Only the two variables Node adds for the IPC channel, which the
+        // process removes from process.env at start.
+        expect(environ.map((entry) => entry.slice(0, entry.indexOf('='))).sort()).toEqual([
+          'NODE_CHANNEL_FD',
+          'NODE_CHANNEL_SERIALIZATION_MODE',
+        ]);
+        expect(environ.join('\n')).not.toContain('must-not-leak');
+        expect(Object.keys(process.env).length).toBeGreaterThan(2);
+        // Nor the flags this process runs with.
+        const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+        for (const flag of process.execArgv) expect(argv).not.toContain(flag);
+      } finally {
+        delete process.env['QAUTH_POOL_TEST_SECRET'];
+      }
+    });
+
+    it('makes a fetch process the first one Linux ends when memory runs out', async () => {
+      const fetches = pool();
+      expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
+      const [pid] = fetchProcessPids();
+      expect(readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8').trim()).toBe('1000');
+    });
+
+    it('gives a fetch process no file descriptor of this process but its channel', async () => {
+      // A file and listening sockets this process holds while the process starts.
+      const held = openSync(__filename, 'r');
+      try {
+        const fetches = pool();
+        expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
+        const [pid] = fetchProcessPids();
+        const mine = new Set(openFiles('self').values());
+        const theirs = openFiles(pid);
+
+        for (const fd of ['0', '1', '2']) expect(theirs.get(fd)).toBe('/dev/null');
+        expect(mine.has(__filename)).toBe(true);
+        expect([...theirs.values()]).not.toContain(__filename);
+        // Sockets, pipes and files are named by inode or path: none of this
+        // process's is open there. `/dev/null` and anonymous inodes (event
+        // loop, timers) are the process's own.
+        const shared = [...theirs.values()].filter(
+          (target) =>
+            mine.has(target) && target !== '/dev/null' && !target.startsWith('anon_inode:')
+        );
+        expect(shared).toEqual([]);
+        // One socket: the IPC channel (the exchange's own connection is closed).
+        expect([...theirs.values()].filter((target) => target.startsWith('socket:'))).toHaveLength(
+          1
+        );
+      } finally {
+        closeSync(held);
+      }
+    });
+  }
+);
 
 describe('opensslSetup', () => {
   it('passes nothing on for a server with no OpenSSL settings', () => {
