@@ -643,9 +643,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, options) => {
+  emailService.sendVerificationEmail = async (to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, options);
+    return original.call(emailService, to, token, link, options);
   };
   try {
     const response = await app.inject({

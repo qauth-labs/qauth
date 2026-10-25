@@ -59,6 +59,15 @@ export function buildRealmUrl(realm: RealmUrlSource, path: string): string {
 }
 
 /**
+ * Where the links in a realm's mail point: the realm's issuer, so a link
+ * opens the auth server of the realm the account belongs to (ADR-019
+ * Decisions 1 and 6), never a `/ui/*` path and never `EMAIL_BASE_URL`.
+ */
+export function realmMailLink(realm: RealmUrlSource): { readonly baseUrl: string } {
+  return { baseUrl: realmIssuer(realm) };
+}
+
+/**
  * The `iss` the access tokens of a realm carry, for the issuer pin of a
  * verification (RFC 9700 §4.4 mix-up defence).
  *

@@ -484,7 +484,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     providerConfig,
     serviceConfig: {
       defaultFrom: env.EMAIL_FROM_ADDRESS,
-      baseUrl: env.EMAIL_BASE_URL,
+      // No link base here: a mail's links start at the issuer of the realm
+      // the account belongs to, passed with each mail (ADR-019 Decision 1,
+      // #490). EMAIL_BASE_URL is no longer read.
       // Same value the send routes use to compute `expiresAt`, so the copy in
       // the email cannot drift from the lifetime actually enforced (#334).
       verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,

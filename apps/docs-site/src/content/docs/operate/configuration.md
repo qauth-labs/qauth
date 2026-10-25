@@ -258,9 +258,9 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Mail
 
-| Key              | Role       | Default  | Since | Description                                                     |
-| ---------------- | ---------- | -------- | ----- | --------------------------------------------------------------- |
-| `EMAIL_BASE_URL` | deployment | required | 0.1.0 | The base URL of the links in mail, such as a verification link. |
+| Key              | Role       | Default  | Since | Description                                                                                                                                             |
+| ---------------- | ---------- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMAIL_BASE_URL` | deployment | required | 0.1.0 | Still required but not read since 0.2.0, because a link in mail, such as a verification link, starts at the issuer of the realm the account belongs to. |
 
 ### Client registration
 

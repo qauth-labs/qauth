@@ -187,7 +187,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: { required: true },
     since: '0.1.0',
-    docs: 'The base URL of the links in mail, such as a verification link.',
+    docs: 'Still required but not read since 0.2.0, because a link in mail, such as a verification link, starts at the issuer of the realm the account belongs to.',
   },
   {
     name: 'RESEND_API_KEY',

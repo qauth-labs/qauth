@@ -55,7 +55,6 @@ await fastify.register(emailPlugin, {
   provider: 'mock',
   serviceConfig: {
     defaultFrom: 'noreply@example.com',
-    baseUrl: 'https://example.com',
   },
 });
 
@@ -87,7 +86,7 @@ fastify.post('/auth/register', async (request, reply) => {
   });
 
   // Send verification email
-  await fastify.emailService.sendVerificationEmail(email, token);
+  await fastify.emailService.sendVerificationEmail(email, token, { baseUrl: issuer });
 
   return reply.code(201).send({
     // The address lives on the credential's `external_sub`, not on the user row.
@@ -131,7 +130,6 @@ interface EmailPluginOptions {
     /**
      * Base URL for verification links
      */
-    baseUrl?: string;
   };
 }
 ```
@@ -148,13 +146,15 @@ Type: `EmailService`
 
 The email service instance with methods:
 
-- `sendVerificationEmail(to: string, token: string, options?: Partial<EmailOptions>): Promise<EmailResult>` - Send a verification email
+- `sendVerificationEmail(to: string, token: string, link: { baseUrl: string }, options?: Partial<EmailOptions>): Promise<EmailResult>` - Send a verification email whose link is `${baseUrl}/auth/verify?token=...`; the base is given per mail, so each account is linked to its own realm's issuer
 
 **Example**:
 
 ```typescript
 // Send verification email
-const result = await fastify.emailService.sendVerificationEmail('user@example.com', 'token123');
+const result = await fastify.emailService.sendVerificationEmail('user@example.com', 'token123', {
+  baseUrl: 'https://auth.example.com',
+});
 
 if (result.success) {
   console.log('Email sent:', result.messageId);
@@ -172,7 +172,9 @@ import { FastifyInstance } from 'fastify';
 
 async function myRoute(fastify: FastifyInstance) {
   // TypeScript knows about fastify.emailService
-  await fastify.emailService.sendVerificationEmail('user@example.com', 'token123');
+  await fastify.emailService.sendVerificationEmail('user@example.com', 'token123', {
+    baseUrl: 'https://auth.example.com',
+  });
 }
 ```
 
@@ -208,7 +210,6 @@ await fastify.register(emailPlugin, {
   },
   serviceConfig: {
     defaultFrom: 'noreply@example.com',
-    baseUrl: 'https://example.com',
   },
 });
 ```
@@ -243,7 +244,6 @@ await fastify.register(emailPlugin, {
   },
   serviceConfig: {
     defaultFrom: 'noreply@example.com',
-    baseUrl: 'https://example.com',
   },
 });
 ```
@@ -268,7 +268,6 @@ await fastify.register(emailPlugin, {
   provider: env.EMAIL_PROVIDER || 'mock',
   serviceConfig: {
     defaultFrom: env.EMAIL_FROM,
-    baseUrl: env.EMAIL_BASE_URL,
   },
 });
 ```
@@ -290,7 +289,6 @@ await productionApp.register(emailPlugin, {
   provider: 'resend',
   serviceConfig: {
     defaultFrom: 'noreply@example.com',
-    baseUrl: 'https://example.com',
   },
 });
 
@@ -350,7 +348,6 @@ await fastify.register(emailPlugin, {
   provider: 'mock',
   serviceConfig: {
     defaultFrom: 'noreply@example.com',
-    baseUrl: 'https://example.com',
   },
 });
 ```
@@ -362,7 +359,9 @@ Email operations can fail. Always handle errors:
 ```typescript
 fastify.post('/auth/register', async (request, reply) => {
   try {
-    const result = await fastify.emailService.sendVerificationEmail(email, token);
+    const result = await fastify.emailService.sendVerificationEmail(email, token, {
+      baseUrl: issuer,
+    });
     if (!result.success) {
       fastify.log.error({ error: result.error }, 'Email sending failed');
       // Handle error (e.g., queue for retry, log, etc.)
@@ -411,7 +410,6 @@ await fastify.register(emailPlugin, {
   provider: 'mock', // Use 'resend' or 'smtp' in production
   serviceConfig: {
     defaultFrom: 'noreply@example.com',
-    baseUrl: 'https://example.com',
   },
 });
 
@@ -457,7 +455,9 @@ fastify.post('/auth/register', async (request, reply) => {
 
   // Send verification email
   try {
-    const result = await fastify.emailService.sendVerificationEmail(email, token);
+    const result = await fastify.emailService.sendVerificationEmail(email, token, {
+      baseUrl: issuer,
+    });
     if (!result.success) {
       fastify.log.error({ error: result.error }, 'Failed to send verification email');
     }
