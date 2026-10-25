@@ -1344,6 +1344,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       }),
       expect.anything()
     );
+    // The exchange starts the family (#552). The realm sets no
+    // sso_max_lifespan, so the token gets the whole refresh lifespan.
+    const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+    expect(stored.familyCreatedAt).toBeGreaterThan(Date.now() - 60_000);
+    expect(stored.familyCreatedAt).toBeLessThanOrEqual(Date.now());
+    expect(stored.expiresAt).toBe(stored.familyCreatedAt + 604_800_000);
 
     expect(result).toMatchObject({
       access_token: 'signed.jwt.token',
@@ -1356,6 +1363,23 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // No `openid` scope was granted → no ID token issued (OIDC Core §3.1.3.3).
     expect(fastify.jwtUtils.signIdToken).not.toHaveBeenCalled();
     expect(result).not.toHaveProperty('id_token');
+  });
+
+  it("caps the new family's first token at the realm's sso_max_lifespan (#552)", async () => {
+    const { fastify, ctx } = setupAuthCodeStub();
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await ctx.handler(
+      { ...baseRequest(), realm: testRealm({ id: 'realm-1', ssoMaxLifespan: 3600 }) },
+      createReply()
+    );
+
+    // One hour is shorter than the week of REFRESH_TOKEN_LIFESPAN, so the
+    // family's end is the token's expiry.
+    const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+    expect(stored.expiresAt).toBe(stored.familyCreatedAt + 3_600_000);
   });
 
   it('creates no browser session on a successful exchange (#488)', async () => {
@@ -2231,6 +2255,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       userId: user.id,
       oauthClientId: confidentialClient.id,
       familyId: REFRESH_FAMILY_ID,
+      familyCreatedAt: Date.now() - 30 * 60_000,
       scopes: ['read:foo', 'write:foo'],
       expiresAt: Date.now() + 60_000,
       revoked: false,
@@ -2324,13 +2349,14 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       'rotated',
       expect.anything()
     );
-    // New token inherits the same family_id.
+    // New token inherits the same family_id and the family's start (#552).
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: user.id,
         oauthClientId: confidentialClient.id,
         tokenHash: 'new-refresh-token-hash',
         familyId: storedToken.familyId,
+        familyCreatedAt: storedToken.familyCreatedAt,
         previousTokenHash: `hash:${REFRESH_TOKEN_HEX}`,
         scopes: ['read:foo', 'write:foo'],
       }),
@@ -2524,6 +2550,134 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_replay' },
       expect.objectContaining({ userId: storedToken.userId, clientId: 'confidential-client' })
     );
+  });
+
+  describe("the realm's sso_max_lifespan caps the family (ADR-019 Decision 3, #552)", () => {
+    const MINUTE = 60_000;
+    /** A realm whose families live at most one hour. */
+    const CAPPED_REALM = testRealm({ id: 'realm-1', ssoMaxLifespan: 3600 });
+
+    /** The refresh stub, with the presented token's family started `ageMs` ago. */
+    function setupFamily(ageMs: number, overrides: Record<string, unknown> = {}) {
+      const setup = setupRefreshStub();
+      const storedToken = {
+        ...setup.storedToken,
+        familyCreatedAt: Date.now() - ageMs,
+        ...overrides,
+      };
+      (setup.fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        setup.confidentialClient
+      );
+      (
+        setup.fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue(storedToken);
+      return { ...setup, storedToken };
+    }
+
+    async function refreshIn(
+      setup: ReturnType<typeof setupFamily>,
+      realm: ReturnType<typeof testRealm>
+    ): Promise<unknown> {
+      await tokenRoute(setup.fastify);
+      if (!setup.ctx.handler) throw new Error('Handler missing');
+      return setup.ctx.handler({ ...refreshRequest(), realm }, createReply());
+    }
+
+    it('rotates before the end, and the new token expires no later than the end', async () => {
+      const setup = setupFamily(59 * MINUTE);
+      const before = Date.now();
+
+      await expect(refreshIn(setup, CAPPED_REALM)).resolves.toMatchObject({
+        refresh_token: 'new-refresh-token',
+      });
+
+      const created = (setup.fastify.repositories.refreshTokens.create as unknown as Mock).mock
+        .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+      const familyEnd = setup.storedToken.familyCreatedAt + 60 * MINUTE;
+      expect(created.familyCreatedAt).toBe(setup.storedToken.familyCreatedAt);
+      expect(created.expiresAt).toBe(familyEnd);
+      expect(created.expiresAt).toBeLessThan(before + 2 * MINUTE);
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+    });
+
+    it('refuses past the end with invalid_grant and revokes the whole family', async () => {
+      // The token was capped at the family's end, a minute ago, so it has
+      // expired too: the family's end is what answers, and it takes the family.
+      const setup = setupFamily(61 * MINUTE, { expiresAt: Date.now() - MINUTE });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).rejects.toThrow(InvalidGrantError);
+
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+        REFRESH_FAMILY_ID,
+        'family_expired'
+      );
+      // Nothing is rotated or minted.
+      expect(setup.fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+      expect(setup.fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+      expect(setup.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_family_expired' },
+      ]);
+    });
+
+    it('ends a family whose token outlives a lowered limit, at its next use', async () => {
+      // Issued while the realm set no limit: the token itself is good for
+      // another week, but the family started two hours ago.
+      const setup = setupFamily(120 * MINUTE, { expiresAt: Date.now() + 7 * 24 * 60 * MINUTE });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).rejects.toThrow(InvalidGrantError);
+
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+        REFRESH_FAMILY_ID,
+        'family_expired'
+      );
+      expect(setup.fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    });
+
+    it('slides as before when the realm sets no sso_max_lifespan', async () => {
+      const setup = setupFamily(365 * 24 * 60 * MINUTE);
+      const before = Date.now();
+
+      await expect(refreshIn(setup, REALM)).resolves.toMatchObject({
+        refresh_token: 'new-refresh-token',
+      });
+
+      const created = (setup.fastify.repositories.refreshTokens.create as unknown as Mock).mock
+        .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+      expect(created.familyCreatedAt).toBe(setup.storedToken.familyCreatedAt);
+      expect(created.expiresAt).toBeGreaterThanOrEqual(before + 604_800_000);
+      expect(created.expiresAt).toBeLessThanOrEqual(Date.now() + 604_800_000);
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+    });
+
+    // RFC 9700 §4.14.2: the cap must not stand in the way of replay detection.
+    it.each([
+      ['before the end', 30 * MINUTE],
+      ['after the end', 61 * MINUTE],
+    ])('still revokes the whole family on replay of an old token %s', async (_label, ageMs) => {
+      const setup = setupFamily(ageMs, { revoked: true });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).rejects.toThrow(InvalidGrantError);
+
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledTimes(1);
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+        REFRESH_FAMILY_ID,
+        'replay_detected'
+      );
+      expect(setup.fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_replay' },
+      ]);
+    });
+
+    it("never lets another client's presentation revoke the family", async () => {
+      const setup = setupFamily(61 * MINUTE, { oauthClientId: 'someone-else' });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).rejects.toThrow(InvalidGrantError);
+
+      expect(setup.fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+    });
   });
 
   // ADR-007 §2 (#184): the refresh grant enforces the agent's CURRENT cap,

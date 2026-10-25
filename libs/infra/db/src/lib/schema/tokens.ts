@@ -190,6 +190,17 @@ export const refreshTokens = pgTable(
     familyId: uuid('family_id')
       .notNull()
       .default(sql`uuidv7()`),
+    /**
+     * When the family started, in epoch ms (ADR-019 Decision 3, issue #552):
+     * the moment the code exchange or sign-in issued its first token. Every
+     * rotation copies it, and a realm's `sso_max_lifespan` counts from it, so
+     * no token of the family lives past that limit. Migration 0038 filled it
+     * from each family's earliest `created_at`.
+     *
+     * No default on purpose: an insert that forgot to copy it would restart
+     * the family's clock.
+     */
+    familyCreatedAt: bigint('family_created_at', { mode: 'number' }).notNull(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * RFC 8707 resource indicator(s) carried from the originating

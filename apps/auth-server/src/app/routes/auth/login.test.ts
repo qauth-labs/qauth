@@ -347,6 +347,48 @@ describe('POST /auth/login', () => {
     expect(reply.headers['Set-Cookie']).toBeUndefined();
   });
 
+  it.each([
+    ['no sso_max_lifespan: the whole refresh lifespan', null, 604_800_000],
+    ["an sso_max_lifespan of one hour: the family's end", 3600, 3_600_000],
+  ])(
+    'starts a refresh-token family whose first token expires after %s (#552)',
+    async (_label, ssoMaxLifespan, lifetimeMs) => {
+      const { fastify, ctx } = createFastifyStub();
+      await loginRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'sc-uuid',
+        clientId: 'system',
+        audience: ['https://auth.example.com'],
+      });
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+      const before = Date.now();
+      await ctx.handler(
+        {
+          realm: testRealm({ id: 'realm-1', ssoMaxLifespan }),
+          body: { email: 'user@example.com', password: 'p' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+          log: requestLog(),
+        },
+        createReply()
+      );
+
+      const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+        .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+      expect(stored.familyCreatedAt).toBeGreaterThanOrEqual(before);
+      expect(stored.familyCreatedAt).toBeLessThanOrEqual(Date.now());
+      expect(stored.expiresAt).toBe(stored.familyCreatedAt + lifetimeMs);
+    }
+  );
+
   it('mints the first-party token with no email claims, even for a verified address — ANT-2026-2O0T72HY', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
