@@ -1,4 +1,8 @@
-import { BadRequestError, ForbiddenError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  MisdirectedRequestError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -601,6 +605,35 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
     expect(result.scope).toBe('openid');
     expect(state.createdClients[0].realmId).toBe('realm-tenant');
+  });
+
+  it('refuses a realm deleted within the resolver cache time, before the hash (#487)', async () => {
+    // The resolver can still hand out the row of a realm deleted since it
+    // cached it; the database no longer has it, so no client may be made.
+    const { fastify, ctx, state } = createFastifyStub();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(undefined);
+    await registerRoute(fastify);
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = createReply();
+    await expect(
+      handler(
+        {
+          body: {
+            redirect_uris: ['https://app.example/cb'],
+            scope: 'openid profile',
+            token_endpoint_auth_method: 'client_secret_basic',
+          },
+          ip: '127.0.0.1',
+          headers: {},
+        },
+        reply
+      )
+    ).rejects.toThrow(MisdirectedRequestError);
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    expect(state.createdClients).toHaveLength(0);
   });
 
   describe('client JWKS is never self-registered (RFC 7591 §2 / #384)', () => {
