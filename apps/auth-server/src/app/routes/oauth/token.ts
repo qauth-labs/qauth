@@ -1431,7 +1431,7 @@ async function handleTokenExchange(
   }
   if (!subjectPayload.sub) {
     await emitRequestFailed(ctx, 'invalid_request', 'subject_token_missing_sub');
-    throw new InvalidRequestError('subject_token has no subject');
+    throw inactiveSubjectTokenError();
   }
 
   // GATE 3b — token-confusion defence. Issuer is now asserted by

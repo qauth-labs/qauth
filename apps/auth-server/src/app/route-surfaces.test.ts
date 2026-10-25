@@ -1,5 +1,6 @@
 /**
- * EVERY ROUTE OF THE ASSEMBLED APP HAS A SURFACE CLASS (#486).
+ * EVERY ROUTE OF THE ASSEMBLED APP HAS A SURFACE CLASS (#486) AND THE ERROR
+ * FORMAT OF ITS KIND (#513).
  *
  * The realm resolver (`plugins/realm-resolver.ts`) refuses to boot when a route
  * has no `config.surface`, so the boot in `beforeAll` is the first half of
@@ -67,6 +68,27 @@ function isBrowserSessionRoute(url: string): boolean {
     url.startsWith('/auth/link/wallet/')
   );
 }
+
+/**
+ * The OAuth protocol endpoints (ADR-019 Decision 7, #513): the routes whose
+ * error response an OAuth, OpenID Connect or OpenID for Verifiable
+ * Presentations specification defines. They, and only they, answer the
+ * `oauth` error format; every other route answers problem documents. The
+ * device authorization and FiPA authorization challenge endpoints join this
+ * list when they are built.
+ */
+const OAUTH_PROTOCOL_ENDPOINTS = new Set([
+  'GET /oauth/authorize',
+  'POST /oauth/authorize',
+  'POST /oauth/token',
+  'POST /oauth/introspect',
+  'POST /oauth/revoke',
+  'POST /oauth/register',
+  'GET /oauth/userinfo',
+  'POST /oauth/userinfo',
+  'GET /oid4vp/request/:handle',
+  'POST /oid4vp/response',
+]);
 
 let server: FastifyInstance | undefined;
 /** Every route as it registered; read after the boot, once every `onRoute` hook ran. */
@@ -143,5 +165,31 @@ describe('route surface classes of the assembled app (#486)', () => {
   it('classes /health, and nothing else, as none', () => {
     const none = routes.filter((route) => route.config?.surface === 'none');
     expect(new Set(none.map((route) => route.url))).toEqual(new Set(['/health']));
+  });
+});
+
+describe('error formats of the assembled app (#513)', () => {
+  /** `METHOD /url` for each method a route serves; HEAD routes are Fastify's own. */
+  function operations(route: RouteOptions): string[] {
+    return [route.method]
+      .flat()
+      .filter((method) => method !== 'HEAD')
+      .map((method) => `${method} ${route.url}`);
+  }
+
+  it('sets the oauth format on every OAuth protocol endpoint', () => {
+    const oauth = routes
+      .filter((route) => route.config?.errorFormat === 'oauth')
+      .flatMap(operations);
+    expect(new Set(oauth)).toEqual(OAUTH_PROTOCOL_ENDPOINTS);
+  });
+
+  it('leaves every other route on the problem default, never naming it', () => {
+    for (const route of routes) {
+      for (const operation of operations(route)) {
+        if (OAUTH_PROTOCOL_ENDPOINTS.has(operation)) continue;
+        expect(route.config?.errorFormat, operation).toBeUndefined();
+      }
+    }
   });
 });
