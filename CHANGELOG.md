@@ -607,6 +607,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (clients of the non-OAuth routes)**: every route that is not an
+  OAuth protocol endpoint answers an error with an RFC 9457 problem document,
+  `application/problem+json` ([#513], ADR-019 Decision 7): `type`, `title`,
+  `status`, `detail`, `instance`, a stable lower-case `code` and `trace_id`
+  (the request id), plus `errors[]` with a `pointer` and a `message` for a
+  validation failure and for weak-password feedback under `/password`. The old
+  `{ error, statusCode, code, feedback, details }` body is gone, from the
+  `/auth`, `/api`, `/consents` and `/ui` routes, the well-known documents, the
+  wallet-link API and the 404 for a path no route serves. Each code has its own
+  problem type, listed on the docs site's new **Problem types** page
+  (`reference/problem-types`), and one registry maps every class of
+  `@qauth-labs/shared-errors` to its code. A 401 or 403 on a bearer-protected
+  route also carries a `WWW-Authenticate` challenge.
+- **BREAKING (OAuth clients that read QAuth's own members)**: the OAuth protocol
+  endpoints (token, authorize, introspect, revoke, register, userinfo and the
+  wallet-facing OID4VP endpoints) answer only the members their specification
+  defines, `error` and `error_description` ([#513]). `code`, `statusCode`,
+  `feedback` and `retryAfter` are gone; the `Retry-After` and
+  `WWW-Authenticate` headers stay. Two shapes are fixed on the way: an unknown
+  `grant_type` answers `unsupported_grant_type` (RFC 6749 §5.2) instead of a
+  validation error, and dynamic registration answers `invalid_client_metadata`
+  or `invalid_redirect_uri` bare in `error`, with the text in
+  `error_description` (RFC 7591 §3.2.2), also for a body its schema refuses. A
+  validation failure answers `invalid_request`, the rate limiter's 429
+  `temporarily_unavailable`, and a 5xx `server_error`. At `/oauth/authorize`, a
+  `client_id` that names no client answers `invalid_request` (it was
+  `invalid_client`).
+- A refusal that several routes raise now reads one way everywhere ([#513]): an
+  access token whose subject is not an active user answers `jwt_invalid` on a
+  problem route and `invalid_token` at userinfo, in one wording that does not
+  say whether the account was deleted or disabled; a `subject_token` naming no
+  active user answers `invalid_request` in one wording; the consent page refuses
+  an unknown client, a refused redirect URI and a malformed `dpop_jkt` with the
+  same code as `/oauth/authorize`; a CSRF mismatch answers `invalid_csrf_token`.
+- The OpenAPI documents list each operation's error responses, referencing the
+  shared `Problem` schema, or `OAuthError` on an OAuth protocol endpoint
+  ([#513]).
+
+  **Action for clients**: branch on `code` and the status of a problem document,
+  or on `error` and the status of an OAuth body, never on `title`, `detail` or
+  `error_description`. The developer portal ships updated with this release.
+
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
   `libs/sdk/resource-guard`, and its names follow: `ResourceGuard`,
@@ -968,6 +1010,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#513]: https://github.com/qauth-labs/qauth/issues/513
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552

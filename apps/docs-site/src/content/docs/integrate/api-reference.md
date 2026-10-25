@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-09-11'
+lastVerified: '2026-10-25'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -28,47 +28,53 @@ login/consent/resume screens an end user sees, see [Hosted UI](/integrate/hosted
 
 ## Error model
 
-Errors share a single envelope:
+QAuth answers an error in one of two formats (ADR-019 Decision 7). Branch on the machine-readable
+member and the HTTP status, never on the wording, which may change.
 
-```json
-{ "error": "human-readable message", "statusCode": 400, "code": "OPTIONAL_CODE" }
-```
-
-Schema-validation failures use:
-
-```json
-{
-  "error": "Validation error",
-  "code": "VALIDATION_ERROR",
-  "statusCode": 400,
-  "details": [{ "path": "/grant_type", "message": "…" }]
-}
-```
-
-`details` carries one entry per rejected field: `path` names it, `message` says
-what is wrong with it. Nothing else — the validator's own issue objects also
-carry the schema path, the rule keyword and a parameter bag, and those describe
-how QAuth is built rather than what it accepts, so they are not returned. At
-most 20 entries are returned. An array longer than its limit is one entry for
-the array as a whole; its elements are not checked.
-
-OAuth endpoints additionally return the standard OAuth error codes documented in
-[OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors) (e.g. `invalid_grant`,
-`invalid_client`, `invalid_scope`, `invalid_target`). On those endpoints `error`
-is the registered RFC 6749 §5.2 token and any human-readable detail is a
-separate `error_description`:
+**Problem documents.** Every route that is not an OAuth protocol endpoint (first-party auth,
+client management, consents, the hosted UI, the well-known documents and any path no route serves)
+answers with an RFC 9457 problem details document, sent as `application/problem+json`:
 
 ```json
 {
-  "error": "invalid_client",
-  "error_description": "CIMD document is not valid JSON",
-  "code": "INVALID_CLIENT",
-  "statusCode": 401
+  "type": "https://docs.qauth.dev/reference/problem-types/#validation-error",
+  "title": "Validation error",
+  "status": 400,
+  "detail": "The request is not valid.",
+  "instance": "/auth/login",
+  "code": "validation_error",
+  "trace_id": "7d1c2e9a-5b8f-4f3e-9c6a-1e2d3f4a5b6c",
+  "errors": [{ "pointer": "/email", "message": "Invalid email address" }]
 }
 ```
 
-`error_description` is omitted where describing the failure would be an
-enumeration oracle — client authentication failures answer with the bare token.
+- `code` is the stable, machine-readable name of the error. The list of codes, with each one's
+  `type`, status and title, is on [Problem types](/reference/problem-types/).
+- `trace_id` is the id the server logged the request under, the `X-Request-Id` the response also
+  carries. Quote it when you report a failure.
+- `errors` names each field a validation failure rejected: `pointer` is an RFC 6901 JSON Pointer
+  into the body or the parameters, and `message` says what is wrong with it. The validator's own
+  issue objects also carry the schema path, the rule keyword and a parameter bag, and those
+  describe how QAuth is built rather than what it accepts, so they are not returned. At most 20
+  entries are returned. An array longer than its limit is one entry for the array as a whole; its
+  elements are not checked. A weak password's feedback arrives as entries whose pointer names the
+  password field.
+- A 5xx carries no `detail`. A 401 or 403 from a route that takes a bearer token also carries a
+  `WWW-Authenticate` challenge (RFC 6750 §3).
+
+**OAuth error bodies.** The OAuth protocol endpoints answer with the body their specification
+defines, `application/json` with only `error` and, where there is something to say,
+`error_description`: the authorization, token, introspection, revocation, dynamic registration and
+userinfo endpoints and the wallet-facing OID4VP endpoints.
+
+```json
+{ "error": "invalid_client", "error_description": "CIMD document is not valid JSON" }
+```
+
+`error` is the registered code (RFC 6749 §5.2, RFC 7591 §3.2.2, RFC 6750 §3.1); the codes are
+listed in [OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors). `error_description` is omitted
+where describing the failure would be an enumeration oracle: client authentication failures answer
+with the bare `invalid_client`. The `Retry-After` and `WWW-Authenticate` headers are sent as before.
 
 | Status | Meaning                                                                                             |
 | ------ | --------------------------------------------------------------------------------------------------- |
