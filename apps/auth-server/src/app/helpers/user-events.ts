@@ -3,9 +3,11 @@ import {
   BadRequestError,
   ForbiddenError,
   InvalidClientError,
+  InvalidClientMetadataError,
   InvalidCredentialsError,
   InvalidDpopProofError,
   InvalidGrantError,
+  InvalidRedirectUriError,
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
@@ -17,6 +19,7 @@ import {
   TokenExpiredError,
   TooManyRequestsError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import {
   type EventDataOf,
@@ -187,12 +190,15 @@ export async function emitUserEvent<Type extends RegisteredEventType>(
 /** The OAuth error classes whose `message` is the registered `error` code. */
 const OAUTH_CODE_ERRORS = [
   InvalidClientError,
+  InvalidClientMetadataError,
   InvalidDpopProofError,
   InvalidGrantError,
+  InvalidRedirectUriError,
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 ] as const;
 
 /** A `snake_case` code, the form an event's `error` and `reason` take. */
