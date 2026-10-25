@@ -4,7 +4,11 @@
  * Kept apart from the script so the validation can be tested without running
  * it, like `client-suspension.ts`.
  */
-import { InvalidWebAuthnOriginError, normaliseWebAuthnOrigin } from '@qauth-labs/shared-validation';
+import {
+  InvalidWebAuthnOriginError,
+  isReservedAudience,
+  normaliseWebAuthnOrigin,
+} from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import {
@@ -159,7 +163,21 @@ export const cimdClientSpecSchema = z
     // Required, so an entry always states the grant. An empty list grants
     // nothing, which is how an operator withdraws one.
     scopes: z.array(z.string().min(1)),
-    audience: z.array(z.string().min(1)).nullable().optional(),
+    // Never a QAuth API audience (#509, ADR-019 Decision 7): a CIMD client is
+    // whoever controls its URL, and it never holds a family audience, as its
+    // own document cannot claim one either. A pre-registered client of
+    // `clients` may.
+    audience: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine((value) => !isReservedAudience(value), {
+            message: 'a CIMD client cannot hold a reserved urn:qauth:aud: audience',
+          })
+      )
+      .nullable()
+      .optional(),
   })
   .strict();
 

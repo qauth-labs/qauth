@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { reservedAudiencesIn } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { env } from '../../config/env';
-import { reservedAudiencesIn } from '../api-conventions/families';
 import { OAUTH_CLIENT_ID_MAX_LENGTH } from '../constants';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';

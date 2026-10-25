@@ -618,8 +618,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   account routes move under their prefixes in [#524]. The token endpoint issues
   an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
   `audience` lists it, on every grant (`invalid_target` otherwise, at
-  `/oauth/authorize` too), and dynamic registration and Client ID Metadata
-  Documents refuse the namespace in `audience` or `resource` metadata. The JWT
+  `/oauth/authorize` too). Dynamic registration and Client ID Metadata Documents
+  refuse the namespace in `audience` or `resource` metadata, and the seed
+  manifest refuses it in a `cimd_clients` entry's `audience`. The JWT
   plugin's new `verifyRequestAccessToken(request, policy)` runs `requireJwt`'s
   checks under a route's issuer rule and `typ` requirement.
 

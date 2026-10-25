@@ -1,6 +1,6 @@
 import { BadRequestError } from '@qauth-labs/shared-errors';
+import { reservedAudiencesIn } from '@qauth-labs/shared-validation';
 
-import { reservedAudiencesIn } from '../api-conventions/families';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';

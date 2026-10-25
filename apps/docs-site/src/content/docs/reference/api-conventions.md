@@ -68,8 +68,10 @@ every realm's tokens carry the deployment's. A route reads the realm from the to
   `/oauth/token`, and the token's `aud` is that value. A client that does not list it is refused
   with `invalid_target`, on every grant.
 - `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case. Dynamic
-  registration refuses it in an `audience` or `resource` member with `invalid_client_metadata`, and
-  a Client ID Metadata Document that names it there does not resolve (`invalid_client`).
+  registration refuses it in an `audience` or `resource` member with `invalid_client_metadata`, a
+  Client ID Metadata Document that names it there does not resolve (`invalid_client`), and the
+  seed manifest refuses it in a `cimd_clients` entry. The rule is `isReservedAudience` in
+  `@qauth-labs/shared-validation`.
 - The developer portal's system client has the developer audience, so the token `/auth/login`
   mints is a developer family token. Until the developer routes move under their prefix, the
   routes at `/api/clients` and `/api/consents` keep their own check (`assertManagementToken`),

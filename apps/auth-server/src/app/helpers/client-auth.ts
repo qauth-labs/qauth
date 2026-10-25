@@ -4,10 +4,10 @@ import {
   InvalidScopeError,
   TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
+import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { isReservedAudience } from '../api-conventions/families';
 import { authenticateClientAssertion, type ClientAssertionCredentials } from './client-assertion';
 import { isAgentClient, resolveClient } from './client-resolution';
 import { isClientUsable } from './client-status';
