@@ -66,19 +66,19 @@ const ERROR_FORMAT_KEY = 'x-qauth-error-format';
 
 /**
  * The error statuses one operation's document lists (#513): the ones it
- * declares, and 421, 429 and 500, which every operation of a realm may answer
- * (the realm resolver, the rate limiter and an unexpected failure). A `none`
- * route such as `/health` belongs to no realm and lists only its own; a route
- * with `rateLimit: false` lists no 429.
+ * declares, 429 unless the route has `rateLimit: false`, and 421 and 500,
+ * which every operation of a realm may answer (the realm resolver and an
+ * unexpected failure). A `none` route such as `/health` belongs to no realm
+ * and answers its own failures, so it adds only the 429.
  */
 function documentedErrorStatuses(
   declared: readonly number[] | undefined,
   config: { surface?: string; rateLimit?: unknown } | undefined
 ): number[] {
   const statuses = new Set(declared ?? []);
+  if (config?.rateLimit !== false) statuses.add(429);
   if (config?.surface !== 'none') {
     statuses.add(421);
-    if (config?.rateLimit !== false) statuses.add(429);
     statuses.add(500);
   }
   return [...statuses].sort((a, b) => a - b);

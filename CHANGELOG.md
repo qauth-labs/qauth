@@ -615,11 +615,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation failure and for weak-password feedback under `/password`. The old
   `{ error, statusCode, code, feedback, details }` body is gone, from the
   `/auth`, `/api`, `/consents` and `/ui` routes, the well-known documents, the
-  wallet-link API and the 404 for a path no route serves. Each code has its own
+  wallet-link API, the 404 for a path no route serves, the router's own refusals
+  (a path that is not valid percent-encoding, 400; an over-long path parameter,
+  414 `uri_too_long`) and a request that cannot be read (400, 408
+  `request_timeout`, 431 `request_header_fields_too_large`). Each code has its own
   problem type, listed on the docs site's new **Problem types** page
   (`reference/problem-types`), and one registry maps every class of
   `@qauth-labs/shared-errors` to its code. A 401 or 403 on a bearer-protected
-  route also carries a `WWW-Authenticate` challenge.
+  route also carries a `WWW-Authenticate` challenge; a 403 says
+  `insufficient_scope` only when a wider token would be let through.
 - **BREAKING (OAuth clients that read QAuth's own members)**: the OAuth protocol
   endpoints (token, authorize, introspect, revoke, register, userinfo and the
   wallet-facing OID4VP endpoints) answer only the members their specification
@@ -633,7 +637,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation failure answers `invalid_request`, the rate limiter's 429
   `temporarily_unavailable`, and a 5xx `server_error`. At `/oauth/authorize`, a
   `client_id` that names no client answers `invalid_request` (it was
-  `invalid_client`).
+  `invalid_client`). Redeeming a code whose user has been deleted answers 400
+  `invalid_grant`, as for a disabled user (it was a 404 naming the user's id).
 - A refusal that several routes raise now reads one way everywhere ([#513]): an
   access token whose subject is not an active user answers `jwt_invalid` on a
   problem route and `invalid_token` at userinfo, in one wording that does not

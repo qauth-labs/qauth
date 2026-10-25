@@ -67,14 +67,17 @@
               "email_already_verified",
               "token_already_used",
               "token_expired",
+              "request_timeout",
               "precondition_failed",
               "content_too_large",
+              "uri_too_long",
               "unsupported_media_type",
               "misdirected_request",
               "unprocessable_content",
               "weak_password",
               "precondition_required",
               "too_many_requests",
+              "request_header_fields_too_large",
               "internal_error",
               "service_unavailable"
             ]
@@ -248,6 +251,16 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
