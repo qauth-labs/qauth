@@ -19,4 +19,14 @@ SET
 WHERE jsonb_typeof("dynamic_registration_allowed_scopes") = 'array'
   AND jsonb_path_exists("dynamic_registration_allowed_scopes", '$[*] ? (@ like_regex "^[aA][dD][mM][iI][nN]:")');
 --> statement-breakpoint
+-- The server always writes a list. A value written by hand that is not one,
+-- such as the string "admin:read openid", would fail the CHECK below and stop
+-- the upgrade; no entry of it can be kept, so it becomes the empty list.
+UPDATE "realms"
+SET
+  "dynamic_registration_allowed_scopes" = '[]'::jsonb,
+  "updated_at" = (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
+WHERE jsonb_typeof("dynamic_registration_allowed_scopes") <> 'array'
+  AND jsonb_path_exists("dynamic_registration_allowed_scopes", '$[*] ? (@ like_regex "^[aA][dD][mM][iI][nN]:")');
+--> statement-breakpoint
 ALTER TABLE "realms" ADD CONSTRAINT "realms_dynamic_registration_scopes_not_admin" CHECK (NOT jsonb_path_exists("realms"."dynamic_registration_allowed_scopes", '$[*] ? (@ like_regex "^[aA][dD][mM][iI][nN]:")'));

@@ -104,6 +104,17 @@ describe('migration 0039 — no admin: scope in the dynamic registration allowli
     expect((await allowlistOf('empty')).scopes).toEqual([]);
   });
 
+  it('empties a value that is not a list but would fail the CHECK, and leaves other values', async () => {
+    await seedRealm('string', 'admin:read openid');
+    await seedRealm('harmless-string', 'openid');
+    await seedRealm('nested', [['admin:read'], 'openid']);
+    await migrate();
+
+    expect((await allowlistOf('string')).scopes).toEqual([]);
+    expect((await allowlistOf('harmless-string')).scopes).toBe('openid');
+    expect((await allowlistOf('nested')).scopes).toEqual(['openid']);
+  });
+
   it('marks a realm whose allowlist it changed as updated', async () => {
     await seedRealm('mixed', ['openid', 'admin:read']);
     await migrate();
