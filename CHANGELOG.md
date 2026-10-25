@@ -617,7 +617,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jti` is the event id on every retry. `endpoint_url` is checked through the
   egress client at registration and at every delivery; the receiver's
   `authorization_header` is stored encrypted with the realm's `data_at_rest` key,
-  and the delivery role's signer grant gains `decrypt` to send it.
+  and the delivery role's signer grant gains `decrypt` for a `delivery:` context
+  only, to send it.
   `GET /ssf/status` adds `delivery_status`, the pending deliveries and the latest
   failed attempt. Until the event mapping of #540, verification events are the
   only SETs sent. The docs site's new **SSF transmitter** page
