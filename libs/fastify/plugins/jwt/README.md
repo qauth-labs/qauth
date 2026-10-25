@@ -64,3 +64,12 @@ fastify.get('/userinfo', {
 ### `fastify.requireJwt`
 
 PreHandler that extracts and verifies the Bearer token from the `Authorization` header. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `JWTInvalidError` (401) on missing/malformed header, and lets `JWTExpiredError` (401) propagate for expired tokens.
+
+### `fastify.verifyRequestAccessToken(request, policy?)`
+
+The checks `requireJwt` makes, returning the verified `JWTPayload` instead of setting `request.jwtPayload`. A route that needs a stricter check passes an `AccessTokenCheckPolicy`:
+
+- `acceptIssuer(issuer, request)` replaces the comparison with the configured `issuer`. It runs after the signature check, and a token with no `iss` is refused before it is called.
+- `requireTyp: true` requires the RFC 9068 `typ: at+jwt` header whatever `requireAccessTokenTyp` says. It can only tighten that setting.
+
+The signature, expiry, revocation and DPoP checks always run. The auth server's API family guards (`requireFamilyToken`) are built on it.
