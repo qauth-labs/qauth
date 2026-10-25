@@ -203,9 +203,13 @@ describe('key import at first boot, through the real auth-server', () => {
         'JWT_RS256_PRIVATE_KEY',
         'SESSION_COOKIE_SECRET',
       ]);
+      // A 40-character slice of each key, or the whole cookie secret: its slice
+      // from character 40 would be only "6789", which a log line's timestamp or
+      // pid can hold by chance.
       for (const line of lines) {
         for (const value of [jwt.privateKey, rsa, COOKIE_SECRET]) {
-          expect(JSON.stringify(line)).not.toContain(value.slice(40, 80));
+          const fragment = value.length >= 80 ? value.slice(40, 80) : value;
+          expect(JSON.stringify(line)).not.toContain(fragment);
         }
       }
     } finally {
