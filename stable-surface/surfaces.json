@@ -177,6 +177,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-ssf-stream-verification-requested-v1",
+      "description": "The urn:qauth:event:ssf.stream.verification_requested:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #410).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/ssf.stream.verification_requested.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-step-up-elevated-v1",
       "description": "The urn:qauth:event:step_up.elevated:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",
