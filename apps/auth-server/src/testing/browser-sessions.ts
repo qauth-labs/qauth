@@ -118,11 +118,14 @@ export function createFakeSessionService(): FakeSessionService {
 /** One queued command of {@link MemorySessionRedis.multi}. */
 type QueuedCommand = () => Promise<unknown>;
 
+/** The condition of a Redis 7 `PEXPIREAT`: set only when it holds. */
+export type ExpiryCondition = 'NX' | 'XX' | 'GT' | 'LT';
+
 /** A `MULTI` block: the commands the browser-session helpers queue. */
 export interface MemorySessionRedisMulti {
   hset(key: string, fields: Record<string, string>): MemorySessionRedisMulti;
   sadd(key: string, ...members: string[]): MemorySessionRedisMulti;
-  pexpireat(key: string, at: number): MemorySessionRedisMulti;
+  pexpireat(key: string, at: number, condition?: ExpiryCondition): MemorySessionRedisMulti;
   exec(): Promise<[Error | null, unknown][]>;
 }
 
@@ -142,9 +145,11 @@ export interface MemorySessionRedis {
   hdel: Mock<(key: string, ...fields: string[]) => Promise<number>>;
   sadd: Mock<(key: string, ...members: string[]) => Promise<number>>;
   smembers: Mock<(key: string) => Promise<string[]>>;
-  pexpireat: Mock<(key: string, at: number) => Promise<number>>;
+  pexpireat: Mock<(key: string, at: number, condition?: ExpiryCondition) => Promise<number>>;
   del: Mock<(...keys: string[]) => Promise<number>>;
   multi: Mock<() => MemorySessionRedisMulti>;
+  /** Drop every key whose deadline is at or before `now`, as Redis would by then. */
+  dropExpired(now: number): void;
 }
 
 /** Create a {@link MemorySessionRedis}. */
@@ -183,8 +188,22 @@ export function createMemorySessionRedis(): MemorySessionRedis {
       return set.size - before;
     }),
     smembers: vi.fn(async (key: string) => [...(sets.get(key) ?? [])]),
-    pexpireat: vi.fn(async (key: string, at: number) => {
+    pexpireat: vi.fn(async (key: string, at: number, condition?: ExpiryCondition) => {
       if (!hashes.has(key) && !sets.has(key)) return 0;
+      // Redis 7 semantics: a key without a deadline counts as never ending,
+      // so GT never sets one on it and LT always does.
+      const current = expiries.get(key);
+      const allowed =
+        condition === 'NX'
+          ? current === undefined
+          : condition === 'XX'
+            ? current !== undefined
+            : condition === 'GT'
+              ? current !== undefined && at > current
+              : condition === 'LT'
+                ? current === undefined || at < current
+                : true;
+      if (!allowed) return 0;
       expiries.set(key, at);
       return 1;
     }),
@@ -207,8 +226,8 @@ export function createMemorySessionRedis(): MemorySessionRedis {
           queued.push(() => redis.sadd(key, ...members));
           return block;
         },
-        pexpireat(key, at) {
-          queued.push(() => redis.pexpireat(key, at));
+        pexpireat(key, at, condition) {
+          queued.push(() => redis.pexpireat(key, at, condition));
           return block;
         },
         async exec() {
@@ -219,6 +238,14 @@ export function createMemorySessionRedis(): MemorySessionRedis {
       };
       return block;
     }),
+    dropExpired(now: number) {
+      for (const [key, at] of expiries) {
+        if (at > now) continue;
+        hashes.delete(key);
+        sets.delete(key);
+        expiries.delete(key);
+      }
+    },
   };
   return redis;
 }

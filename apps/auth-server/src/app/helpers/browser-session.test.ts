@@ -270,6 +270,42 @@ describe('endBrowserSessions (logout ends every session)', () => {
     expect(sessions.redis.sets.has(`user-browser-sessions:${USER_ID}`)).toBe(false);
   });
 
+  it('keeps the index until its latest session ends, when a newer one ends earlier', async () => {
+    // The realm's lifetime shrank between the two sign-ins: the newer session
+    // ends first. Its deadline must not pull the index in under the older one.
+    const index = `user-browser-sessions:${USER_ID}`;
+    const older = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
+    const create = sessions.service.create.getMockImplementation();
+    if (create === undefined) throw new Error('the fake service has no create');
+    const shorterEnd = older.expiresAt - 30 * 60_000;
+    sessions.service.create.mockImplementationOnce(async (input) => ({
+      ...(await create(input)),
+      expiresAt: shorterEnd,
+    }));
+    const newer = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
+    expect(newer.expiresAt).toBe(shorterEnd);
+
+    expect(sessions.redis.expiries.get(index)).toBe(older.expiresAt);
+
+    // Past the newer session's end, the index is still there for logout.
+    sessions.redis.dropExpired(shorterEnd + 1);
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([
+      older.sid,
+      newer.sid,
+    ]);
+    expect(sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: older.sid,
+      reason: 'sign_out_everywhere',
+    });
+  });
+
   it('ends nothing for a user with no recorded session', async () => {
     await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([]);
     expect(sessions.service.revoke).not.toHaveBeenCalled();
