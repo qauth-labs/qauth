@@ -175,12 +175,25 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
     return { get, postHeader, postBody };
   }
 
-  /** RFC 6750 §3.1: 401 with a Bearer challenge naming `invalid_token`. */
-  function expectInvalidToken(response: LightMyRequestResponse): void {
+  /**
+   * RFC 6750 §3.1: 401 with a Bearer challenge naming `invalid_token`.
+   *
+   * Userinfo answers the OAuth error body; `/auth/logout` is no OAuth protocol
+   * endpoint and answers a problem document (#513).
+   */
+  function expectInvalidToken(
+    response: LightMyRequestResponse,
+    format: 'oauth' | 'problem' = 'oauth'
+  ): void {
     expect(response.statusCode).toBe(401);
     expect(response.headers['www-authenticate']).toMatch(
       /^Bearer realm="OAuth", error="invalid_token"/
     );
+    if (format === 'oauth') {
+      expect(response.json()).toMatchObject({ error: 'invalid_token' });
+    } else {
+      expect(response.json()).toMatchObject({ status: 401, code: 'jwt_invalid' });
+    }
   }
 
   /** Nothing the server logged was a 500 or a database error. */
@@ -309,7 +322,7 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
         headers: { authorization: `Bearer ${accessToken}` },
       });
 
-      expectInvalidToken(logout);
+      expectInvalidToken(logout, 'problem');
       expectNoDatabaseError(log);
       const events = await app.dbPool.query<{ subject_id: string | null }>(
         `SELECT subject_id FROM events WHERE type = 'urn:qauth:event:user.sign_out_failed:v1-rc.0'`
