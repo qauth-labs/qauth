@@ -270,6 +270,80 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     60_000
   );
 
+  it('of two concurrent redemptions one is issued tokens and the other is the replay that revokes them', async () => {
+    const app = server();
+    const cookie = await signedInUser(app, 'consent skip');
+    const { code, verifier } = await authorize(app, cookie, 'consent skip');
+
+    const responses = await Promise.all([
+      exchange(app, code, verifier),
+      exchange(app, code, verifier),
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 400]);
+    const winner = responses.find((response) => response.statusCode === 200);
+    const loser = responses.find((response) => response.statusCode === 400);
+    if (winner === undefined || loser === undefined)
+      throw new Error('expected one 200 and one 400');
+    expect(loser.json()).toMatchObject({ error: 'invalid_grant' });
+    // The loser's revocation saw the family the winner committed.
+    const family = await familyOf(app, code);
+    expect(family).toEqual([
+      expect.objectContaining({ revoked: true, revoked_reason: 'code_replay' }),
+    ]);
+    expect(await tokenFailureReasons(app)).toEqual(['code_replay']);
+    const refreshToken = (winner.json() as { refresh_token: string }).refresh_token;
+    expect((await refresh(app, refreshToken)).statusCode).toBe(400);
+  }, 60_000);
+
+  it('a consent form posted with a challenge the mint refuses answers 400 and writes no code', async () => {
+    // The consent screen renders only a challenge `/oauth/authorize` accepted;
+    // a hand-built POST is held to the same bound, so it never reaches the
+    // mint helper's refusal as a server error.
+    const app = server();
+    const cookie = await signedInUser(app, 'consent screen');
+    const pkce = pkcePair();
+    const authorizeResponse = await app.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPES.join(' '),
+        code_challenge: pkce.challenge,
+        code_challenge_method: 'S256',
+      }).toString()}`,
+      headers: { cookie },
+    });
+    const screen = await app.inject({
+      method: 'GET',
+      url: authorizeResponse.headers['location'] as string,
+      headers: { cookie },
+    });
+    expect(screen.statusCode).toBe(200);
+    const hidden = Object.fromEntries(
+      [...screen.body.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)].map(
+        ([, name, value]) => [name, decodeHtmlEntities(value)]
+      )
+    );
+
+    const decision = await app.inject({
+      method: 'POST',
+      url: '/ui/consent',
+      headers: { ...FORM, cookie },
+      payload: new URLSearchParams({
+        ...hidden,
+        code_challenge: `${'A'.repeat(42)}=`,
+        csrf_token: extractCsrfToken(screen.body),
+        decision: 'allow',
+      }).toString(),
+    });
+
+    expect(decision.statusCode).toBe(400);
+    const { rows } = await app.dbPool.query('SELECT id FROM authorization_codes');
+    expect(rows).toEqual([]);
+  }, 60_000);
+
   it('a replay with the wrong PKCE verifier is refused and revokes nothing (OAuth 2.1 §7.5.3)', async () => {
     const app = server();
     const cookie = await signedInUser(app, 'consent skip');

@@ -263,8 +263,9 @@ second valid redemption is denied and revokes what the first issued) and §7.5.3
 restates it. The RFC 9700 row replaces a waiver that was filed under §4.5 with
 RFC 6749's sentence as its quote; the text RFC 9700 actually has is in §4.2.4.
 
-All four are proven by the token endpoint's unit tests, which cite every spec
-in one `describe` title. The container-backed suite
+All five rows are proven by the token endpoint's unit tests: one `describe`
+title cites OAuth 2.1 §4.1.3, RFC 6749 §4.1.2 and RFC 9700 §4.2.4, and the tests
+inside it that prove §7.5.3 cite it in their own titles. The container-backed suite
 (`apps/auth-server/src/app/code-replay.integration.test.ts`) proves the same
 behaviour end to end, but integration suites are not in the reports the gate
 reads.

@@ -2110,7 +2110,26 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       ]);
     });
 
-    it('refuses a replay naming a resource outside the code’s binding and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+    it('refuses a replay without the proof a DPoP-bound code needs with invalid_grant, and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+      // DPoP on: an unspent code would answer invalid_dpop_proof here; a spent
+      // one answers invalid_grant, as it did before spent codes were read.
+      const { fastify, ctx } = setupSpentCode({ dpopJkt: 'k'.repeat(43) });
+      Object.assign(fastify, { dpop: { verifyRequest: vi.fn() } });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'dpop_missing_proof' },
+      ]);
+    });
+
+    it('refuses a replay naming a resource outside the code’s binding with invalid_grant, and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+      // An unspent code answers invalid_target here; a spent one invalid_grant.
       const { fastify, ctx } = setupSpentCode({ resource: ['https://api.example.com'] });
       await tokenRoute(fastify);
       const handler = ctx.handler;
@@ -2118,10 +2137,17 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
       await expect(
         handler(baseRequest({ resource: ['https://other.example.com'] }), createReply())
-      ).rejects.toThrow(InvalidTargetError);
+      ).rejects.toThrow(InvalidGrantError);
       expect(
         fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
       ).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        {
+          grantType: 'authorization_code',
+          error: 'invalid_grant',
+          reason: 'resource_outside_binding',
+        },
+      ]);
     });
 
     it('a replay for a user disabled since is still a replay, and spends nothing', async () => {

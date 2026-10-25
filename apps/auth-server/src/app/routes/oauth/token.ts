@@ -691,23 +691,30 @@ async function handleAuthorizationCode(
   // RFC 9449 §10 (#480): a code the authorization request bound to a DPoP key
   // (`dpop_jkt`) is redeemed only with a proof under that key. It is not
   // burned on a refusal: whoever lacks the key cannot spend the code the
-  // client is about to redeem.
+  // client is about to redeem. A spent code is `invalid_grant` whatever the
+  // proof (RFC 6749 §5.2), as it was before spent codes were read at all.
   const codeBinding = dpopBindingRefusal(ctx, authCode.dpopJkt);
   if (codeBinding) {
-    await emitRequestFailed(ctx, codeBinding.error, codeBinding.reason, authCode.userId);
-    throw codeBinding.error === 'invalid_grant'
+    const error = authCode.used ? 'invalid_grant' : codeBinding.error;
+    await emitRequestFailed(ctx, error, codeBinding.reason, authCode.userId);
+    throw error === 'invalid_grant'
       ? new InvalidGrantError('Invalid or expired authorization code')
       : new InvalidDpopProofError();
   }
 
   // RFC 8707 §2.2: if the token request also includes `resource`, it MUST
   // be a subset of the one bound to the auth code. Empty request resource
-  // carries forward the code's resource unchanged.
+  // carries forward the code's resource unchanged. A spent code is
+  // `invalid_grant` here too.
   const codeResource = authCode.resource ?? [];
   const requestedResource = body.resource ?? [];
   if (requestedResource.length > 0) {
     const extra = requestedResource.filter((r) => !codeResource.includes(r));
     if (extra.length > 0) {
+      if (authCode.used) {
+        await emitRequestFailed(ctx, 'invalid_grant', 'resource_outside_binding', authCode.userId);
+        throw new InvalidGrantError('Invalid or expired authorization code');
+      }
       await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_binding', authCode.userId);
       throw new InvalidTargetError('requested resource is outside the authorization-code binding');
     }

@@ -9,14 +9,14 @@
       "quote": "The authorization server MUST return an access token only once for a given authorization code.",
       "applies": "POST /oauth/token, authorization_code grant. The redemption spends the code by a compare-and-set (`markUsed`, `WHERE used = false`) in the transaction that issues the tokens; a second redemption, read or concurrent, issues nothing.",
       "status": "covered",
-      "evidenceMatch": "second redemption of a code"
+      "evidenceMatch": "denies a replayed code|loses the race"
     },
     {
       "id": "oauth-2_1-4_1_3-code-replay-revokes",
       "section": "4.1.3",
       "level": "SHOULD",
       "quote": "If a second valid token request is made with the same authorization code as a previously successful token request, the authorization server MUST deny the request and SHOULD revoke (when possible) all access tokens and refresh tokens previously issued based on that authorization code.",
-      "applies": "POST /oauth/token, authorization_code grant. The replay answers `invalid_grant` and revokes the refresh-token family the first redemption started, rotations included, found through `refresh_tokens.authorization_code_id`; it is recorded as `token.request_failed` with reason `code_replay`. Access tokens are self-contained JWTs and stay valid until they expire: revoking them is not possible without a per-token denylist, which the \"(when possible)\" of the text allows.",
+      "applies": "POST /oauth/token, authorization_code grant. The replay answers `invalid_grant` and revokes the refresh-token family the first redemption started, rotations included, found through `refresh_tokens.authorization_code_id`; it is recorded as `token.request_failed` with reason `code_replay`. A replay is recognised until the hourly purge job deletes the spent code, at the earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes). Access tokens are self-contained JWTs and stay valid until they expire: revoking them is not possible without a per-token denylist, which the \"(when possible)\" of the text allows.",
       "status": "covered",
       "evidenceMatch": "revokes the refresh family|family revoked"
     },

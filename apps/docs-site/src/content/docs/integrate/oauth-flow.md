@@ -226,10 +226,14 @@ Notes:
   rule for codes from a browser redirect, although OAuth 2.1 drops the
   parameter.
 - **Redeem a code once.** A second redemption is refused with `invalid_grant`
-  and, when it is otherwise a valid request, revokes every refresh token the
-  first one led to (OAuth 2.1 §4.1.3): QAuth cannot tell a retry from an
-  attacker who copied the code. So do not retry a token request that may have
-  reached the server; send the user through `/oauth/authorize` again instead.
+  and, when it is otherwise a valid request (your client, the same
+  `redirect_uri`, the right `code_verifier`, DPoP key and `resource`), revokes
+  every refresh token the first one led to (OAuth 2.1 §4.1.3): QAuth cannot
+  tell a retry from an attacker who copied the code. So do not retry a token
+  request that may have reached the server; send the user through
+  `/oauth/authorize` again instead. Access tokens already issued stay valid
+  until they expire, and a code is recognised as spent until the hourly purge
+  deletes it, some time after its five-minute lifetime.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`refresh_token` is present only when the user has a stored consent** for

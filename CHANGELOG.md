@@ -815,16 +815,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused with `invalid_grant` but revoked nothing, because the token endpoint
   could not tell a spent code from an unknown one. It now reads spent codes
   too, and a second redemption that is otherwise a valid request (the code's
-  own client, its `redirect_uri`, the right `code_verifier`) answers
-  `invalid_grant` and revokes every refresh token descended from the first
-  redemption, rotations included (OAuth 2.1 §4.1.3, RFC 6749 §4.1.2). The
+  own client, its `redirect_uri`, the right `code_verifier`, the DPoP key the
+  code is bound to, a `resource` inside its binding) answers `invalid_grant`
+  and revokes every refresh token descended from the first redemption,
+  rotations included (OAuth 2.1 §4.1.3, RFC 6749 §4.1.2). The
   `token.request_failed` event's reason is `code_replay`. A replay that fails
-  any of those checks is refused for that reason and revokes nothing, so
-  whoever saw a code without the client's credentials or verifier cannot end
-  the client's tokens (OAuth 2.1 §7.5.3). A redemption that loses the race to
-  a concurrent one is the same replay; it used to answer `404` with the code's
-  row id in the message. Access tokens already issued from the code are JWTs
-  and stay valid until they expire. Migration 0039 adds the link that makes
+  any of those checks answers `invalid_grant` as before, with that check as its
+  reason, and revokes nothing, so whoever saw a code without the client's
+  credentials or verifier cannot end the client's tokens (OAuth 2.1 §7.5.3). A
+  redemption that loses the race to a concurrent one is the same replay; it
+  used to answer `404` with the code's row id in the message. Access tokens
+  already issued from the code are JWTs and stay valid until they expire. A
+  replay is recognised until the hourly purge job deletes the code, at the
+  earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes); after
+  that the code is unknown and revokes nothing. `code_replay` is also the
+  reason for a code that a logout, a consent revocation or a refused
+  redemption (user disabled, agent scope cap) had spent: the server records no
+  difference, and such a code started no family, so nothing is revoked for it.
+  Migration 0039 adds the link that makes
   this possible, `refresh_tokens.authorization_code_id` (nullable, set on the
   first token of each family, `ON DELETE SET NULL` when the purge job deletes
   the code). Families started before the upgrade, or by a node of the previous
@@ -842,9 +850,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OAuth error it can read.
 - Every authorization code is minted by one helper, `mintAuthorizationCode`
   ([#627], ADR-017 Decision 10), which refuses to write a code without an S256
-  PKCE challenge of 43 to 128 characters in every environment. The two routes
-  that mint codes, the consent-skip path of `/oauth/authorize` and the consent
-  screen, validated the challenge already, so their responses are unchanged.
+  PKCE challenge of 43 to 128 unreserved characters (RFC 7636 §4.2) in every
+  environment. `/oauth/authorize` validated the challenge that way already. The
+  consent screen's form checked only its length, so a hand-built
+  `POST /ui/consent` with a challenge outside that character set was given a
+  code that could never be redeemed; it now answers `400`. A consent screen the
+  server rendered always carries a valid challenge, so nothing a browser sends
+  changes.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
