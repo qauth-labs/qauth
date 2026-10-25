@@ -31,6 +31,13 @@ describe('extractAccessTokenCredential (RFC 6750 §2.1, RFC 9449 §7.1)', () => 
     expect(extractAccessTokenCredential(header, { allowDpop: true })).toBeNull();
   });
 
+  it('reads no Bearer token from a header that holds two (Bearer a b)', () => {
+    // `/auth/logout`'s header schema (`^Bearer .+$`) lets this header through,
+    // so the route's own refusal of it is reachable.
+    expect(extractJWTFromHeader('Bearer a b')).toBeNull();
+    expect(extractAccessTokenCredential('Bearer a b')).toBeNull();
+  });
+
   it('agrees with extractJWTFromHeader on every Bearer header', () => {
     for (const header of ['Bearer abc', 'Bearer ', 'bearer abc', 'Bearer a b', undefined]) {
       const credential = extractAccessTokenCredential(header);

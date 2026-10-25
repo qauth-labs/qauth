@@ -459,6 +459,70 @@ describe('POST /auth/logout', () => {
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a live', false],
+    ['an EXPIRED', true],
+  ])(
+    'throws (401) and does NOT revoke for %s DPoP-bound token sent as Bearer',
+    async (_name, expired) => {
+      // RFC 9449 §7.2 (#480): the route reads a Bearer token, and a token bound
+      // to a DPoP key is never one, expired or not.
+      const { fastify, ctx } = createFastifyStub();
+      const claims = loginClaims({ cnf: { jkt: 'dpop-key-thumbprint' } });
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bound.access.jwt');
+      if (expired) {
+        (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+          new JWTExpiredError('Access token has expired')
+        );
+        (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue(claims);
+      } else {
+        (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(claims);
+      }
+
+      await logoutRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(
+        handler(logoutRequest('Bearer bound.access.jwt'), createReply())
+      ).rejects.toThrow('A DPoP-bound access token cannot be used as a Bearer token');
+      expect(fastify.sessionUtils.deleteSession).not.toHaveBeenCalled();
+      expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+    }
+  );
+
+  it('stops at a failed write: the steps before it stay done, none after it runs, and the failure is recorded', async () => {
+    // The writes are not one transaction (graphs/flows/core/logout): a store
+    // failure part way answers 500 with the sessions ended and the codes spent.
+    const { fastify, ctx } = createFastifyStub();
+    const storeDown = new Error('connection terminated');
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ jti: 'login-jti-3', exp: Math.floor(Date.now() / 1000) + 600 })
+    );
+    (fastify.repositories.refreshTokens.revokeAllForUser as unknown as Mock).mockRejectedValue(
+      storeDown
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(logoutRequest(), createReply())).rejects.toBe(storeDown);
+    expect(fastify.redis.del).toHaveBeenCalledWith(`user-browser-sessions:${VALID_USER.id}`);
+    expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalledWith(
+      VALID_USER.id
+    );
+    expect(fastify.redis.setex).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_out_failed:v1-rc.0',
+      { reason: 'internal_error' },
+      { realmId: REALM.id, userId: VALID_USER.id, actor: 'user' }
+    );
+  });
+
   it('throws (401) when the user does not exist, without revoking, and records no user', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');

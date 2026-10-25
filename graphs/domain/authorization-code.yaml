@@ -1,0 +1,22 @@
+# The hand-written overlay of AuthorizationCode, the authorization_codes table. The entity and its fields are
+# generated from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal action
+# core.logout invokes. The token flow (#609) adds consume and the examples.
+schema: delurio-graph/0
+kind: domain
+id: qauth
+
+actions:
+  AuthorizationCode.invalidateForUser:
+    # internal: invoked by core.logout, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:104
+    body:
+      type: object
+      required: [userId]
+      properties:
+        userId: { type: string, format: uuid }
+    result: { type: integer, minimum: 0 } # the number of codes it spent
+    sideEffects:
+      - >-
+        every AuthorizationCode of the user that is not used yet gets used = true and usedAt = now, expired or not,
+        so none can be redeemed
+      - 'it waits for a redemption in flight, which holds its code row until the refresh token it mints is committed'

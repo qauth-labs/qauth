@@ -1,0 +1,586 @@
+# POST /auth/logout as the code works today (capture mode, #674): the only logout QAuth has, and the baseline that
+# RP-initiated logout (end_session_endpoint) replaces. It has no screens. The states run in the order the server
+# runs them: the realm resolver and the rate limiter (onRequest hooks), the header schema, then the handler.
+#
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees.
+#   Every 401 is RFC 6750's invalid_token, carried in WWW-Authenticate; the body is the error handler's
+#   (apps/auth-server/src/app/plugins/error-handler.ts), since this route is not under an API family prefix.
+# - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard is written on the
+#   transition it decides, and that transition's `source:` is the line of the check.
+# - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions and the access
+#   token denylist live in the cache, and the event store has its own writer (ADR-019 Decision 8). The two database
+#   writes are domain actions (graphs/domain/).
+schema: delurio-graph/0
+kind: flow
+id: core.logout
+status: captured
+domain: qauth
+title: Sign out with an access token
+summary: >-
+  The developer portal's server, or any caller holding the token /auth/login minted, posts it as a Bearer token.
+  QAuth accepts it even when it has expired, as long as QAuth signed it. It ends the user's browser sessions,
+  invalidates their unredeemed authorization codes, revokes their refresh tokens at every client and on every
+  device, denylists the token when it is still live, and records the sign-out. It refuses any other token with 401.
+
+scope:
+  shows: POST /auth/logout from the request to the response, in the order the server runs its checks
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - 'a store failure while the token is checked (the system client lookup, the user lookup) answers 500 before
+      anything is ended'
+    - 'a failure to record a refused sign-out (user.sign_out_failed) turns that refusal into a 500'
+    - "Fastify's own refusals before the header check, such as an empty body sent as application/json (400)"
+    - 'the four causes of a 421 (a malformed host, an unknown host, a disabled realm, a realm with no issuer) give
+      one answer and are drawn as one exit'
+    - 'a token with no jti, minted before the claim existed, is not denylisted'
+    - 'a token whose sub is empty or not a UUID: QAuth never mints one for the portal'
+    - 'with RATE_LIMIT_ENABLED=false the logout limit is not applied'
+    - 'the effects are not one transaction: a failure part way leaves the steps before it done'
+
+context:
+  host:
+    values: [realm, unknown]
+    initial: any
+    say:
+      realm: 'the host is a host of an enabled realm that has an issuer'
+      unknown: 'the host names no realm, a disabled realm or a realm with no issuer'
+  overLimit:
+    values: [false, true]
+    initial: any
+    say:
+      'true': 'this client address has used up its logout requests for the window'
+      'false': 'the address is under its logout limit'
+  header:
+    values: [bearer, invalid, notOneToken]
+    initial: any
+    say:
+      bearer: 'the Authorization header is Bearer and one token'
+      invalid: 'the Authorization header is missing, or does not match ^Bearer .+$'
+      notOneToken: 'the header matches ^Bearer .+$ but is not two parts split by one space, such as Bearer a b'
+  signature:
+    values: [valid, invalid]
+    initial: any
+    say:
+      valid: 'QAuth signed the token, for this issuer'
+      invalid: 'the token is no JWT, its signature or issuer does not verify, or it is live and its typ or claims do not verify'
+  expired:
+    values: [false, true]
+    initial: any
+    say: { 'true': 'the token has expired', 'false': 'the token has not expired' }
+  issuedFor:
+    values: [portal, otherClient, delegated, otherAudience]
+    initial: any
+    say:
+      portal: 'the token is the one /auth/login mints for the developer portal'
+      otherClient: 'the token was issued to another client'
+      delegated: 'the token carries an act claim: it acts for an agent'
+      otherAudience: 'the token was issued to the system client for another audience'
+  subject:
+    values: [user, deleted, otherRealm]
+    initial: any
+    say:
+      user: "the token's subject is a user of this realm"
+      deleted: "the token's subject names no user any more"
+      otherRealm: "the token's subject is a user of another realm"
+  dpopBound:
+    values: [false, true]
+    initial: any
+    say:
+      'true': 'the token is bound to a DPoP key (cnf)'
+      'false': 'the token is bound to no key'
+  ownSession:
+    values: [false, true]
+    initial: any
+    say:
+      'true': "the request carries the session cookie of one of the user's browser sessions"
+      'false': "the request carries no session cookie of the user's"
+  sessionsEnded: { values: [false, true], initial: false }
+  codesInvalidated: { values: [false, true], initial: false }
+  refreshTokensRevoked: { values: [false, true], initial: false }
+
+effects:
+  endSessions: { set: { sessionsEnded: true } }
+  invalidateCodes: { set: { codesInvalidated: true } }
+  revokeRefreshTokens: { set: { refreshTokensRevoked: true } }
+
+failures:
+  # each effect fails only on a store error; the catch block records user.sign_out_failed and rethrows
+  endingSessions: { from: browserSessionStore, server: [server_error] }
+  invalidatingCodes: { from: AuthorizationCode.invalidateForUser, server: [server_error] }
+  revokingRefreshTokens: { from: RefreshToken.revokeAllForUser, server: [server_error] }
+  revokingAccessToken: { from: accessTokenDenylist, server: [server_error] }
+  recordingSignOut: { from: eventStore, server: [server_error] }
+
+# The main story: the portal's server signs a user out with the live token /auth/login gave it.
+main:
+  given:
+    host: realm
+    overLimit: false
+    header: bearer
+    signature: valid
+    expired: false
+    issuedFor: portal
+    subject: user
+    dpopBound: false
+    ownSession: false
+  events: [LOGOUT, DONE, DONE, DONE, DONE, DONE]
+
+initial: idle
+states:
+  idle:
+    title: Wait for a logout request
+    source: apps/auth-server/src/app/routes/auth/logout.ts:38
+    on:
+      LOGOUT:
+        target: resolvingRealm
+        say: 'POST /auth/logout arrives'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:39
+
+  resolvingRealm:
+    title: Find the realm of the host
+    description: >-
+      The realm resolver's onRequest hook, before any route code. /auth/logout is an api route, so it answers on a
+      realm's endpoint hosts too. A request refused here is never counted by the rate limiter.
+    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
+    always:
+      - guard: "host == 'unknown'"
+        target: misdirected_request.host
+        say: 'the host names no enabled realm with an issuer'
+        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
+      - target: rateLimiting
+        say: 'the request has its realm'
+        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
+
+  rateLimiting:
+    title: Count the request against the logout limit
+    description: LOGOUT_RATE_LIMIT requests per LOGOUT_RATE_WINDOW seconds, for each client address and realm.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:53
+    always:
+      - guard: overLimit
+        target: too_many_requests.logout_limit
+        say: 'the address has used up its logout requests'
+        source: apps/auth-server/src/app/plugins/rate-limit.ts:25
+      - target: validatingHeader
+        say: 'the address is under its limit'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:54
+
+  validatingHeader:
+    title: Check the Authorization header against the schema
+    source: apps/auth-server/src/app/routes/auth/logout.ts:46
+    always:
+      - guard: "header == 'invalid'"
+        target: validation_error.authorization
+        say: 'the header is missing or does not match ^Bearer .+$'
+        source: apps/auth-server/src/app/schemas/auth.ts:133
+      - target: readingToken
+        say: 'the header matches the schema'
+        source: apps/auth-server/src/app/schemas/auth.ts:130
+
+  readingToken:
+    title: Read the token from the header
+    description: >-
+      The handler splits the header on single spaces and takes the token only when there are exactly two parts and
+      the first is Bearer. The schema lets through a header such as "Bearer a b", which this refuses.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:70
+    always:
+      - guard: "header == 'notOneToken'"
+        target: invalid_token.missing_token
+        say: 'the header holds no single token'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:72
+      - target: verifyingToken
+        say: 'the header holds one token'
+        source: libs/server/jwt/src/lib/header-utils.ts:24
+
+  verifyingToken:
+    title: Verify the token, and accept it expired
+    description: >-
+      The EdDSA signature, then the issuer, then the expiry, in that order. A token that fails only on its expiry is
+      accepted, however long ago it expired: its claims are decoded without the typ and claim-shape checks a live
+      token goes through. Unlike requireJwt, this route does not read the revocation denylist, so a token revoked
+      earlier still signs its user out.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:85
+    always:
+      - guard: "signature == 'invalid'"
+        target: invalid_token.unverified
+        say: 'the token does not verify'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:96
+      - guard: expired
+        target: checkingManagementToken
+        say: 'the token has expired, but QAuth signed it: its claims are read anyway'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:90
+      - target: checkingManagementToken
+        say: 'the token verifies'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:85
+
+  checkingManagementToken:
+    title: Accept only the portal's own token
+    description: >-
+      assertManagementToken with requireActiveUser false, so a disabled user may still sign out. The checks run in
+      this order, and the realm check runs only when the subject names a user.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:106
+    always:
+      - guard: "issuedFor == 'otherClient'"
+        target: invalid_token.not_management_client
+        say: "the token's client_id is not the system client's"
+        source: apps/auth-server/src/app/helpers/management-token.ts:67
+      - guard: "issuedFor == 'delegated'"
+        target: invalid_token.delegated
+        say: 'the token acts for an agent'
+        source: apps/auth-server/src/app/helpers/management-token.ts:71
+      - guard: "issuedFor == 'otherAudience'"
+        target: invalid_token.wrong_audience
+        say: "the token's audience lacks the system client's"
+        source: apps/auth-server/src/app/helpers/management-token.ts:77
+      - guard: "subject == 'otherRealm'"
+        target: invalid_token.other_realm
+        say: 'the subject is a user of another realm'
+        source: apps/auth-server/src/app/helpers/management-token.ts:84
+      - target: checkingBinding
+        say: "the token is the portal's, for this realm or for no user"
+        source: apps/auth-server/src/app/helpers/management-token.ts:86
+
+  checkingBinding:
+    title: Refuse a DPoP-bound token
+    description: RFC 9449 §7.2. The route reads a Bearer token, and a DPoP-bound token is never one.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:111
+    always:
+      - guard: dpopBound
+        target: invalid_token.dpop_bound
+        say: 'the token is bound to a DPoP key'
+        source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:66
+      - target: findingUser
+        say: 'the token is bound to no key'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:112
+
+  findingUser:
+    title: Find the token's user
+    source: apps/auth-server/src/app/routes/auth/logout.ts:121
+    always:
+      - guard: "subject == 'deleted'"
+        target: invalid_token.subject_not_a_user
+        say: 'the subject was deleted after the token was minted'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:122
+      - target: endingSessions
+        say: 'the subject is a user of this realm'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:128
+
+  endingSessions:
+    title: End the user's browser sessions
+    description: >-
+      Every hosted browser session of the user, found through the per-user index rather than a cookie, so that none
+      of them can obtain a new authorization code once the codes are invalidated. The cookie of the request is
+      cleared when it names one of them.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:136
+    invoke: { external: browserSessionStore }
+    on:
+      DONE:
+        target: invalidatingCodes
+        effect: [endSessions]
+        say: 'the sessions are ended'
+        source: apps/auth-server/src/app/helpers/browser-session.ts:115
+      FAIL.server:
+        target: server_error.store
+        say: 'the session store fails'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:174
+
+  invalidatingCodes:
+    title: Invalidate the user's unredeemed authorization codes
+    description: >-
+      Before the refresh tokens, because a code redeemed after that sweep would mint a refresh token that survives
+      the logout. It waits for a redemption in flight, which holds its code row until its refresh token is
+      committed.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:146
+    invoke: { action: AuthorizationCode.invalidateForUser }
+    on:
+      DONE:
+        target: revokingRefreshTokens
+        effect: [invalidateCodes]
+        say: 'the codes are spent'
+        source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:104
+      FAIL.server:
+        target: server_error.store
+        say: 'the database fails'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:174
+
+  revokingRefreshTokens:
+    title: Revoke every active refresh token of the user
+    description: At every client and on every device, with the reason logout.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:150
+    invoke: { action: RefreshToken.revokeAllForUser }
+    on:
+      DONE:
+        - guard: expired
+          target: recordingSignOut
+          effect: [revokeRefreshTokens]
+          say: 'the token has expired, so it is already inert and is not denylisted'
+          source: apps/auth-server/src/app/routes/auth/logout.ts:155
+        - target: revokingAccessToken
+          effect: [revokeRefreshTokens]
+          say: 'the refresh tokens are revoked and the token is still live'
+          source: apps/auth-server/src/app/routes/auth/logout.ts:155
+      FAIL.server:
+        target: server_error.store
+        say: 'the database fails'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:174
+
+  revokingAccessToken:
+    title: Denylist the token of this request
+    description: >-
+      Its jti, for the rest of its lifetime, as /oauth/revoke does for a token presented to it; otherwise it would
+      keep working at the management API until it expires.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:156
+    invoke: { external: accessTokenDenylist }
+    on:
+      DONE:
+        target: recordingSignOut
+        say: 'the token is denylisted'
+        source: apps/auth-server/src/app/helpers/token-revocation.ts:30
+      FAIL.server:
+        target: server_error.store
+        say: 'the cache fails'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:174
+
+  recordingSignOut:
+    title: Record the sign-out
+    description:
+      The event urn:qauth:event:user.signed_out:v1-rc.0. A failed write fails the request, after everything
+      above has ended.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:160
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        - guard: ownSession
+          target: signed_out.cookie_cleared
+          say: "the request's own session was one of those ended"
+          source: apps/auth-server/src/app/routes/auth/logout.ts:138
+        - target: signed_out
+          say: 'the event is recorded'
+          source: apps/auth-server/src/app/routes/auth/logout.ts:170
+      FAIL.server:
+        target: server_error.store
+        say: 'the event store fails'
+        source: apps/auth-server/src/app/routes/auth/logout.ts:174
+
+  signed_out:
+    type: final
+    title: The user is signed out
+    source: apps/auth-server/src/app/routes/auth/logout.ts:170
+    response:
+      status: 200
+      body: { success: true, message: Successfully logged out }
+
+  signed_out.cookie_cleared:
+    type: final
+    title: The user is signed out, and the request's session cookie is cleared
+    source: apps/auth-server/src/app/routes/auth/logout.ts:139
+    response:
+      status: 200
+      headers:
+        Set-Cookie:
+          '__Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when
+          SESSION_COOKIE_SECURE is on'
+      body: { success: true, message: Successfully logged out }
+
+  misdirected_request.host:
+    type: final
+    title: Refuse a host QAuth does not answer for
+    source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
+    response:
+      status: 421
+      body:
+        error: This server does not answer for the requested host
+        code: MISDIRECTED_REQUEST
+        statusCode: 421
+
+  too_many_requests.logout_limit:
+    type: final
+    title: Refuse a request over the logout limit
+    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
+    response:
+      status: 429
+      headers:
+        x-ratelimit-limit: LOGOUT_RATE_LIMIT
+        x-ratelimit-remaining: '0'
+        x-ratelimit-reset: the seconds until the window resets
+        retry-after: the same seconds
+      body:
+        error: 'Rate limit exceeded, retry in {the rest of the window, such as 1 minute}'
+        statusCode: 429
+
+  validation_error.authorization:
+    type: final
+    title: Refuse a missing or malformed Authorization header
+    source: apps/auth-server/src/app/schemas/auth.ts:133
+    response:
+      status: 400
+      body:
+        error: Validation error
+        code: VALIDATION_ERROR
+        statusCode: 400
+        details:
+          - path: /authorization
+            message: "the schema's message, such as: Authorization header must be in format: Bearer <token>"
+
+  invalid_token.missing_token:
+    type: final
+    title: Refuse a header that holds no single token
+    source: apps/auth-server/src/app/routes/auth/logout.ts:73
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate:
+          'Bearer realm="OAuth", error="invalid_token", error_description="Missing or invalid Authorization
+          header. Expected format:  Bearer <token> "'
+      body:
+        error: 'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.unverified:
+    type: final
+    title: Refuse a token that does not verify
+    description: >-
+      A bad signature, a malformed token, another issuer, or a live token with the wrong typ or malformed claims.
+    source: apps/auth-server/src/app/routes/auth/logout.ts:96
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate: 'Bearer realm="OAuth", error="invalid_token", error_description="<the body''s error>"'
+      body:
+        error: 'Invalid JWT token, or Invalid JWT token: <why>'
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.not_management_client:
+    type: final
+    title: Refuse a token issued to another client
+    source: apps/auth-server/src/app/helpers/management-token.ts:68
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate:
+          'Bearer realm="OAuth", error="invalid_token", error_description="Access token was not issued for
+          the management API"'
+      body:
+        error: Access token was not issued for the management API
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.delegated:
+    type: final
+    title: Refuse a token that acts for an agent
+    source: apps/auth-server/src/app/helpers/management-token.ts:72
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate:
+          'Bearer realm="OAuth", error="invalid_token", error_description="A delegated access token cannot
+          use the management API"'
+      body:
+        error: A delegated access token cannot use the management API
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.wrong_audience:
+    type: final
+    title: Refuse a token for another audience
+    source: apps/auth-server/src/app/helpers/management-token.ts:78
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate:
+          'Bearer realm="OAuth", error="invalid_token", error_description="Access token audience does not
+          match the management API"'
+      body:
+        error: Access token audience does not match the management API
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.other_realm:
+    type: final
+    title: Refuse a token of another realm's user
+    source: apps/auth-server/src/app/helpers/management-token.ts:101
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate:
+          'Bearer realm="OAuth", error="invalid_token", error_description="Access token was not issued in
+          this realm"'
+      body:
+        error: Access token was not issued in this realm
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.dpop_bound:
+    type: final
+    title: Refuse a DPoP-bound token sent as a Bearer token
+    source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:67
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate:
+          'Bearer realm="OAuth", error="invalid_token", error_description="A DPoP-bound access token cannot
+          be used as a Bearer token"'
+      body:
+        error: A DPoP-bound access token cannot be used as a Bearer token
+        code: JWT_INVALID
+        statusCode: 401
+
+  invalid_token.subject_not_a_user:
+    type: final
+    title: Refuse a token whose user no longer exists
+    source: apps/auth-server/src/app/routes/auth/logout.ts:123
+    response:
+      status: 401
+      headers:
+        WWW-Authenticate: 'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not a user"'
+      body:
+        error: Access token subject is not a user
+        code: JWT_INVALID
+        statusCode: 401
+
+  server_error.store:
+    type: final
+    title: Fail on a store error
+    description: >-
+      The steps before the failing one stay done. With NODE_ENV=production the body is the one below; otherwise it
+      carries the error's message and stack.
+    source: apps/auth-server/src/app/plugins/error-handler.ts:522
+    response:
+      status: 500
+      body: { error: Internal server error, statusCode: 500 }
+
+assertions:
+  - id: only-the-portals-token-ends-access
+    never:
+      "state in ['endingSessions', 'invalidatingCodes', 'revokingRefreshTokens', 'revokingAccessToken',
+      'recordingSignOut', 'signed_out', 'signed_out.cookie_cleared'] and (host != 'realm' or overLimit or header !=
+      'bearer' or signature != 'valid' or issuedFor != 'portal' or subject != 'user' or dpopBound)"
+    say:
+      "Nothing is ended unless the request carries the portal's own token, signed by QAuth and bound to no key, for a
+      user of this realm"
+    source: apps/auth-server/src/app/routes/auth/logout.ts:106
+  - id: signed-by-qauth-is-never-unverified
+    never: "state == 'invalid_token.unverified' and signature == 'valid'"
+    say: 'A token QAuth signed is never refused as unverified, however long ago it expired'
+    source: apps/auth-server/src/app/routes/auth/logout.ts:90
+  - id: codes-before-refresh-tokens
+    never: "state == 'revokingRefreshTokens' and not (sessionsEnded and codesInvalidated)"
+    say:
+      'The refresh tokens are swept only after the browser sessions are ended and the unredeemed codes are spent, so
+      no code redeemed later mints a refresh token that survives the logout'
+    source: apps/auth-server/src/app/routes/auth/logout.ts:146
+  - id: signed-out-means-ended
+    never:
+      "state in ['signed_out', 'signed_out.cookie_cleared'] and not (sessionsEnded and codesInvalidated and
+      refreshTokensRevoked)"
+    say: 'A 200 answer means the browser sessions, the unredeemed codes and the refresh tokens have all been ended'
+    source: apps/auth-server/src/app/routes/auth/logout.ts:170
+  - id: expired-token-not-denylisted
+    never: "state == 'revokingAccessToken' and expired"
+    say: 'An expired token is never written to the denylist'
+    source: apps/auth-server/src/app/routes/auth/logout.ts:155
+  - id: misdirected-is-not-counted
+    never: "state == 'too_many_requests.logout_limit' and host != 'realm'"
+    say: 'A request for a host QAuth does not answer for is refused before the rate limiter counts it'
+    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
