@@ -90,6 +90,10 @@ const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
  * value failed validation and answered `invalid_request`. A missing or
  * repeated `grant_type` is still the schema's to refuse: that request is
  * malformed. Runs before validation, so it reads the parsed body as sent.
+ *
+ * The jwt-bearer grant while `ID_JAG_ENABLED` is off is refused here too, as
+ * the handler's master gate refuses it (ADR-011): exactly as an unknown grant
+ * type, whatever else the body holds or lacks, with the gate's event.
  */
 async function rejectUnsupportedGrantType(request: FastifyRequest): Promise<void> {
   const body = request.body;
@@ -97,7 +101,17 @@ async function rejectUnsupportedGrantType(request: FastifyRequest): Promise<void
     typeof body === 'object' && body !== null
       ? (body as { grant_type?: unknown }).grant_type
       : undefined;
-  if (typeof grantType === 'string' && !TOKEN_GRANT_TYPES.includes(grantType)) {
+  if (typeof grantType !== 'string') return;
+  if (grantType === JWT_BEARER_GRANT_TYPE && !env.ID_JAG_ENABLED) {
+    await emitUserEvent(
+      request,
+      TOKEN_REQUEST_FAILED,
+      { grantType, error: 'unsupported_grant_type', reason: 'id_jag_disabled' },
+      { actor: 'client' }
+    );
+    throw new UnsupportedGrantTypeError();
+  }
+  if (!TOKEN_GRANT_TYPES.includes(grantType)) {
     throw new UnsupportedGrantTypeError();
   }
 }
@@ -185,7 +199,9 @@ export default async function (fastify: FastifyInstance) {
 
       try {
         // ADR-011 MASTER GATE. With `ID_JAG_ENABLED` off the jwt-bearer grant
-        // does not exist on this deployment, so it is refused HERE — before
+        // does not exist on this deployment, so it is refused HERE (and in
+        // `rejectUnsupportedGrantType`, before validation, for a body the
+        // schema would refuse) — before
         // client authentication, before any DB work — exactly as an unknown
         // grant type is. This keeps the flag-off behaviour equivalent to the
         // pre-ADR-011 build (which fell through to `unsupported_grant_type`)
@@ -684,10 +700,11 @@ async function handleAuthorizationCode(
 
   const user = await fastify.repositories.users.findById(authCode.userId);
   if (!user) {
-    // The code names no user any more, so the event has none.
-    const notFound = new NotFoundError('User', authCode.userId);
-    await emitRequestFailed(ctx, oauthErrorCode(notFound), 'user_not_found');
-    throw notFound;
+    // The code names no user any more, so the event has none. Answered as the
+    // disabled user below is (RFC 6749 §5.2 `invalid_grant`), so the answer
+    // does not tell a deleted account from a disabled one (#513).
+    await emitRequestFailed(ctx, 'invalid_grant', 'user_not_found');
+    throw new InvalidGrantError('Invalid or expired authorization code');
   }
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the

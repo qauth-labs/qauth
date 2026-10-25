@@ -2141,7 +2141,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
   });
 
-  it('rejects when the user bound to the code cannot be found', async () => {
+  it('rejects with invalid_grant, as for a disabled user, when the user bound to the code cannot be found', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(null);
     await tokenRoute(fastify);
@@ -2149,7 +2149,15 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     if (!handler) throw new Error('Handler missing');
 
     const reply = createReply();
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
+    // The answer does not tell a deleted account from a disabled one (#513);
+    // the event's reason does.
+    await expect(handler(baseRequest(), reply)).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.request_failed:v1-rc.0',
+      expect.objectContaining({ error: 'invalid_grant', reason: 'user_not_found' }),
+      expect.anything()
+    );
   });
 
   it('rejects with unauthorized_client when the client is not authorized for the authorization_code grant', async () => {
