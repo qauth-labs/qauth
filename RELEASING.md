@@ -49,12 +49,13 @@ OIDC identity, and npm accepts the packages through trusted publishing.
       `@qauth-labs/resource-guard@0.0.0` is already published and deprecated.
       For a later SDK, from an empty directory:
       ```sh
+      pkg='@qauth-labs/new-sdk'   # the new SDK's package name
       npm init --scope=@qauth-labs -y
-      npm pkg set name=@qauth-labs/<sdk> version=0.0.0 \
+      npm pkg set "name=$pkg" version=0.0.0 \
         description='Placeholder; see https://github.com/qauth-labs/qauth'
-      echo '# @qauth-labs/<sdk>' > README.md
+      echo "# $pkg" > README.md
       npm publish --access public
-      npm deprecate @qauth-labs/<sdk>@0.0.0 'Placeholder; install a real version.'
+      npm deprecate "$pkg@0.0.0" 'Placeholder; install a real version.'
       ```
    2. In the package's settings on npmjs.com, add a trusted publisher with
       exactly these values:
@@ -110,10 +111,11 @@ publishes nothing.
 
 Never unpublish: a version once seen must stay resolvable for whoever pinned it.
 
-- **A bad package version:** `npm deprecate @qauth-labs/<sdk>@<version> '<why, and what to use>'`.
-  Then release a fixed QAuth version.
+- **A bad package version:** deprecate it, then release a fixed QAuth version.
+  For example, `npm deprecate '@qauth-labs/resource-guard@0.2.0' 'Broken; use 0.2.1.'`.
 - **A bad `latest` or `next`:** point the dist-tag back at the previous good
-  version: `npm dist-tag add @qauth-labs/<sdk>@<good version> latest`.
+  version, for example
+  `npm dist-tag add '@qauth-labs/resource-guard@0.1.9' latest`.
 - **A staged package you do not want:** reject it on npmjs.com instead of
   approving it, and delete the draft release.
 - **A bad image:** deployments pin digests, so announce the previous good

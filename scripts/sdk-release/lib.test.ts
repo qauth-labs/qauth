@@ -132,6 +132,15 @@ describe("QAuth's CHANGELOG", () => {
     expect(() => releaseNotes(CHANGELOG, '0.1.4')).toThrow(SdkReleaseError);
   });
 
+  it('reads the escaped Markdown form of a heading too', () => {
+    const escaped = CHANGELOG.replace('## [Unreleased]', '## \\[Unreleased\\]').replace(
+      '## [0.1.3]',
+      '## \\[0.1.3\\]'
+    );
+    expect(latestReleasedVersion(escaped)).toBe('0.1.3');
+    expect(releaseNotes(escaped, '0.2.0-rc.0')).toBe('### Added\n\n- Coming next.');
+  });
+
   it('as committed, gives the dry run a version every SDK can be stamped with', () => {
     const committed = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
     expect(() => distTagFor(latestReleasedVersion(committed))).not.toThrow();

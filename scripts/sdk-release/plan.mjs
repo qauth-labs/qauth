@@ -21,6 +21,7 @@ import {
   hasReleaseSection,
   latestReleasedVersion,
   parseReleaseTag,
+  releaseNotes,
   SdkReleaseError,
 } from './lib.mjs';
 
@@ -40,6 +41,9 @@ try {
     if (!version.includes('-rc.') && !hasReleaseSection(changelog, version)) {
       throw new SdkReleaseError(`${tag}: CHANGELOG.md has no '## [${version}]' section`);
     }
+    // The draft release needs notes: fail here, before anything is packed,
+    // rather than after the packages are staged.
+    releaseNotes(changelog, version);
     publish = true;
   } else if (mode === 'dry-run') {
     version = latestReleasedVersion(changelog);

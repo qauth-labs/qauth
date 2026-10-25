@@ -53,11 +53,17 @@ export function parseReleaseTag(tag) {
   return version;
 }
 
+/**
+ * The name in a `## [X.Y.Z]` heading, or in its escaped Markdown form
+ * `## \\[X.Y.Z\\]`; `undefined` for any other line.
+ */
+const headingName = (line) => /^## \\?\[([^\\\]]+)\\?\]/.exec(line)?.[1];
+
 /** The `## [X.Y.Z]` release headings of QAuth's CHANGELOG, newest first. */
 function releaseHeadings(changelog) {
   return changelog
     .split('\n')
-    .map((line) => /^## \[([^\]]+)\]/.exec(line)?.[1])
+    .map(headingName)
     .filter((version) => version !== undefined && version !== 'Unreleased');
 }
 
@@ -80,7 +86,7 @@ export function hasReleaseSection(changelog, version) {
 export function releaseNotes(changelog, version) {
   const heading = version.includes('-rc.') ? 'Unreleased' : version;
   const lines = changelog.split('\n');
-  const start = lines.findIndex((line) => line.startsWith(`## [${heading}]`));
+  const start = lines.findIndex((line) => headingName(line) === heading);
   if (start === -1) throw new SdkReleaseError(`CHANGELOG.md has no \`## [${heading}]\` section`);
   const end = lines.findIndex((line, i) => i > start && line.startsWith('## '));
   return lines
