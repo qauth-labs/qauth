@@ -295,12 +295,13 @@ curl -s -X POST http://localhost:3000/oauth/token \
 - The response contains a **new** `refresh_token` — store it and discard the old.
 - Each new refresh token is good for `REFRESH_TOKEN_LIFESPAN` from the refresh.
   When the realm sets `sso_max_lifespan`, the family also ends that long after
-  the code exchange that started it, and never after the end of the user's
-  browser session that the authorization ran in: no token of the family expires
-  later, and a refresh at or after that point fails with `invalid_grant` and
-  revokes the whole family. Send the user through `/oauth/authorize` again. A
-  silent `prompt=none` authorization just before the session ends gives a
-  family that ends with the session.
+  it starts. A family starts at the code exchange or at `POST /auth/login`. A
+  family started by a code exchange also ends no later than the user's browser
+  session that the authorization ran in. No token of the family expires later,
+  and a refresh at or after that point fails with `invalid_grant` and revokes
+  the whole family. Send the user through `/oauth/authorize` again. A silent
+  `prompt=none` authorization just before the session ends gives a family that
+  ends with the session.
 - `scope` may be passed to **down-scope** only; requesting a scope not in the
   original set returns `invalid_scope`. Omit it to keep the original scopes.
 - The refreshed scopes must still be allowed for the client. If a scope was

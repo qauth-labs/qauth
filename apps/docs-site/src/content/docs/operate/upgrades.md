@@ -131,8 +131,9 @@ until the last old node is gone.
 
 Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records
 when each refresh-token family started. It fills the new column for every row
-of `refresh_tokens` in one statement, inside the runner's transaction, and the
-`ALTER TABLE` before it locks the table until that transaction commits. While
+of `refresh_tokens` in one statement, inside the runner's transaction. The
+`ALTER TABLE` on `refresh_tokens` that runs first takes a lock on the table and
+holds it until that transaction commits. While
 the runner works, every token request that reads or writes a refresh token
 waits: a code exchange, a refresh, `POST /auth/login` and the purge job. Nothing
 fails; those requests finish once the runner does, unless your proxy or client
@@ -149,9 +150,9 @@ family:
 | 100,000                  | 58 MB      | 5.7 s           | 4.7 s                 |
 | 1,000,000                | 588 MB     | 100 s           | 99.8 s                |
 
-Almost all of it is the `UPDATE` (5.5 s and 98.4 s). A Postgres with more
-`shared_buffers` and a larger `max_wal_size` takes less time. To know your own
-number, count first:
+Almost all of it is the `UPDATE` (5.5 s and 98.4 s). These were default
+settings; more `shared_buffers` and a larger `max_wal_size` may shorten the
+pause, which we have not measured. To estimate your own, count first:
 
 ```sql
 SELECT count(*) FROM refresh_tokens;
