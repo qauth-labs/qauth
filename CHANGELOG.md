@@ -744,6 +744,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the database. The failed-login and rate-limit counters start from zero
   after the upgrade, as their Redis keys now carry the realm id.
 
+- **Every URL comes from the realm row** ([#490], ADR-019 Decision 1). The
+  issuer and endpoint URLs in discovery, the RFC 9207 `iss` of an authorization
+  response, the userinfo audience, the client-assertion audience, both sides of
+  ID-JAG, the wallet `response_uri`, `request_uri` and same-device return URI,
+  the link in a verification mail and the base a DPoP proof's `htu` is checked
+  against are built on the issuer of the realm the request's host named. After
+  boot nothing reads `JWT_ISSUER`, `EMAIL_BASE_URL` or the `Host` header to
+  build a URL, and a lint rule refuses `request.host`, `request.hostname`,
+  `request.port`, `request.protocol`, the `Host` header and `X-Forwarded-*`
+  outside the realm resolver. A deployment with one realm sees the same URLs as
+  before. With a second realm:
+  - its discovery, `iss`, mail links and wallet URLs name its own issuer;
+  - a DPoP proof sent to it must name its own endpoint URL, so proofs to a
+    realm other than the boot one are no longer refused;
+  - introspection, revocation, logout, the token-exchange subject token and the
+    Bearer path of `/oauth/authorize` accept only a token whose `iss` is the
+    realm's issuer. Tokens still carry `JWT_ISSUER` until they are signed per
+    realm ([#491]), so until then only the default realm's tokens pass there.
+
+  `EMAIL_BASE_URL` stays required but is no longer read. The mail library's
+  `sendVerificationEmail` takes the link base with each mail instead of from
+  its configuration.
+
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
   session service ([#469]): one `sessions` row with the realm, the user,
@@ -968,6 +991,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#490]: https://github.com/qauth-labs/qauth/issues/490
+[#491]: https://github.com/qauth-labs/qauth/issues/491
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552
