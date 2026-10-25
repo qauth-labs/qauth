@@ -1,5 +1,6 @@
 import { BadRequestError } from '@qauth-labs/shared-errors';
 
+import { reservedAudiencesIn } from '../api-conventions/families';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
@@ -106,6 +107,37 @@ export function validateRedirectUri(uri: string, customSchemes: readonly string[
     'invalid_redirect_uri',
     `unsupported scheme: ${parsed.protocol} (use https, http to a loopback host, or a private-use scheme such as com.example.app: per RFC 8252 §7.1)`
   );
+}
+
+/**
+ * The client metadata members a registration could name a token audience in.
+ * Neither is registered metadata QAuth stores: the request schema drops both,
+ * as RFC 7591 §2 lets a server ignore metadata it does not understand.
+ */
+const AUDIENCE_METADATA_MEMBERS = ['audience', 'resource'] as const;
+
+/**
+ * Refuse a registration whose `audience` or `resource` metadata names a
+ * QAuth-defined audience (`urn:qauth:aud:`, #509), with
+ * `invalid_client_metadata`. An API family audience is issued only to a client
+ * an operator set up to list it (ADR-019 Decision 7), so a client that claims
+ * one for itself is told so rather than registered as if it had not asked.
+ *
+ * Takes the body as it arrived, before the schema strips the two members; any
+ * other value in them is still ignored. A Client ID Metadata Document is held
+ * to the same rule (`toCimdClientInsert`).
+ */
+export function assertNoReservedAudienceMetadata(body: unknown): void {
+  if (typeof body !== 'object' || body === null) return;
+  for (const member of AUDIENCE_METADATA_MEMBERS) {
+    const value: unknown = Reflect.get(body, member);
+    if (reservedAudiencesIn(value).length > 0) {
+      rejectRegistration(
+        'invalid_client_metadata',
+        `${member} values starting with "urn:qauth:aud:" are reserved for QAuth's own APIs and cannot be registered`
+      );
+    }
+  }
 }
 
 /**

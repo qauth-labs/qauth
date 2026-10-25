@@ -1,7 +1,11 @@
 import { BadRequestError } from '@qauth-labs/shared-errors';
 import { describe, expect, it, vi } from 'vitest';
 
-import { validateAndNormalize, validateRedirectUri } from './dynamic-client-registration';
+import {
+  assertNoReservedAudienceMetadata,
+  validateAndNormalize,
+  validateRedirectUri,
+} from './dynamic-client-registration';
 
 /** `REDIRECT_URI_CUSTOM_SCHEMES` unset: the default. */
 const NO_CUSTOM_SCHEMES: readonly string[] = [];
@@ -299,5 +303,31 @@ describe('validateAndNormalize', () => {
     );
     expect(n.isPublic).toBe(false);
     expect(n.tokenEndpointAuthMethod).toBe('client_secret_basic');
+  });
+});
+
+describe('assertNoReservedAudienceMetadata (#509)', () => {
+  it.each([
+    { audience: 'urn:qauth:aud:developer:v1-rc.0' },
+    { audience: ['https://api.example.com', 'urn:qauth:aud:admin:v1-rc.0'] },
+    { resource: 'Urn:QAuth:Aud:account:v1-rc.0' },
+    { resource: ['urn:qauth:aud:anything'] },
+  ])('refuses %j with invalid_client_metadata', (metadata) => {
+    expect(() => assertNoReservedAudienceMetadata({ client_name: 'App', ...metadata })).toThrow(
+      /^invalid_client_metadata: /
+    );
+    expect(() => assertNoReservedAudienceMetadata(metadata)).toThrow(BadRequestError);
+  });
+
+  it.each([
+    undefined,
+    null,
+    'urn:qauth:aud:developer:v1-rc.0',
+    { client_name: 'App' },
+    { audience: 'https://api.example.com', resource: ['https://api.example.com/mcp'] },
+    { audience: { nested: 'urn:qauth:aud:admin:v1-rc.0' } },
+    { scope: 'urn:qauth:aud:admin:v1-rc.0' },
+  ])('leaves %j to the schema, which ignores the two members', (body) => {
+    expect(() => assertNoReservedAudienceMetadata(body)).not.toThrow();
   });
 });

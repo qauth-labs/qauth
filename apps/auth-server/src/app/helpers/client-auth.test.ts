@@ -33,6 +33,7 @@ import {
   resolveAudience,
   SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS,
   toAgentScopeContext,
+  unlistedReservedAudiences,
   validateScopes,
 } from './client-auth';
 
@@ -699,5 +700,31 @@ describe('resolveAudience', () => {
   it('falls back to clientId when an audience entry is oversized', () => {
     const oversized = ['a'.repeat(257)];
     expect(resolveAudience({ ...base, audience: oversized })).toBe('cid');
+  });
+});
+
+describe('unlistedReservedAudiences (#509)', () => {
+  const ADMIN = 'urn:qauth:aud:admin:v1-rc.0';
+  const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+
+  it('returns the reserved audiences the client does not list', () => {
+    expect(unlistedReservedAudiences({ audience: null }, ADMIN)).toEqual([ADMIN]);
+    expect(unlistedReservedAudiences({ audience: [ADMIN] }, [ADMIN, ACCOUNT])).toEqual([ACCOUNT]);
+    expect(
+      unlistedReservedAudiences({ audience: [ADMIN] }, ['URN:QAUTH:AUD:admin:v1-rc.0'])
+    ).toEqual(['URN:QAUTH:AUD:admin:v1-rc.0']);
+  });
+
+  it('returns nothing for listed or ordinary audiences', () => {
+    expect(unlistedReservedAudiences({ audience: [ADMIN, ACCOUNT] }, [ADMIN, ACCOUNT])).toEqual([]);
+    expect(
+      unlistedReservedAudiences({ audience: null }, ['https://api.example.com', 'client-1'])
+    ).toEqual([]);
+  });
+
+  it('lists nothing from a malformed stored audience', () => {
+    expect(unlistedReservedAudiences({ audience: ADMIN as unknown as string[] }, [ADMIN])).toEqual([
+      ADMIN,
+    ]);
   });
 });

@@ -6,7 +6,10 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
-import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
+import {
+  assertNoReservedAudienceMetadata,
+  validateAndNormalize,
+} from '../../helpers/dynamic-client-registration';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
 import { requestRealm } from '../../helpers/request-realm';
@@ -46,6 +49,11 @@ export default async function (fastify: FastifyInstance) {
         response: {
           201: dynamicClientRegistrationResponseSchema,
         },
+      },
+      // Before validation, which drops the `audience` and `resource` members a
+      // client may not use to claim a QAuth API audience (#509).
+      preValidation: async (request) => {
+        assertNoReservedAudienceMetadata(request.body);
       },
       config: {
         surface: 'api',

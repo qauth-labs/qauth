@@ -7,6 +7,7 @@ import {
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { isReservedAudience } from '../api-conventions/families';
 import { authenticateClientAssertion, type ClientAssertionCredentials } from './client-assertion';
 import { isAgentClient, resolveClient } from './client-resolution';
 import { isClientUsable } from './client-status';
@@ -587,4 +588,25 @@ export function resolveAudience(client: OAuthClientLike, resource?: string[]): s
     return client.clientId;
   }
   return parsed.data.length === 1 ? parsed.data[0] : parsed.data;
+}
+
+/**
+ * The QAuth-defined audiences (`urn:qauth:aud:`, #509) in `aud` that the
+ * client's own `audience` does not list.
+ *
+ * Every grant takes a token's `aud` from an RFC 8707 `resource` value when the
+ * request names one, and nothing else stops a client from naming an API
+ * family's audience there (ADR-019 Decision 7). The token endpoint therefore
+ * issues such an audience only to a client an operator set up to list it, and
+ * refuses `invalid_target` when this returns anything. It reads the client's
+ * stored `audience`, never the client id: a client whose id happens to be a
+ * reserved value lists nothing by that.
+ */
+export function unlistedReservedAudiences(
+  client: Pick<OAuthClientLike, 'audience'>,
+  aud: string | readonly string[]
+): string[] {
+  const parsed = audienceSchema.safeParse(client.audience);
+  const listed = new Set(parsed.success ? parsed.data : []);
+  return [aud].flat().filter((value) => isReservedAudience(value) && !listed.has(value));
 }

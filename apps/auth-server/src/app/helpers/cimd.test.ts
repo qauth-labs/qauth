@@ -279,6 +279,47 @@ describe('toCimdClientInsert — agent classification (ADR-007 §2)', () => {
   });
 });
 
+describe('toCimdClientInsert — the reserved urn:qauth:aud: namespace (#509)', () => {
+  it.each([
+    ['audience', 'urn:qauth:aud:developer:v1-rc.0'],
+    ['audience', ['https://api.example.com', 'urn:qauth:aud:admin:v1-rc.0']],
+    ['resource', 'URN:QAUTH:AUD:account:v1-rc.0'],
+    ['resource', ['urn:qauth:aud:other']],
+  ])('refuses a document whose %s claims %j', (member, value) => {
+    const doc = cimdDocumentSchema.parse(validDoc({ [member]: value }));
+    expect(() => toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel')).toThrow(
+      expect.objectContaining({
+        name: 'InvalidClientError',
+        errorDescription: 'CIMD document claims a reserved urn:qauth:aud: audience',
+      })
+    );
+  });
+
+  it('ignores any other audience or resource, which it never stores', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ audience: ['https://api.example.com'], resource: { odd: 'shape' } })
+    );
+    const insert = toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel');
+    expect(insert).not.toHaveProperty('audience');
+    expect(insert.scopes).toEqual([]);
+  });
+
+  it('keeps the two members through the cache, so a cached document is refused too', async () => {
+    const fastify = fastifyStub();
+    ssrfSafeGet.mockResolvedValue(
+      ok(validDoc({ resource: 'urn:qauth:aud:developer:v1-rc.0' }), {
+        'cache-control': 'max-age=600',
+      })
+    );
+    await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    const cached = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(() => toCimdClientInsert('realm-1', CLIENT_ID, cached, 'sentinel')).toThrow(
+      InvalidClientError
+    );
+  });
+});
+
 describe('toCimdClientInsert — never operator-provisioned (ANT-2026-O8U3P920)', () => {
   it('pins provisionedByOperator to false, whatever the document says', () => {
     // The document's host chose the redirect URIs, so a CIMD client never

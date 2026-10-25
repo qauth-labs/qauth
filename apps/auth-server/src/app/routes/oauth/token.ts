@@ -27,6 +27,7 @@ import {
   type OAuthClientLike,
   resolveAudience,
   toAgentScopeContext,
+  unlistedReservedAudiences,
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
@@ -553,6 +554,24 @@ async function emitRequestFailed(
 }
 
 /**
+ * Refuse to mint `aud` when it holds a QAuth API audience (`urn:qauth:aud:`)
+ * the client does not list (#509, ADR-019 Decision 7): RFC 8707 §2
+ * `invalid_target`, the server being unwilling to issue a token for that
+ * resource. A family accepts any token with its audience, whichever client it
+ * was issued to, so the operator decides which clients get one. Called by
+ * every grant once the audience is known and before anything is written.
+ */
+async function assertReservedAudiencesListed(
+  ctx: HandlerContext<{ grant_type: string }>,
+  aud: string | readonly string[],
+  userId: string | null = null
+): Promise<void> {
+  if (unlistedReservedAudiences(ctx.client, aud).length === 0) return;
+  await emitRequestFailed(ctx, 'invalid_target', 'reserved_audience_not_listed', userId);
+  throw new InvalidTargetError('a QAuth API audience is issued only to a client that lists it');
+}
+
+/**
  * Handle the authorization_code grant (legacy flow from Phase 1).
  * Now also issues `aud` + `scope` claims on the access token.
  */
@@ -727,6 +746,7 @@ async function handleAuthorizationCode(
   // override and the response `expires_in` so they always agree.
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   const aud = resolveAudience(client, effectiveResource);
+  await assertReservedAudiencesListed(ctx, aud, user.id);
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 
@@ -916,6 +936,7 @@ async function handleClientCredentials(
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
   const aud = resolveAudience(client, requestedResource);
+  await assertReservedAudiencesListed(ctx, aud);
   const accessToken = await issueAccessToken(fastify, {
     sub: client.clientId,
     clientId: client.clientId,
@@ -1180,6 +1201,7 @@ async function handleRefreshToken(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   const aud = resolveAudience(client, effectiveResource);
+  await assertReservedAudiencesListed(ctx, aud, user.id);
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
@@ -1626,6 +1648,7 @@ async function handleTokenExchange(
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
   const aud = arrayToAud(effectiveAudience);
+  await assertReservedAudiencesListed(ctx, aud, user.id);
 
   // Clamp lifespan so the delegated token NEVER outlives the subject token's
   // authority (and so it cannot be re-exchanged to extend it indefinitely).
@@ -2114,6 +2137,7 @@ async function handleJwtBearer(
   // whole allowlist. `resolveAudience` collapses the single value to a string
   // `aud`, so the token names exactly one resource server.
   const aud = resolveAudience(client, [assertion.resource]);
+  await assertReservedAudiencesListed(ctx, aud, user.id);
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,
