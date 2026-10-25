@@ -34,7 +34,13 @@ try {
     }
     const changelog = join(SDK_ROOT, project, 'CHANGELOG.md');
     const sections = existsSync(changelog) ? readFileSync(changelog, 'utf8') : '';
-    if (!new RegExp(`^## \\[?${version.replace(/\./g, '\\.')}\\]?(\\s|$)`, 'm').test(sections)) {
+    // `## 0.1.0 (2026-10-26)` as nx release writes it, or `## [0.1.0]`. Plain
+    // string comparison: the version never becomes part of a pattern.
+    const isSection = (line) =>
+      [`## ${version}`, `## [${version}]`].some(
+        (heading) => line === heading || line.startsWith(`${heading} `)
+      );
+    if (!sections.split('\n').some(isSection)) {
       throw new SdkReleaseError(`${tag}: ${changelog} has no section for ${version}`);
     }
     const plan = { publish: true, packages: [{ project, version, distTag: distTagFor(version) }] };
