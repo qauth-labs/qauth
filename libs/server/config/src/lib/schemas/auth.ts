@@ -1,3 +1,4 @@
+import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import { parseRealmEndpointHosts } from './realm-endpoint-hosts';
@@ -402,16 +403,29 @@ export const authEnvSchema = z.object({
    * Intentionally tight: only OIDC core scopes. Admin / tenant-scoped
    * grants (e.g. `example:admin`, `tenant-a:*`) MUST be added explicitly by
    * an operator and MUST NOT live in this default.
+   *
+   * Boot refuses a scope with the reserved `admin:` prefix, in any case
+   * (#507, ADR-019 Decision 7): the admin API's scopes are never obtained
+   * through dynamic registration, so the list may not name one.
    */
   DEFAULT_DYNAMIC_REGISTRATION_SCOPES: z
     .string()
     .default('openid profile email offline_access')
-    .transform((s) =>
-      s
+    .transform((s, ctx) => {
+      const scopes = s
         .split(/[\s,]+/)
         .map((x) => x.trim())
-        .filter((x) => x.length > 0)
-    ),
+        .filter((x) => x.length > 0);
+      const reserved = reservedAdminScopesIn(scopes);
+      if (reserved.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `DEFAULT_DYNAMIC_REGISTRATION_SCOPES lists ${reserved.map((scope) => `"${scope}"`).join(', ')}: the "admin:" prefix is reserved for the admin API, and a dynamically registered client never holds such a scope.`,
+        });
+        return z.NEVER;
+      }
+      return scopes;
+    }),
 
   /**
    * Bare custom schemes a redirect URI may use (#774), separated by spaces or

@@ -197,6 +197,48 @@ describe('authEnvSchema MAX_CLIENTS_PER_DEVELOPER', () => {
 });
 
 /**
+ * DEFAULT_DYNAMIC_REGISTRATION_SCOPES seeds a realm's dynamic registration
+ * allowlist, which may never hold a scope with the reserved `admin:` prefix
+ * (#507, ADR-019 Decision 7).
+ */
+describe('authEnvSchema DEFAULT_DYNAMIC_REGISTRATION_SCOPES', () => {
+  const parse = (raw?: string) =>
+    authEnvSchema.parse(raw === undefined ? {} : { DEFAULT_DYNAMIC_REGISTRATION_SCOPES: raw })
+      .DEFAULT_DYNAMIC_REGISTRATION_SCOPES;
+
+  it('defaults to the OIDC core scopes', () => {
+    expect(parse()).toEqual(['openid', 'profile', 'email', 'offline_access']);
+  });
+
+  it('splits on spaces and commas', () => {
+    expect(parse('openid, mcp:read  mcp:write')).toEqual(['openid', 'mcp:read', 'mcp:write']);
+  });
+
+  it('accepts scopes that only contain "admin"', () => {
+    expect(parse('openid agent:admin example:admin administrator')).toEqual([
+      'openid',
+      'agent:admin',
+      'example:admin',
+      'administrator',
+    ]);
+  });
+
+  it.each([
+    'openid admin:read',
+    'admin:write',
+    'openid,admin:security',
+    'ADMIN:read',
+    'admin:custom',
+  ])('refuses the boot for %j, naming the reserved scope', (raw) => {
+    const result = authEnvSchema.safeParse({ DEFAULT_DYNAMIC_REGISTRATION_SCOPES: raw });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toMatch(
+      /^DEFAULT_DYNAMIC_REGISTRATION_SCOPES lists "[^"]+": the "admin:" prefix is reserved for the admin API/
+    );
+  });
+});
+
+/**
  * SESSION_LAST_SEEN_INTERVAL (ADR-019 Decision 3, issue #469): how often, at
  * most, a browser session's `last_seen_at` is written. One minute by default,
  * as ADR-019 decides; the operator may change it.

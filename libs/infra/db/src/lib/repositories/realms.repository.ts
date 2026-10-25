@@ -10,6 +10,7 @@ import {
   eventRetentionProblems,
   InvalidRealmHostError,
   normaliseRealmHost,
+  reservedAdminScopesIn,
   resolveRpId,
   rpIdCoversHost,
 } from '@qauth-labs/shared-validation';
@@ -316,6 +317,25 @@ function assertSsoLimits(data: {
   }
 }
 
+/**
+ * Refuse a dynamic registration allowlist that holds a scope with the reserved
+ * `admin:` prefix, in any case (#507, ADR-019 Decision 7): the admin API's
+ * scopes are never obtained through dynamic registration. The CHECK
+ * `realms_dynamic_registration_scopes_not_admin` refuses the same.
+ */
+function assertDynamicRegistrationScopes(data: {
+  dynamicRegistrationAllowedScopes?: readonly string[];
+}): void {
+  const scopes = data.dynamicRegistrationAllowedScopes;
+  if (scopes === undefined) return;
+  const reserved = reservedAdminScopesIn(scopes.filter((scope) => typeof scope === 'string'));
+  if (reserved.length > 0) {
+    throw new BadRequestError(
+      `Realm dynamic_registration_allowed_scopes must not hold a scope starting with "admin:", which is reserved for the admin API: ${reserved.join(', ')}`
+    );
+  }
+}
+
 /** Map a duplicate key to {@link UniqueConstraintError}; rethrow anything else. */
 function rethrowUnique(error: unknown, fallbackConstraint: string): never {
   if (isUniqueConstraintError(error)) {
@@ -329,7 +349,8 @@ function rethrowUnique(error: unknown, fallbackConstraint: string): never {
  *
  * Every realm it creates gets `options.seeds` for the policies its creator
  * leaves out, and every create and update refuses event retention outside
- * its limits and an `sso_max_lifespan` of zero or less ({@link BadRequestError}).
+ * its limits, an `sso_max_lifespan` of zero or less and a dynamic
+ * registration allowlist with an `admin:` scope ({@link BadRequestError}).
  *
  * @param defaultDb - Database client to use for queries
  * @param options - The realm policy seeds (ADR-019 Decision 10)
@@ -355,6 +376,7 @@ export function createRealmsRepository(
     }
     assertEventRetention(row);
     assertSsoLimits(row);
+    assertDynamicRegistrationScopes(row);
     return row;
   }
 
@@ -664,6 +686,7 @@ export function createRealmsRepository(
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       assertEventRetention(data);
       assertSsoLimits(data);
+      assertDynamicRegistrationScopes(data);
       const invoker = tx ?? defaultDb;
       const updateData = {
         ...data,

@@ -35,6 +35,9 @@ describe('the reserved admin: scope prefix (#507)', () => {
     ' admin:read',
     'openid',
     '',
+    // Not ASCII, so no scope (RFC 6749 §3.3), and not folded onto ASCII.
+    'ADM\u0130N:read',
+    'adm\u0131n:read',
   ])('leaves %j alone', (scope) => {
     expect(isReservedAdminScope(scope)).toBe(false);
   });
