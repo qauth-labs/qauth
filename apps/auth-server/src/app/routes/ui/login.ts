@@ -365,8 +365,7 @@ export default async function (fastify: FastifyInstance) {
       }
 
       // Password check via the user_credentials read path (#228); the enabled
-      // gate below still reads the users row, which is fetched for the
-      // session payload anyway.
+      // gate below still reads the users row.
       const check = await verifyPasswordCredential(fastify, {
         realmId: realm.id,
         email: normalizedEmail,
