@@ -72,6 +72,7 @@
         "libs/fastify/plugins/signer/*",
         "libs/fastify/plugins/event-delivery/*",
         "libs/fastify/plugins/sessions/*",
+        "libs/fastify/plugins/dpop/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
         "libs/keys/aws-kms/*"
@@ -109,6 +110,7 @@
         "libs/fastify/plugins/signer/*",
         "libs/fastify/plugins/event-delivery/*",
         "libs/fastify/plugins/sessions/*",
+        "libs/fastify/plugins/dpop/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
         "libs/keys/aws-kms/*"
