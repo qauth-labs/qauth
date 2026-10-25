@@ -123,18 +123,25 @@ describe('the admin permissions page (#507)', () => {
     ]);
   });
 
-  // A published id is never removed: a permission that is no longer needed is
-  // retired (`retiredIn`), so its id stays taken and the page keeps it.
-  it('still registers every permission the committed page publishes', () => {
+  // A published id is never removed and never given another meaning: a
+  // permission that is no longer needed is retired (`retiredIn`), so its id
+  // stays taken and the page keeps it, and its class never changes, or every
+  // stored custom role that lists it would reach it with another scope. The
+  // committed page is read before `-u` rewrites it, so the run that
+  // regenerates the page fails too; a later run reads the rewritten page,
+  // which is why the page's diff is the change a reviewer checks.
+  it('still registers every permission the committed page publishes, with its class', () => {
     const published = [
       ...tableRows(sectionOf(COMMITTED_PAGE, 'Permissions')),
       ...tableRows(sectionOf(COMMITTED_PAGE, 'Retired permissions')),
-    ].map(([id]) => id.replace(/`/g, ''));
+    ].map(([id, permissionClass]) => ({ id: id.replace(/`/g, ''), class: permissionClass }));
     expect(published.length).toBeGreaterThan(0);
-    const removed = published.filter((id) => PERMISSION_REGISTRY.get(id) === undefined);
+    const changed = published.filter(
+      (entry) => PERMISSION_REGISTRY.get(entry.id)?.class !== entry.class
+    );
     expect(
-      removed,
-      'a published permission id was removed: retire it with retiredIn instead'
+      changed,
+      'a published permission was removed or changed its class: retire it with retiredIn and define a new id instead'
     ).toEqual([]);
   });
 

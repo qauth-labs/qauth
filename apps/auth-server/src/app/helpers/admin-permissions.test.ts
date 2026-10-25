@@ -151,6 +151,7 @@ describe('definePermission', () => {
     'realms.policies-write',
     '',
   ])('refuses the id %j', (id) => {
+    expect(PERMISSION_ID_PATTERN.test(id)).toBe(false);
     expect(() => definePermission({ ...valid, id, resource: id.split('.')[0] || 'x' })).toThrow(
       PermissionDefinitionError
     );

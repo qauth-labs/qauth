@@ -38,6 +38,7 @@ describe('admin scopes (#507)', () => {
   it('cannot be changed at run time', () => {
     expect(Object.isFrozen(ADMIN_SCOPES)).toBe(true);
     expect(Object.isFrozen(ADMIN_SCOPE_LIST)).toBe(true);
+    expect(Object.isFrozen(PERMISSION_CLASSES)).toBe(true);
   });
 });
 

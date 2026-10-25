@@ -39,7 +39,7 @@ export { isReservedAdminScope, reservedAdminScopesIn };
  * permission has exactly one (`admin-permissions.ts`), and each class has
  * exactly one scope.
  */
-export const PERMISSION_CLASSES = ['read', 'write', 'security'] as const;
+export const PERMISSION_CLASSES = Object.freeze(['read', 'write', 'security'] as const);
 
 export type PermissionClass = (typeof PERMISSION_CLASSES)[number];
 
@@ -76,6 +76,11 @@ export function permissionClassOfScope(scope: string): PermissionClass | undefin
  * A token's scopes as a set. Takes the space-delimited `scope` claim
  * (RFC 6749 §3.3, RFC 9068 §2.2.3) or a list that was already split. A string
  * is never read as a list of characters.
+ *
+ * The claim is split on the space character only, as RFC 6749 §3.3 delimits
+ * it (`resource-guard` splits on any white space). A tab or a line break never
+ * appears in a claim QAuth issues, and kept inside a scope it only makes that
+ * scope match nothing.
  */
 export function tokenScopeSet(scopes: string | Iterable<string>): ReadonlySet<string> {
   if (typeof scopes === 'string') {

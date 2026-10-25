@@ -80,6 +80,7 @@ describe('built-in roles (#507)', () => {
 
   it('cannot be edited', () => {
     expect(Object.isFrozen(BUILT_IN_ROLES)).toBe(true);
+    expect(Object.isFrozen(BUILT_IN_ROLE_NAMES)).toBe(true);
     for (const name of BUILT_IN_ROLE_NAMES) {
       const role = BUILT_IN_ROLES[name];
       expect(Object.isFrozen(role)).toBe(true);

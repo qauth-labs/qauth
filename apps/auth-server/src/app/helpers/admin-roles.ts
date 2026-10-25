@@ -26,7 +26,7 @@ import { PERMISSION_REGISTRY, type PermissionRegistry } from './admin-permission
 import { allowedPermissionClasses, type PermissionClass } from './admin-scopes';
 
 /** The names of the built-in roles, from the least to the most privileged. */
-export const BUILT_IN_ROLE_NAMES = ['viewer', 'editor', 'security-admin'] as const;
+export const BUILT_IN_ROLE_NAMES = Object.freeze(['viewer', 'editor', 'security-admin'] as const);
 
 export type BuiltInRoleName = (typeof BUILT_IN_ROLE_NAMES)[number];
 
