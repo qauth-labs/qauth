@@ -23,7 +23,7 @@ export interface SsfTransmitter {
    * client resolves it and checks every address, sending nothing. The push
    * route checks again at every delivery.
    *
-   * @throws SsfRequestError naming the egress reason when it is refused
+   * @throws SsfRequestError when it is refused; the reason is logged, not returned
    */
   checkEndpoint(url: string): Promise<void>;
 }
@@ -77,7 +77,10 @@ export const ssfPlugin = fp<SsfPluginOptions>(
           await egress.validateDestination(url, { purpose: SSF_EGRESS_PURPOSE });
         } catch (error) {
           if (!isEgressError(error)) throw error;
-          throw new SsfRequestError(`endpoint_url is refused (${error.reason})`);
+          // The reason stays in the server's log (the egress client logs it):
+          // telling the receiver would let it map which names resolve to
+          // private addresses.
+          throw new SsfRequestError('endpoint_url is refused');
         }
       },
     });

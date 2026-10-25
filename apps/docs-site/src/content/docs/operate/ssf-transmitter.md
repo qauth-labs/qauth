@@ -32,6 +32,19 @@ UPDATE realms SET ssf_transmitter_enabled = true WHERE name = 'master';
 
 The auth server reads realm rows through a cache, so a change takes effect within 30 seconds.
 
+A realm needs two keys of its own: an `event_signing` key, which signs its SETs, and a
+`data_at_rest` key, which stores receivers' headers. The default realm gets both at boot. For
+any other realm, create them before turning its switch on (see
+[Keys](/operate/keys/#adding-a-key-auth-serverkeyscreate)):
+
+```bash
+pnpm nx run auth-server:keys:create --realm=<realm> --purpose=event_signing --algorithm=EdDSA
+pnpm nx run auth-server:keys:create --realm=<realm> --purpose=data_at_rest --algorithm=A256GCM
+```
+
+Without them, creating a stream with an `authorization_header` fails, and every delivery fails at
+signing until its attempts run out.
+
 With both on, the realm:
 
 - serves the transmitter metadata at `/.well-known/ssf-configuration`. Every URL in it is built
@@ -46,8 +59,12 @@ With both on, the realm:
 A receiver is an OAuth client of the realm. It authenticates with its own access token from the
 `client_credentials` grant, and the token must:
 
-- carry the `ssf:stream` scope;
+- carry the `ssf:stream` scope (a token without it gets `403`);
 - name the realm's issuer in `aud`, so a token minted for another resource cannot manage streams.
+
+Give `ssf:stream` only to clients you trust with the realm's security events: a receiver may add
+any user or client of the realm as a subject. Taking the scope away, disabling or suspending the
+client, or deleting it stops its deliveries; deleting the client deletes its stream.
 
 Create the client with `client_credentials`, the `ssf:stream` scope and the realm's issuer as its
 audience, for example as an entry of the seed manifest's `clients`:
@@ -90,11 +107,13 @@ curl -s https://auth.example.com/ssf/stream \
 ```
 
 - QAuth checks `endpoint_url` through its egress client when the stream is created or changed: an
-  address that is private, loopback, link-local or otherwise not public is refused with `400`. It
-  checks again at every delivery, so a name that later resolves to such an address is refused
-  then too.
+  address that is private, loopback, link-local or otherwise not public is refused with `400`
+  (`endpoint_url is refused`; the reason is in the server's log, not in the answer). It checks
+  again at every delivery, so a name that later resolves to such an address is refused then too.
 - `authorization_header` is sent with every push. QAuth stores it encrypted with the realm's
-  `data_at_rest` key and never returns it.
+  `data_at_rest` key and never returns it. A `PATCH` whose `delivery` leaves it out and keeps the
+  same `endpoint_url` keeps the stored header, so sending back what a read returned changes
+  nothing; a new `endpoint_url` never gets the old header, and a `PUT` replaces it.
 - `events_delivered` in the answer is what QAuth will send: the requested events it supports.
 
 ## Add subjects

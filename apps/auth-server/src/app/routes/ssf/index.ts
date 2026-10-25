@@ -220,10 +220,23 @@ export default async function (fastify: FastifyInstance) {
     if (body.stream_id === undefined) throw new BadRequestError('stream_id is required');
     const current = await ownStream(receiver, body.stream_id);
     await checked(() => assertTransmitterMembers(body, configurationOf(receiver, current)));
-    const delivery =
+    let delivery =
       body.delivery !== undefined || replace
         ? await deliveryFor(receiver, current.id, body.delivery)
         : {};
+    // QAuth never returns the stored header, so a receiver that reads its
+    // stream and PATCHes `delivery` back cannot send it again. A PATCH that
+    // leaves the header out and keeps the endpoint keeps the stored header; a
+    // new endpoint never gets the old one, and a PUT replaces it.
+    if (
+      !replace &&
+      body.delivery !== undefined &&
+      body.delivery.authorization_header === undefined &&
+      'endpointUrl' in delivery &&
+      delivery.endpointUrl === current.endpointUrl
+    ) {
+      delivery = { ...delivery, authorizationHeader: current.authorizationHeader };
+    }
     const updated = await streams.update(
       keyOf(receiver, current.id),
       {
@@ -386,7 +399,11 @@ export default async function (fastify: FastifyInstance) {
     subject: z.infer<typeof addSubjectRequestSchema>['subject']
   ) {
     const subjectKey = canonicalSubjectKey(subject);
-    if (subjectKey.length > SUBJECT_KEY_MAX) throw new BadRequestError('The subject is too long');
+    // Bytes, not characters: the key is indexed, and a long multibyte subject
+    // would pass a character count and fail the index.
+    if (Buffer.byteLength(subjectKey) > SUBJECT_KEY_MAX) {
+      throw new BadRequestError('The subject is too long');
+    }
     return { subjectKey, eventSubject: eventSubjectOf(subject, issuerOf(receiver)) };
   }
 
@@ -400,7 +417,7 @@ export default async function (fastify: FastifyInstance) {
         tags: TAGS,
         'x-qauth-stability': 'experimental',
         body: addSubjectRequestSchema,
-        response: { 200: z.null() },
+        response: { 200: z.void().describe('An empty body (SSF 1.0 §8.1.3.2).') },
       },
     },
     async (request, reply) => {
@@ -420,7 +437,7 @@ export default async function (fastify: FastifyInstance) {
       if (added === 'full') {
         throw new BadRequestError(`A stream holds at most ${SSF_STREAM_SUBJECTS_MAX} subjects`);
       }
-      return reply.code(200).send(null);
+      return reply.code(200).send();
     }
   );
 
@@ -468,8 +485,9 @@ export default async function (fastify: FastifyInstance) {
       if (state !== undefined && scanValues(state).length > 0) {
         throw new BadRequestError('state must not be shaped like a token or a key');
       }
+      const limitKey = REDIS_KEYS.SSF_VERIFICATION(receiver.realm.id, stream.id);
       const allowed = await fastify.redis.set(
-        REDIS_KEYS.SSF_VERIFICATION(receiver.realm.id, stream.id),
+        limitKey,
         '1',
         'EX',
         SSF_MIN_VERIFICATION_INTERVAL,
@@ -479,26 +497,35 @@ export default async function (fastify: FastifyInstance) {
         reply.header('Retry-After', String(SSF_MIN_VERIFICATION_INTERVAL));
         throw new TooManyRequestsError('Verification was requested too recently');
       }
-      await fastify.db.transaction(async (tx) => {
-        const eventId = await emitUserEvent(
-          request,
-          ssfStreamVerificationRequested.type,
-          state === undefined ? {} : { state },
-          {
-            tx,
-            realmId: receiver.realm.id,
-            subject: { type: 'ssf_stream', id: stream.id },
-            clientId: receiver.client.clientId,
-            actor: 'client',
-          }
-        );
-        const enqueued = await streams.enqueueForEvent(tx, {
-          streamId: stream.id,
-          eventId,
-          now: Date.now(),
-        });
-        if (!enqueued) throw new Error('ssf: the verification event was not queued for its stream');
-      });
+      // A request that recorded nothing does not count against the interval.
+      const release = (error: unknown) =>
+        fastify.redis
+          .del(limitKey)
+          .catch(() => undefined)
+          .then(() => Promise.reject(error));
+      await fastify.db
+        .transaction(async (tx) => {
+          const eventId = await emitUserEvent(
+            request,
+            ssfStreamVerificationRequested.type,
+            state === undefined ? {} : { state },
+            {
+              tx,
+              realmId: receiver.realm.id,
+              subject: { type: 'ssf_stream', id: stream.id },
+              clientId: receiver.client.clientId,
+              actor: 'client',
+            }
+          );
+          const enqueued = await streams.enqueueForEvent(tx, {
+            streamId: stream.id,
+            eventId,
+            now: Date.now(),
+          });
+          if (!enqueued)
+            throw new Error('ssf: the verification event was not queued for its stream');
+        })
+        .catch(release);
       reply.code(204);
       return reply.send(null);
     }

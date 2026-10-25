@@ -394,6 +394,7 @@ describe('the SSF transmitter (real containers)', () => {
         subject: { format: 'iss_sub', iss: ISSUER, sub: randomUUID() },
       });
       expect(added.statusCode, added.body).toBe(200);
+      expect(added.body).toBe('');
 
       const verify = await call(app, who, 'POST', '/ssf/verify', {
         stream_id: streamId,
@@ -513,7 +514,7 @@ describe('the SSF transmitter (real containers)', () => {
           delivery: { method: PUSH, endpoint_url: endpoint },
         });
         expect(response.statusCode, endpoint).toBe(400);
-        expect(response.json<{ error: string }>().error).toBe('endpoint_url is refused (address)');
+        expect(response.json<{ error: string }>().error).toBe('endpoint_url is refused');
       }
       expect(await app.repositories.ssfStreams.list(realmId, who.id)).toEqual([]);
 
@@ -603,11 +604,12 @@ describe('the SSF transmitter (real containers)', () => {
       const otherAudience = await newReceiver(app, realmId, {
         audience: 'https://resource.example',
       });
-      for (const who of [noScope, otherAudience]) {
-        const response = await call(app, who, 'GET', '/ssf/stream');
-        expect(response.statusCode).toBe(401);
-        expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
-      }
+      // A valid token without the scope is a 403 (RFC 6750 §3.1); one for
+      // another resource is not valid here at all.
+      expect((await call(app, noScope, 'GET', '/ssf/stream')).statusCode).toBe(403);
+      const response = await call(app, otherAudience, 'GET', '/ssf/stream');
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
       expect((await app.inject({ method: 'GET', url: '/ssf/stream' })).statusCode).toBe(401);
     });
 
@@ -635,6 +637,22 @@ describe('the SSF transmitter (real containers)', () => {
         description: 'patched',
         events_requested: [VERIFICATION],
       });
+      const storedHeader = async () =>
+        (
+          await app.dbPool.query<{ h: string | null }>(
+            'SELECT authorization_header AS h FROM ssf_streams WHERE id = $1',
+            [streamId]
+          )
+        ).rows[0].h;
+      const header = await storedHeader();
+      expect(header).toMatch(/^v1\./);
+      // Sending back what a read returns keeps the header QAuth never returns.
+      const echoed = await call(app, who, 'PATCH', '/ssf/stream', {
+        stream_id: streamId,
+        delivery: patched.json<{ delivery: unknown }>().delivery,
+      });
+      expect(echoed.statusCode, echoed.body).toBe(200);
+      expect(await storedHeader()).toBe(header);
       const wrongAud = await call(app, who, 'PATCH', '/ssf/stream', {
         stream_id: streamId,
         aud: 'someone-else',
@@ -651,6 +669,8 @@ describe('the SSF transmitter (real containers)', () => {
         delivery: { endpoint_url: 'https://receiver.egress.test/replaced' },
       });
       expect(replaced.json()).not.toHaveProperty('description');
+      // A new endpoint never gets the old header.
+      expect(await storedHeader()).toBeNull();
       const poll = await call(app, who, 'PUT', '/ssf/stream', { stream_id: streamId });
       expect(poll.statusCode).toBe(400);
 

@@ -50,11 +50,11 @@ describe('ssfPlugin', () => {
     const app = await build({ enabled: true });
     for (const url of ['https://10.0.0.7/events', 'https://127.0.0.1/events', 'https://[::1]/']) {
       await expect(app.ssf?.checkEndpoint(url)).rejects.toThrow(
-        new SsfRequestError('endpoint_url is refused (address)')
+        new SsfRequestError('endpoint_url is refused')
       );
     }
     await expect(app.ssf?.checkEndpoint('http://receiver.example/')).rejects.toThrow(
-      'endpoint_url is refused (scheme)'
+      'endpoint_url is refused'
     );
   });
 

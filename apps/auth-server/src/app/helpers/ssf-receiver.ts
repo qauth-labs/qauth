@@ -1,5 +1,5 @@
 import { SSF_STREAM_SCOPE } from '@qauth-labs/fastify-plugin-ssf';
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { type RealmRow, requestRealm } from './request-realm';
@@ -58,13 +58,15 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
  * - The token is a client's own (`client_credentials`): `sub` is its
  *   `client_id`, and it carries no `act`, so no user's or agent's delegated
  *   token manages a stream.
- * - It carries the `ssf:stream` scope, which the operator gives receivers.
+ * - It carries the `ssf:stream` scope, which the operator gives receivers;
+ *   a token without it is a 403 (RFC 6750 §3.1, `insufficient_scope`).
  * - Its `aud` names the realm's issuer, the transmitter: a token minted for
  *   another resource, which that resource holds, cannot manage streams.
  * - The client exists in this realm and is enabled and not suspended.
  *
- * Every refusal after the first is a 401 with an `invalid_token` challenge,
- * as RFC 6750 §3.1 prescribes for a token not valid for the resource.
+ * Every other refusal after the first is a 401 with an `invalid_token`
+ * challenge, as RFC 6750 §3.1 prescribes for a token not valid for the
+ * resource.
  */
 export function createRequireSsfReceiver(
   fastify: FastifyInstance
@@ -79,7 +81,8 @@ export function createRequireSsfReceiver(
     }
     const scopes = (claims.scope ?? '').split(' ');
     if (!scopes.includes(SSF_STREAM_SCOPE)) {
-      throw new JWTInvalidError(`Access token lacks the ${SSF_STREAM_SCOPE} scope`);
+      // RFC 6750 §3.1: a valid token without the scope is a 403.
+      throw new ForbiddenError(`Access token lacks the ${SSF_STREAM_SCOPE} scope`);
     }
     const realm = requestRealm(request);
     const audiences = claims.aud === undefined ? [] : [claims.aud].flat();

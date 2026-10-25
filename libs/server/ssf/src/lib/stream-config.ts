@@ -69,6 +69,7 @@ export const streamConfigRequestSchema = z
     delivery: deliveryRequestSchema.optional(),
     description: z
       .string()
+      .max(16 * SSF_DESCRIPTION_MAX)
       .optional()
       .describe('The receiver’s description, cut to 1024 characters.'),
     iss: z.unknown().optional(),

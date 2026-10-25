@@ -3395,7 +3395,8 @@
                   },
                   "description": {
                     "description": "The receiver’s description, cut to 1024 characters.",
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 16384
                   },
                   "iss": {},
                   "aud": {},
@@ -3717,7 +3718,8 @@
                   },
                   "description": {
                     "description": "The receiver’s description, cut to 1024 characters.",
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 16384
                   },
                   "iss": {},
                   "aud": {},
@@ -3868,7 +3870,8 @@
                   },
                   "description": {
                     "description": "The receiver’s description, cut to 1024 characters.",
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 16384
                   },
                   "iss": {},
                   "aud": {},
@@ -6216,7 +6219,14 @@
         "x-qauth-stability": "experimental",
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "An empty body (SSF 1.0 §8.1.3.2).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "An empty body (SSF 1.0 §8.1.3.2)."
+                }
+              }
+            }
           }
         }
       }
