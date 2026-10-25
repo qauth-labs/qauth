@@ -544,10 +544,14 @@ type RedeemedRequestStateRow = NonNullable<
  * applicable" and §13.3's step 6 note says the wallet simply stops.
  *
  * The `redirect_uri` is built by `buildWalletLoginReturnUri` from the issuer
- * of the realm the wallet posted to (#490), the realm the `response_uri` it
- * was handed names, so this function contributes nothing of its own to the
- * URL — in particular nothing from the row or the request's headers. The code
- * is the only variable part, by construction.
+ * of the realm the wallet posted to (#490), which is the realm the
+ * `response_uri` it was handed names, so this function contributes nothing of
+ * its own to the URL — in particular nothing from the row or the request's
+ * headers. The code is the only variable part, by construction. The redeemed
+ * row's realm is not yet compared with the request's: a state is found by its
+ * digest alone until lookups take the realm (#489). A code posted to another
+ * realm's host lands there, where the flow's browser holds no binder cookie,
+ * so the flow cannot finish.
  *
  * @param request - the wallet's request, for the realm it was resolved to.
  * @param sameDevice - the redeemed row's `sameDevice` column, as returned.

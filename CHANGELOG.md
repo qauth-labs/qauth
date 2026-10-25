@@ -754,7 +754,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build a URL, and a lint rule refuses `request.host`, `request.hostname`,
   `request.port`, `request.protocol`, the `Host` header and `X-Forwarded-*`
   outside the realm resolver. A deployment with one realm sees the same URLs as
-  before. With a second realm:
+  before, except mail links where `EMAIL_BASE_URL` was set to another base than
+  `JWT_ISSUER`: they now start at `JWT_ISSUER`, and the boot logs a warning
+  saying so. With a second realm:
   - its discovery, `iss`, mail links and wallet URLs name its own issuer;
   - a DPoP proof sent to it must name its own endpoint URL, so proofs to a
     realm other than the boot one are no longer refused;
@@ -763,7 +765,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     realm's issuer. Tokens still carry `JWT_ISSUER` until they are signed per
     realm ([#491]), so until then only the default realm's tokens pass there.
 
-  `EMAIL_BASE_URL` stays required but is no longer read. The mail library's
+  `EMAIL_BASE_URL` stays required but is no longer read for links. The mail library's
   `sendVerificationEmail` takes the link base with each mail instead of from
   its configuration.
 

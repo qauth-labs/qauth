@@ -162,7 +162,9 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     }
   });
 
-  it('derives endpoint URLs from the configured issuer (no trailing slash)', async () => {
+  it("publishes the realm row's issuer, whatever trailing slash the JWT plugin's issuer has", async () => {
+    // The row never ends with a slash (a CHECK refuses one; the boot step
+    // drops the one JWT_ISSUER may carry), and the plugin's issuer is not read.
     const app = await buildApp({ issuer: `${ISSUER}/` });
     try {
       const res = await app.inject({
