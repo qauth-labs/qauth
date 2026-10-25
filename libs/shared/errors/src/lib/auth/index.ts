@@ -2,6 +2,7 @@ export * from './email-already-verified.error';
 export * from './email-not-verified.error';
 export * from './invalid-client.error';
 export * from './invalid-credentials.error';
+export * from './invalid-dpop-proof.error';
 export * from './invalid-grant.error';
 export * from './invalid-request.error';
 export * from './invalid-scope.error';

@@ -48,6 +48,15 @@ export const accessTokenClaimsSchema = z.looseObject({
   aud: z.union([z.string(), z.array(z.string())]).optional(),
   // RFC 8693 §4.1 delegation actor (nested chain).
   act: actClaimSchema.optional(),
+  // RFC 9449 §6.1 confirmation of a DPoP-bound token: the key's base64url
+  // SHA-256 thumbprint. A `cnf` without a well-formed `jkt` is refused rather
+  // than read as unbound: a resource that ignored it would accept the token
+  // as a bearer token, the downgrade RFC 9449 §7.2 forbids.
+  cnf: z
+    .looseObject({
+      jkt: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    })
+    .optional(),
   // Registered temporal/issuer claims.
   iat: z.number().optional(),
   exp: z.number().optional(),

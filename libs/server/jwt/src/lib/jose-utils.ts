@@ -26,6 +26,15 @@ import type { KeyLike } from '../types/key-management';
  * }
  * ```
  */
+/** Whether a decoded `cnf` claim names a DPoP key thumbprint (RFC 9449 §6.1). */
+function isConfirmationClaim(value: unknown): value is { jkt: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { jkt?: unknown }).jkt === 'string'
+  );
+}
+
 export function decodeJwtUnsafe(token: string) {
   try {
     const decoded = joseDecodeJwt(token);
@@ -56,6 +65,9 @@ export function decodeJwtUnsafe(token: string) {
       // signature store). Optional: tokens minted before the claim existed
       // legitimately lack it.
       jti: typeof decoded.jti === 'string' ? decoded.jti : undefined,
+      // RFC 9449 §6.1: surfaced so a caller that tolerates expiry (logout) can
+      // still refuse a DPoP-bound token presented as a Bearer token.
+      ...(isConfirmationClaim(decoded['cnf']) ? { cnf: { jkt: decoded['cnf'].jkt } } : {}),
       iat: decoded.iat,
       exp: decoded.exp,
       iss: decoded.iss,

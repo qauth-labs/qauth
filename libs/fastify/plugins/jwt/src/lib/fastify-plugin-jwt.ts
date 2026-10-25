@@ -16,6 +16,7 @@ import {
   exportPublicJwk,
   exportPublicKeyPem,
   exportRs256PublicJwk,
+  extractAccessTokenCredential,
   extractJWTFromHeader,
   generateRefreshToken,
   hashRefreshToken,
@@ -46,6 +47,24 @@ declare module 'fastify' {
 
   interface FastifyRequest {
     jwtPayload?: JWTPayload;
+  }
+}
+
+/**
+ * Refuse a DPoP-bound access token presented as a Bearer token (RFC 9449
+ * §7.2). Its `cnf.jkt` names the one key whose proofs may accompany it, so
+ * accepting it without a proof would let anyone who copied it use it.
+ *
+ * Applied whether or not this server verifies DPoP proofs: a token minted while
+ * `DPOP_ENABLED` was on stays bound after the switch goes off. `requireJwt`
+ * calls it for every Bearer credential; a route that reads a Bearer token by
+ * hand calls it after verification.
+ *
+ * @throws JWTInvalidError when the claims carry `cnf`
+ */
+export function refuseBoundTokenAsBearer(claims: { cnf?: unknown }): void {
+  if (claims.cnf !== undefined) {
+    throw new JWTInvalidError('A DPoP-bound access token cannot be used as a Bearer token');
   }
 }
 
@@ -307,6 +326,11 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       extractFromHeader(authHeader) {
         return extractJWTFromHeader(authHeader);
       },
+      extractCredentialFromHeader(authHeader) {
+        return extractAccessTokenCredential(authHeader, {
+          allowDpop: options.verifyDpopProof !== undefined,
+        });
+      },
       decodeTokenUnsafe(token) {
         return decodeJwtUnsafe(token);
       },
@@ -350,10 +374,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     fastify.decorate('jwtUtils', jwtUtils);
 
     async function requireJwt(request: FastifyRequest): Promise<void> {
-      const token = jwtUtils.extractFromHeader(request.headers.authorization);
-      if (!token) {
+      // `Bearer`, or `DPoP` only when the host app verifies DPoP proofs: without
+      // `verifyDpopProof` a `DPoP` header is no credential, as before DPoP.
+      const credential = jwtUtils.extractCredentialFromHeader(request.headers.authorization);
+      if (!credential) {
         throw new JWTInvalidError('Missing or malformed Authorization header');
       }
+      const { scheme, token } = credential;
       // RFC 9700 mix-up defence: every bearer-protected route MUST only accept
       // tokens this server issued. Pin the issuer here so the shared preHandler
       // rejects a foreign-issuer token even if it verifies under the same key.
@@ -367,6 +394,18 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       // wired a denylist; otherwise behaviour is unchanged.
       if (options.isTokenRevoked && (await options.isTokenRevoked(payload.jti))) {
         throw new JWTInvalidError('Token has been revoked');
+      }
+
+      if (scheme === 'DPoP' && options.verifyDpopProof !== undefined) {
+        // RFC 9449 §7.1: the DPoP scheme carries a DPoP-bound token, checked
+        // against the proof's key. A token bound to no key has nothing to
+        // check the proof against.
+        if (payload.cnf === undefined) {
+          throw new JWTInvalidError('The access token is not bound to a DPoP key');
+        }
+        await options.verifyDpopProof(request, token, payload);
+      } else {
+        refuseBoundTokenAsBearer(payload);
       }
 
       request.jwtPayload = payload;

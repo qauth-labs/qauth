@@ -1,6 +1,14 @@
 import type { HybridSignedToken, SignatureAlgorithm } from '@qauth-labs/core-crypto';
-import type { ActClaim, AkpJwk, JWTPayload, PublicJwk, Rs256Jwk } from '@qauth-labs/server-jwt';
-import type { FastifyPluginOptions } from 'fastify';
+import type {
+  AccessTokenCredential,
+  ActClaim,
+  AkpJwk,
+  ConfirmationClaim,
+  JWTPayload,
+  PublicJwk,
+  Rs256Jwk,
+} from '@qauth-labs/server-jwt';
+import type { FastifyPluginOptions, FastifyRequest } from 'fastify';
 
 /**
  * JWT plugin configuration options
@@ -121,6 +129,21 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * stays store-agnostic — the auth-server supplies a Redis-backed denylist.
    */
   isTokenRevoked?: (jti: string | undefined) => Promise<boolean> | boolean;
+  /**
+   * DPoP at the routes `requireJwt` protects (RFC 9449 §7, #480). When set,
+   * `requireJwt` also accepts `Authorization: DPoP <token>` for a DPoP-bound
+   * token, and calls this with the request, the token and its verified claims
+   * after the signature, issuer and revocation checks. It must throw unless
+   * the request carries a valid DPoP proof for that token under the key its
+   * `cnf.jkt` names. Kept as a callback so the JWT plugin stays free of the
+   * DPoP verifier and its replay store, as {@link isTokenRevoked} keeps it
+   * free of Redis.
+   *
+   * When absent (`DPOP_ENABLED` off), a `DPoP` header is no credential, as
+   * before DPoP. A DPoP-bound token sent as a Bearer token is refused either
+   * way (RFC 9449 §7.2).
+   */
+  verifyDpopProof?: (request: FastifyRequest, token: string, claims: JWTPayload) => Promise<void>;
 }
 
 /**
@@ -138,7 +161,7 @@ export interface Jwks {
  * JWT payload structure and the RFC 8693 `act` (actor) claim shape.
  * Re-exported to avoid apps needing direct dependency on @qauth-labs/server-jwt
  */
-export type { ActClaim, HybridSignedToken, JWTPayload };
+export type { AccessTokenCredential, ActClaim, ConfirmationClaim, HybridSignedToken, JWTPayload };
 
 /**
  * JWT utilities interface
@@ -167,6 +190,8 @@ export interface JwtUtils {
     scope?: string;
     aud?: string | string[];
     act?: ActClaim;
+    /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
+    cnf?: ConfirmationClaim;
     /**
      * Override the access-token lifespan (seconds). Intended to SHORTEN a token
      * below the configured default — the token-exchange grant clamps the
@@ -199,6 +224,8 @@ export interface JwtUtils {
     scope?: string;
     aud?: string | string[];
     act?: ActClaim;
+    /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
+    cnf?: ConfirmationClaim;
     /** Narrow the lifespan below the configured default (never widens). */
     expiresInOverride?: number;
   }): Promise<HybridSignedToken>;
@@ -279,6 +306,13 @@ export interface JwtUtils {
    * @returns JWT token string or null if header is missing or invalid format
    */
   extractFromHeader(authHeader: string | undefined): string | null;
+  /**
+   * Extract the access token of an `Authorization` header with its scheme:
+   * `Bearer`, or `DPoP` when the plugin was given `verifyDpopProof` (RFC 9449
+   * §7.1). A `DPoP` header is no credential on a server that does not verify
+   * DPoP proofs.
+   */
+  extractCredentialFromHeader(authHeader: string | undefined): AccessTokenCredential | null;
   /**
    * Decode a JWT token without verification
    * WARNING: This does NOT verify the signature. Only use for:
