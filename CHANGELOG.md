@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Published container images** (ADR-018 §6). A release tag now publishes
+  `ghcr.io/qauth-labs/qauth/auth-server` and
+  `ghcr.io/qauth-labs/qauth/migration-runner` for `linux/amd64`, pushed by
+  digest, signed with cosign (keyless) and carrying build-provenance and SPDX
+  SBOM attestations (the new `release-images.yml` workflow). A stable `vX.Y.Z`
+  is tagged `X.Y.Z` and `X.Y`, a release candidate only its own version, and
+  there is no `latest` before 1.0. The publish jobs wait for a maintainer in the
+  `release` environment. The developer portal is not published: its build bakes
+  in the auth server's public URL. The docs site's new **Published images**
+  page (`operate/images`) shows how to pin the digests and verify them.
+- The auth-server image installs `tsx` at the exact version the lockfile
+  resolves (4.23.15), not the floating `tsx@4`.
 - **A registry of configuration keys** ([#449], ADR-018 §5). Every environment
   key the auth server and the developer portal read has one entry in
   `libs/server/config/src/lib/registry/`: a tier (stable, advanced or

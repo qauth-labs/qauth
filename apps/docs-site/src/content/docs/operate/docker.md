@@ -20,6 +20,11 @@ QAuth uses Docker Compose to orchestrate the following services:
 | **auth-server**      | Custom               | Main authentication API server                           |
 | **developer-portal** | Custom               | TanStack Start web UI for registration/login/consents    |
 
+Compose builds the three custom images from source. Each release also
+publishes the `migration-runner` and `auth-server` images, signed and
+attested, so a deployment can pin their digests instead of building them:
+see [Published images](/operate/images/).
+
 ### Production vs development
 
 | Use case        | Compose file(s)                                 | Service image                                | Watch                |
