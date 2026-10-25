@@ -197,24 +197,6 @@ export default async function (fastify: FastifyInstance) {
           scopes: [],
         });
 
-        // Create session ID
-        const sessionId = randomUUID();
-
-        // Store session in Redis
-        await fastify.sessionUtils.setSession(
-          sessionId,
-          {
-            userId: user.id,
-            // The address the user just authenticated with (#230:
-            // users.email no longer exists; external_sub is the normalized
-            // registered address of the password credential).
-            email: check.credential.externalSub,
-            sessionId,
-            createdAt: Date.now(),
-          },
-          accessTokenExpiresIn
-        );
-
         // Record the sign-in
         await emitUserEvent(
           request,

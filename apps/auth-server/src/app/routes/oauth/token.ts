@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import { DpopProofError } from '@qauth-labs/fastify-plugin-dpop';
-import { PASSWORD_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
 import {
   BadRequestError,
@@ -803,33 +802,6 @@ async function handleAuthorizationCode(
     );
     return { accessToken, idToken };
   });
-
-  let sessionId: string | undefined;
-  try {
-    sessionId = randomUUID();
-    // #230: the session display address comes from the password credential's
-    // external_sub (users.email no longer exists). Deliberately NOT the
-    // resolved email claims: those are empty for not-yet-verified users, and
-    // the consent display must keep showing the login address. Omitted when
-    // no password credential exists (future wallet users, #231) — consumers
-    // fall back to userId.
-    const passwordCredential = await fastify.repositories.userCredentials.findByUserIdAndType(
-      user.id,
-      PASSWORD_PROVIDER_TYPE
-    );
-    await fastify.sessionUtils.setSession(
-      sessionId,
-      {
-        userId: user.id,
-        ...(passwordCredential ? { email: passwordCredential.externalSub } : {}),
-        sessionId,
-        createdAt: Date.now(),
-      },
-      accessTokenExpiresIn
-    );
-  } catch (sessionError) {
-    fastify.log.warn({ err: sessionError }, 'Failed to manage session during token exchange');
-  }
 
   // Token issuance metrics (#126).
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });

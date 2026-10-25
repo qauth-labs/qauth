@@ -627,8 +627,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   // The browser session service (ADR-019 Decision 3, #469): Postgres as the
   // source of truth, Redis as a cache. It needs the database, cache and
-  // metrics plugins above it and only decorates the instance; no route uses
-  // it yet (#488 moves the sign-in and the session lookup onto it).
+  // metrics plugins above it and only decorates the instance; the browser
+  // sign-in and the session lookup use it (#488).
   await fastify.register(sessionServicePlugin, {
     settings: {
       defaultMaxLifespanSeconds: env.SESSION_COOKIE_TTL,

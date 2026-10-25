@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import { normalizeEmail, passwordSchema } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -8,7 +6,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
-import { trackBrowserSession } from '../../helpers/browser-session';
+import { createBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
@@ -422,22 +420,15 @@ export default async function (fastify: FastifyInstance) {
       // other attempts left on it.
       await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
 
-      // Session-fixation defense: always mint a fresh session id on a
-      // successful credential check, even if the browser already had one.
-      const sessionId = randomUUID();
-      await fastify.sessionUtils.setSession(
-        sessionId,
-        {
-          userId: user.id,
-          // #230: the credential's external_sub is the authenticated address.
-          email: check.credential.externalSub,
-          sessionId,
-          createdAt: Date.now(),
-        },
-        env.SESSION_COOKIE_TTL
-      );
-      // Recorded under the user so `/auth/logout` can end it.
-      await trackBrowserSession(fastify, user.id, sessionId);
+      // Session-fixation defense: always a new session, with a new `sid`, on
+      // a successful credential check, even if the browser already had one.
+      // The session service stores it in Postgres (#488).
+      const session = await createBrowserSession(fastify, request, {
+        realmId: realm.id,
+        userId: user.id,
+        // #230: the credential's external_sub is the authenticated address.
+        identifier: check.credential.externalSub,
+      });
 
       await fastify.repositories.users.updateLastLogin(user.id);
       await emitUserEvent(
@@ -447,7 +438,7 @@ export default async function (fastify: FastifyInstance) {
         { realmId: realm.id, userId: user.id, actor: 'user' }
       );
 
-      setSessionCookie(reply, sessionId);
+      setSessionCookie(reply, session.sid);
       // Burn the login-CSRF cookie now that authentication succeeded. Fastify
       // accumulates multiple Set-Cookie headers into an array, so this does not
       // clobber the session cookie set just above.

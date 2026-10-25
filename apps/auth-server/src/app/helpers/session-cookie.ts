@@ -1,6 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import type { AssuranceLevel } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -15,85 +14,12 @@ import { env } from '../../config/env';
  *   - no `Domain` attribute
  * This gives us free CSRF-ish isolation across subdomains and prevents a
  * sibling origin from overwriting the session.
+ *
+ * The cookie carries only the session's `sid` and its HMAC, never the user
+ * id: the session itself is the session service's (#488), looked up by `sid`
+ * in the request's realm, so revoking it there ends the cookie too.
  */
 export const SESSION_COOKIE_NAME = '__Host-qauth_session';
-
-/**
- * Payload stored server-side in Redis keyed by session id. We never put the
- * userId in the cookie itself — the cookie only carries the session id +
- * HMAC. Binding the authenticated user to the cookie only via the Redis
- * lookup keeps revocation cheap (delete the key) and avoids leaking the
- * user id if the signing secret is ever compromised.
- */
-export interface BrowserSessionData {
-  userId: string;
-  /**
-   * Normalized address of the credential used to authenticate (#230:
-   * `credential.externalSub`). Optional — future non-email credentials
-   * (wallet, #231) have none; consumers fall back to `userId`. Pre-#230
-   * Redis sessions carry the field and remain readable.
-   */
-  email?: string;
-  sessionId: string;
-  createdAt: number;
-  /**
-   * eIDAS Level of Assurance established by the authentication that created
-   * this session (#237, ADR-004/ADR-010). `'substantial'` or `'high'`; ABSENT
-   * for every authentication that established nothing higher — which today is
-   * every password login (ADR-003: `assuranceLevel: 'low'`).
-   *
-   * Carried on the session for the same reason `createdAt` is: it describes the
-   * authentication EVENT, and `/oauth/authorize` copies it onto the
-   * authorization code so `/oauth/token` can assert `acr` in the ID token long
-   * after the session stopped being in scope.
-   *
-   * Absent — never `'low'` — so "no assurance was established" has one
-   * representation everywhere, and pre-#237 Redis sessions read correctly.
-   */
-  assuranceLevel?: AssuranceLevel;
-  /** Monotonic nonce for CSRF double-submit cookie (rotated on consent POST). */
-  csrfToken?: string;
-  /**
-   * CSRF token for the cookie-authed JSON API (e.g. `DELETE /consents/:id`).
-   * Distinct from {@link csrfToken} (which the consent screen burns after use)
-   * so the two flows don't invalidate each other. Long-lived per session —
-   * minted lazily by the GET that lists consents, validated via the
-   * `X-CSRF-Token` header on state-changing JSON requests. The custom header
-   * forces a CORS preflight, so naive cross-site CSRF is blocked even before
-   * the token comparison runs.
-   */
-  apiCsrfToken?: string;
-  /**
-   * The exact scope set rendered on the most recent consent screen for a given
-   * client, keyed by `client_id`. The consent POST handler grants ONLY these
-   * scopes — the hidden `scope` form field is attacker-controllable, so the
-   * granted set is bound to what the user actually saw, not to what is POSTed.
-   */
-  consentScopes?: Record<string, string[]>;
-  /**
-   * The RFC 8707 resources named on that same consent screen, keyed by
-   * `client_id`. Bound for the same reason as {@link consentScopes}: a
-   * `resource` becomes the token's `aud`, and the hidden `resource` form
-   * fields are as attacker-controllable as the hidden `scope`. The consent
-   * POST records and binds only these.
-   */
-  consentResources?: Record<string, string[]>;
-  [key: string]: unknown;
-}
-
-/**
- * Whole seconds left of the session's lifetime. Zero or negative once
- * `SESSION_COOKIE_TTL` has passed since `createdAt` (NaN when the record has
- * no `createdAt`, which callers must treat as expired).
- *
- * The lifetime is absolute, counted from the sign-in: the cookie's `Max-Age`
- * is set once at login and never renewed, so the server-side record must not
- * outlive it either, however often it is rewritten.
- */
-export function remainingSessionTtl(session: BrowserSessionData): number {
-  const expiresAt = session.createdAt + env.SESSION_COOKIE_TTL * 1000;
-  return Math.ceil((expiresAt - Date.now()) / 1000);
-}
 
 const SEPARATOR = '.';
 
@@ -219,8 +145,8 @@ export function setSessionCookie(
 }
 
 /**
- * Clear the session cookie. Used on logout and when a session id fails to
- * resolve to a Redis entry (stale cookie).
+ * Clear the session cookie. Used on logout and when a session id resolves to
+ * no live session (stale cookie).
  */
 export function clearSessionCookie(reply: FastifyReply): void {
   const attrs = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
@@ -230,7 +156,7 @@ export function clearSessionCookie(reply: FastifyReply): void {
 
 /**
  * Generate a CSRF token suitable for the consent form's hidden input. The
- * same value is also stored in the session payload; on POST the server
+ * same value is also stored in the session's side record; on POST the server
  * compares the two in a timing-safe way (double-submit cookie pattern).
  */
 export function generateCsrfToken(): string {

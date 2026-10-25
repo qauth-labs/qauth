@@ -1,126 +1,176 @@
+import type {
+  BrowserSession,
+  SessionAssuranceLevel,
+  SessionRevokedReason,
+} from '@qauth-labs/fastify-plugin-sessions';
+import { eventRequest } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { env } from '../../config/env';
 import { REDIS_KEYS } from '../constants/redis-keys';
+import { requestRealm } from './request-realm';
 import {
-  type BrowserSessionData,
   clearSessionCookie,
   readCookie,
-  remainingSessionTtl,
   SESSION_COOKIE_NAME,
   verifySignedSessionId,
 } from './session-cookie';
+import { deleteSessionSideRecord, writeSessionSideRecord } from './session-side-record';
+
+/** What {@link createBrowserSession} stores for a successful sign-in. */
+export interface BrowserSignIn {
+  /** The realm the user signed in to: the user's own. */
+  realmId: string;
+  userId: string;
+  /**
+   * The identifier of the credential the user signed in with (its
+   * `external_sub`), shown on the consent screen. Kept in the side record,
+   * not in Postgres.
+   */
+  identifier?: string;
+  /**
+   * The eIDAS level of assurance the authentication established (#237);
+   * `null` or absent when nothing above `low` was.
+   */
+  assuranceLevel?: SessionAssuranceLevel | null;
+}
+
+/**
+ * Sign the user in on this browser: a new session through the session service
+ * (ADR-019 Decision 3, #488), with the request's address and `User-Agent`,
+ * recorded under the user for `/auth/logout`. Always a new session with a new
+ * `sid`, whatever cookie the browser sent: the session-fixation defence.
+ *
+ * The address and the `User-Agent` are stored as the sign-in event records
+ * them (`eventRequest`): an address in its published form, the header cut to
+ * 1024 characters, and neither when it does not qualify.
+ *
+ * The caller sets the cookie with the returned `sid`.
+ */
+export async function createBrowserSession(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  signIn: BrowserSignIn
+): Promise<BrowserSession> {
+  const userAgent = request.headers['user-agent'];
+  const origin = eventRequest({
+    ip: request.ip,
+    userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+  });
+  const session = await fastify.sessionService.create({
+    realmId: signIn.realmId,
+    userId: signIn.userId,
+    authTime: Date.now(),
+    assuranceLevel: signIn.assuranceLevel ?? null,
+    ipAddress: origin?.ip ?? null,
+    userAgent: origin?.userAgent ?? null,
+  });
+  await trackBrowserSession(fastify, session);
+  if (signIn.identifier !== undefined) {
+    await writeSessionSideRecord(fastify, session, { identifier: signIn.identifier });
+  }
+  return session;
+}
 
 /**
  * Resolve the currently authenticated browser user from the signed
- * `__Host-qauth_session` cookie. Returns `null` when:
+ * `__Host-qauth_session` cookie, through the session service. Returns `null`
+ * when:
  *   - the cookie is absent
  *   - the signature is invalid
- *   - the referenced session has been evicted from Redis (TTL expired or
- *     logged out)
- *   - the session is older than `SESSION_COOKIE_TTL`, whatever expiry its
- *     Redis key carries (an absolute lifetime, counted from `createdAt`)
+ *   - the service holds no live session with that `sid` in the request's
+ *     realm: never created, revoked, past its absolute end or the realm's idle
+ *     limit, or a session of another realm (ADR-019 Decision 1)
  *   - the session's user no longer exists or has been disabled
  *
  * The caller is responsible for deciding what to do with a null result —
  * e.g. redirect to the login page, or render an error. When the cookie
- * signature is valid but the session is gone, the stale cookie is cleared
+ * signature is valid but the session is absent, the stale cookie is cleared
  * as a side-effect so the browser stops sending it. A session whose user is
- * gone or disabled is deleted from Redis and its cookie cleared the same way:
- * disabling an account must end the sign-in it already holds, not only
- * refuse the next one (as `/ui/login` and every token grant already do).
+ * gone or disabled is revoked and its cookie cleared the same way: disabling
+ * an account must end the sign-in it already holds, not only refuse the next
+ * one (as `/ui/login` and every token grant already do).
  */
 export async function resolveBrowserSession(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply
-): Promise<BrowserSessionData | null> {
+): Promise<BrowserSession | null> {
   const raw = readCookie(request, SESSION_COOKIE_NAME);
-  const sessionId = verifySignedSessionId(raw);
-  if (!sessionId) return null;
+  const sid = verifySignedSessionId(raw);
+  if (!sid) return null;
 
-  const data = await fastify.sessionUtils.getSession<BrowserSessionData>(sessionId);
-  if (!data) {
-    // Signature was valid but Redis has no record — stale cookie.
+  const session = await fastify.sessionService.get({ realmId: requestRealm(request).id, sid });
+  if (!session) {
+    // Signature was valid but the session is absent — stale cookie.
     clearSessionCookie(reply);
     return null;
   }
 
-  // Written as "not positive" so a record without `createdAt` (NaN) is refused.
-  if (!(remainingSessionTtl(data) > 0)) {
-    // Past its absolute lifetime: a record rewritten by a replayed cookie must
-    // not outlive the lifetime the browser's own cookie was given at sign-in.
-    await fastify.sessionUtils.deleteSession(sessionId);
-    clearSessionCookie(reply);
-    return null;
-  }
-
-  const user = await fastify.repositories.users.findById(data.userId);
+  const user = await fastify.repositories.users.findById(session.userId);
   if (!user || !user.enabled) {
     // The account behind the session is gone or disabled — end the session
-    // so the cookie cannot keep refreshing it, and treat it as no sign-in.
-    await fastify.sessionUtils.deleteSession(sessionId);
+    // so the cookie cannot keep using it, and treat it as no sign-in.
+    await endBrowserSession(fastify, session.realmId, session.sid, 'admin');
     clearSessionCookie(reply);
     return null;
   }
-  return data;
+  return session;
 }
 
 /**
- * Write back a session obtained from {@link resolveBrowserSession}, e.g. to
- * store a CSRF token on it.
- *
- * `setSession` is `SETEX`, which replaces the key's expiry, so the record is
- * stored for what is LEFT of its lifetime. Passing `SESSION_COOKIE_TTL` again
- * would restart the clock on every write and let a replayed cookie keep its
- * session alive indefinitely.
+ * Record a newly created browser session under its user, so
+ * {@link endBrowserSessions} can end it (`/auth/logout`). The index expires
+ * with the newest session in it: every session of a realm gets the realm's
+ * lifetime when it is created, and the service never extends one, so no
+ * session in the index outlives the newest.
  */
-export async function saveBrowserSession(
+async function trackBrowserSession(
   fastify: FastifyInstance,
-  session: BrowserSessionData
+  session: BrowserSession
 ): Promise<void> {
-  await fastify.sessionUtils.setSession<BrowserSessionData>(
-    session.sessionId,
-    session,
-    // Redis rejects a TTL of 0, which a write on the last tick would compute.
-    Math.max(1, remainingSessionTtl(session))
-  );
+  const key = REDIS_KEYS.USER_BROWSER_SESSIONS(session.userId);
+  const results = await fastify.redis
+    .multi()
+    .sadd(key, session.sid)
+    .pexpireat(key, session.expiresAt)
+    .exec();
+  // A MULTI reports a failed command in its results, not by rejecting. An
+  // untracked session would survive `/auth/logout`.
+  const failed = results?.find(([error]) => error !== null);
+  if (failed) throw failed[0];
+}
+
+/** Revoke one session through the service and drop its side record. */
+async function endBrowserSession(
+  fastify: FastifyInstance,
+  realmId: string,
+  sid: string,
+  reason: SessionRevokedReason
+): Promise<void> {
+  await fastify.sessionService.revoke({ realmId, sid, reason });
+  await deleteSessionSideRecord(fastify, realmId, sid);
 }
 
 /**
- * Record a newly minted browser session under its user, so
- * {@link endBrowserSessions} can end it (`/auth/logout`). Call it wherever a
- * session is created. The index expires `SESSION_COOKIE_TTL` after the newest
- * session in it was created: no session outlives that (see
- * {@link resolveBrowserSession}), and no rewrite extends one
- * ({@link saveBrowserSession}), so the index outlives every session it names.
- */
-export async function trackBrowserSession(
-  fastify: FastifyInstance,
-  userId: string,
-  sessionId: string
-): Promise<void> {
-  const key = REDIS_KEYS.USER_BROWSER_SESSIONS(userId);
-  await fastify.redis.multi().sadd(key, sessionId).expire(key, env.SESSION_COOKIE_TTL).exec();
-}
-
-/**
- * End every browser session of `userId` recorded by
- * {@link trackBrowserSession}: delete each session record (which is what
- * {@link resolveBrowserSession} reads, so `/oauth/authorize` shows the login
- * page again) and drop the index. Returns the ids it ended, so the caller can
+ * End every browser session of `userId` recorded by `createBrowserSession`:
+ * revoke each through the session service (so `/oauth/authorize` shows the
+ * login page again on every node, after the cache's tombstone), drop its side
+ * record, and drop the index. Returns the ids it ended, so the caller can
  * clear the cookie of the request it is handling when that is one of them;
  * other browsers' cookies go stale and are cleared on their next request.
+ *
+ * @param realmId - the user's realm: a session is only ever ended in it
  */
 export async function endBrowserSessions(
   fastify: FastifyInstance,
+  realmId: string,
   userId: string
 ): Promise<string[]> {
   const key = REDIS_KEYS.USER_BROWSER_SESSIONS(userId);
-  const sessionIds = await fastify.redis.smembers(key);
-  for (const sessionId of sessionIds) {
-    await fastify.sessionUtils.deleteSession(sessionId);
+  const sids = await fastify.redis.smembers(key);
+  for (const sid of sids) {
+    await endBrowserSession(fastify, realmId, sid, 'sign_out_everywhere');
   }
   await fastify.redis.del(key);
-  return sessionIds;
+  return sids;
 }

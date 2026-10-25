@@ -1,15 +1,13 @@
+import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
 import { BadRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
-import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser-session';
+import { resolveBrowserSession } from '../../helpers/browser-session';
 import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
-import {
-  type BrowserSessionData,
-  csrfTokensEqual,
-  generateCsrfToken,
-} from '../../helpers/session-cookie';
+import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
+import { readSessionSideRecord, writeSessionSideRecord } from '../../helpers/session-side-record';
 import { emitUserEvent } from '../../helpers/user-events';
 
 /**
@@ -57,18 +55,19 @@ const unauthorizedResponseSchema = z.object({
 const CSRF_HEADER = 'x-csrf-token';
 
 /**
- * Ensure the session carries an `apiCsrfToken`; mint + persist one if absent.
- * The token is long-lived (per session) so concurrent / multi-tab usage works.
- * Returns the token to embed in a response.
+ * Ensure the session's side record carries an `apiCsrfToken`; mint + persist
+ * one if absent. The token is long-lived (per session) so concurrent /
+ * multi-tab usage works. Returns the token to embed in a response.
  */
 async function ensureApiCsrfToken(
   fastify: FastifyInstance,
-  session: BrowserSessionData
+  session: BrowserSession
 ): Promise<string> {
-  if (session.apiCsrfToken) return session.apiCsrfToken;
+  const { apiCsrfToken } = await readSessionSideRecord(fastify, session);
+  if (apiCsrfToken) return apiCsrfToken;
   const token = generateCsrfToken();
-  // Stored for what is left of the session's lifetime, never extending it.
-  await saveBrowserSession(fastify, { ...session, apiCsrfToken: token });
+  // The side record expires with the session, never extending it.
+  await writeSessionSideRecord(fastify, session, { apiCsrfToken: token });
   return token;
 }
 
@@ -129,7 +128,8 @@ export default async function (fastify: FastifyInstance) {
       // CORS preflight for cross-origin attempts; the timing-safe comparison
       // closes the same-origin XSS gap that SameSite=Lax does not address.
       const provided = request.headers[CSRF_HEADER] as string | undefined;
-      if (!csrfTokensEqual(provided, session.apiCsrfToken)) {
+      const { apiCsrfToken } = await readSessionSideRecord(fastify, session);
+      if (!csrfTokensEqual(provided, apiCsrfToken)) {
         await emitUserEvent(
           request,
           'urn:qauth:event:request.csrf_rejected:v1-rc.0',

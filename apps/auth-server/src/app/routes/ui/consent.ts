@@ -14,7 +14,7 @@ import {
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
-import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser-session';
+import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
 import { isClientUsable } from '../../helpers/client-status';
@@ -40,6 +40,11 @@ import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
+import {
+  burnConsentCsrfToken,
+  readSessionSideRecord,
+  writeSessionSideRecord,
+} from '../../helpers/session-side-record';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
@@ -156,7 +161,7 @@ function consentPage(opts: {
   authorizeParams: Record<string, string | undefined>;
   /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
   resources: string[];
-  userEmail: string;
+  userIdentifier: string;
   /** Host portion of the redirect_uri, shown so the user can sanity-check the destination. */
   redirectHost: string;
   /** True when the redirect targets loopback/localhost (CIMD §6 impersonation warning). */
@@ -326,7 +331,7 @@ function consentPage(opts: {
           <form class="card" method="post" action="/ui/consent">
             <h1>${opts.clientName} wants to access your account</h1>
             ${homepage}
-            <p class="as-user">Signed in as ${opts.userEmail}</p>
+            <p class="as-user">Signed in as ${opts.userIdentifier}</p>
             ${badge} ${loopbackWarning}
             <p><strong>Requested access:</strong></p>
             <ul class="scopes">
@@ -456,6 +461,11 @@ export default async function (fastify: FastifyInstance) {
       // grant, so what the user approves is what the token is issued for.
       const resources = query.resource ?? [];
 
+      // The CSRF token, the bound scopes and resources, and the identifier
+      // shown below live in the session's side record (#488), not in the
+      // session: rendering this screen writes Redis only.
+      const side = await readSessionSideRecord(fastify, session);
+
       // Reuse the session's existing CSRF token if present; only mint a
       // fresh one when none exists yet. Rotating on every GET would break
       // multi-tab flows: opening the consent page in a second tab would
@@ -463,7 +473,7 @@ export default async function (fastify: FastifyInstance) {
       // submit would fail even though the user's intent is legitimate.
       // The token is still burned on successful POST, and a new session
       // (re-login) always mints a new one.
-      const csrfToken = session.csrfToken ?? generateCsrfToken();
+      const csrfToken = side.csrfToken ?? generateCsrfToken();
 
       // Scope-presentation integrity (#150 hardening): bind the EXACT scope set
       // the user is about to see to the session, keyed by client_id. The POST
@@ -473,14 +483,12 @@ export default async function (fastify: FastifyInstance) {
       // change between GETs for the same client), so this write also covers the
       // first-time CSRF-token mint above. The RFC 8707 resources shown as the
       // audience are bound the same way: they become the token's `aud`.
-      const consentScopes = { ...(session.consentScopes ?? {}), [client.clientId]: scopes };
-      const consentResources = {
-        ...(session.consentResources ?? {}),
-        [client.clientId]: resources,
-      };
-      // Stored for what is left of the session's lifetime: rendering the
-      // screen must not extend the session.
-      await saveBrowserSession(fastify, { ...session, csrfToken, consentScopes, consentResources });
+      // The side record expires with the session: rendering the screen never
+      // extends it.
+      await writeSessionSideRecord(fastify, session, {
+        csrfToken,
+        consent: { clientId: client.clientId, scopes, resources },
+      });
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
@@ -549,9 +557,10 @@ export default async function (fastify: FastifyInstance) {
           // per entry so the POST body carries every requested resource URI
           // back to the handler, which compares them with the binding above.
           resources,
-          // #230: session email is optional (future non-email credentials);
-          // fall back to the stable subject id for display.
-          userEmail: session.email ?? session.userId,
+          // #230: the identifier of the credential the user signed in with.
+          // A sign-in without one, or a lost side record, shows the stable
+          // subject id instead.
+          userIdentifier: side.identifier ?? session.userId,
           redirectHost: redirectHost(query.redirect_uri),
           redirectIsLoopback: isLoopbackRedirect(query.redirect_uri),
           isCimd,
@@ -619,7 +628,8 @@ export default async function (fastify: FastifyInstance) {
         return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
       }
 
-      if (!csrfTokensEqual(session.csrfToken, body.csrf_token)) {
+      const side = await readSessionSideRecord(fastify, session);
+      if (!csrfTokensEqual(side.csrfToken, body.csrf_token)) {
         // No client: the posted `client_id` is not resolved before this check.
         await emitUserEvent(
           request,
@@ -632,7 +642,7 @@ export default async function (fastify: FastifyInstance) {
 
       // Burn the CSRF token so the form cannot be replayed. A fresh one is
       // minted on the next GET /ui/consent render.
-      await saveBrowserSession(fastify, { ...session, csrfToken: undefined });
+      await burnConsentCsrfToken(fastify, session);
 
       const realm = requestRealm(request);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
@@ -718,7 +728,7 @@ export default async function (fastify: FastifyInstance) {
       // field that survived the allowlist intersection) is refused rather than
       // silently granting a set the user never saw. A missing binding (a POST
       // with no preceding GET in this session) is likewise refused.
-      const boundScopes = session.consentScopes?.[client.clientId];
+      const boundScopes = side.consentScopes[client.clientId];
       const postedScopes = filterRequestedScopes(body.scope, client);
       if (boundScopes === undefined || !scopeSetsEqual(boundScopes, postedScopes)) {
         await emitUserEvent(
@@ -746,7 +756,7 @@ export default async function (fastify: FastifyInstance) {
       // page the session no longer describes (a later render rebound it) or
       // a tampered form. A session rendered before resources were bound
       // carries no entry, which reads as "named none".
-      const boundResources = session.consentResources?.[client.clientId] ?? [];
+      const boundResources = side.consentResources[client.clientId] ?? [];
       const postedResources = body.resource ?? [];
       if (!resourceSetsEqual(boundResources, postedResources)) {
         await emitUserEvent(
@@ -789,7 +799,7 @@ export default async function (fastify: FastifyInstance) {
         priorConsentScopes: [],
         prompt,
         maxAgeSeconds: body.max_age ?? null,
-        authTimeMs: session.createdAt,
+        authTimeMs: session.authTime,
         nowMs: Date.now(),
         freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
         // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login on
@@ -861,7 +871,7 @@ export default async function (fastify: FastifyInstance) {
             // (browser-session establishment, epoch MS), so /oauth/token can
             // assert `auth_time` in the ID token and `max_age` evaluates the
             // actual session age rather than this code's mint time.
-            authTime: session.createdAt,
+            authTime: session.authTime,
             // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
             // the code so /oauth/token can assert `acr`. NULL for a password
             // login (`'low'`), which is the "omit the claim" outcome.
@@ -905,7 +915,7 @@ export default async function (fastify: FastifyInstance) {
             scopes,
             dangerousScopes: dangerousGranted,
             ...(scopeMode === null ? {} : { scopeMode }),
-            authenticatedAt: new Date(session.createdAt).toISOString(),
+            authenticatedAt: new Date(session.authTime).toISOString(),
           },
           { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
         );

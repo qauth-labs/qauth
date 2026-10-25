@@ -8,6 +8,7 @@ import { WALLET_LOGIN_STATUS_RATE_LIMIT, WALLET_LOGIN_STATUS_RATE_WINDOW_S } fro
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { csrfTokensEqual } from '../../helpers/session-cookie';
+import { readSessionSideRecord } from '../../helpers/session-side-record';
 import { emitUserEvent } from '../../helpers/user-events';
 import {
   advanceWalletLinkFlow,
@@ -162,7 +163,8 @@ export default async function (fastify: FastifyInstance) {
       }
 
       const provided = request.headers[CSRF_HEADER] as string | undefined;
-      if (!csrfTokensEqual(provided, session.apiCsrfToken)) {
+      const { apiCsrfToken } = await readSessionSideRecord(fastify, session);
+      if (!csrfTokensEqual(provided, apiCsrfToken)) {
         await emitUserEvent(
           request,
           'urn:qauth:event:request.csrf_rejected:v1-rc.0',
