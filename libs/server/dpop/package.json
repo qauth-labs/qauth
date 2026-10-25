@@ -1,0 +1,18 @@
+{
+  "name": "@qauth-labs/server-dpop",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "jose": "catalog:",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/shared-test-vectors": "workspace:*",
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "ioredis": "catalog:",
+    "vitest": "catalog:"
+  }
+}

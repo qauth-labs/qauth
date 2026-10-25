@@ -68,6 +68,7 @@ beforeEach(() => {
     ID_JAG_ALLOW_PRIVATE_ADDRESSES: undefined,
     DB_POOL_MAX: undefined,
     WEBAUTHN_ENABLED: undefined,
+    DPOP_ENABLED: undefined,
   });
 });
 
@@ -292,6 +293,38 @@ describe('WEBAUTHN_ENABLED is refused at boot until F2b is complete (#467)', () 
       WEBAUTHN_ENABLED: 'false',
     });
     expect((await import('./env')).env.WEBAUTHN_ENABLED).toBe(false);
+  });
+});
+
+/**
+ * DPOP_ENABLED (ADR-014 §3, ADR-017 phase F3, #479). The shared verifier is
+ * built, but no endpoint binds tokens to a DPoP key yet, so the environment
+ * schema refuses the switch. The change that makes the token endpoint issue
+ * DPoP-bound tokens removes the refusal and this block with it.
+ */
+describe('DPOP_ENABLED is refused at boot until the token endpoint binds tokens (#479)', () => {
+  it('DPOP_ENABLED=true fails the boot, naming the variable and the way out', async () => {
+    setEnv({ NODE_ENV: 'development', DPOP_ENABLED: 'true' });
+
+    const boot = import('./env');
+    await expect(boot).rejects.toThrow('DPOP_ENABLED=true is not available yet');
+    await expect(boot).rejects.toThrow('Unset DPOP_ENABLED or set it to false');
+  });
+
+  it('unset or false boots with DPoP off, in production too', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      DPOP_ENABLED: undefined,
+    });
+    expect((await import('./env')).env.DPOP_ENABLED).toBe(false);
+
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      DPOP_ENABLED: 'false',
+    });
+    expect((await import('./env')).env.DPOP_ENABLED).toBe(false);
   });
 });
 

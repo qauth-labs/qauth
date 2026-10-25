@@ -2,6 +2,7 @@ import type { ConfigKey } from '../types';
 import { ACCOUNT_KEYS } from './accounts';
 import { AUTH_SERVER_KEYS } from './auth-server';
 import { DEVELOPER_PORTAL_KEYS } from './developer-portal';
+import { DPOP_KEYS } from './dpop';
 import { EVENT_DELIVERY_KEYS } from './event-delivery';
 import { EVENT_RETENTION_KEYS } from './event-retention';
 import { EVENT_TELEMETRY_KEYS } from './event-telemetry';
@@ -27,6 +28,7 @@ export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...EVENT_RETENTION_KEYS,
   ...STORAGE_KEYS,
   ...TOKEN_KEYS,
+  ...DPOP_KEYS,
   ...KEK_KEYS,
   ...ACCOUNT_KEYS,
   ...REGISTRATION_KEYS,
