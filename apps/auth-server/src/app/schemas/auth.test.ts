@@ -1,7 +1,34 @@
 import { PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
-import { loginSchema, registerSchema, resendVerificationSchema, verifyBodySchema } from './auth';
+import {
+  loginSchema,
+  logoutHeadersSchema,
+  registerSchema,
+  resendVerificationSchema,
+  verifyBodySchema,
+} from './auth';
+
+/**
+ * `POST /auth/logout` checks its header twice: this schema first (400), then
+ * the handler's own read of the token (401). The schema's `^Bearer .+$` lets
+ * through a header that holds more than one token, so the handler's 401 is
+ * reachable over HTTP (graphs/flows/core/logout, `invalid_token.missing_token`).
+ */
+describe('logoutHeadersSchema', () => {
+  it('lets through a Bearer header that holds more than one token, for the handler to refuse', () => {
+    expect(logoutHeadersSchema.safeParse({ authorization: 'Bearer a b' }).success).toBe(true);
+  });
+
+  it.each([
+    ['no header', {}],
+    ['another scheme', { authorization: 'Basic YTpi' }],
+    ['a lower-case scheme', { authorization: 'bearer abc' }],
+    ['an empty Bearer token', { authorization: 'Bearer ' }],
+  ])('refuses %s', (_name, headers) => {
+    expect(logoutHeadersSchema.safeParse(headers).success).toBe(false);
+  });
+});
 
 /**
  * An email address is at most 254 characters (RFC 5321 §4.5.3.1.3: a path is
