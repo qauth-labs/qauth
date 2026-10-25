@@ -1,26 +1,3 @@
 {
-  "approvals": [
-    {
-      "surface": "openapi",
-      "change": {
-        "rule": "response-property-enum-value-added",
-        "operation": "POST /oauth/introspect",
-        "fingerprint": "25f844fa8c60",
-        "text": "added the new `DPoP` enum value to the `token_type` response property for the response status `200`"
-      },
-      "ref": "#480",
-      "release": "v0.2.0"
-    },
-    {
-      "surface": "openapi",
-      "change": {
-        "rule": "response-property-enum-value-added",
-        "operation": "POST /oauth/token",
-        "fingerprint": "fba9179ab234",
-        "text": "added the new `DPoP` enum value to the `anyOf[subschema #2]/token_type` response property for the response status `200`"
-      },
-      "ref": "#480",
-      "release": "v0.2.0"
-    }
-  ]
+  "approvals": []
 }
