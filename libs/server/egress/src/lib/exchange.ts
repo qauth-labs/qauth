@@ -1,4 +1,5 @@
 import type { LookupAddress } from 'node:dns';
+import { writeFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as netConnect, type Socket } from 'node:net';
@@ -215,129 +216,136 @@ export function exchange(
     }
     signal.addEventListener('abort', onAbort, { once: true });
 
-    let tcp: Socket;
+    // Node throws for some bad input (a path with a space) rather than
+    // emitting an error; that is a failure too.
     try {
-      tcp = dial(job.hostname, job.addresses, job.port);
-    } catch (err) {
-      failed(err instanceof Error ? err.message : 'could not connect');
-      return;
-    }
-    sockets.push(tcp);
-    tcp.on('error', (err) => failed(err.message));
-    const secure = tls.connect({
-      socket: tcp,
-      host: job.hostname,
-      // RFC 6066 has no SNI for an IP literal; the certificate is then checked
-      // against the address.
-      ...(job.literalFamily === 0 ? { servername: job.hostname } : {}),
-      ciphers: egressCiphers(),
-      minVersion: tlsDefaults.minVersion,
-      maxVersion: tlsDefaults.maxVersion,
-      ALPNProtocols: ['http/1.1'],
-      // Explicit, so NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn it off.
-      rejectUnauthorized: true,
-    });
-    sockets.push(secure);
-    secure.on('error', (err) => failed(err.message));
-
-    const tooLarge = (): ExchangeOutcome =>
-      failure('size', `the response is larger than ${job.maxResponseBytes} bytes`);
-
-    // The body cap counts body bytes only. Chunk-size lines, chunk extensions
-    // and trailers are not body, and a host could send them without end; this
-    // caps everything read from the connection: the heads, and twice the body
-    // cap for the body with its framing.
-    const maxWireBytes = 2 * job.maxResponseBytes + MAX_HEADER_BYTES * (MAX_INTERIM_RESPONSES + 2);
-    let wireBytes = 0;
-    secure.on('data', (chunk: Buffer) => {
-      wireBytes += chunk.length;
-      // Fail once this chunk has reached the HTTP parser, which listens after
-      // this listener: a socket destroyed under it in the middle of a 'data'
-      // event trips an assertion in Node's HTTP client, an uncaught exception.
-      if (wireBytes > maxWireBytes) process.nextTick(() => finish(tooLarge()));
-    });
-    secure.once('secureConnect', () => {
-      clearTimeout(connectTimer);
-      if (!settled) onSecured?.();
-    });
-
-    const headers: Record<string, string> = {
-      ...job.headers,
-      host: hostHeader(job),
-      connection: 'close',
-    };
-    if (job.body !== undefined) headers['content-length'] = String(job.body.byteLength);
-
-    const req = httpsRequest(
-      {
-        method: job.method,
+      let tcp: Socket;
+      try {
+        tcp = dial(job.hostname, job.addresses, job.port);
+      } catch (err) {
+        failed(err instanceof Error ? err.message : 'could not connect');
+        return;
+      }
+      sockets.push(tcp);
+      tcp.on('error', (err) => failed(err.message));
+      const secure = tls.connect({
+        socket: tcp,
         host: job.hostname,
-        port: job.port,
-        path: job.path,
-        headers,
-        setHost: false,
-        maxHeaderSize: MAX_HEADER_BYTES,
-        insecureHTTPParser: false,
-        createConnection: () => secure,
-      },
-      (res) => {
-        const status = res.statusCode ?? 0;
-        const resHeaders = responseHeaders(res);
-        const location = resHeaders['location'];
-        if (REDIRECT_STATUSES.has(status) && location !== undefined) {
-          finish({
-            kind: 'response',
-            status,
-            headers: resHeaders,
-            body: Buffer.alloc(0),
-            location,
-          });
-          return;
-        }
+        // RFC 6066 has no SNI for an IP literal; the certificate is then checked
+        // against the address.
+        ...(job.literalFamily === 0 ? { servername: job.hostname } : {}),
+        ciphers: egressCiphers(),
+        minVersion: tlsDefaults.minVersion,
+        maxVersion: tlsDefaults.maxVersion,
+        ALPNProtocols: ['http/1.1'],
+        // Explicit, so NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn it off.
+        rejectUnauthorized: true,
+      });
+      sockets.push(secure);
+      secure.on('error', (err) => failed(err.message));
 
-        // A HEAD answer, a 204 and a 304 declare a length they do not send.
-        const hasBody = job.method !== 'HEAD' && status !== 204 && status !== 304;
-        const declared = Number(resHeaders['content-length']);
-        if (hasBody && Number.isFinite(declared) && declared > job.maxResponseBytes) {
-          finish(tooLarge());
-          return;
-        }
-        let received = 0;
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => {
-          received += chunk.length;
-          if (received > job.maxResponseBytes) {
+      const tooLarge = (): ExchangeOutcome =>
+        failure('size', `the response is larger than ${job.maxResponseBytes} bytes`);
+
+      // The body cap counts body bytes only. Chunk-size lines, chunk extensions
+      // and trailers are not body, and a host could send them without end; this
+      // caps everything read from the connection: the heads, and twice the body
+      // cap for the body with its framing.
+      const maxWireBytes =
+        2 * job.maxResponseBytes + MAX_HEADER_BYTES * (MAX_INTERIM_RESPONSES + 2);
+      let wireBytes = 0;
+      secure.on('data', (chunk: Buffer) => {
+        wireBytes += chunk.length;
+        // Fail once this chunk has reached the HTTP parser, which listens after
+        // this listener: a socket destroyed under it in the middle of a 'data'
+        // event trips an assertion in Node's HTTP client, an uncaught exception.
+        if (wireBytes > maxWireBytes) process.nextTick(() => finish(tooLarge()));
+      });
+      secure.once('secureConnect', () => {
+        clearTimeout(connectTimer);
+        if (!settled) onSecured?.();
+      });
+
+      const headers: Record<string, string> = {
+        ...job.headers,
+        host: hostHeader(job),
+        connection: 'close',
+      };
+      if (job.body !== undefined) headers['content-length'] = String(job.body.byteLength);
+
+      const req = httpsRequest(
+        {
+          method: job.method,
+          host: job.hostname,
+          port: job.port,
+          path: job.path,
+          headers,
+          setHost: false,
+          maxHeaderSize: MAX_HEADER_BYTES,
+          insecureHTTPParser: false,
+          createConnection: () => secure,
+        },
+        (res) => {
+          const status = res.statusCode ?? 0;
+          const resHeaders = responseHeaders(res);
+          const location = resHeaders['location'];
+          if (REDIRECT_STATUSES.has(status) && location !== undefined) {
+            finish({
+              kind: 'response',
+              status,
+              headers: resHeaders,
+              body: Buffer.alloc(0),
+              location,
+            });
+            return;
+          }
+
+          // A HEAD answer, a 204 and a 304 declare a length they do not send.
+          const hasBody = job.method !== 'HEAD' && status !== 204 && status !== 304;
+          const declared = Number(resHeaders['content-length']);
+          if (hasBody && Number.isFinite(declared) && declared > job.maxResponseBytes) {
             finish(tooLarge());
             return;
           }
-          chunks.push(chunk);
-        });
-        res.on('end', () =>
-          finish({
-            kind: 'response',
-            status,
-            headers: resHeaders,
-            body: Buffer.concat(chunks),
-            location: undefined,
-          })
-        );
-        res.on('error', (err) => failed(err.message));
-      }
-    );
+          let received = 0;
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => {
+            received += chunk.length;
+            if (received > job.maxResponseBytes) {
+              finish(tooLarge());
+              return;
+            }
+            chunks.push(chunk);
+          });
+          res.on('end', () =>
+            finish({
+              kind: 'response',
+              status,
+              headers: resHeaders,
+              body: Buffer.concat(chunks),
+              location: undefined,
+            })
+          );
+          res.on('error', (err) => failed(err.message));
+        }
+      );
 
-    // 1xx responses never reach the response callback, so the byte cap does
-    // not see them; a host could stream them until the deadline.
-    let interim = 0;
-    req.on('information', () => {
-      interim += 1;
-      if (interim > MAX_INTERIM_RESPONSES) failed('too many interim responses');
-    });
-    req.on('error', (err) => failed(err.message));
-    // Once the request has closed the exchange is over, whatever else
-    // happened. An unsolicited `101`, which Node answers by dropping the
-    // socket, is reported with nothing but 'close'.
-    req.on('close', () => failed('the connection closed without a response'));
-    req.end(job.body);
+      // 1xx responses never reach the response callback, so the byte cap does
+      // not see them; a host could stream them until the deadline.
+      let interim = 0;
+      req.on('information', () => {
+        interim += 1;
+        if (interim > MAX_INTERIM_RESPONSES) failed('too many interim responses');
+      });
+      req.on('error', (err) => failed(err.message));
+      // Once the request has closed the exchange is over, whatever else
+      // happened. An unsolicited `101`, which Node answers by dropping the
+      // socket, is reported with nothing but 'close'.
+      req.on('close', () => failed('the connection closed without a response'));
+      req.end(job.body);
+    } catch (err) {
+      failed(err instanceof Error ? err.message : 'the request could not be sent');
+    }
   });
 }
 
@@ -350,8 +358,18 @@ export const FETCH_PROCESS_TAG = 'qauth:egress-fetch-process';
 
 /** What the pool sends a fetch process. */
 export type ToFetchProcess =
-  /** First, once: the trust store of the server's process, as PEM, and its TLS defaults. */
-  | { readonly type: 'init'; readonly ca: readonly string[]; readonly tls: TlsDefaults }
+  /** First, once: how the server's process sets up TLS. */
+  | {
+      readonly type: 'init';
+      /**
+       * The server's trust store, as PEM. Empty when the server uses OpenSSL's
+       * store (`--use-openssl-ca`), which the process then uses too.
+       */
+      readonly ca: readonly string[];
+      readonly tls: TlsDefaults;
+      /** `SSL_CERT_FILE` and `SSL_CERT_DIR` of the server, for OpenSSL's store. */
+      readonly opensslStore: { readonly certFile?: string; readonly certDir?: string };
+    }
   /** One exchange at a time; the next only after the outcome of this one. */
   | { readonly type: 'exchange'; readonly id: number; readonly job: ExchangeJob };
 
@@ -383,6 +401,12 @@ function runFetchProcess(send: (message: FromFetchProcess) => void): void {
   } catch {
     // Not permitted: the process still runs, at the default priority.
   }
+  // And when memory runs out, Linux ends this process before the server.
+  try {
+    writeFileSync('/proc/self/oom_score_adj', '1000');
+  } catch {
+    // Not Linux, or not permitted.
+  }
   process.on('disconnect', () => process.exit(0));
   // Never aborted: the pool ends the call by killing the process.
   const noAbort = new AbortController().signal;
@@ -390,7 +414,11 @@ function runFetchProcess(send: (message: FromFetchProcess) => void): void {
     // The pool is the server's process, the side this process trusts.
     const message = received as ToFetchProcess;
     if (message.type === 'init') {
-      tls.setDefaultCACertificates([...message.ca]);
+      // OpenSSL reads these when it first loads its store, after this.
+      const { certFile, certDir } = message.opensslStore;
+      if (certFile !== undefined) process.env['SSL_CERT_FILE'] = certFile;
+      if (certDir !== undefined) process.env['SSL_CERT_DIR'] = certDir;
+      if (message.ca.length > 0) tls.setDefaultCACertificates([...message.ca]);
       tlsDefaults = { ...message.tls };
       send({ type: 'ready' });
       return;
@@ -401,7 +429,13 @@ function runFetchProcess(send: (message: FromFetchProcess) => void): void {
       dialPinned,
       noAbort,
       () => send({ type: 'secured', id })
-    ).then((outcome) => send({ type: 'outcome', id, outcome }));
+    )
+      .catch((err: unknown): ExchangeOutcome => ({
+        kind: 'failed',
+        reason: 'network',
+        message: `egress to ${job.hostname} failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+      }))
+      .then((outcome) => send({ type: 'outcome', id, outcome }));
   });
 }
 

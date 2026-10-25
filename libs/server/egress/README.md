@@ -122,10 +122,16 @@ A process can be killed.
   needs one. A process holds its slot until it has exited.
 - **Nothing of the server's.** A process starts with an empty environment (Node adds the two
   variables of its IPC channel and removes them at start), `/dev/null` for its standard streams, no
-  file descriptor of the server's but that channel, none of the server's Node flags, a 64 MiB heap
-  and the lowest CPU priority. It trusts the certificates the server's process trusts — Node's
-  bundled roots, `NODE_EXTRA_CA_CERTS`, the system store when Node uses it — and takes its TLS
-  defaults (`--tls-min-v1.3`, `--tls-cipher-list`), both sent over the channel when it starts.
+  file descriptor of the server's but that channel, none of the server's Node flags, a 64 MiB heap,
+  the lowest CPU priority and, on Linux, the highest OOM score, so that the kernel ends a fetch
+  process before the server when memory runs out.
+- **The server's TLS setup.** A process trusts the certificates the server's process trusts —
+  Node's bundled roots, `NODE_EXTRA_CA_CERTS`, the system store when Node uses it — and takes its
+  TLS defaults (`--tls-min-v1.3`, `--tls-cipher-list`), both sent over the channel when it starts.
+  The OpenSSL flags of the server's command line and `NODE_OPTIONS` (`--use-openssl-ca`,
+  `--use-system-ca`, `--openssl-config`, `--openssl-legacy-provider`, `--enable-fips`, …) are
+  passed on, `OPENSSL_CONF` as `--openssl-config`, and with `--use-openssl-ca` the process reads
+  OpenSSL's store from the server's `SSL_CERT_FILE` and `SSL_CERT_DIR`, sent over the channel.
 - **Bounds.** At most 8 processes run at once, and the calls to one host family hold at most 2 of
   them. A host name counts under its registrable domain, by the Public Suffix List with its private
   section: `a.example.com` and `b.example.com` share a family, `alice.eu.org` and `bob.eu.org` do
@@ -138,7 +144,15 @@ A process can be killed.
   message kept to one line that names the host — and kills a process that answers out of turn.
 - **Loaded from source.** Node does not strip the types of a file under `node_modules`, where a
   deployment keeps this library, so the pool reads `exchange.ts` and hands it to Node with
-  `--input-type=module-typescript --eval`. That file therefore imports `node:` builtins only.
+  `--input-type=module-typescript --eval`. That file therefore imports `node:` builtins only, and
+  the library runs from its TypeScript sources only, as the server does.
+- **Memory.** An idle fetch process takes about 70 MB, so a full pool adds about 600 MB to the
+  server's memory; allow for it in a container limit. Processes start only for concurrent calls and
+  exit after a minute without one.
+- **Killability, not confidentiality.** A fetch process runs as the server's user. The pool keeps a
+  host from holding the server's CPU or its slots past a deadline; it does not keep the server's
+  secrets from a fetch process that a host has taken over, which can read
+  `/proc/<server pid>/environ`, or end the server through the channel.
 
 `egressPoolStats()` returns what the pool is doing, for `/metrics`:
 

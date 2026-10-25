@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { validateHeaderName, validateHeaderValue } from 'node:http';
+import { join } from 'node:path';
 import tls from 'node:tls';
 
 import {
@@ -90,21 +91,80 @@ export interface ProcessPool {
 const FETCH_PROCESS_FLAGS = ['--max-old-space-size=64', '--no-addons'];
 
 /**
- * The program of a fetch process: `exchange.ts` next to this module, in this
- * module's own form. The source is handed to Node with `--eval` rather than as
- * a file: Node does not strip the types of a file under `node_modules`, which
- * is where a deployment keeps this library.
+ * The program of a fetch process: `exchange.ts` next to this module. The
+ * source is handed to Node with `--eval` rather than as a file: Node does not
+ * strip the types of a file under `node_modules`, which is where a deployment
+ * keeps this library. The library runs from its TypeScript sources, as the
+ * server does; a fetch process could not load a compiled form, which needs
+ * `tslib` from a module path it does not have.
  */
-const PROGRAM_FILE = join(__dirname, `exchange${extname(__filename)}`);
+const PROGRAM_FILE = join(__dirname, 'exchange.ts');
 
-let program: { source: string; inputType: string } | undefined;
+let program: string | undefined;
 
-function fetchProcessProgram(): { source: string; inputType: string } {
-  program ??= {
-    source: readFileSync(PROGRAM_FILE, 'utf8'),
-    inputType: extname(PROGRAM_FILE) === '.ts' ? 'module-typescript' : 'commonjs',
-  };
+function fetchProcessProgram(): string {
+  program ??= readFileSync(PROGRAM_FILE, 'utf8');
   return program;
+}
+
+/** Node flags that set up OpenSSL and its trust store, which a fetch process takes from the server. */
+const OPENSSL_FLAGS: readonly string[] = [
+  '--use-openssl-ca',
+  '--use-bundled-ca',
+  '--use-system-ca',
+  '--openssl-legacy-provider',
+  '--openssl-shared-config',
+  '--enable-fips',
+  '--force-fips',
+];
+
+/** How a fetch process sets up OpenSSL: the server's way. */
+export interface OpensslSetup {
+  /** Node flags for the process. */
+  readonly flags: string[];
+  /** The server uses OpenSSL's trust store, which the process then uses too. */
+  readonly opensslStore: boolean;
+  readonly certFile: string | undefined;
+  readonly certDir: string | undefined;
+}
+
+/**
+ * The OpenSSL setup of a process started with `execArgv` and `nodeOptions`
+ * (`NODE_OPTIONS`) in `env`. The empty environment of a fetch process would
+ * otherwise drop it: `OPENSSL_CONF` becomes `--openssl-config`, the flags in
+ * {@link OPENSSL_FLAGS} are passed on, and `SSL_CERT_FILE` and `SSL_CERT_DIR`
+ * go over the channel. Nothing else of the environment is read.
+ *
+ * @internal exported for its tests
+ */
+export function opensslSetup(
+  execArgv: readonly string[],
+  nodeOptions: string | undefined,
+  env: Readonly<Record<string, string | undefined>>
+): OpensslSetup {
+  const given = [...(nodeOptions ?? '').split(/\s+/).filter(Boolean), ...execArgv];
+  const flags: string[] = [];
+  let config: string | undefined;
+  for (let i = 0; i < given.length; i += 1) {
+    const flag = given[i];
+    if (OPENSSL_FLAGS.includes(flag)) {
+      if (!flags.includes(flag)) flags.push(flag);
+    } else if (flag.startsWith('--openssl-config=')) {
+      config = flag.slice('--openssl-config='.length);
+    } else if (flag === '--openssl-config' && i + 1 < given.length) {
+      config = given[i + 1];
+      i += 1;
+    }
+  }
+  config ??= env['OPENSSL_CONF'];
+  if (config) flags.push(`--openssl-config=${config}`);
+  return {
+    flags,
+    // Node refuses to start with both --use-openssl-ca and --use-bundled-ca.
+    opensslStore: flags.includes('--use-openssl-ca'),
+    certFile: env['SSL_CERT_FILE'] || undefined,
+    certDir: env['SSL_CERT_DIR'] || undefined,
+  };
 }
 
 /** The longest failure message taken from a fetch process. */
@@ -151,10 +211,11 @@ export function parseFetchProcessMessage(
     const text = o['message'];
     if (!CHILD_FAILURE_REASONS.includes(reason) || typeof text !== 'string') return undefined;
     // The message reaches errors and logs: it must be the exchange's own,
-    // naming the host, on one line. OpenSSL's end with a line break.
+    // naming the host, on one line and without format characters. OpenSSL's
+    // end with a line break.
     const prefix = `egress to ${job.hostname} failed: `;
     const line = text
-      .replace(/\p{Cc}+/gu, ' ')
+      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ')
       .trimEnd()
       .slice(0, MAX_MESSAGE_LENGTH);
     return {
@@ -178,7 +239,14 @@ export function parseFetchProcessMessage(
   if (typeof headers !== 'object' || headers === null) return undefined;
   const copied: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
-    if (typeof value !== 'string') return undefined;
+    if (typeof value !== 'string' || name !== name.toLowerCase()) return undefined;
+    try {
+      // What Node's HTTP parser let through, checked again on this side.
+      validateHeaderName(name);
+      validateHeaderValue(name, value);
+    } catch {
+      return undefined;
+    }
     copied[name] = value;
   }
   return {
@@ -215,6 +283,8 @@ interface FetchProcess {
   ending: boolean;
   /** It has started and said so. */
   ready: boolean;
+  /** It has reported the end of the TLS handshake of its call. */
+  secured: boolean;
   /** Runs from the process being ready, or the call's start, to the end of the TLS handshake. */
   connectTimer: NodeJS.Timeout | undefined;
   onCallAbort: (() => void) | undefined;
@@ -341,7 +411,11 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     }
     const { call } = proc;
     const message = call && parseFetchProcessMessage(raw, proc.id, call.job);
-    if (call === undefined || message === undefined) {
+    if (
+      call === undefined ||
+      message === undefined ||
+      (message.type === 'secured' && proc.secured)
+    ) {
       // Nothing is asked of an idle process, and a process that answers out
       // of turn or out of shape is not given another call.
       kill(
@@ -352,6 +426,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
       return;
     }
     if (message.type === 'secured') {
+      proc.secured = true;
       clearTimeout(proc.connectTimer);
       proc.connectTimer = undefined;
       return;
@@ -361,10 +436,11 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     if (!proc.ending) {
       idle.push(proc);
       proc.idleTimer = setTimeout(() => {
-        // Not killed at a deadline: it simply has nothing to do.
+        // Not killed at a deadline: it simply has nothing to do. SIGKILL all
+        // the same: a process that ignored SIGTERM would hold its place.
         proc.ending = true;
         leaveIdle(proc);
-        proc.child.kill();
+        proc.child.kill('SIGKILL');
       }, limits.idleTimeoutMs);
       proc.idleTimer.unref();
     }
@@ -372,10 +448,18 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
   };
 
   const spawnProcess = (): FetchProcess => {
-    const { source, inputType } = fetchProcessProgram();
+    const source = fetchProcessProgram();
+    const openssl = opensslSetup(process.execArgv, process.env['NODE_OPTIONS'], process.env);
     const child = spawn(
       process.execPath,
-      [...FETCH_PROCESS_FLAGS, `--input-type=${inputType}`, '--eval', source, FETCH_PROCESS_TAG],
+      [
+        ...FETCH_PROCESS_FLAGS,
+        ...openssl.flags,
+        '--input-type=module-typescript',
+        '--eval',
+        source,
+        FETCH_PROCESS_TAG,
+      ],
       {
         // Nothing of the server's environment (database URL, key material,
         // proxy settings, NODE_OPTIONS) is the fetch's business. Node adds the
@@ -397,6 +481,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
       family: undefined,
       ending: false,
       ready: false,
+      secured: false,
       connectTimer: undefined,
       onCallAbort: undefined,
       idleTimer: undefined,
@@ -429,11 +514,13 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     });
     // The trust store of this process, so an exchange there trusts exactly
     // what one here would: the bundled roots, NODE_EXTRA_CA_CERTS and the
-    // system store when Node uses it. And its TLS defaults, which flags such
-    // as --tls-min-v1.3 set and the empty environment would drop.
+    // system store when Node uses it, or OpenSSL's store. And its TLS
+    // defaults, which flags such as --tls-min-v1.3 set and the empty
+    // environment would drop.
     send(proc, {
       type: 'init',
-      ca: tls.getCACertificates('default'),
+      ca: openssl.opensslStore ? [] : tls.getCACertificates('default'),
+      opensslStore: { certFile: openssl.certFile, certDir: openssl.certDir },
       tls: {
         ciphers: tls.DEFAULT_CIPHERS,
         minVersion: tls.DEFAULT_MIN_VERSION,
@@ -458,6 +545,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     nextId += 1;
     running.id = nextId;
     running.call = call;
+    running.secured = false;
     running.family = call.family;
     bump(held, call.family, 1);
     if (running.ready) startConnectTimer(running, call);

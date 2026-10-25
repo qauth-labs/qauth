@@ -455,7 +455,9 @@ never runs that handshake on the thread that serves requests:
   process of its own instead. A process is killed at its deadline and a fresh one takes its place,
   so a hostile host holds a slot for no longer than the deadline. At most 8 processes run, and the
   host names under one registrable domain (`a.example.com`, `b.example.com`) share 2 of them. A
-  process starts with an empty environment and none of the server's open files.
+  process starts with an empty environment and none of the server's open files. Each takes about
+  70 MB, so a full pool needs about 600 MB beside the server; Linux ends a fetch process first
+  when memory runs out.
 
 Neither makes a hostile host free: a caller who names enough domains still keeps fetches busy until
 their deadlines. The mitigation is `CIMD_TRUST_POLICY=allowlist`: the server then fetches a Client

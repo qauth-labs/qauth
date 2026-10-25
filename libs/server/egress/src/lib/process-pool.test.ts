@@ -1,4 +1,13 @@
-import { closeSync, openSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import {
@@ -7,17 +16,25 @@ import {
   type Server,
   type Socket,
 } from 'node:net';
-import { platform } from 'node:os';
+import { platform, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import tls, { getCACertificates, setDefaultCACertificates } from 'node:tls';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { explicitCurveCertificate, serverFirstFlight } from '../testing/hostile-handshake';
 import { createTestCertificate } from '../testing/test-certificate';
-import { type ExchangeJob, type ExchangeOutcome, FETCH_PROCESS_TAG } from './exchange';
+import {
+  dialPinned,
+  exchange,
+  type ExchangeJob,
+  type ExchangeOutcome,
+  FETCH_PROCESS_TAG,
+} from './exchange';
 import {
   createProcessPool,
   egressPoolStats,
+  opensslSetup,
   parseFetchProcessMessage,
   type ProcessPool,
   sharedProcessPool,
@@ -36,6 +53,7 @@ import { NODE_TRANSPORT } from './transport';
 const LINUX = platform() === 'linux';
 
 let trustedBefore: string[];
+let ca: ReturnType<typeof createTestCertificate>;
 let leaf: ReturnType<typeof createTestCertificate>;
 let okServer: HttpsServer;
 let okPort: number;
@@ -59,7 +77,7 @@ const respond: typeof okHandler = (_req, _body, res) => {
 };
 
 beforeAll(async () => {
-  const ca = createTestCertificate({ subject: 'pool test CA' });
+  ca = createTestCertificate({ subject: 'pool test CA' });
   leaf = createTestCertificate({
     subject: 'egress.test',
     issuer: ca,
@@ -453,6 +471,47 @@ describe('fetch processes (integration: real processes, local TLS servers)', () 
     }
   });
 
+  it('uses OpenSSL’s trust store when this process is set to', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'egress-openssl-'));
+    writeFileSync(join(dir, 'ca.pem'), ca.pem);
+    const before = { options: process.env['NODE_OPTIONS'], file: process.env['SSL_CERT_FILE'] };
+    const restore = (name: string, value: string | undefined): void => {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+    // This process no longer trusts the test CA, so neither does a process
+    // that takes its trust store.
+    setDefaultCACertificates(trustedBefore);
+    try {
+      await expect(pool().exchange(okJob(), within(5_000))).resolves.toMatchObject({
+        kind: 'failed',
+        reason: 'network',
+      });
+      // As a server started with NODE_OPTIONS=--use-openssl-ca and
+      // SSL_CERT_FILE would see them.
+      process.env['NODE_OPTIONS'] = `${before.options ?? ''} --use-openssl-ca`.trim();
+      process.env['SSL_CERT_FILE'] = join(dir, 'ca.pem');
+      expect(text(await pool().exchange(okJob(), within(5_000)))).toBe('ok');
+    } finally {
+      restore('NODE_OPTIONS', before.options);
+      restore('SSL_CERT_FILE', before.file);
+      setDefaultCACertificates([...trustedBefore, ca.pem]);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a request Node refuses to send as a failure, with its reason', async () => {
+    const refused = {
+      kind: 'failed',
+      reason: 'network',
+      message: 'egress to ok.egress.test failed: Request path contains unescaped characters',
+    };
+    await expect(exchange(okJob({ path: '/a b' }), dialPinned, within(5_000))).resolves.toEqual(
+      refused
+    );
+    await expect(pool().exchange(okJob({ path: '/a b' }), within(5_000))).resolves.toEqual(refused);
+  });
+
   it('returns a TLS failure from the process with its host-only message', async () => {
     const fetches = pool();
     // The certificate does not cover this name.
@@ -526,6 +585,13 @@ describe.skipIf(!LINUX)('what a fetch process inherits (integration, Linux /proc
     }
   });
 
+  it('makes a fetch process the first one Linux ends when memory runs out', async () => {
+    const fetches = pool();
+    expect(text(await fetches.exchange(okJob(), within(5_000)))).toBe('ok');
+    const [pid] = fetchProcessPids();
+    expect(readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8').trim()).toBe('1000');
+  });
+
   it('gives a fetch process no file descriptor of this process but its channel', async () => {
     // A file and listening sockets this process holds while the process starts.
     const held = openSync(__filename, 'r');
@@ -551,6 +617,42 @@ describe.skipIf(!LINUX)('what a fetch process inherits (integration, Linux /proc
     } finally {
       closeSync(held);
     }
+  });
+});
+
+describe('opensslSetup', () => {
+  it('passes nothing on for a server with no OpenSSL settings', () => {
+    expect(opensslSetup(['--max-old-space-size=512'], '--enable-source-maps', {})).toEqual({
+      flags: [],
+      opensslStore: false,
+      certFile: undefined,
+      certDir: undefined,
+    });
+  });
+
+  it('passes on the OpenSSL flags of NODE_OPTIONS and of the command line', () => {
+    expect(
+      opensslSetup(['--use-openssl-ca', '--inspect'], '--require x --openssl-legacy-provider', {
+        SSL_CERT_FILE: '/etc/ssl/ca.pem',
+        SSL_CERT_DIR: '/etc/ssl/certs',
+        DATABASE_URL: 'postgres://secret',
+      })
+    ).toEqual({
+      flags: ['--openssl-legacy-provider', '--use-openssl-ca'],
+      opensslStore: true,
+      certFile: '/etc/ssl/ca.pem',
+      certDir: '/etc/ssl/certs',
+    });
+  });
+
+  it('turns OPENSSL_CONF into --openssl-config, unless a flag names the file', () => {
+    expect(
+      opensslSetup(['--enable-fips'], undefined, { OPENSSL_CONF: '/etc/fips.cnf' }).flags
+    ).toEqual(['--enable-fips', '--openssl-config=/etc/fips.cnf']);
+    expect(
+      opensslSetup(['--openssl-config', '/etc/a.cnf'], undefined, { OPENSSL_CONF: '/etc/b.cnf' })
+        .flags
+    ).toEqual(['--openssl-config=/etc/a.cnf']);
   });
 });
 
@@ -594,6 +696,9 @@ describe('parseFetchProcessMessage', () => {
     ['a body that is not bytes', response({ body: 'ok' })],
     ['a body above the cap', response({ body: new Uint8Array(11) })],
     ['a header value that is not a string', response({ headers: { a: ['b'] } })],
+    ['a header name that is not a token', response({ headers: { 'a b': 'c' } })],
+    ['a header name in upper case', response({ headers: { A: 'b' } })],
+    ['a header value with a line break', response({ headers: { a: 'b\r\nx-forged: 1' } })],
     ['a location that is not a string', response({ location: 1 })],
     [
       'a reason only the pool gives',
@@ -617,6 +722,9 @@ describe('parseFetchProcessMessage', () => {
     };
     expect(message('egress to api.egress.test failed: x\r\nforged log line\n')).toBe(
       'egress to api.egress.test failed: x forged log line'
+    );
+    expect(message('egress to api.egress.test failed: a\u2028b\u202ec')).toBe(
+      'egress to api.egress.test failed: a b c'
     );
     const long = message(`egress to api.egress.test failed: ${'x'.repeat(600)}`);
     expect(long).toMatch(/^egress to api\.egress\.test failed: x+$/);
