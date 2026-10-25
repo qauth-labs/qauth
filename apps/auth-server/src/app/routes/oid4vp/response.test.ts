@@ -17,6 +17,7 @@ import { CompactEncrypt, importJWK, type JWK } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
 import type { emitUserEvent } from '../../helpers/user-events';
 
@@ -60,8 +61,11 @@ const VP_TOKEN = JSON.stringify({ pid: [PRESENTATION] });
 
 const STATE = 'state-value';
 
-/** The deployment's public origin, as `JWT_ISSUER` names it (trailing slash canonicalised away). */
+/** The issuer of the realm the wallet posted to, the origin of every URL it is handed (#490). */
 const ISSUER = 'https://auth.example.com';
+
+/** The realm the wallet's request was resolved to. */
+const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
 
 /**
  * The exact wire shape of a Response Code: 32 bytes base64url, no padding —
@@ -163,8 +167,12 @@ function makeReply() {
   return { reply, sent };
 }
 
-function makeRequest(body: Record<string, unknown>) {
-  return { body, ip: '203.0.113.9', headers: { 'user-agent': 'test-wallet/1.0' } };
+/**
+ * A wallet's POST, as the realm resolver (#486) hands it on: resolved to the
+ * realm whose host the `response_uri` named.
+ */
+function makeRequest(body: Record<string, unknown>, realm = REALM) {
+  return { body, ip: '203.0.113.9', headers: { 'user-agent': 'test-wallet/1.0' }, realm };
 }
 
 function pendingState(overrides: Record<string, unknown> = {}) {
@@ -253,10 +261,9 @@ const ENABLED_ENV = {
   OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
   OID4VP_RESPONSE_RATE_LIMIT: 30,
   OID4VP_RESPONSE_RATE_WINDOW: 60,
-  // The origin the same-device `redirect_uri` is built on (#405) — the ONLY
-  // source of it; the handler never reads `Host`. With the trailing slash the
-  // real config would canonicalise away, so the test proves it does.
-  JWT_ISSUER: `${ISSUER}/`,
+  // Not the origin of the same-device `redirect_uri` (#490): that is the
+  // request realm's issuer. Set to another host so a test would see it leak.
+  JWT_ISSUER: 'https://jwt-issuer.example.net/',
   // The at-rest secret for the per-request decryption key (#377 Phase C):
   // unset, the default, so a stored key is the JWK document itself.
   OID4VP_RESPONSE_KEY_SECRET: undefined,
@@ -1366,14 +1373,15 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
   async function submit(
     body: Record<string, unknown>,
     row: unknown,
-    env: Record<string, unknown> = ENABLED_ENV
+    env: Record<string, unknown> = ENABLED_ENV,
+    realm = REALM
   ) {
     const { fastify, ctx, store } = await register(env);
     fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(row);
     const handler = ctx.handler as NonNullable<TestContext['handler']>;
     const { reply, sent } = makeReply();
 
-    await handler(makeRequest(body), reply);
+    await handler(makeRequest(body, realm), reply);
 
     return { fastify, store, reply, sent, body: sent[0] as Record<string, unknown> };
   }
@@ -1440,6 +1448,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
           store.delete(key);
         },
       } as never);
+      supplyRequestRealm(app, REALM);
       await app.register(route, { prefix: '/oid4vp' });
       await app.ready();
 
@@ -1663,8 +1672,8 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     const redirectUri = body.redirect_uri as string;
     const url = new URL(redirectUri);
 
-    // Absolute (RFC 3986 §4.3), on the ISSUER's origin — `JWT_ISSUER` with its
-    // trailing slash canonicalised away, never the request's `Host`.
+    // Absolute (RFC 3986 §4.3), on the request realm's issuer — never
+    // `JWT_ISSUER` or the request's `Host` (#490).
     expect(url.origin).toBe(ISSUER);
     expect(url.protocol).toBe('https:');
     expect(url.pathname).toBe('/ui/wallet-login/return');
@@ -1692,14 +1701,17 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     }
   });
 
-  it('builds redirect_uri from JWT_ISSUER — a different issuer moves the origin, nothing else', async () => {
-    const { body } = await submit(accepted, sameDeviceState(), {
-      ...ENABLED_ENV,
-      JWT_ISSUER: 'https://id.other.example',
-    });
+  it("builds redirect_uri from the request realm's issuer — another realm moves the origin, nothing else (#490)", async () => {
+    const { body } = await submit(
+      accepted,
+      sameDeviceState(),
+      ENABLED_ENV,
+      testRealm({ id: 'realm-b', issuer: 'https://id.other.example' })
+    );
 
     expect(new URL(body.redirect_uri as string).origin).toBe('https://id.other.example');
     expect(new URL(body.redirect_uri as string).pathname).toBe('/ui/wallet-login/return');
+    expect(body.redirect_uri).not.toContain('jwt-issuer.example.net');
   });
 
   it('never returns redirect_uri on a refusal', async () => {

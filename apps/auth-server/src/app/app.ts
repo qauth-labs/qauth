@@ -46,6 +46,8 @@ import {
 import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { realmIssuer } from './helpers/realm-url';
+import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import { defaultRealmPlugin } from './plugins/default-realm';
@@ -259,10 +261,14 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // shared verifier over the cache plugin's Redis, which records used proofs.
   // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
   // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
-  // included) and the request path, the endpoint URL discovery publishes,
-  // never the `Host` header. A request to one of DEFAULT_REALM_ENDPOINT_HOSTS
-  // must therefore name the published URL in `htu` too.
-  await fastify.register(dpopPlugin, { enabled: env.DPOP_ENABLED, baseUrl: env.JWT_ISSUER });
+  // included) of the request's realm and the request path, the endpoint URL
+  // that realm's discovery publishes (ADR-019 Decision 1, #490), never the
+  // `Host` header. A request to one of the realm's endpoint hosts must
+  // therefore name the published URL in `htu` too.
+  await fastify.register(dpopPlugin, {
+    enabled: env.DPOP_ENABLED,
+    baseUrl: (request) => realmIssuer(requestRealm(request)),
+  });
 
   await fastify.register(passwordPlugin, {
     hashConfig: {
