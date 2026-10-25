@@ -186,9 +186,11 @@ export interface BootAuthServerOptions {
   /**
    * Routes to add beside the app's, for a suite that reads request state no
    * route shows, such as the realm the resolver put on the request (#486).
-   * Each one needs a `config.surface`, as every route of the app does.
+   * Each one needs a `config.surface`, as every route of the app does. It may
+   * be async, to import an app module after the boot reset the registry, so
+   * the module is the instance the app loaded.
    */
-  readonly routes?: (app: FastifyInstance) => void;
+  readonly routes?: (app: FastifyInstance) => void | Promise<void>;
   /**
    * The event telemetry queue's sizes and times (#541), for a suite that
    * fills the queue or waits for a batch.
