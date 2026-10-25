@@ -490,13 +490,18 @@ describe('every absolute URL comes from the realm row (#490)', () => {
 
   it("refuses at realm B's introspection a token that names realm A's issuer", async () => {
     const { app, realmA, realmB } = await boot();
-    await seedIntrospectingClient(app, realmA, 'urls-a');
-    await seedIntrospectingClient(app, realmB, 'urls-b');
+    // The same client_id in both realms names two clients (#487), so realm B's
+    // client passes introspection's same-client check for a token of A's: only
+    // the issuer pin can refuse it.
+    await seedIntrospectingClient(app, realmA, 'urls-client');
+    await seedIntrospectingClient(app, realmB, 'urls-client');
 
-    const tokenOfA = await clientCredentialsToken(app, HOST_A, 'urls-a');
+    const tokenOfA = await clientCredentialsToken(app, HOST_A, 'urls-client');
     expect(decodeJwtClaims(tokenOfA)['iss']).toBe(ISSUER_A);
-    expect(await introspect(app, HOST_A, 'urls-a', tokenOfA)).toMatchObject({ active: true });
-    expect(await introspect(app, HOST_B, 'urls-b', tokenOfA)).toEqual({ active: false });
+    expect(await introspect(app, HOST_A, 'urls-client', tokenOfA)).toMatchObject({
+      active: true,
+    });
+    expect(await introspect(app, HOST_B, 'urls-client', tokenOfA)).toEqual({ active: false });
   }, 120_000);
 
   it('warns at boot when EMAIL_BASE_URL is not the issuer the mailed links now start at', async () => {
