@@ -3,7 +3,7 @@ import { validateHeaderName, validateHeaderValue } from 'node:http';
 import { type CheckedUrl, checkUrl, hostForLog, resolveCheckedAddresses } from './destination';
 import { EgressError, type EgressErrorReason, EgressFailure, type EgressOutcome } from './errors';
 import { DEFAULT_EGRESS_LIMITS, type EgressLimits, mergeLimits } from './limits';
-import { type EgressTransport, exchange, NODE_TRANSPORT } from './transport';
+import { type EgressTransport, NODE_TRANSPORT } from './transport';
 
 /** The HTTP methods the client sends. */
 export const EGRESS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;
@@ -299,24 +299,33 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
             signal,
             target.hostname
           );
-          const result = await exchange(
+          const result = await transport.exchange(
             {
-              target,
+              hostname: target.hostname,
+              port: target.port,
+              literalFamily: target.literalFamily,
+              path: `${target.url.pathname}${target.url.search}`,
               addresses,
               method,
               headers,
               body,
               connectTimeoutMs: limits.connectTimeoutMs,
               maxResponseBytes: limits.maxResponseBytes,
-              signal,
             },
-            transport.dial
+            signal
           );
+          if (result.kind === 'failed') {
+            throw new EgressFailure(result.reason, 'failed', result.message);
+          }
           if (result.location === undefined) {
+            const { body: bytes } = result;
             return {
               status: result.status,
               headers: result.headers,
-              body: result.body,
+              // Bytes from a fetch process arrive as a plain Uint8Array.
+              body: Buffer.isBuffer(bytes)
+                ? bytes
+                : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
               url: target.url.href,
               redirects,
             };

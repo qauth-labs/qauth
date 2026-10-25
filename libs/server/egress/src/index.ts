@@ -21,3 +21,4 @@ export {
   isEgressError,
 } from './lib/errors';
 export { DEFAULT_EGRESS_LIMITS, type EgressLimits } from './lib/limits';
+export { type EgressPoolStats, egressPoolStats } from './lib/process-pool';
