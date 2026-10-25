@@ -107,12 +107,11 @@ scenarios:
           path: /auth/login
           json: { email: '{account.email}', password: '{account.password}' }
         save: { token: body.access_token }
-      - run:
+      - run: # no API deletes a user
           - psql
           - '{databaseUrl}'
           - --command
           - "DELETE FROM users WHERE id = '{account.sub}'"
-          # no API deletes a user
 
   missingHeader:
     given:
