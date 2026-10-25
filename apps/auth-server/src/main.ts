@@ -43,8 +43,9 @@ const server = Fastify({
   // decides `request.host`, which picks the request's realm
   // (app/plugins/realm-resolver.ts, #486): `X-Forwarded-Host` counts only from
   // a listed hop. The host only selects a realm; no URL is built from it, and
-  // nothing reads `request.protocol`. The public origin still comes from
-  // JWT_ISSUER (ADR-013).
+  // nothing reads `request.protocol`. Every public URL starts at the issuer of
+  // the resolved realm (app/helpers/realm-url.ts, #490), and the lint
+  // configuration refuses the request's authority outside the resolver.
   trustProxy: env.TRUST_PROXY,
   routerOptions: {
     ignoreTrailingSlash: true,
