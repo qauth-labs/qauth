@@ -8,6 +8,7 @@ import {
   InvalidTargetError,
   NotFoundError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -3341,9 +3342,11 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
   it('fails the exchange closed when the revocation denylist cannot be read', async () => {
     const { fastify, ctx, subjectPayload } = setupExchangeStub();
     (subjectPayload as { jti?: string }).jti = 'some-jti';
-    (fastify.redis.exists as unknown as Mock).mockRejectedValueOnce(new Error('redis down'));
+    const redisDown = new Error('redis down');
+    (fastify.redis.exists as unknown as Mock).mockRejectedValueOnce(redisDown);
 
-    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow('redis down');
+    // The store's own failure propagates, to be answered as a server error.
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toBe(redisDown);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     // The catch-all records the OAuth code the error stands for, never its message.
     expect(emitUserEventMock).toHaveBeenCalledWith(
@@ -3621,10 +3624,9 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       aud: AGENT_CLIENT_ID,
     });
 
-    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toMatchObject({
-      message: 'invalid_request',
-      errorDescription: 'subject_token subject is not a user',
-    });
+    const refusal = invoke(fastify, ctx, exchangeRequest());
+    await expect(refusal).rejects.toBeInstanceOf(InvalidRequestError);
+    await expect(refusal).rejects.toMatchObject({ message: 'invalid_request' });
 
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
@@ -4081,7 +4083,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
-    ).rejects.toBeInstanceOf(Error);
+    ).rejects.toBeInstanceOf(UnsupportedGrantTypeError);
     // Refused BEFORE client authentication, so nothing was looked up.
     expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
@@ -4757,10 +4759,9 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
         subjectScope: 'chat.read chat.history',
       });
 
-      await expect(invoke(fastify, ctx, mintRequest())).rejects.toMatchObject({
-        message: 'invalid_scope',
-        errorDescription: 'chat.history not permitted for this client',
-      });
+      const refusal = invoke(fastify, ctx, mintRequest());
+      await expect(refusal).rejects.toBeInstanceOf(InvalidScopeError);
+      await expect(refusal).rejects.toMatchObject({ message: 'invalid_scope' });
       expectRefusedWithEvent();
     });
 

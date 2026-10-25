@@ -5,7 +5,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { emitUserEvent } from '../../helpers/user-events';
-import errorHandler from '../../plugins/error-handler';
+import errorHandler, { type ErrorFormat } from '../../plugins/error-handler';
 import userinfoRoute from './userinfo';
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -47,10 +47,12 @@ interface TestContext {
   handler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   options?: {
     preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    config?: { errorFormat?: ErrorFormat };
   };
   postHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   postOptions?: {
     preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    config?: { errorFormat?: ErrorFormat };
   };
 }
 
@@ -147,6 +149,37 @@ function createFastifyStub() {
   return { fastify, ctx };
 }
 
+/**
+ * The error format the real `GET /oauth/userinfo` route declares, for the
+ * stand-in routes below that answer through the real error handler (#513).
+ */
+async function userinfoErrorConfig(): Promise<{ errorFormat?: ErrorFormat }> {
+  const { fastify, ctx } = createFastifyStub();
+  await userinfoRoute(fastify);
+  return { errorFormat: ctx.options?.config?.errorFormat };
+}
+
+/**
+ * An RFC 6750 §3.1 `invalid_token` refusal as it reaches the wire: a 401 with
+ * the Bearer challenge, and the OAuth body, `error` and nothing QAuth adds.
+ */
+function expectInvalidTokenAnswer(response: {
+  statusCode: number;
+  headers: Record<string, unknown>;
+  json: () => unknown;
+}): void {
+  expect(response.statusCode).toBe(401);
+  expect(response.headers['content-type']).toMatch(/^application\/json(?:;|$)/);
+  expect(response.headers['www-authenticate']).toMatch(
+    /^Bearer realm="OAuth", error="invalid_token"(?:,|$)/
+  );
+  const json = response.json() as Record<string, unknown>;
+  expect(json).toMatchObject({ error: 'invalid_token' });
+  for (const member of ['code', 'statusCode']) {
+    expect(json).not.toHaveProperty(member);
+  }
+}
+
 describe('GET /userinfo route', () => {
   it('registers route with requireJwt as preHandler', async () => {
     const { fastify, ctx } = createFastifyStub();
@@ -155,6 +188,15 @@ describe('GET /userinfo route', () => {
 
     expect(ctx.handler).toBeDefined();
     expect(ctx.options?.preHandler).toBe(fastify.requireJwt);
+  });
+
+  it('answers errors in the OAuth format on GET and POST (RFC 6750 §3, #513)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+
+    await userinfoRoute(fastify);
+
+    expect(ctx.options?.config?.errorFormat).toBe('oauth');
+    expect(ctx.postOptions?.config?.errorFormat).toBe('oauth');
   });
 
   it('returns userinfo for existing user and jwt payload — `sub` is unconditional (OIDC Core §5.3.2)', async () => {
@@ -405,9 +447,7 @@ describe('GET /userinfo route', () => {
 
     // A deleted user's token: not a 404, which RFC 6750 §3.1 does not define
     // for a protected resource, but the invalid-token refusal.
-    await expect(handler(request, reply)).rejects.toThrow(
-      new JWTInvalidError('Access token subject is not a user')
-    );
+    await expect(handler(request, reply)).rejects.toBeInstanceOf(JWTInvalidError);
 
     // An unconfirmed subject is not the event's subject: it names no user.
     expect(emitUserEventMock).toHaveBeenCalledWith(
@@ -549,6 +589,7 @@ describe('GET /userinfo route', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: await userinfoErrorConfig(),
         preHandler: async () => {
           throw new JWTInvalidError('Invalid JWT token');
         },
@@ -566,14 +607,7 @@ describe('GET /userinfo route', () => {
         },
       });
 
-      expect(response.statusCode).toBe(401);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        error: expect.any(String),
-        code: 'JWT_INVALID',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }
@@ -589,6 +623,7 @@ describe('GET /userinfo route', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: await userinfoErrorConfig(),
         preHandler: async () => {
           throw new JWTExpiredError('JWT token has expired');
         },
@@ -606,14 +641,7 @@ describe('GET /userinfo route', () => {
         },
       });
 
-      expect(response.statusCode).toBe(401);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        error: 'JWT token has expired',
-        code: 'JWT_EXPIRED',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }
@@ -629,6 +657,7 @@ describe('GET /userinfo route', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: await userinfoErrorConfig(),
         preHandler: async () => {
           throw new JWTInvalidError('Missing or malformed Authorization header');
         },
@@ -645,14 +674,7 @@ describe('GET /userinfo route', () => {
         },
       });
 
-      expect(response.statusCode).toBe(401);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        error: 'Missing or malformed Authorization header',
-        code: 'JWT_INVALID',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }
@@ -1040,7 +1062,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
       aud: 'reporting-service',
     });
 
-    await expect(run()).rejects.toThrow(new JWTInvalidError('Access token subject is not a user'));
+    await expect(run()).rejects.toBeInstanceOf(JWTInvalidError);
     expectRefusedAsNoUser(fastify, 'reporting-service');
   });
 
@@ -1112,6 +1134,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: { errorFormat: ctx.options?.config?.errorFormat },
         preHandler: async (request) => {
           (request as unknown as { jwtPayload: unknown }).jwtPayload = {
             sub: 'reporting-service',
@@ -1130,15 +1153,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
         headers: { authorization: 'Bearer machine.token' },
       });
 
-      expect(response.statusCode).toBe(401);
-      expect(response.headers['www-authenticate']).toBe(
-        'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not a user"'
-      );
-      expect(response.json()).toMatchObject({
-        statusCode: 401,
-        error: 'Access token subject is not a user',
-        code: 'JWT_INVALID',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }

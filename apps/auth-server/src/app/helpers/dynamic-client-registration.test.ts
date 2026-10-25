@@ -1,4 +1,4 @@
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
 import { describe, expect, it, vi } from 'vitest';
 
 import { validateAndNormalize, validateRedirectUri } from './dynamic-client-registration';
@@ -25,7 +25,7 @@ describe('validateRedirectUri', () => {
 
   it('rejects http for non-loopback hosts', () => {
     expect(() => validateRedirectUri('http://app.example/cb', NO_CUSTOM_SCHEMES)).toThrow(
-      BadRequestError
+      InvalidRedirectUriError
     );
   });
 
@@ -57,9 +57,7 @@ describe('validateRedirectUri', () => {
     'wss://app.example/cb',
     'com..example:/cb',
   ])('refuses the redirect URI %s (scheme not allowed)', (uri) => {
-    expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(
-      /^invalid_redirect_uri: unsupported scheme: /
-    );
+    expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(InvalidRedirectUriError);
   });
 
   describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
@@ -67,7 +65,7 @@ describe('validateRedirectUri', () => {
 
     it('refuses a bare scheme by default, with the existing error', () => {
       expect(() => validateRedirectUri(cursorCallback, NO_CUSTOM_SCHEMES)).toThrow(
-        /^invalid_redirect_uri: unsupported scheme: cursor:/
+        InvalidRedirectUriError
       );
     });
 
@@ -77,24 +75,26 @@ describe('validateRedirectUri', () => {
 
     it('still refuses a bare scheme that is not listed', () => {
       expect(() => validateRedirectUri('myapp://callback', ['cursor'])).toThrow(
-        /^invalid_redirect_uri: unsupported scheme: myapp:/
+        InvalidRedirectUriError
       );
     });
 
     it('still refuses a fragment on a listed scheme', () => {
-      expect(() => validateRedirectUri(`${cursorCallback}#x`, ['cursor'])).toThrow(/fragment/);
+      expect(() => validateRedirectUri(`${cursorCallback}#x`, ['cursor'])).toThrow(
+        InvalidRedirectUriError
+      );
     });
 
     it('refuses javascript: even when the list names it', () => {
       expect(() => validateRedirectUri('javascript:alert(1)', ['javascript'])).toThrow(
-        /^invalid_redirect_uri: unsupported scheme: /
+        InvalidRedirectUriError
       );
     });
 
     it('carries the list through dynamic registration', () => {
       const body = { redirect_uris: [cursorCallback] };
       expect(() => validateAndNormalize(body, ['openid'], NO_CUSTOM_SCHEMES)).toThrow(
-        /invalid_redirect_uri/
+        InvalidRedirectUriError
       );
       expect(validateAndNormalize(body, ['openid'], ['cursor']).redirectUris).toEqual([
         cursorCallback,
@@ -104,12 +104,14 @@ describe('validateRedirectUri', () => {
 
   it('rejects redirect URIs containing a fragment', () => {
     expect(() => validateRedirectUri('https://app.example/cb#fragment', NO_CUSTOM_SCHEMES)).toThrow(
-      BadRequestError
+      InvalidRedirectUriError
     );
   });
 
   it('rejects malformed URIs', () => {
-    expect(() => validateRedirectUri('not a url', NO_CUSTOM_SCHEMES)).toThrow(BadRequestError);
+    expect(() => validateRedirectUri('not a url', NO_CUSTOM_SCHEMES)).toThrow(
+      InvalidRedirectUriError
+    );
   });
 
   it('rejects a tab or line break anywhere in the URI, which new URL() would silently delete', () => {
@@ -119,7 +121,7 @@ describe('validateRedirectUri', () => {
       'https://app.example/cb\r\n',
       '\thttps://app.example/cb',
     ]) {
-      expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(BadRequestError);
+      expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(InvalidRedirectUriError);
     }
   });
 
@@ -148,7 +150,7 @@ describe('validateRedirectUri', () => {
         'https://bücher.example/cb',
         'https://a.example/c b',
       ]) {
-        expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(BadRequestError);
+        expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(InvalidRedirectUriError);
       }
       expect(constructed).not.toHaveBeenCalled();
     } finally {
@@ -243,7 +245,7 @@ describe('validateAndNormalize', () => {
         allowedScopes,
         NO_CUSTOM_SCHEMES
       )
-    ).toThrow(/invalid_redirect_uri/);
+    ).toThrow(InvalidRedirectUriError);
   });
 
   it('allows client_credentials without redirect_uris', () => {
@@ -271,7 +273,7 @@ describe('validateAndNormalize', () => {
         allowedScopes,
         NO_CUSTOM_SCHEMES
       )
-    ).toThrow(/invalid_client_metadata.*client_credentials/);
+    ).toThrow(InvalidClientMetadataError);
   });
 
   it('rejects authorization_code grant without code response_type', () => {
@@ -285,7 +287,7 @@ describe('validateAndNormalize', () => {
         allowedScopes,
         NO_CUSTOM_SCHEMES
       )
-    ).toThrow(/invalid_client_metadata.*code.*response type/);
+    ).toThrow(InvalidClientMetadataError);
   });
 
   it('marks confidential clients as non-public', () => {
