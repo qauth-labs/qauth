@@ -32,8 +32,11 @@ const uuidSubjectSchema = z.uuid();
  * portal's own token, so this pins all three claims that identify it:
  *
  * - `client_id` is the system client's id.
- * - `aud` carries every audience the system client resolves to — the same
- *   binding the `/oauth/authorize` Bearer path already enforces.
+ * - `aud` carries every audience the system client resolves to: the
+ *   developer API's audience since #509. A token minted before #509 carries
+ *   the system client's `client_id` instead, and is accepted until it expires;
+ *   no grant mints one now. The `/oauth/authorize` Bearer path relies on the
+ *   same rule.
  * - No `act` claim: a delegated token acts for an agent, never the developer.
  * - `sub` names a user that still exists and is enabled. The token outlives
  *   the login that minted it by up to its lifetime, and an account disabled
@@ -72,9 +75,13 @@ export async function assertManagementToken(
     throw new JWTInvalidError('A delegated access token cannot use the management API');
   }
 
-  const expected = [resolveAudience(systemClient)].flat();
   const presented = claims.aud === undefined ? [] : [claims.aud].flat();
-  if (!expected.every((audience) => presented.includes(audience))) {
+  const carriesAll = (expected: string[]) =>
+    expected.every((audience) => presented.includes(audience));
+  // The system client's audience, or the `client_id` a token minted before it
+  // had one carries (#509). The family guard of the developer API, which
+  // replaces these routes (#524), accepts only the first.
+  if (!carriesAll([resolveAudience(systemClient)].flat()) && !carriesAll([systemClient.clientId])) {
     throw new JWTInvalidError('Access token audience does not match the management API');
   }
 

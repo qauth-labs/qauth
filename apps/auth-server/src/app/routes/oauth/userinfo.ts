@@ -3,9 +3,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
+import { systemClientId } from '../../helpers/oauth-client';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -22,10 +24,10 @@ import { userinfoResponseSchema } from '../../schemas/oauth';
  *    grant named no RFC 8707 `resource` and the operator configured no
  *    `audience` for the client. That is the token an OIDC client gets from its
  *    own code flow (OIDC Core §5.3), and the `/auth/login` token the developer
- *    portal sends here (`client_id` and `aud` are both the system client). A
- *    delegated token keeps the subject token's audience, which GATE 3c makes
- *    contain the agent's `client_id`, so it qualifies unless it was narrowed to
- *    another server.
+ *    portal sent here before #509 (`client_id` and `aud` both the system
+ *    client). A delegated token keeps the subject token's audience, which
+ *    GATE 3c makes contain the agent's `client_id`, so it qualifies unless it
+ *    was narrowed to another server.
  *  - the `resource` values the grant named, or the client's configured
  *    `audience`: a token for those resource servers.
  *
@@ -34,6 +36,12 @@ import { userinfoResponseSchema } from '../../schemas/oauth';
  * grant to resource servers can request beside them. A token whose `aud` names
  * only other resource servers is refused: a resource server that received one
  * must not be able to read the user's claims with it.
+ *
+ * One token of the second kind is accepted too: the developer portal's
+ * `/auth/login` token, whose `client_id` is the system client and whose `aud`
+ * is the developer API's since #509. The portal reads its user here, and the
+ * developer API is this server, not a resource server the token was handed
+ * to. A developer-API token issued to any other client is refused.
  */
 function isAddressedToUserinfo(
   payload: { aud?: string | string[]; clientId?: string },
@@ -43,10 +51,15 @@ function isAddressedToUserinfo(
   if (audiences.includes(userinfoEndpoint)) {
     return true;
   }
-  return (
+  if (
     typeof payload.clientId === 'string' &&
     payload.clientId.length > 0 &&
     audiences.includes(payload.clientId)
+  ) {
+    return true;
+  }
+  return (
+    payload.clientId === systemClientId() && audiences.includes(API_FAMILY_AUDIENCES.developer)
   );
 }
 

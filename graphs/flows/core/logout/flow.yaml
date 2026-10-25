@@ -222,22 +222,22 @@ states:
       - guard: "issuedFor == 'otherClient'"
         target: invalid_token.not_management_client
         say: "the token's client_id is not the system client's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:67
+        source: apps/auth-server/src/app/helpers/management-token.ts:70
       - guard: "issuedFor == 'delegated'"
         target: invalid_token.delegated
         say: 'the token acts for an agent'
-        source: apps/auth-server/src/app/helpers/management-token.ts:71
+        source: apps/auth-server/src/app/helpers/management-token.ts:74
       - guard: "issuedFor == 'otherAudience'"
         target: invalid_token.wrong_audience
-        say: "the token's audience lacks the system client's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:77
+        say: "the token's audience lacks the system client's, and its client_id too (a token minted before #509)"
+        source: apps/auth-server/src/app/helpers/management-token.ts:84
       - guard: "subject == 'otherRealm'"
         target: invalid_token.other_realm
         say: 'the subject is a user of another realm'
-        source: apps/auth-server/src/app/helpers/management-token.ts:84
+        source: apps/auth-server/src/app/helpers/management-token.ts:91
       - target: checkingBinding
         say: "the token is the portal's, for this realm or for no user"
-        source: apps/auth-server/src/app/helpers/management-token.ts:86
+        source: apps/auth-server/src/app/helpers/management-token.ts:93
 
   checkingBinding:
     title: Refuse a DPoP-bound token
@@ -247,7 +247,7 @@ states:
       - guard: dpopBound
         target: invalid_token.dpop_bound
         say: 'the token is bound to a DPoP key'
-        source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:66
+        source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:76
       - target: findingUser
         say: 'the token is bound to no key'
         source: apps/auth-server/src/app/routes/auth/logout.ts:112
@@ -454,7 +454,7 @@ states:
   invalid_token.not_management_client:
     type: final
     title: Refuse a token issued to another client
-    source: apps/auth-server/src/app/helpers/management-token.ts:68
+    source: apps/auth-server/src/app/helpers/management-token.ts:71
     response:
       status: 401
       headers:
@@ -469,7 +469,7 @@ states:
   invalid_token.delegated:
     type: final
     title: Refuse a token that acts for an agent
-    source: apps/auth-server/src/app/helpers/management-token.ts:72
+    source: apps/auth-server/src/app/helpers/management-token.ts:75
     response:
       status: 401
       headers:
@@ -484,7 +484,7 @@ states:
   invalid_token.wrong_audience:
     type: final
     title: Refuse a token for another audience
-    source: apps/auth-server/src/app/helpers/management-token.ts:78
+    source: apps/auth-server/src/app/helpers/management-token.ts:85
     response:
       status: 401
       headers:
@@ -499,7 +499,7 @@ states:
   invalid_token.other_realm:
     type: final
     title: Refuse a token of another realm's user
-    source: apps/auth-server/src/app/helpers/management-token.ts:101
+    source: apps/auth-server/src/app/helpers/management-token.ts:108
     response:
       status: 401
       headers:
@@ -514,7 +514,7 @@ states:
   invalid_token.dpop_bound:
     type: final
     title: Refuse a DPoP-bound token sent as a Bearer token
-    source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:67
+    source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:77
     response:
       status: 401
       headers:
@@ -545,7 +545,7 @@ states:
     description: >-
       The steps before the failing one stay done. With NODE_ENV=production the body is the one below; otherwise it
       carries the error's message and stack.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:522
+    source: apps/auth-server/src/app/plugins/error-handler.ts:551
     response:
       status: 500
       body: { error: Internal server error, statusCode: 500 }

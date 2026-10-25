@@ -110,6 +110,7 @@ function createReply() {
 function makeFastify() {
   const ctx: TestContext = {};
   const findActive = vi.fn();
+  const findByClientId = vi.fn();
   // The browser sessions the `__Host-qauth_session` cookie names (#488).
   const sessions = createBrowserSessionFixture();
   const fastify: any = {
@@ -128,7 +129,13 @@ function makeFastify() {
     },
     repositories: {
       oauthClients: {
-        findByClientId: vi.fn(),
+        findByClientId,
+        // The system client is given the developer audience the first time
+        // it is read (#509): the client the lookup returns, with the update.
+        update: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
+          ...(await findByClientId.getMockImplementation()?.()),
+          ...data,
+        })),
       },
       oauthConsents: {
         findActive,
@@ -525,6 +532,60 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+  });
+
+  describe('a QAuth API audience as resource (#509)', () => {
+    const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
+
+    async function authorizeFor(client: Record<string, unknown>, resource: string[]) {
+      const { fastify, ctx, sessions } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email'],
+        resourceScopes: Object.fromEntries(resource.map((value) => [value, ['email']])),
+        revokedAt: null,
+      });
+      const { cookie } = await sessions.signIn({
+        sid: 'sid-509',
+        realmId: REALM.id,
+        userId: 'user-1',
+      });
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, resource },
+          url: '/oauth/authorize',
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+      return { fastify, state };
+    }
+
+    it('is refused with invalid_target when the client does not list it', async () => {
+      for (const resource of [
+        [DEVELOPER_AUDIENCE],
+        ['https://api.example.com/v1', 'urn:qauth:aud:admin:v1-rc.0'],
+      ]) {
+        const { fastify, state } = await authorizeFor(CLIENT, resource);
+        expect(state.redirected).toContain('error=invalid_target');
+        expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      }
+    });
+
+    it('is bound to the code when the client lists it', async () => {
+      const { fastify } = await authorizeFor({ ...CLIENT, audience: [DEVELOPER_AUDIENCE] }, [
+        DEVELOPER_AUDIENCE,
+      ]);
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+      const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+        .calls[0][0];
+      expect(createArg.resource).toEqual([DEVELOPER_AUDIENCE]);
+    });
   });
 
   it('never reads RFC 8707 resource back out of request.url', async () => {

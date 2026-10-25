@@ -155,10 +155,45 @@ describe('assertManagementToken', () => {
     await expect(
       assertManagementToken(fastify, REALM, portalClaims({ aud: 'https://portal.example.com' }))
     ).rejects.toThrow(JWTInvalidError);
-    // The bare client id no longer matches once an audience is configured.
-    await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toThrow(
-      JWTInvalidError
-    );
+  });
+
+  describe('the developer audience of the system client (#509)', () => {
+    const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
+
+    beforeEach(() => {
+      systemClient.audience = [DEVELOPER_AUDIENCE];
+    });
+
+    it('accepts the portal token minted since, which carries the developer audience', async () => {
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
+      ).resolves.toBeUndefined();
+    });
+
+    it('still accepts a portal token minted before, whose audience is the client id', async () => {
+      await expect(assertManagementToken(fastify, REALM, portalClaims())).resolves.toBeUndefined();
+    });
+
+    it('keeps the client id and delegation pins on either audience', async () => {
+      for (const aud of [DEVELOPER_AUDIENCE, 'system']) {
+        await expect(
+          assertManagementToken(fastify, REALM, portalClaims({ aud, clientId: 'third-party-app' }))
+        ).rejects.toThrow(JWTInvalidError);
+        await expect(
+          assertManagementToken(fastify, REALM, portalClaims({ aud, act: { sub: 'agent' } }))
+        ).rejects.toThrow(JWTInvalidError);
+      }
+    });
+
+    it('refuses another family audience', async () => {
+      await expect(
+        assertManagementToken(
+          fastify,
+          REALM,
+          portalClaims({ aud: 'urn:qauth:aud:account:v1-rc.0' })
+        )
+      ).rejects.toThrow(JWTInvalidError);
+    });
   });
 });
 
