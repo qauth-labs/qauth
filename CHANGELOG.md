@@ -65,6 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, which ADR-018 §4 marks
   experimental; the setting works as before. With wallet sign-in off the base
   profile does not run, and nothing is logged for it.
+- **Experimental items stay out of discovery and the default API** ([#477],
+  ADR-018 §5). Each registry item lists the discovery members it adds, and the
+  discovery documents carry them only while the item is on: absent, never
+  `null` or `false`, while it is off. Each built item names the docs page that
+  documents it; a page whose frontmatter sets `experimental: true` shows an
+  "Experimental" banner, and the registry's tests hold flagged pages and items
+  one to one (the wallet sign-in page is the base profile's). The stable-surface
+  check now fails on an experimental operation in the default-flag OpenAPI
+  export, and the exporter refuses a default surface with an experimental item
+  on or a maximal one that leaves a built item off. The wire suite checks that a
+  default deployment answers every experimental operation as a route that does
+  not exist and lists no experimental discovery member.
 - **Background jobs** ([#452], ADR-019 Decision 8). The auth-server runs
   periodic jobs in-process. A Postgres advisory lock keeps each job to one node
   per interval when several nodes share the database, and a job whose node dies
@@ -920,6 +932,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#474]: https://github.com/qauth-labs/qauth/issues/474
 [#475]: https://github.com/qauth-labs/qauth/issues/475
 [#476]: https://github.com/qauth-labs/qauth/issues/476
+[#477]: https://github.com/qauth-labs/qauth/issues/477
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#479]: https://github.com/qauth-labs/qauth/issues/479
 [#480]: https://github.com/qauth-labs/qauth/issues/480
