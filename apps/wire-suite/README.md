@@ -40,13 +40,14 @@ test that cites a registered spec section counts as evidence for that row.
 
 ## Configuration
 
-| Variable                   | Required | Meaning                                                                                       |
-| -------------------------- | -------- | --------------------------------------------------------------------------------------------- |
-| `QAUTH_WIRE_ALLOW_WRITES`  | yes      | Must be exactly `1`. Confirms the server may be written to.                                   |
-| `QAUTH_BASE_URL`           | yes      | The server's issuer identifier, e.g. `http://localhost:3000`. Discovery must report it as is. |
-| `QAUTH_ADMIN_URL`          | no       | Where admin operations go. Defaults to `QAUTH_BASE_URL`.                                      |
-| `QAUTH_WIRE_CLIENT_ID`     | yes      | The confidential client from `seed/clients.json`: `wire-confidential`.                        |
-| `QAUTH_WIRE_CLIENT_SECRET` | yes      | Its secret, as the seed command printed it.                                                   |
+| Variable                     | Required | Meaning                                                                                                                 |
+| ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `QAUTH_WIRE_ALLOW_WRITES`    | yes      | Must be exactly `1`. Confirms the server may be written to.                                                             |
+| `QAUTH_BASE_URL`             | yes      | The server's issuer identifier, e.g. `http://localhost:3000`. Discovery must report it as is.                           |
+| `QAUTH_ADMIN_URL`            | no       | Where admin operations go. Defaults to `QAUTH_BASE_URL`.                                                                |
+| `QAUTH_WIRE_CLIENT_ID`       | yes      | The confidential client from `seed/clients.json`: `wire-confidential`.                                                  |
+| `QAUTH_WIRE_CLIENT_SECRET`   | yes      | Its secret, as the seed command printed it.                                                                             |
+| `QAUTH_WIRE_SSF_TRANSMITTER` | no       | `1` when the target's realm runs the SSF transmitter; the metadata suite then checks the document instead of the `404`. |
 
 ## Run it locally
 
