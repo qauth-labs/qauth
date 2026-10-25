@@ -74,6 +74,14 @@ describe('main.ts security invariants', () => {
  * `env.test.ts`); this pins that `main.ts` logs them at boot.
  */
 describe('main.ts boot warnings', () => {
+  it('answers the router\'s refusals and unreadable requests with problem documents (#513)', () => {
+    // Without them Fastify sends its own { error, code, message, statusCode }
+    // envelope for a path that is not valid percent-encoding, an over-long
+    // path parameter, a malformed request or a request timeout.
+    expect(mainCode).toMatch(/frameworkErrors:\s*answerFrameworkError/);
+    expect(mainCode).toMatch(/clientErrorHandler:\s*answerClientError/);
+  });
+
   it('logs every env deprecation warning through the server logger', () => {
     expect(mainCode).toMatch(
       /for \(const \w+ of envDeprecationWarnings\)\s*\{\s*server\.log\.warn\(/

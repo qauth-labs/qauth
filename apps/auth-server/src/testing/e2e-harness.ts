@@ -15,6 +15,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
 import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
+import { answerFrameworkError, answerUnknownRouteBeforeBody } from '../app/helpers/request-bounds';
 import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
 
 /**
@@ -269,12 +270,13 @@ export async function bootAuthServer(
     // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
     // TRUST_PROXY hop, and `request.ip` reads `X-Forwarded-For` likewise.
     trustProxy: env.TRUST_PROXY,
+    // As in `main.ts`: the router's own refusals answer problem documents (#513).
+    frameworkErrors: answerFrameworkError,
   });
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
   // As in `main.ts`: a path no route serves is answered before its body is
   // read, with the `not_found` problem document (#513).
-  const { answerUnknownRouteBeforeBody } = await import('../app/helpers/request-bounds');
   server.addHook('onRequest', answerUnknownRouteBeforeBody);
   // `fp()` only lifts ENCAPSULATION: the same plugins register in the same order
   // and every route is identical, but `db`/`dbPool`/`redis` land on the root

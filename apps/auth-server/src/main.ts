@@ -7,7 +7,12 @@ import Fastify, { LogController } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { app } from './app/app';
-import { answerUnknownRouteBeforeBody, requestDeadlineOptions } from './app/helpers/request-bounds';
+import {
+  answerClientError,
+  answerFrameworkError,
+  answerUnknownRouteBeforeBody,
+  requestDeadlineOptions,
+} from './app/helpers/request-bounds';
 import { openapiOptions } from './app/openapi-options';
 import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
@@ -53,6 +58,12 @@ const server = Fastify({
   // incomplete (REQUEST_TIMEOUT_MS, 60 s by default): Fastify's default is for
   // ever, which let a caller park unfinished requests until the heap ran out.
   ...requestDeadlineOptions(env.REQUEST_TIMEOUT_MS),
+  // A request the router refuses before any route (a path that is not valid
+  // percent-encoding, an over-long path parameter) and a connection whose
+  // request cannot be read at all answer problem documents too, not
+  // Fastify's own envelope (#513).
+  frameworkErrors: answerFrameworkError,
+  clientErrorHandler: answerClientError,
 }).withTypeProvider<ZodTypeProvider>();
 
 // Answer a request for an unknown route BEFORE its body is read. The default 404

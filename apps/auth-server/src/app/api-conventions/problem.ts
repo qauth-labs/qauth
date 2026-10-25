@@ -229,6 +229,12 @@ export const PROBLEM_CODES = {
     title: 'Token expired',
     description: 'The one-time token has expired.',
   },
+  request_timeout: {
+    status: 408,
+    type: 'request-timeout',
+    title: 'Request timeout',
+    description: 'The request did not arrive whole within the time the server waits for it.',
+  },
   precondition_failed: {
     status: 412,
     type: 'precondition-failed',
@@ -240,6 +246,12 @@ export const PROBLEM_CODES = {
     type: 'content-too-large',
     title: 'Content too large',
     description: 'The request body is larger than the server accepts.',
+  },
+  uri_too_long: {
+    status: 414,
+    type: 'uri-too-long',
+    title: 'URI too long',
+    description: 'A segment of the request path is longer than the server accepts.',
   },
   unsupported_media_type: {
     status: 415,
@@ -277,7 +289,14 @@ export const PROBLEM_CODES = {
     status: 429,
     type: 'too-many-requests',
     title: 'Too many requests',
-    description: 'The caller has sent too many requests. `Retry-After` says when to try again.',
+    description:
+      'The caller has sent too many requests. `Retry-After`, when present, says when to try again.',
+  },
+  request_header_fields_too_large: {
+    status: 431,
+    type: 'request-header-fields-too-large',
+    title: 'Request header fields too large',
+    description: 'The request headers are larger than the server accepts.',
   },
   internal_error: {
     status: 500,
@@ -308,14 +327,17 @@ const STATUS_FALLBACK_CODES: Readonly<Record<number, ProblemCode>> = {
   403: 'forbidden',
   404: 'not_found',
   405: 'method_not_allowed',
+  408: 'request_timeout',
   409: 'conflict',
   412: 'precondition_failed',
   413: 'content_too_large',
+  414: 'uri_too_long',
   415: 'unsupported_media_type',
   421: 'misdirected_request',
   422: 'unprocessable_content',
   428: 'precondition_required',
   429: 'too_many_requests',
+  431: 'request_header_fields_too_large',
   500: 'internal_error',
   503: 'service_unavailable',
 };

@@ -3,7 +3,12 @@ import { connect } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { answerUnknownRouteBeforeBody, requestDeadlineOptions } from './request-bounds';
+import {
+  answerClientError,
+  answerFrameworkError,
+  answerUnknownRouteBeforeBody,
+  requestDeadlineOptions,
+} from './request-bounds';
 
 /**
  * Two things let one address park unfinished request bodies until the heap ran
@@ -137,4 +142,88 @@ describe('requestDeadlineOptions', () => {
 
     expect(outcome).toBe('HTTP/1.1 408 Request Timeout');
   }, 15_000);
+});
+
+/** Write `raw` to a listening instance and return what came back, whole. */
+async function rawExchange(instance: FastifyInstance, raw: string): Promise<string> {
+  await instance.listen({ port: 0, host: '127.0.0.1' });
+  const address = instance.server.address();
+  if (!address || typeof address === 'string') throw new Error('no port');
+  return new Promise<string>((resolve) => {
+    const socket = connect(address.port, '127.0.0.1', () => socket.write(raw));
+    let received = '';
+    socket.on('data', (chunk) => (received += chunk.toString()));
+    socket.on('close', () => resolve(received));
+    setTimeout(() => {
+      socket.destroy();
+      resolve(received);
+    }, 3_000);
+  });
+}
+
+/** The JSON body of a raw HTTP/1.1 answer. */
+function rawBody(answer: string): Record<string, unknown> {
+  return JSON.parse(answer.slice(answer.indexOf('\r\n\r\n') + 4)) as Record<string, unknown>;
+}
+
+describe("the router's refusals and unreadable requests (#513)", () => {
+  /** Fastify's own envelope, which none of these answers may carry. */
+  const LEGACY = ['error', 'statusCode', 'message'];
+
+  it('answers a path that is not valid percent-encoding with bad_request, echoing nothing', async () => {
+    app = Fastify({ frameworkErrors: answerFrameworkError });
+    app.get('/items/:id', async () => ({ ok: true }));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/items/%E0%A4%A?response_code=secret',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ status: 400, code: 'bad_request' });
+    expect(typeof body['trace_id']).toBe('string');
+    for (const member of LEGACY) expect(body).not.toHaveProperty(member);
+    expect(res.body).not.toContain('secret');
+    expect(res.body).not.toContain('FST_ERR');
+  });
+
+  it("answers a path parameter over the router's limit with uri_too_long", async () => {
+    app = Fastify({ frameworkErrors: answerFrameworkError });
+    app.get('/items/:id', async () => ({ ok: true }));
+
+    const res = await app.inject({ method: 'GET', url: `/items/${'x'.repeat(200)}` });
+
+    expect(res.statusCode).toBe(414);
+    expect(res.json()).toMatchObject({ status: 414, code: 'uri_too_long' });
+    expect(res.body).not.toContain('x'.repeat(200));
+  });
+
+  it('answers a request it cannot parse with a bad_request problem document', async () => {
+    app = Fastify({ clientErrorHandler: answerClientError });
+    app.get('/', async () => ({ ok: true }));
+
+    const answer = await rawExchange(app, 'NOT A REQUEST\r\n\r\n');
+
+    expect(answer.split('\r\n')[0]).toBe('HTTP/1.1 400 Bad Request');
+    expect(answer).toContain('Content-Type: application/problem+json');
+    const body = rawBody(answer);
+    expect(body).toMatchObject({ status: 400, code: 'bad_request' });
+    expect(typeof body['trace_id']).toBe('string');
+    for (const member of LEGACY) expect(body).not.toHaveProperty(member);
+  });
+
+  it('answers headers over the size limit with request_header_fields_too_large', async () => {
+    app = Fastify({ clientErrorHandler: answerClientError, http: { maxHeaderSize: 1024 } });
+    app.get('/', async () => ({ ok: true }));
+
+    const answer = await rawExchange(
+      app,
+      `GET / HTTP/1.1\r\nHost: localhost\r\nX-Padding: ${'a'.repeat(4096)}\r\n\r\n`
+    );
+
+    expect(answer.split('\r\n')[0]).toBe('HTTP/1.1 431 Request Header Fields Too Large');
+    expect(rawBody(answer)).toMatchObject({ status: 431, code: 'request_header_fields_too_large' });
+  });
 });

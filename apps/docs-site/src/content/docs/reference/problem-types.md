@@ -197,6 +197,12 @@ The one-time token has already been used.
 
 The one-time token has expired.
 
+## `request-timeout`
+
+**Code** `request_timeout` · **Status** 408 · **Title** Request timeout
+
+The request did not arrive whole within the time the server waits for it.
+
 ## `precondition-failed`
 
 **Code** `precondition_failed` · **Status** 412 · **Title** Precondition failed
@@ -208,6 +214,12 @@ The `If-Match` value does not match the current `ETag` of the resource.
 **Code** `content_too_large` · **Status** 413 · **Title** Content too large
 
 The request body is larger than the server accepts.
+
+## `uri-too-long`
+
+**Code** `uri_too_long` · **Status** 414 · **Title** URI too long
+
+A segment of the request path is longer than the server accepts.
 
 ## `unsupported-media-type`
 
@@ -243,7 +255,13 @@ The update needs an `If-Match` header.
 
 **Code** `too_many_requests` · **Status** 429 · **Title** Too many requests
 
-The caller has sent too many requests. `Retry-After` says when to try again.
+The caller has sent too many requests. `Retry-After`, when present, says when to try again.
+
+## `request-header-fields-too-large`
+
+**Code** `request_header_fields_too_large` · **Status** 431 · **Title** Request header fields too large
+
+The request headers are larger than the server accepts.
 
 ## `internal-error`
 
