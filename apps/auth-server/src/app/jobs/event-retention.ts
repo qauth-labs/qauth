@@ -144,7 +144,11 @@ export function createEventRetentionJob(options: EventRetentionJobOptions): JobD
             const batch = await options.retention.deleteBatch({
               realmId: realm.realmId,
               category,
-              before: now() - days * DAY_MS,
+              // A retention longer than the time since 1970 (the limits allow
+              // 36500 days) keeps every event; the repository refuses a
+              // negative cut-off, which would fail the run and every realm
+              // after this one.
+              before: Math.max(0, now() - days * DAY_MS),
               through,
               limit: batchSize,
               now: now(),

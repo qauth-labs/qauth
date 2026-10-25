@@ -151,6 +151,29 @@ describe('event-retention (#536)', () => {
     );
   });
 
+  it('cuts off at the epoch when a retention is longer than the time since 1970', async () => {
+    const retention = store([], [REALM_A, REALM_B]);
+    retention.realms.mockResolvedValueOnce(
+      [REALM_A, REALM_B].map((realmId) => ({
+        realmId,
+        realmExists: true,
+        userEventRetentionDays: 36500,
+        adminEventRetentionDays: 36500,
+      }))
+    );
+    const ctx = context();
+
+    await job(retention).run(ctx);
+
+    expect(retention.deleteBatch.mock.calls.map(([request]) => request.before)).toEqual([
+      0, 0, 0, 0,
+    ]);
+    expect(ctx.info).toHaveBeenCalledWith(
+      { deleted: { user: 0, admin: 0 }, realms: 2, busyRealms: 0 },
+      'event retention ran'
+    );
+  });
+
   it('logs a chain break at the oldest admin event as an error', async () => {
     const retention = store([
       done(0),
