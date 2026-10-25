@@ -203,6 +203,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `REDIS_CONNECTION_TIMEOUT`   | deployment | `10000` | 0.1.0 | How long, in milliseconds, the server waits to connect to Redis.                                                                                                                                                                                       |
 | `REDIS_MAX_RETRIES`          | deployment | `3`     | 0.1.0 | How many times one Redis command is retried before it fails.                                                                                                                                                                                           |
 
+### Tokens
+
+| Key            | Role       | Default | Since | Description                                                                                                                   |
+| -------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `DPOP_ENABLED` | deployment | `false` | 0.2.0 | Turn DPoP-bound tokens on (RFC 9449); refused at boot until the token endpoint binds tokens to a DPoP key (ADR-017 phase F3). |
+
 ### Signing
 
 | Key                      | Role       | Default     | Since | Description                                                                                                                                                                                               |
