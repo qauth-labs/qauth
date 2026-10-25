@@ -810,6 +810,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/oauth/authorize` again. Nodes of the previous release do not enforce the
   limit, so it applies once the last of them is gone.
 
+- **A replayed authorization code revokes the refresh-token family it
+  started** ([#627], ADR-017 Decision 10). A second redemption of a code was
+  refused with `invalid_grant` but revoked nothing, because the token endpoint
+  could not tell a spent code from an unknown one. It now reads spent codes
+  too, and a second redemption that is otherwise a valid request (the code's
+  own client, its `redirect_uri`, the right `code_verifier`) answers
+  `invalid_grant` and revokes every refresh token descended from the first
+  redemption, rotations included (OAuth 2.1 §4.1.3, RFC 6749 §4.1.2). The
+  `token.request_failed` event's reason is `code_replay`. A replay that fails
+  any of those checks is refused for that reason and revokes nothing, so
+  whoever saw a code without the client's credentials or verifier cannot end
+  the client's tokens (OAuth 2.1 §7.5.3). A redemption that loses the race to
+  a concurrent one is the same replay; it used to answer `404` with the code's
+  row id in the message. Access tokens already issued from the code are JWTs
+  and stay valid until they expire. Migration 0039 adds the link that makes
+  this possible, `refresh_tokens.authorization_code_id` (nullable, set on the
+  first token of each family, `ON DELETE SET NULL` when the purge job deletes
+  the code). Families started before the upgrade, or by a node of the previous
+  release during a rolling upgrade, have no link, so a replay of their code is
+  refused but revokes nothing. The conformance matrix's RFC 9700 waiver for
+  this becomes a covered row, beside new OAuth 2.1 and RFC 6749 rows.
+- **`POST /oauth/token`: an authorization code presented without
+  `redirect_uri` answers `invalid_grant`** ([#627], ADR-017 Decision 10). The
+  request schema required the parameter, so a missing one answered
+  `400 VALIDATION_ERROR`, not an OAuth error. Every code QAuth issues came
+  through a browser redirect and still needs the URI the authorization request
+  named, so a missing or empty value is now a mismatch: `400 invalid_grant`,
+  like a different value, and the code is not spent. A client that follows
+  OAuth 2.1 alone, which drops the parameter, is still refused; it now gets an
+  OAuth error it can read.
+- Every authorization code is minted by one helper, `mintAuthorizationCode`
+  ([#627], ADR-017 Decision 10), which refuses to write a code without an S256
+  PKCE challenge of 43 to 128 characters in every environment. The two routes
+  that mint codes, the consent-skip path of `/oauth/authorize` and the consent
+  screen, validated the challenge already, so their responses are unchanged.
+
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
   so a pool of one would leave requests waiting until the job ends. The error
@@ -975,6 +1011,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#627]: https://github.com/qauth-labs/qauth/issues/627
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21

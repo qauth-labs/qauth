@@ -200,10 +200,11 @@ Basic-plan Appendix, and from the prose "Known gaps" register that used to sit i
 the header comment of `apps/auth-server/src/app/routes/oauth/oidc-conformance.test.ts`.
 That comment is now a pointer here, so the gap register has one home.
 
-Two of the runbook's nine Step 7 checkboxes have **no** row yet, and both for the
-same reason: **both client-auth methods demonstrated** and **authorization-code
-reuse** are RFC 6749 requirements, and RFC 6749 is one of the four stubs above.
-They arrive with its rows. Every other Step 7 checkbox is a row here.
+One of the runbook's nine Step 7 checkboxes has **no** row yet: **both
+client-auth methods demonstrated** is an RFC 6749 requirement, and RFC 6749 was
+one of the four stubs above. It arrives with RFC 6749's remaining rows. The
+other one that waited on RFC 6749, **authorization-code reuse**, is a row since
+increment 4. Every other Step 7 checkbox is a row here.
 
 ## Scope of increment 3 — the same-device return leg (#405)
 
@@ -244,3 +245,26 @@ The request-side §8.2 rules (no `redirect_uri` parameter beside `response_uri`)
 and every other section the suite already cites for these two specs are the
 visible backlog under "Citations with no row" — only for titles that spell the
 version out; the bare-token citations stay foreign.
+
+## Scope of increment 4 — authorization-code replay (#627)
+
+Registered: **OAuth 2.1**, as `oauth-2_1`, under its draft revision only —
+`OAuth 2.1 draft-16` and `draft-ietf-oauth-v2-1-16`. Section numbers move between
+drafts, so a citation names the revision it was checked against, the same rule
+that keeps `OID4VP 1.0` version-qualified. The bare `OAuth` token stays a foreign
+anchor: the suite's older `OAuth 2.1 §…` citations neither prove nor orphan
+against these rows. Re-pinning to a later draft is a pass over these rows and
+the titles that cite them ([the spec pin log](../spec-pin-log.md)).
+
+Populated, unsealed: OAuth 2.1 §4.1.3 (a code yields an access token once; a
+second valid redemption is denied and revokes what the first issued) and §7.5.3
+(a replay with invalid parameters revokes nothing), the first RFC 6749 row
+(§4.1.2, the same obligation in its original form), and RFC 9700 §4.2.4, which
+restates it. The RFC 9700 row replaces a waiver that was filed under §4.5 with
+RFC 6749's sentence as its quote; the text RFC 9700 actually has is in §4.2.4.
+
+All four are proven by the token endpoint's unit tests, which cite every spec
+in one `describe` title. The container-backed suite
+(`apps/auth-server/src/app/code-replay.integration.test.ts`) proves the same
+behaviour end to end, but integration suites are not in the reports the gate
+reads.

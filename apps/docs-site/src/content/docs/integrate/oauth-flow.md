@@ -221,7 +221,15 @@ Notes:
   `-d client_secret=…` (`client_secret_post`). Public clients send neither.
 - The authorization code is single-use and short-lived; the same
   `redirect_uri` (exactly as sent to `/oauth/authorize`, loopback port
-  included) and a PKCE-matching `code_verifier` are mandatory.
+  included) and a PKCE-matching `code_verifier` are mandatory. A missing
+  `redirect_uri` is `invalid_grant`, like a different one: QAuth keeps RFC 6749's
+  rule for codes from a browser redirect, although OAuth 2.1 drops the
+  parameter.
+- **Redeem a code once.** A second redemption is refused with `invalid_grant`
+  and, when it is otherwise a valid request, revokes every refresh token the
+  first one led to (OAuth 2.1 §4.1.3): QAuth cannot tell a retry from an
+  attacker who copied the code. So do not retry a token request that may have
+  reached the server; send the user through `/oauth/authorize` again instead.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`refresh_token` is present only when the user has a stored consent** for
@@ -780,16 +788,16 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > of a 302. An owner who changes the redirect URIs of an operator-provisioned
 > client through `PATCH /api/clients/{id}` removes that trust.
 
-| Code                      | Meaning                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `invalid_request`         | Missing/malformed parameter.                                                                                 |
-| `invalid_client`          | Client authentication failed or client unknown.                                                              |
-| `invalid_grant`           | Bad/expired code, bad PKCE verifier, or invalid/replayed refresh token.                                      |
-| `unauthorized_client`     | Client not allowed to use this grant.                                                                        |
-| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                   |
-| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                      |
-| `unsupported_grant_type`  | Unknown `grant_type`.                                                                                        |
-| `temporarily_unavailable` | HTTP `503` with `Retry-After`: the server is too busy to check the client secret now; retry after the delay. |
+| Code                      | Meaning                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_request`         | Missing/malformed parameter.                                                                                                  |
+| `invalid_client`          | Client authentication failed or client unknown.                                                                               |
+| `invalid_grant`           | Bad, expired or already-redeemed code, wrong or missing `redirect_uri`, bad PKCE verifier, or invalid/replayed refresh token. |
+| `unauthorized_client`     | Client not allowed to use this grant.                                                                                         |
+| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                    |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                       |
+| `unsupported_grant_type`  | Unknown `grant_type`.                                                                                                         |
+| `temporarily_unavailable` | HTTP `503` with `Retry-After`: the server is too busy to check the client secret now; retry after the delay.                  |
 
 ---
 

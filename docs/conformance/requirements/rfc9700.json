@@ -1,17 +1,15 @@
 {
   "specId": "rfc9700",
-  "note": "Hand-authored. `quote` is verbatim from https://www.rfc-editor.org/rfc/rfc9700 with line wrapping removed and nothing else changed. Not sealed: RFC 9700 is broad and only the waived row below is enumerated. A PKCE row was drafted here and REMOVED rather than kept — no test cites RFC 9700 §4.1.3, and PKCE enforcement belongs under RFC 7636 (a stub in this increment). Marking it covered to make the gate pass would be exactly the over-claiming the gate exists to catch.",
+  "note": "Hand-authored. `quote` is verbatim from https://www.rfc-editor.org/rfc/rfc9700 with line wrapping removed and nothing else changed. Not sealed: RFC 9700 is broad and only the row below is enumerated. A PKCE row was drafted here and REMOVED rather than kept — no test cites RFC 9700 §4.1.3, and PKCE enforcement belongs under RFC 7636 (a stub in this increment). Marking it covered to make the gate pass would be exactly the over-claiming the gate exists to catch. The code-replay row used to be a waiver filed under §4.5 with RFC 6749 §4.1.2's sentence as its quote; RFC 9700 states the recommendation in §4.2.4, quoted below, and #627 satisfies it.",
   "requirements": [
     {
-      "id": "rfc9700-4_5-code-replay",
-      "section": "4.5",
+      "id": "rfc9700-4_2_4-code-replay",
+      "section": "4.2.4",
       "level": "SHOULD",
-      "quote": "If an authorization code is used more than once, the authorization server MUST deny the request and SHOULD revoke (when possible) all tokens previously issued based on that authorization code.",
-      "applies": "POST /oauth/token, authorization_code grant.",
-      "status": "waived",
-      "reason": "The MUST half is satisfied — codes are single-use and a replay is refused with invalid_grant. The SHOULD half is not: QAuth does not additionally revoke tokens already issued from the replayed code, so a token minted by the legitimate first exchange survives an attacker's replay attempt until it expires.",
-      "decision": "docs/oidf-op-certification-runbook.md",
-      "revisit": "2026-11-30"
+      "quote": "Therefore, [RFC6749] further recommends that, when an attempt is made to redeem a code twice, the authorization server SHOULD revoke all tokens issued previously based on that code.",
+      "applies": "POST /oauth/token, authorization_code grant. A second redemption that is otherwise a valid request revokes the refresh-token family the first redemption started; access tokens, self-contained JWTs, stay valid until they expire.",
+      "status": "covered",
+      "evidenceMatch": "revokes the refresh family|family revoked"
     }
   ]
 }
