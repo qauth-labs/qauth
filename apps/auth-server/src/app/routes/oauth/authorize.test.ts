@@ -1,3 +1,4 @@
+import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -51,6 +52,7 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
 });
 
 import { env } from '../../../config/env';
+import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import { authorizeQuerySchema } from '../../schemas/oauth';
@@ -108,6 +110,8 @@ function createReply() {
 function makeFastify() {
   const ctx: TestContext = {};
   const findActive = vi.fn();
+  // The browser sessions the `__Host-qauth_session` cookie names (#488).
+  const sessions = createBrowserSessionFixture();
   const fastify: any = {
     withTypeProvider: () => {
       const route = {
@@ -149,6 +153,7 @@ function makeFastify() {
       verifyAccessToken: vi.fn(),
       getIssuer: () => 'https://auth.example.com',
     },
+    sessionService: sessions.service,
     sessionUtils: {
       getSession: vi.fn(),
       // #316 follow-up: the login bounce parks the pending authorize URL here
@@ -156,11 +161,15 @@ function makeFastify() {
       setSession: vi.fn().mockResolvedValue(undefined),
       deleteSession: vi.fn().mockResolvedValue(undefined),
     },
-    // Per-`jti` access-token denylist (RFC 7009); nothing revoked by default.
-    redis: { exists: vi.fn().mockResolvedValue(0) },
+    redis: {
+      // Where a session's side record and its user's index live.
+      ...sessions.redis,
+      // Per-`jti` access-token denylist (RFC 7009); nothing revoked by default.
+      exists: vi.fn().mockResolvedValue(0),
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
 
 /** A Bearer token's `sub` must be a user id (UUID): the first-party pin looks it up. */
@@ -198,7 +207,6 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.handler!(
@@ -225,28 +233,21 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   });
 
   it('redirects to /ui/consent when session is valid but no prior consent', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
 
-    // Build a valid signed cookie matching the mocked secret.
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-1');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-1',
-      createdAt: Date.now(),
-    });
+    // A signed-in browser: a live session in the request's realm.
+    const { cookie } = await sessions.signIn({ sid: 'sid-1', realmId: REALM.id, userId: 'user-1' });
 
     const { reply, state } = createReply();
     await ctx.handler!(
       {
         query: BASE_QUERY,
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -258,7 +259,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   });
 
   it('skips consent and issues code when existing consent covers the requested scopes', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -267,21 +268,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       revokedAt: null,
     });
 
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-2',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await sessions.signIn({ sid: 'sid-2', realmId: REALM.id, userId: 'user-1' });
 
     const { reply, state } = createReply();
     await ctx.handler!(
       {
         query: BASE_QUERY,
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -318,7 +312,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   });
 
   it("resolves the client in the request's realm and records that realm (#487)", async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -326,11 +320,11 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       scopes: ['email'],
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const tenant = testRealm({ id: 'realm-tenant' });
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-1',
+      realmId: tenant.id,
       userId: 'user-1',
-      sessionId: 'sid-1',
-      createdAt: Date.now(),
     });
 
     const handler = ctx.handler;
@@ -340,14 +334,16 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       {
         query: BASE_QUERY,
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signSessionId('sid-1')}` },
+        headers: { cookie },
         ip: '127.0.0.1',
-        realm: testRealm({ id: 'realm-tenant' }),
+        realm: tenant,
       },
       reply
     );
 
     expect(state.redirected).toContain('code=');
+    // The session is looked up in that realm too.
+    expect(sessions.service.get).toHaveBeenCalledWith({ realmId: 'realm-tenant', sid: 'sid-1' });
     expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
       'realm-tenant',
       CLIENT.clientId
@@ -360,6 +356,51 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     );
   });
 
+  // ADR-019 Decision 1: a session signs its user in to its own realm only. A
+  // cookie whose session lives in another realm is no sign-in here, even with
+  // a consent that would otherwise mint a code at once.
+  it('treats a session cookie of another realm as no session and sends the browser to /ui/login', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email', 'read:foo'],
+      revokedAt: null,
+    });
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-other-realm',
+      realmId: 'realm-other',
+      userId: 'user-1',
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply, state } = createReply();
+    await handler(
+      {
+        query: BASE_QUERY,
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(sessions.service.get).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: 'sid-other-realm',
+    });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    // The cookie is cleared as a stale one; the session itself is left to its
+    // own realm.
+    expect(state.headers['Set-Cookie']).toContain('Max-Age=0');
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.service.sessions.has('sid-other-realm')).toBe(true);
+  });
+
   // The first consent read is a snapshot. A revocation that commits after it
   // must not leave a code issued on a consent that no longer exists: the
   // request is answered as one arriving after the revocation would be.
@@ -369,7 +410,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   ])(
     'issues no code and %s when the consent is revoked between the read and the code insert',
     async (_label, extraQuery, expectedRedirect) => {
-      const { fastify, ctx } = makeFastify();
+      const { fastify, ctx, sessions } = makeFastify();
       await authorizeRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
         CLIENT
@@ -383,13 +424,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
         undefined
       );
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      const signed = signSessionId('sid-race');
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      const { cookie } = await sessions.signIn({
+        sid: 'sid-race',
+        realmId: REALM.id,
         userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: 'sid-race',
-        createdAt: Date.now(),
       });
 
       const { reply, state } = createReply();
@@ -397,7 +435,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
         {
           query: { ...BASE_QUERY, ...extraQuery },
           url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -412,7 +450,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
 
   it('fails closed, without re-running the request, when every locked re-read finds no consent', async () => {
     // A consent that keeps vanishing under the lock must not loop the handler.
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -423,13 +461,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
       undefined
     );
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-race-2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-race-2',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-race-2',
-      createdAt: Date.now(),
     });
 
     const { reply, state } = createReply();
@@ -437,7 +472,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       {
         query: { ...BASE_QUERY, prompt: 'none' },
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&prompt=none',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -465,7 +500,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   it('persists RFC 8707 resource indicator(s) onto the authorization code', async () => {
     // RFC 8707 clients sends `resource` with /oauth/authorize;
     // the code row MUST carry it so /oauth/token can set `aud` correctly.
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
@@ -473,21 +508,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       resourceScopes: { 'https://api.example.com/v1': ['email'] },
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-3');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-3',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await sessions.signIn({ sid: 'sid-3', realmId: REALM.id, userId: 'user-1' });
 
     const { reply } = createReply();
     await ctx.handler!(
       {
         query: { ...BASE_QUERY, resource: ['https://api.example.com/v1'] },
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -506,21 +534,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     // (`??resource=system`), so an unvalidated string became the token's `aud`.
     // Only the validated `request.query` may be bound to the code;
     // authorize-routing.test.ts covers the same thing with the real router.
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-4');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-4',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await sessions.signIn({ sid: 'sid-4', realmId: REALM.id, userId: 'user-1' });
 
     const { reply } = createReply();
     await ctx.handler!(
@@ -529,7 +550,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
         // schema saw the unknown key `?resource` and stripped it.
         query: BASE_QUERY,
         url: '/oauth/authorize??resource=system&response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -541,7 +562,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   });
 
   it('persists multiple RFC 8707 resource indicators as an array', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
@@ -552,14 +573,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       },
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-5');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-5',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await sessions.signIn({ sid: 'sid-5', realmId: REALM.id, userId: 'user-1' });
 
     const { reply } = createReply();
     await ctx.handler!(
@@ -572,7 +586,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
           '/oauth/authorize?response_type=code&client_id=app-123&scope=email' +
           '&resource=https%3A%2F%2Fapi.example.com%2Fv1' +
           '&resource=https%3A%2F%2Fapi2.example.com%2Fv1',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -600,7 +614,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       [undefined, '/ui/consent?'],
       ['none', 'error=consent_required'],
     ] as const) {
-      const { fastify, ctx } = makeFastify();
+      const { fastify, ctx, sessions } = makeFastify();
       await authorizeRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
         CLIENT
@@ -610,13 +624,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
         resourceScopes,
         revokedAt: null,
       });
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      const signed = signSessionId('sid-other-resource');
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      const { cookie } = await sessions.signIn({
+        sid: 'sid-other-resource',
+        realmId: REALM.id,
         userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: 'sid-other-resource',
-        createdAt: Date.now(),
       });
 
       const { reply, state } = createReply();
@@ -624,7 +635,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
         {
           query: { ...BASE_QUERY, prompt, resource: ['https://other.example.com/v1'] },
           url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fother.example.com%2Fv1',
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -638,7 +649,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
 
 describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
   it('issues a code from a form-encoded POST body, identically to GET', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -647,14 +658,12 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
       revokedAt: null,
     });
 
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-post-1');
-    const createdAt = Date.now();
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    // Signed in a minute ago, so the session's auth time is not the mint time.
+    const { session, cookie } = await sessions.signIn({
+      sid: 'sid-post-1',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-post-1',
-      createdAt,
+      authTime: Date.now() - 60_000,
     });
 
     expect(ctx.postHandler).toBeDefined();
@@ -665,7 +674,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
         body: { ...BASE_QUERY, scope: 'email' },
         query: {},
         url: '/oauth/authorize',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -679,23 +688,25 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     // OIDC Core §2: the REAL session auth-time (ms) is persisted on the code.
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
-    expect(createArg.authTime).toBe(createdAt);
+    expect(createArg.authTime).toBe(session.authTime);
   });
 
   it.each([
     ['a wallet session at high assurance', 'high', 'high'],
     ['a wallet session at substantial assurance', 'substantial', 'substantial'],
-    // The password path: `ui/login.ts` writes no `assuranceLevel` at all
-    // (ADR-003 makes a password credential `'low'`), so the code records NULL
-    // and /oauth/token emits no `acr`. This is the #237/#240 invariant, asserted
-    // at the hop where it could first be broken.
-    ['a password session', undefined, null],
+    // The password path: `ui/login.ts` signs in with no `assuranceLevel`
+    // (ADR-003 makes a password credential `'low'`), so the session holds NULL,
+    // the code records NULL and /oauth/token emits no `acr`. This is the
+    // #237/#240 invariant, asserted at the hop where it could first be broken.
+    ['a password session', null, null],
+    // The session service's type admits neither of these; the route still
+    // binds only a level it reads as above `low`.
     ['a session that somehow carries low', 'low', null],
     ['a session carrying an unreadable level', 'medium', null],
   ])(
     'binds the assurance level of %s onto the authorization code (#237)',
     async (_label, sessionLevel, expected) => {
-      const { fastify, ctx } = makeFastify();
+      const { fastify, ctx, sessions } = makeFastify();
       await authorizeRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
         CLIENT
@@ -706,15 +717,13 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
         revokedAt: null,
       });
 
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      const signed = signSessionId('sid-acr-1');
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      const { session, cookie } = await sessions.signIn({
+        sid: 'sid-acr-1',
+        realmId: REALM.id,
         userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: 'sid-acr-1',
-        createdAt: Date.now(),
-        ...(sessionLevel === undefined ? {} : { assuranceLevel: sessionLevel }),
+        assuranceLevel: sessionLevel as SessionAssuranceLevel | null,
       });
+      expect(session.assuranceLevel).toBe(sessionLevel);
 
       const { reply } = createReply();
       await ctx.postHandler!(
@@ -723,7 +732,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
           body: { ...BASE_QUERY, scope: 'email' },
           query: {},
           url: '/oauth/authorize',
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -740,7 +749,6 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.postHandler!(
@@ -772,7 +780,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
   });
 
   it('binds RFC 8707 resource from the POST body onto the code', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -781,13 +789,10 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
       resourceScopes: { 'https://api.example.com/v1': ['email'] },
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-post-2');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-post-2',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-post-2',
-      createdAt: Date.now(),
     });
 
     const { reply } = createReply();
@@ -797,7 +802,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
         body: { ...BASE_QUERY, scope: 'email', resource: ['https://api.example.com/v1'] },
         query: {},
         url: '/oauth/authorize',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -968,7 +973,6 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.handler!(
@@ -1003,7 +1007,6 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.handler!(
@@ -1054,7 +1057,6 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
           redirectUris: [uri],
         });
         (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-        (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
         const { reply, state } = createReply();
         await expect(
@@ -1087,7 +1089,6 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
       redirectUris: ['com.example.app:/oauth2redirect'],
     });
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.handler!(
@@ -1118,7 +1119,6 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
         redirectUris: [uri],
       });
       (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
       const { reply, state } = createReply();
       const run = () =>
         ctx.handler!(
@@ -1210,7 +1210,7 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
   };
 
   async function runAuthorize(client: typeof CLIENT, scope: string, sid: string) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -1220,20 +1220,13 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
       scopes: ['agent:readonly', 'agent:exec', 'email'],
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId(sid);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: sid,
-      createdAt: Date.now(),
-    });
+    const { cookie } = await sessions.signIn({ sid, realmId: REALM.id, userId: 'user-1' });
     const { reply, state } = createReply();
     await ctx.handler!(
       {
         query: { ...BASE_QUERY, client_id: (client as { clientId: string }).clientId, scope },
         url: `/oauth/authorize?response_type=code&client_id=${(client as { clientId: string }).clientId}&scope=${encodeURIComponent(scope)}`,
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1291,13 +1284,14 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     client?: typeof CLIENT;
     scope: string;
     priorConsent?: string[] | null;
-    createdAt: number;
+    /** When the session's user authenticated, epoch ms. */
+    authTime: number;
     prompt?: string;
     maxAge?: string;
     sid: string;
   }) {
     const client = opts.client ?? DANGEROUS_CLIENT;
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -1306,13 +1300,11 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         ? undefined
         : { scopes: opts.priorConsent, revokedAt: null }
     );
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId(opts.sid);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: opts.sid,
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: opts.sid,
-      createdAt: opts.createdAt,
+      authTime: opts.authTime,
     });
     const clientId = (client as { clientId: string }).clientId;
     const query: Record<string, unknown> = {
@@ -1334,7 +1326,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       {
         query,
         url: `/oauth/authorize?${urlParams.toString()}`,
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -1346,7 +1338,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     const { fastify, state } = await run({
       scope: 'write:foo',
       priorConsent: null,
-      createdAt: Date.now() - 10 * MINUTE,
+      authTime: Date.now() - 10 * MINUTE,
       sid: 'sid-su-1',
     });
     expect(state.redirected).toContain('/ui/login?return_to=');
@@ -1370,7 +1362,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'read:foo email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 10 * MINUTE,
+      authTime: Date.now() - 10 * MINUTE,
       sid: 'sid-su-2',
     });
     // read:foo is a NEW (elevated) scope → must re-consent, not skip.
@@ -1383,7 +1375,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'email',
       priorConsent: ['email', 'read:foo'],
-      createdAt: Date.now() - 10 * MINUTE,
+      authTime: Date.now() - 10 * MINUTE,
       sid: 'sid-su-3',
     });
     // No elevation, no danger, no prompt → code issued directly.
@@ -1395,7 +1387,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     const { fastify, state } = await run({
       scope: 'write:foo',
       priorConsent: null,
-      createdAt: Date.now() - 5000, // fresh
+      authTime: Date.now() - 5000, // fresh
       sid: 'sid-su-4',
     });
     // Fresh auth satisfies the login requirement; the elevation still needs
@@ -1409,7 +1401,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 10 * MINUTE,
+      authTime: Date.now() - 10 * MINUTE,
       prompt: 'login',
       sid: 'sid-su-5',
     });
@@ -1422,7 +1414,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 5000, // 5s old → floor(5) = 5 > 0
+      authTime: Date.now() - 5000, // 5s old → floor(5) = 5 > 0
       maxAge: '0',
       sid: 'sid-su-6',
     });
@@ -1440,7 +1432,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 40, // 40ms old, simulating the post-login return trip
+      authTime: Date.now() - 40, // 40ms old, simulating the post-login return trip
       maxAge: '0',
       sid: 'sid-su-6b',
     });
@@ -1456,7 +1448,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     const { fastify, state } = await run({
       scope: 'write:foo',
       priorConsent: ['write:foo'], // remembered → would otherwise skip consent
-      createdAt: Date.now() - 10 * MINUTE,
+      authTime: Date.now() - 10 * MINUTE,
       sid: 'sid-su-7',
     });
     expect(state.redirected).toContain('/ui/login?return_to=');
@@ -1469,7 +1461,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     const { fastify, state } = await run({
       scope: 'write:foo',
       priorConsent: ['write:foo'],
-      createdAt: Date.now() - 10 * MINUTE,
+      authTime: Date.now() - 10 * MINUTE,
       prompt: 'none',
       sid: 'sid-su-8',
     });
@@ -1485,7 +1477,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'read:foo email',
       priorConsent: ['email'], // read:foo is a new, non-dangerous elevation
-      createdAt: Date.now() - 1000,
+      authTime: Date.now() - 1000,
       prompt: 'none',
       sid: 'sid-su-9',
     });
@@ -1499,7 +1491,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: 'email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 1000,
+      authTime: Date.now() - 1000,
       prompt: 'none',
       sid: 'sid-su-10',
     });
@@ -1517,7 +1509,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: '',
       priorConsent: null,
-      createdAt: Date.now() - 1000,
+      authTime: Date.now() - 1000,
       prompt: 'none',
       sid: 'sid-su-11',
     });
@@ -1541,7 +1533,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: freshDynamicClient,
       scope: 'email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 1000,
+      authTime: Date.now() - 1000,
       prompt: 'none',
       sid: 'sid-su-12',
     });
@@ -1559,7 +1551,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       client: CLIENT,
       scope: '',
       priorConsent: ['email'],
-      createdAt: Date.now() - 1000,
+      authTime: Date.now() - 1000,
       prompt: 'none',
       sid: 'sid-su-13',
     });
@@ -1601,7 +1593,6 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
         : (opts.consent ?? undefined)
     );
     // No browser session; a valid Bearer token resolves the user.
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
       sub: BEARER_USER,
@@ -1707,7 +1698,6 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
       undefined
     );
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
       sub: BEARER_USER,
@@ -1788,7 +1778,6 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
     );
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
       sub: BEARER_USER,
@@ -1818,7 +1807,6 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
     );
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
       sub: BEARER_USER,
@@ -1846,7 +1834,7 @@ describe('GET /oauth/authorize — disabled user', () => {
   // must not yield a code: the session is ended and the login page shown; the
   // Bearer path answers access_denied like an expired token.
   it('sends a session whose user has been disabled back to /ui/login', async () => {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
@@ -1858,13 +1846,7 @@ describe('GET /oauth/authorize — disabled user', () => {
       id: 'user-1',
       enabled: false,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-1');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
-      userId: 'user-1',
-      sessionId: 'sid-1',
-      createdAt: Date.now(),
-    });
+    const { cookie } = await sessions.signIn({ sid: 'sid-1', realmId: REALM.id, userId: 'user-1' });
 
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
@@ -1873,14 +1855,20 @@ describe('GET /oauth/authorize — disabled user', () => {
       {
         query: BASE_QUERY,
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
     );
 
     expect(state.redirected).toContain('/ui/login?return_to=');
-    expect(fastify.sessionUtils.deleteSession).toHaveBeenCalledWith('sid-1');
+    expect(sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: 'sid-1',
+      reason: 'admin',
+    });
+    expect(sessions.service.sessions.has('sid-1')).toBe(false);
+    expect(state.headers['Set-Cookie']).toContain('Max-Age=0');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1892,7 +1880,6 @@ describe('GET /oauth/authorize — disabled user', () => {
       id: 'consent-1',
       scopes: ['email'],
     });
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
       sub: BEARER_USER,
@@ -1943,7 +1930,6 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
       environment: clientEnv,
     });
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     return {
@@ -2010,7 +1996,7 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
   // code straight away: the test sees both the stored redirect_uri and the
   // Location header.
   async function authorize(registered: string[], redirectUri: string) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...CLIENT,
@@ -2021,13 +2007,10 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
       scopes: ['email'],
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-loopback');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-loopback',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-loopback',
-      createdAt: Date.now(),
     });
 
     const { reply, state } = createReply();
@@ -2036,7 +2019,7 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
         {
           query: { ...BASE_QUERY, redirect_uri: redirectUri },
           url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-          headers: { cookie: `__Host-qauth_session=${signed}` },
+          headers: { cookie },
           ip: '127.0.0.1',
         },
         reply
@@ -2114,7 +2097,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     client?: Record<string, unknown>;
     query?: Record<string, unknown>;
     /** Browser session (default: fresh, valid). `null` drops the cookie entirely. */
-    session?: Record<string, unknown> | null;
+    session?: { authTime?: number } | null;
     /** Prior consent used to reach the consent-skip / code-issuance path. */
     consent?: Record<string, unknown> | null;
     /** Present a Bearer token instead of a cookie; `false` makes verification fail. */
@@ -2124,7 +2107,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   }
 
   async function run(opts: RunOptions = {}) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     if (opts.issuer !== undefined) {
       (fastify.jwtUtils as unknown as { getIssuer: () => string }).getIssuer = () =>
         opts.issuer as string;
@@ -2139,7 +2122,6 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
 
     const headers: Record<string, string> = {};
     if (opts.bearer) {
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
       (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
       if (opts.bearer === 'valid') {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
@@ -2155,20 +2137,14 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
       headers['authorization'] = 'Bearer bearer.token';
     } else {
       (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      const sid = `sid-iss-${Math.random().toString(36).slice(2)}`;
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-        opts.session === null
-          ? null
-          : {
-              userId: 'user-1',
-              email: 'a@b.com',
-              sessionId: sid,
-              createdAt: Date.now(),
-              ...opts.session,
-            }
-      );
-      headers['cookie'] = `__Host-qauth_session=${signSessionId(sid)}`;
+      if (opts.session !== null) {
+        const { cookie } = await sessions.signIn({
+          realmId: REALM.id,
+          userId: 'user-1',
+          ...opts.session,
+        });
+        headers['cookie'] = cookie;
+      }
     }
 
     const query = { ...BASE_QUERY, ...opts.query };
@@ -2259,7 +2235,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     const { state } = await run({
       client: { ...CLIENT, clientId: 'app-danger', scopes: ['read:foo', 'write:foo', 'email'] },
       query: { client_id: 'app-danger', scope: 'write:foo', prompt: 'none' },
-      session: { createdAt: Date.now() - STEP_UP_FRESH_AUTH_WINDOW_MS * 10 },
+      session: { authTime: Date.now() - STEP_UP_FRESH_AUTH_WINDOW_MS * 10 },
       consent: { scopes: ['read:foo', 'write:foo', 'email'], revokedAt: null },
     });
     expect(state.redirected).toContain('error=login_required');
@@ -2329,7 +2305,7 @@ describe('GET /oauth/authorize — error responses for clients no operator provi
     client: Record<string, unknown>,
     opts: { prompt?: string; session?: boolean; scope?: string; consent?: unknown } = {}
   ) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -2338,16 +2314,12 @@ describe('GET /oauth/authorize — error responses for clients no operator provi
     );
     const headers: Record<string, string> = {};
     if (opts.session) {
-      const { signSessionId } = await import('../../helpers/session-cookie');
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      const { cookie } = await sessions.signIn({
+        sid: 'sid-untrusted',
+        realmId: REALM.id,
         userId: 'user-1',
-        email: 'a@b.com',
-        sessionId: 'sid-untrusted',
-        createdAt: Date.now(),
       });
-      headers['cookie'] = `__Host-qauth_session=${signSessionId('sid-untrusted')}`;
-    } else {
-      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+      headers['cookie'] = cookie;
     }
     const query = {
       ...BASE_QUERY,
@@ -2472,7 +2444,7 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
 
   /** Drive the authorize handler with an existing consent so a code is minted. */
   async function mintWith(query: Record<string, unknown>) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -2480,13 +2452,10 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
       scopes: ['email', 'read:foo'],
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-316');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-316',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-316',
-      createdAt: Date.now(),
     });
 
     const { reply, state } = createReply();
@@ -2494,7 +2463,7 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
       {
         query,
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -2558,18 +2527,15 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
     // The consent round-trip is where the flow used to die one step later: the
     // authorize query schema accepted the value, then the form mirror rejected
     // it. The return query must carry the state whole for that hop to work.
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    const signed = signSessionId('sid-316c');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-316c',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-316c',
-      createdAt: Date.now(),
     });
 
     const { reply, state } = createReply();
@@ -2579,7 +2545,7 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
         url: `/oauth/authorize?response_type=code&client_id=app-123&scope=email&state=${encodeURIComponent(
           LONG_STATE
         )}&nonce=${LONG_NONCE}`,
-        headers: { cookie: `__Host-qauth_session=${signed}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -2598,7 +2564,7 @@ describe('GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 94
 
   /** A signed-in user whose stored consent covers the request, so a code is minted. */
   async function issueCode(dpopOn: boolean, dpopJkt: unknown) {
-    const { fastify, ctx } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     (fastify as unknown as { dpop: unknown }).dpop = dpopOn
       ? { algorithms: ['ES256'], verifyRequest: vi.fn() }
       : null;
@@ -2609,19 +2575,17 @@ describe('GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 94
       scopes: ['email', 'read:foo'],
       revokedAt: null,
     });
-    const { signSessionId } = await import('../../helpers/session-cookie');
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-dpop',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-dpop',
-      createdAt: Date.now(),
     });
     const { reply, state } = createReply();
     await ctx.handler!(
       {
         query: { ...BASE_QUERY, dpop_jkt: dpopJkt },
         url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie: `__Host-qauth_session=${signSessionId('sid-dpop')}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply

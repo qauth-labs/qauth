@@ -59,10 +59,10 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { RESUME_PATH_PREFIX } from '../../helpers/pending-authorization';
-import { signSessionId } from '../../helpers/session-cookie';
 import { emitUserEvent } from '../../helpers/user-events';
 import authorizeRoute from '../oauth/authorize';
 import consentRoute from './consent';
@@ -176,6 +176,8 @@ function makeFastify() {
     post?: (request: any, reply: any) => Promise<unknown>;
   } = {};
   const stash = new Map<string, unknown>();
+  // The browser sessions the `__Host-qauth_session` cookie names (#488).
+  const sessions = createBrowserSessionFixture();
   // The realm resolver's decoration (#486): a request reaches its handler with
   // the realm of its host.
   const withRealm =
@@ -210,12 +212,9 @@ function makeFastify() {
       verifyAccessToken: vi.fn(),
       getIssuer: () => 'https://auth.example.com',
     },
-    // NOTE: the real `createSessionUtils` prefixes every key with `session:`
-    // internally, so callers pass the BARE id (`resolveBrowserSession` passes
-    // the session id from the cookie). This double must therefore be seeded
-    // with bare ids too — seeding `session:sid-1` made `getSession('sid-1')`
-    // miss, which silently degraded the step-up tests below into the
-    // no-session branch and left both step-up call sites unverified.
+    sessionService: sessions.service,
+    // The pending-authorization stash every login bounce parks the authorize
+    // URL in, under its bare `pending-authz:<handle>` key.
     sessionUtils: {
       getSession: vi.fn(async (id: string) => stash.get(id) ?? null),
       setSession: vi.fn(async (id: string, data: unknown) => {
@@ -225,9 +224,12 @@ function makeFastify() {
         stash.delete(id);
       }),
     },
+    // Where a session's side record (the consent CSRF token and scope
+    // binding) lives.
+    redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, ctx, stash };
+  return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
 
 /** Byte length of the `Location:` header line the redirect would emit. */
@@ -285,7 +287,6 @@ describe('login redirect size — /oauth/authorize', () => {
   it('GET with no session stays far under the proxy header budget', async () => {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.get!({ query: BASE_QUERY, url: authorizeUrl(), headers: {}, ip: '127.0.0.1' }, reply);
@@ -302,7 +303,6 @@ describe('login redirect size — /oauth/authorize', () => {
   it('POST (OIDC Core §3.1.2.1) with no session stays under the budget', async () => {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.post!(
@@ -323,12 +323,13 @@ describe('login redirect size — /oauth/authorize', () => {
   });
 
   it('step-up fresh-login bounce stays under the budget', async () => {
-    const { fastify, ctx, stash } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
-    stash.set('sid-1', {
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-1',
+      realmId: REALM.id,
       userId: 'user-1',
-      sessionId: 'sid-1',
-      createdAt: Date.now() - 10 * 60 * 1000,
+      authTime: Date.now() - 10 * 60 * 1000,
     });
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
 
@@ -338,7 +339,7 @@ describe('login redirect size — /oauth/authorize', () => {
       {
         query,
         url: authorizeUrl({ ...BASE_QUERY, prompt: 'login' }),
-        headers: { cookie: `__Host-qauth_session=${signSessionId('sid-1')}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
@@ -356,7 +357,6 @@ describe('login redirect size — /ui/consent', () => {
   it('GET with no session stays under the budget', async () => {
     const { fastify, ctx } = makeFastify();
     await consentRoute(fastify);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.get!(
@@ -379,7 +379,6 @@ describe('login redirect size — /ui/consent', () => {
   it('POST with no session stays under the budget', async () => {
     const { fastify, ctx } = makeFastify();
     await consentRoute(fastify);
-    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
 
     const { reply, state } = createReply();
     await ctx.post!(
@@ -398,15 +397,18 @@ describe('login redirect size — /ui/consent', () => {
   });
 
   it('POST step-up bounce stays under the budget', async () => {
-    const { fastify, ctx, stash } = makeFastify();
+    const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    stash.set('sid-su', {
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-su',
+      realmId: REALM.id,
       userId: 'user-1',
-      email: 'a@b.com',
-      sessionId: 'sid-su',
-      csrfToken: 'csrf-su',
-      createdAt: Date.now() - 10 * 60 * 1000,
-      consentScopes: { 'app-123': ['write:foo'] },
+      authTime: Date.now() - 10 * 60 * 1000,
+      side: {
+        identifier: 'a@b.com',
+        csrfToken: 'csrf-su',
+        consentScopes: { 'app-123': ['write:foo'] },
+      },
     });
 
     const { reply, state } = createReply();
@@ -420,7 +422,7 @@ describe('login redirect size — /ui/consent', () => {
           allow_forever: '1',
           resource: [],
         },
-        headers: { cookie: `__Host-qauth_session=${signSessionId('sid-su')}` },
+        headers: { cookie },
         ip: '127.0.0.1',
       },
       reply
