@@ -495,9 +495,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a Redis call is given up after 250 ms; with Postgres down, a session
   that needs it is absent and a cached one is served no longer than the cache
   time. `/metrics` counts cache reads,
-  Postgres reads and last-seen writes. No route uses the service yet: browser
-  sessions stay in Redis until the sign-in and the session lookup move onto it
-  ([#488]).
+  Postgres reads and last-seen writes. The browser sign-in and the session
+  lookup use it ([#488], under Changed).
 
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
@@ -713,6 +712,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than on the next request; the dynamic registration scope list is still read
   from the database. The failed-login and rate-limit counters start from zero
   after the upgrade, as their Redis keys now carry the realm id.
+
+- **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
+  `POST /ui/login` and the wallet sign-in create the session through the
+  session service ([#469]): one `sessions` row with the realm, the user,
+  `auth_time`, the assurance level a wallet credential established, and the
+  sign-in request's address and `User-Agent`. Every route that reads the
+  session cookie (`/oauth/authorize`, the consent screen, `/consents`, wallet
+  linking) finds the session through the service, in the realm of the
+  request's host: a cookie of another realm names no session there, and a
+  realm's `sso_max_lifespan` and `sso_idle_timeout` now end its sessions. The
+  consent screen's CSRF token and the scopes and resources it showed, the
+  consent API's CSRF token and the address shown as "Signed in as" are kept in
+  a Redis record beside the session, which expires with it and never reaches
+  Postgres. `/oauth/token` and `POST /auth/login` no longer write a session:
+  nothing read those. `POST /auth/logout` revokes the user's sessions through
+  the service, and a session of a disabled user is revoked when its cookie is
+  next used.
+
+  **Action for operators**: none, but the sessions the previous version kept
+  in Redis are not moved. Everyone signed in to the hosted pages signs in once
+  more after the upgrade; tokens and consents are unaffected (see the upgrade
+  guide).
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
