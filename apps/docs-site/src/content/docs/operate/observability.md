@@ -105,8 +105,11 @@ These structured logs complement the durable `audit_logs` database trail.
 
 ## Failed-Login Tracking & Lockout
 
-Failed logins are tracked per identifier (email **hash** and source IP) in Redis
-(`apps/auth-server/src/app/helpers/failed-login.ts`). After
+Failed logins are tracked per realm and identifier (email **hash** and source IP)
+in Redis (`apps/auth-server/src/app/helpers/failed-login.ts`). Each realm counts
+its own: the same address in two realms is two accounts, and a source address
+locked out in one realm is not locked out in another. The rate limits keep a
+bucket per realm and address the same way. After
 `FAILED_LOGIN_MAX_ATTEMPTS` failures inside `FAILED_LOGIN_WINDOW`, the identifier
 is locked out for `FAILED_LOGIN_LOCKOUT_DURATION` seconds; further login attempts
 return `429 Too Many Requests` with a `Retry-After` header before any credential
