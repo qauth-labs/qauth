@@ -352,8 +352,9 @@ Key contract facts:
 ```
 
 `id_token` is a separate, client-audienced (`aud` = your `client_id`) EdDSA JWT
-asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `name`
-(only under the `profile` scope, and only when set on the user), and `email` /
+asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `sid`
+(the browser session, when one backs the code), `name` (only under the
+`profile` scope, and only when set on the user), and `email` /
 `email_verified` (only under the `email` scope, same trust-ordered resolution
 as the [UserInfo response](#userinfo-response-getpost-oauthuserinfo-200-ok)
 below). The ID token and UserInfo release the same profile and email claims

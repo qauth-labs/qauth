@@ -241,15 +241,23 @@ Notes:
 ### ID token claims (OIDC)
 
 Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
-(all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:170-204`):
+(all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:176-226`):
 
 | Claim            | Present when                                                                                   |
 | ---------------- | ---------------------------------------------------------------------------------------------- |
 | `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.                  |
 | `auth_time`      | Always for the code flow (the session's real authentication time, epoch seconds).              |
+| `sid`            | A browser session backs the code: its session id, the value the session cookie names.          |
 | `name`           | The granted scope includes `profile` **and** the user has a `firstName` and/or `lastName` set. |
 | `email`          | The granted scope includes `email` **and** a verified email attribute exists.                  |
 | `email_verified` | Same condition as `email`; always `true` when present.                                         |
+
+`sid` names the user's browser session on the auth server, one per account
+signed in on a browser, and is what back-channel logout will name when that
+session ends (ADR-019 Decisions 3 and 4). A code from the headless Bearer
+hand-off of `/oauth/authorize` has no browser session, so its ID token has no
+`sid`. The access token, the introspection response and the refresh token never
+carry it, and discovery does not advertise it yet.
 
 `email`/`email_verified` share the same trust-ordered resolution the access
 token and [UserInfo](#userinfo-oidc) use, so all three never disagree within

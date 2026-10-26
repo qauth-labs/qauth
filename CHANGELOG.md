@@ -510,6 +510,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Postgres reads and last-seen writes. The browser sign-in and the session
   lookup use it ([#488], under Changed).
 
+- **`sid` on ID tokens** ([#549], ADR-019 Decisions 3 and 4). The ID token from
+  the authorization code exchange carries `sid`, the id of the browser session
+  the user signed in with (the `sessions` row the session cookie names), which
+  back-channel logout will name. Migration 0039 adds
+  `authorization_codes.session_id`, a nullable foreign key to `sessions` that a
+  deleted session sets to null. `/oauth/authorize` and the consent form store
+  it on the code and, in the same transaction, record the client in
+  `session_clients`, once per session and client; the sessions repository looks
+  that registry up by session, by user and by client, and revoking a session
+  deletes its rows. A code from the legacy Bearer path of `/oauth/authorize`
+  has no browser session and its ID token no `sid`, nor does a code minted
+  before the upgrade. Access tokens, introspection responses, refresh tokens
+  and discovery are unchanged. If a sign-out commits while a code is being
+  minted for that session, no code is issued: the browser goes back to the
+  sign-in page, or the client gets `login_required` under `prompt=none`. The
+  migration is additive; during a rolling upgrade the previous release writes
+  codes without a session.
+
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
   the default realm's step and under an advisory lock on the realm, the
@@ -970,6 +988,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#488]: https://github.com/qauth-labs/qauth/issues/488
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#549]: https://github.com/qauth-labs/qauth/issues/549
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
