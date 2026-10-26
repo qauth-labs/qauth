@@ -259,7 +259,7 @@ await fastify.register(emailPlugin, {
 
 ### Environment Variables
 
-The plugin accepts configuration through options. For environment-based configuration, you can extend `@qauth-labs/server-config`:
+The plugin accepts configuration through options. A host app passes values from its own parsed environment, which it builds with the schemas of `@qauth-labs/server-config`:
 
 ```typescript
 // The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
@@ -455,6 +455,8 @@ await fastify.register(emailPlugin, {
 // Registration route
 fastify.post('/auth/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
+  // One normalised address for both the credential and the email that is sent
+  const normalizedEmail = normalizeEmail(email);
 
   // Validate password strength
   const strength = fastify.passwordValidator.validatePasswordStrength(password);
@@ -476,7 +478,7 @@ fastify.post('/auth/register', async (request, reply) => {
     userId: user.id,
     realmId,
     providerType: 'password',
-    externalSub: normalizeEmail(email),
+    externalSub: normalizedEmail,
     credentialData: buildPasswordCredentialData(passwordHash, false),
   });
 
@@ -494,7 +496,7 @@ fastify.post('/auth/register', async (request, reply) => {
 
   // Send verification email
   try {
-    const result = await fastify.emailService.sendVerificationEmail(email, token);
+    const result = await fastify.emailService.sendVerificationEmail(normalizedEmail, token);
     if (!result.success) {
       fastify.log.error({ error: result.error }, 'Failed to send verification email');
     }

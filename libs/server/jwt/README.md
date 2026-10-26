@@ -119,7 +119,10 @@ const publicKey = await importPublicKey(
 -----END PUBLIC KEY-----`
 );
 
-// RS256 keys have their own importers; rs256PrivatePem is a PKCS#8 PEM string
+// RS256 keys have their own importers. They take a PKCS#8 PEM string.
+const rs256PrivatePem = `-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----`;
 const rs256PrivateKey = await importRs256PrivateKey(rs256PrivatePem);
 const rs256PublicKey = await importRs256PublicKey(derivePublicKeyPemFromPrivate(rs256PrivatePem));
 ```

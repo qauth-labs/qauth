@@ -227,7 +227,10 @@ async function loginUser(email: string, password: string) {
   // Verify even when no credential exists: an unknown email then costs the same
   // Argon2id work and throws the same error as a wrong password, so neither
   // tells a caller which accounts exist.
-  decoyHash ??= hasher.hashPassword(randomBytes(32).toString('hex'));
+  decoyHash ??= hasher.hashPassword(randomBytes(32).toString('hex')).catch((err: unknown) => {
+    decoyHash = undefined; // a failed decoy is not cached: the next miss makes a new one
+    throw err;
+  });
   const isValid = await hasher.verifyPassword(
     credential?.passwordHash ?? (await decoyHash),
     password
