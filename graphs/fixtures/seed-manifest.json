@@ -1,0 +1,51 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "consent-web",
+      "name": "Consent replay web app",
+      "description": "The consent graph's ordinary client (graphs/flows/core/consent). Replay fixture: never seed it into a deployment that serves real users.",
+      "grant_types": ["authorization_code", "refresh_token"],
+      "response_types": ["code"],
+      "scopes": ["openid", "profile", "email", "offline_access", "write:notes"],
+      "redirect_uris": ["https://consent-web.example/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "none"
+    },
+    {
+      "client_id": "consent-agent",
+      "name": "Consent replay agent",
+      "description": "The consent graph's agent client, capped at the readonly mode, so a request for agent:exec is above its cap. Replay fixture: never seed it into a deployment that serves real users.",
+      "grant_types": ["authorization_code"],
+      "response_types": ["code"],
+      "scopes": ["openid", "agent:readonly", "agent:exec"],
+      "redirect_uris": ["https://consent-agent.example/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "none",
+      "is_agent": true,
+      "max_agent_mode": "readonly"
+    },
+    {
+      "client_id": "consent-plain-http",
+      "name": "Consent replay client with a plain-http redirect",
+      "description": "The consent graph's client whose registered redirect URI is plain http to a host that is not loopback, which no environment permits. Replay fixture: never seed it into a deployment that serves real users.",
+      "grant_types": ["authorization_code"],
+      "response_types": ["code"],
+      "scopes": ["openid"],
+      "redirect_uris": ["http://consent-plain-http.example/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "none"
+    },
+    {
+      "client_id": "consent-development",
+      "name": "Consent replay development client",
+      "description": "The consent graph's development client: its scenario sets oauth_clients.environment to development and the realm's ceiling to match, which the manifest cannot. Replay fixture: never seed it into a deployment that serves real users.",
+      "grant_types": ["authorization_code"],
+      "response_types": ["code"],
+      "scopes": ["openid", "profile", "write:notes"],
+      "redirect_uris": ["https://consent-development.example/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "none"
+    }
+  ]
+}
