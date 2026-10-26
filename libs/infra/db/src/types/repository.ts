@@ -858,6 +858,16 @@ export type Session = InferSelectModel<typeof sessions>;
 export type SessionClient = InferSelectModel<typeof sessionClients>;
 
 /**
+ * What {@link SessionsRepository.revoke} returns: the ended row and the
+ * `session_clients` rows it deleted with it (issue #549), the clients the
+ * session served, which back-channel logout notifies.
+ */
+export interface RevokedSession {
+  session: Session;
+  clients: SessionClient[];
+}
+
+/**
  * Input of {@link SessionsRepository.create}. The id is not accepted: the
  * database makes it (`uuidv7()`), and it becomes the session's `sid`. Nor are
  * the revocation columns: a session starts live.
@@ -921,20 +931,25 @@ export interface SessionsRepository {
    * revoked, with `expired` or any other reason.
    *
    * In the same transaction it deletes the session's `session_clients` rows
-   * (issue #549): an ended session holds no client. A caller that must know
-   * which clients it served (back-channel logout) reads them first, in the
-   * transaction it passes.
+   * (issue #549), an ended session holding no client, and returns them: the
+   * one complete list of the clients it served, which back-channel logout
+   * reads. A list read before the call could miss a code being minted
+   * meanwhile, whose row {@link recordClient} commits before this `UPDATE`
+   * proceeds; the `DELETE` that follows sees it.
    *
-   * @returns the ended row, or `undefined` when the realm holds no such session
-   * or it was already revoked. A second call changes nothing and keeps the
-   * first reason.
+   * Runs READ COMMITTED; a `tx` passed in must be READ COMMITTED too, or the
+   * `DELETE` reads the snapshot from before the `UPDATE` waited.
+   *
+   * @returns the ended row and the clients it served, or `undefined` when the
+   * realm holds no such session or it was already revoked. A second call
+   * changes nothing and keeps the first reason.
    */
   revoke(
     realmId: string,
     id: string,
     reason: SessionRevokedReason,
     tx?: DbClient
-  ): Promise<Session | undefined>;
+  ): Promise<RevokedSession | undefined>;
   /**
    * A user's live sessions in a realm, newest first: not revoked and before
    * `expires_at`. Served by the partial index `idx_sessions_realm_user_active`.
@@ -947,14 +962,16 @@ export interface SessionsRepository {
    * client before keeps its one row and its first time.
    *
    * The session row is locked `FOR SHARE` until `tx` ends, so a concurrent
-   * {@link revoke} either waits and then deletes the row written here, or
-   * committed first and this call finds no live session. Hence `tx` is
-   * required: outside a transaction the lock would end with the statement.
+   * {@link revoke} either waits and then deletes (and returns) the row
+   * written here, or committed first and this call finds no live session.
+   * Hence `tx` is required, and READ COMMITTED: outside a transaction the
+   * lock would end with the statement.
    *
    * @returns `true` when the realm holds the session live (not revoked, before
-   * `expires_at`) and the row is stored; `false`, writing nothing, otherwise.
-   * The caller then issues no code: no ID token may name a session that
-   * back-channel logout would not reach.
+   * `expires_at`), the client is one of the same realm, and the row is stored;
+   * `false`, writing nothing, otherwise. The caller then issues no code, so
+   * every code minted from a session is among the clients its revocation
+   * returns.
    */
   recordClient(
     realmId: string,
@@ -963,9 +980,9 @@ export interface SessionsRepository {
     tx: DbClient
   ): Promise<boolean>;
   /**
-   * The clients one session of the realm served, oldest first. Empty for a
-   * session of another realm, and for a revoked one, whose rows
-   * {@link revoke} deleted.
+   * The clients one live session of the realm served, oldest first. Empty for
+   * a session of another realm, and for one revoked or past `expires_at`. The
+   * idle limit is the session service's call and is not judged here.
    */
   listClientsForSession(
     realmId: string,
@@ -973,15 +990,14 @@ export interface SessionsRepository {
     tx?: DbClient
   ): Promise<SessionClient[]>;
   /**
-   * The registry rows of every session of one user in the realm, oldest
-   * first. A session past `expires_at` but not revoked keeps its rows until
-   * it is revoked or deleted; the caller judges the session.
+   * The registry rows of every live session of one user in the realm (not
+   * revoked, before `expires_at`), oldest first.
    */
   listClientsForUser(realmId: string, userId: string, tx?: DbClient): Promise<SessionClient[]>;
   /**
    * The registry rows of one client (its `oauth_clients.id`) across the
-   * realm's sessions, oldest first. As with {@link listClientsForUser}, a
-   * session past its end keeps its rows until it is revoked or deleted.
+   * realm's live sessions, oldest first. A session past `expires_at` keeps its
+   * rows until it is revoked or its row deleted, but is not listed.
    */
   listSessionsForClient(
     realmId: string,

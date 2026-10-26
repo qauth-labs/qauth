@@ -2,12 +2,14 @@ import { and, asc, desc, eq, gt, isNull, lte, type SQL } from 'drizzle-orm';
 
 import type {
   NewSession,
+  RevokedSession,
   Session,
   SessionClient,
   SessionsRepository,
   UpdateSessionLastSeenOptions,
 } from '../../types';
 import { DbClient } from '../db';
+import { oauthClients } from '../schema/core';
 import { sessionClients, type SessionRevokedReason, sessions } from '../schema/sessions';
 
 /**
@@ -23,8 +25,9 @@ import { sessionClients, type SessionRevokedReason, sessions } from '../schema/s
  */
 export function createSessionsRepository(defaultDb: DbClient): SessionsRepository {
   /**
-   * The registry rows of the realm's sessions that `where` selects, oldest
-   * first. The join on `sessions` is what confines them to the realm.
+   * The registry rows of the realm's live sessions (not revoked, before
+   * `expires_at`) that `where` selects, oldest first. The join on `sessions`
+   * is what confines them to the realm.
    */
   async function registryRows(
     realmId: string,
@@ -40,7 +43,14 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       })
       .from(sessionClients)
       .innerJoin(sessions, eq(sessions.id, sessionClients.sessionId))
-      .where(and(eq(sessions.realmId, realmId), where))
+      .where(
+        and(
+          eq(sessions.realmId, realmId),
+          isNull(sessions.revokedAt),
+          gt(sessions.expiresAt, Date.now()),
+          where
+        )
+      )
       .orderBy(
         asc(sessionClients.firstSeenAt),
         asc(sessionClients.sessionId),
@@ -99,9 +109,8 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       id: string,
       reason: SessionRevokedReason,
       tx?: DbClient
-    ): Promise<Session | undefined> {
-      const invoker = tx ?? defaultDb;
-      return invoker.transaction(async (t) => {
+    ): Promise<RevokedSession | undefined> {
+      const end = async (t: DbClient): Promise<RevokedSession | undefined> => {
         const [session] = await t
           .update(sessions)
           .set({ revokedAt: Date.now(), revokedReason: reason })
@@ -113,10 +122,20 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
         // A second statement, not a CTE beside the UPDATE: it reads a fresh
         // snapshot, taken after the UPDATE got the row. A code minted under
         // `recordClient`'s share lock has committed its registry row by then,
-        // so the row is seen and deleted rather than outliving the session.
-        await t.delete(sessionClients).where(eq(sessionClients.sessionId, session.id));
-        return session;
-      });
+        // so the row is seen, deleted and returned rather than outliving the
+        // session unnoticed.
+        const clients = await t
+          .delete(sessionClients)
+          .where(eq(sessionClients.sessionId, session.id))
+          .returning();
+        return { session, clients };
+      };
+      // READ COMMITTED whatever the server's default: only that level gives
+      // the DELETE a snapshot taken after the UPDATE. A caller's transaction
+      // must be READ COMMITTED too; it runs as a savepoint inside it.
+      return tx === undefined
+        ? defaultDb.transaction(end, { isolationLevel: 'read committed' })
+        : tx.transaction(end);
     },
 
     async listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]> {
@@ -145,9 +164,15 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       // until `tx` ends, and that revocation then deletes the row written
       // here. One that committed first makes PostgreSQL re-check the WHERE
       // on the new row version, which drops the row: no live session.
+      // The join refuses a client of another realm (ADR-019 Decision 1):
+      // `session_clients` has no realm of its own.
       const [live] = await tx
         .select({ id: sessions.id })
         .from(sessions)
+        .innerJoin(
+          oauthClients,
+          and(eq(oauthClients.id, oauthClientId), eq(oauthClients.realmId, sessions.realmId))
+        )
         .where(
           and(
             eq(sessions.realmId, realmId),
@@ -156,7 +181,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
             gt(sessions.expiresAt, Date.now())
           )
         )
-        .for('share');
+        .for('share', { of: sessions });
       if (live === undefined) return false;
       await tx
         .insert(sessionClients)

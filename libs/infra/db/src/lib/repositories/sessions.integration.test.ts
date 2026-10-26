@@ -356,11 +356,15 @@ describe('sessions integration (real Postgres)', () => {
       const created = await repo.create(session(realm, user));
 
       const ended = await repo.revoke(realm, created.id, 'sign_out_everywhere');
-      expect(ended).toMatchObject({ id: created.id, revokedReason: 'sign_out_everywhere' });
-      expect(ended?.revokedAt).toEqual(expect.any(Number));
+      expect(ended?.session).toMatchObject({
+        id: created.id,
+        revokedReason: 'sign_out_everywhere',
+      });
+      expect(ended?.session.revokedAt).toEqual(expect.any(Number));
+      expect(ended?.clients).toEqual([]);
 
       expect(await repo.revoke(realm, created.id, 'admin')).toBeUndefined();
-      expect(await repo.findById(realm, created.id)).toEqual(ended);
+      expect(await repo.findById(realm, created.id)).toEqual(ended?.session);
     });
 
     it('lists only the user live sessions, newest first', async () => {
@@ -477,11 +481,12 @@ describe('sessions integration (real Postgres)', () => {
       });
     });
 
-    it('records nothing for a revoked or expired session, or one of another realm', async () => {
+    it('records nothing for a revoked or expired session, one of another realm, or a client of another realm', async () => {
       const realm = await seedRealm();
       const other = await seedRealm();
       const user = await seedUser(realm);
       const client = await seedClient(realm);
+      const foreignClient = await seedClient(other);
       const revoked = await repo.create(session(realm, user));
       await repo.revoke(realm, revoked.id, 'sign_out');
       const expired = await repo.create(session(realm, user, { expiresAt: Date.now() - 1 }));
@@ -490,10 +495,13 @@ describe('sessions integration (real Postgres)', () => {
       expect(await record(realm, revoked.id, client)).toBe(false);
       expect(await record(realm, expired.id, client)).toBe(false);
       expect(await record(other, live.id, client)).toBe(false);
+      expect(await record(realm, live.id, foreignClient)).toBe(false);
       expect(await count('session_clients', 'true', [])).toBe(0);
+      // The live session and a client of its realm: recorded.
+      expect(await record(realm, live.id, client)).toBe(true);
     });
 
-    it('revoking a session deletes its rows and leaves other sessions’ rows', async () => {
+    it('revoking a session deletes and returns its rows, and leaves other sessions’ rows', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm);
       const clientA = await seedClient(realm);
@@ -504,7 +512,12 @@ describe('sessions integration (real Postgres)', () => {
       await record(realm, ended.id, clientB);
       await record(realm, kept.id, clientA);
 
-      expect(await repo.revoke(realm, ended.id, 'sign_out')).toMatchObject({ id: ended.id });
+      const revoked = await repo.revoke(realm, ended.id, 'sign_out');
+      expect(revoked?.session.id).toBe(ended.id);
+      expect(revoked?.clients.map((row) => row.oauthClientId).sort()).toEqual(
+        [clientA, clientB].sort()
+      );
+      expect(revoked?.clients.every((row) => row.sessionId === ended.id)).toBe(true);
 
       expect(await registry(ended.id)).toEqual([]);
       expect(await registry(kept.id)).toEqual([{ oauth_client_id: clientA }]);
@@ -512,11 +525,11 @@ describe('sessions integration (real Postgres)', () => {
       expect(await repo.findById(realm, ended.id)).toMatchObject({ revokedReason: 'sign_out' });
     });
 
-    it('a revocation that waits on a code mint deletes the row the mint wrote', async () => {
+    it('a revocation that waits on a code mint deletes and returns the row the mint wrote', async () => {
       const realm = await seedRealm();
       const created = await repo.create(session(realm, await seedUser(realm)));
       const client = await seedClient(realm);
-      let revocation: Promise<unknown> | undefined;
+      let revocation: ReturnType<SessionsRepository['revoke']> | undefined;
 
       await db().transaction(async (tx) => {
         expect(await repo.recordClient(realm, created.id, client, tx)).toBe(true);
@@ -525,7 +538,12 @@ describe('sessions integration (real Postgres)', () => {
         // transaction holds.
         await waitForLockWait();
       });
-      expect(await revocation).toMatchObject({ id: created.id });
+      const revoked = await revocation;
+      expect(revoked?.session.id).toBe(created.id);
+      // The client the mint served is in the list back-channel logout reads.
+      expect(revoked?.clients).toEqual([
+        { sessionId: created.id, oauthClientId: client, firstSeenAt: expect.any(Number) },
+      ]);
 
       expect(await registry(created.id)).toEqual([]);
     });
@@ -537,9 +555,7 @@ describe('sessions integration (real Postgres)', () => {
       let mint: Promise<boolean> | undefined;
 
       await db().transaction(async (tx) => {
-        expect(await repo.revoke(realm, created.id, 'sign_out', tx)).toMatchObject({
-          id: created.id,
-        });
+        expect((await repo.revoke(realm, created.id, 'sign_out', tx))?.session.id).toBe(created.id);
         mint = record(realm, created.id, client);
         await waitForLockWait();
       });
@@ -598,6 +614,32 @@ describe('sessions integration (real Postgres)', () => {
         row(aliceFirst.id, app, 1000),
         row(aliceSecond.id, app, 3000),
         row(bobs.id, app, 4000),
+      ]);
+
+      // A session past its end, or revoked by a release that left its rows
+      // (the previous one, during a rolling upgrade), is not listed.
+      const expired = await repo.create(session(realm, alice, { expiresAt: Date.now() + HOUR }));
+      const leftOver = await repo.create(session(realm, alice));
+      await pool().query(
+        `INSERT INTO session_clients (session_id, oauth_client_id, first_seen_at)
+         VALUES ($1, $3, 5000), ($2, $3, 6000)`,
+        [expired.id, leftOver.id, app]
+      );
+      await pool().query(`UPDATE sessions SET expires_at = $2 WHERE id = $1`, [
+        expired.id,
+        Date.now() - 1,
+      ]);
+      await pool().query(
+        `UPDATE sessions SET revoked_at = $2, revoked_reason = 'sign_out' WHERE id = $1`,
+        [leftOver.id, Date.now()]
+      );
+      expect(await repo.listClientsForSession(realm, expired.id)).toEqual([]);
+      expect(await repo.listClientsForSession(realm, leftOver.id)).toEqual([]);
+      expect((await repo.listClientsForUser(realm, alice)).map((r) => r.firstSeenAt)).toEqual([
+        1000, 2000, 3000,
+      ]);
+      expect((await repo.listSessionsForClient(realm, app)).map((r) => r.firstSeenAt)).toEqual([
+        1000, 3000, 4000,
       ]);
 
       // Another realm's session and client are never found from this realm.

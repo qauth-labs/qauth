@@ -241,12 +241,22 @@ describe('createSessionsRepository', () => {
 
     const ended = await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
 
-    expect(ended?.id).toBe(SESSION_ID);
+    expect(ended?.session.id).toBe(SESSION_ID);
+    expect(ended?.clients).toEqual([]);
     expect(
       queries.map((query) => query.text.toLowerCase().split(' ').slice(0, 3).join(' '))
-    ).toEqual(['begin', 'update "sessions" set', 'delete from "session_clients"', 'commit']);
+    ).toEqual([
+      'begin isolation level',
+      'update "sessions" set',
+      'delete from "session_clients"',
+      'commit',
+    ]);
+    // READ COMMITTED whatever the server's default: the DELETE needs a
+    // snapshot taken after the UPDATE got the row.
+    expect(queries[0].text.toLowerCase()).toBe('begin isolation level read committed');
     const remove = queries[2];
     expect(remove.text.toLowerCase()).toContain('where "session_clients"."session_id" = $1');
+    expect(remove.text.toLowerCase()).toContain('returning');
     expect(remove.values).toEqual([SESSION_ID]);
   });
 
@@ -258,6 +268,42 @@ describe('createSessionsRepository', () => {
     expect(queries.some((query) => query.text.toLowerCase().includes('session_clients'))).toBe(
       false
     );
+  });
+
+  it('revoke returns the registry rows it deleted', async () => {
+    const { db } = createRecordingDb((text) => {
+      const lower = text.toLowerCase();
+      if (lower.startsWith('update "sessions"')) return [SESSION_ROW];
+      if (lower.startsWith('delete from "session_clients"')) {
+        return [[SESSION_ID, CLIENT_ID, String(NOW - 1_000)]];
+      }
+      return undefined;
+    });
+
+    const ended = await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
+
+    expect(ended?.clients).toEqual([
+      { sessionId: SESSION_ID, oauthClientId: CLIENT_ID, firstSeenAt: NOW - 1_000 },
+    ]);
+  });
+
+  it('revoke inside a caller’s transaction runs as a savepoint of it', async () => {
+    const { db, queries } = createRecordingDb((text) =>
+      text.toLowerCase().startsWith('update "sessions"') ? [SESSION_ROW] : undefined
+    );
+
+    await db.transaction((tx) =>
+      createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', tx)
+    );
+
+    expect(queries.map((query) => query.text.toLowerCase().split(' ')[0])).toEqual([
+      'begin',
+      'savepoint',
+      'update',
+      'delete',
+      'release',
+      'commit',
+    ]);
   });
 
   it('recordClient locks the live session for share, then adds the row once', async () => {
@@ -275,11 +321,16 @@ describe('createSessionsRepository', () => {
     expect(recorded).toBe(true);
     expect(queries).toHaveLength(2);
     const [lock, insert] = queries.map((query) => ({ ...query, text: query.text.toLowerCase() }));
-    expect(lock.text).toMatch(/"sessions"\."realm_id" = \$1 and "sessions"\."id" = \$2/);
+    // The client must be one of the session's realm (ADR-019 Decision 1).
+    expect(lock.text).toContain(
+      'inner join "oauth_clients" on ("oauth_clients"."id" = $1 and "oauth_clients"."realm_id" = "sessions"."realm_id")'
+    );
+    expect(lock.text).toMatch(/"sessions"\."realm_id" = \$2 and "sessions"\."id" = \$3/);
     expect(lock.text).toContain('"sessions"."revoked_at" is null');
-    expect(lock.text).toContain('"sessions"."expires_at" > $3');
-    expect(lock.text.trim()).toMatch(/for share$/);
-    expect(lock.values).toEqual([REALM_ID, SESSION_ID, NOW]);
+    expect(lock.text).toContain('"sessions"."expires_at" > $4');
+    // Only the session row is locked, not the client's.
+    expect(lock.text.trim()).toMatch(/for share of "sessions"$/);
+    expect(lock.values).toEqual([CLIENT_ID, REALM_ID, SESSION_ID, NOW]);
     expect(insert.text).toContain('insert into "session_clients"');
     expect(insert.text).toContain('on conflict do nothing');
     expect(insert.values).toEqual([SESSION_ID, CLIENT_ID]);
@@ -295,11 +346,11 @@ describe('createSessionsRepository', () => {
   });
 
   it.each([
-    ['listClientsForSession', '"session_clients"."session_id" = $2', SESSION_ID],
-    ['listClientsForUser', '"sessions"."user_id" = $2', USER_ID],
-    ['listSessionsForClient', '"session_clients"."oauth_client_id" = $2', CLIENT_ID],
+    ['listClientsForSession', '"session_clients"."session_id" = $3', SESSION_ID],
+    ['listClientsForUser', '"sessions"."user_id" = $3', USER_ID],
+    ['listSessionsForClient', '"session_clients"."oauth_client_id" = $3', CLIENT_ID],
   ] as const)(
-    '%s reads the registry of the realm’s sessions only, oldest first',
+    '%s reads the registry of the realm’s live sessions only, oldest first',
     async (method, filter, id) => {
       const query = await run(method);
       const text = query.text.toLowerCase();
@@ -307,11 +358,14 @@ describe('createSessionsRepository', () => {
       expect(text).toContain(
         'from "session_clients" inner join "sessions" on "sessions"."id" = "session_clients"."session_id"'
       );
-      expect(text).toContain(`where ("sessions"."realm_id" = $1 and ${filter})`);
+      expect(text).toContain(
+        'where ("sessions"."realm_id" = $1 and "sessions"."revoked_at" is null and ' +
+          `"sessions"."expires_at" > $2 and ${filter})`
+      );
       expect(text).toContain(
         'order by "session_clients"."first_seen_at" asc, "session_clients"."session_id" asc, "session_clients"."oauth_client_id" asc'
       );
-      expect(query.values).toEqual([REALM_ID, id]);
+      expect(query.values).toEqual([REALM_ID, NOW, id]);
     }
   );
 
