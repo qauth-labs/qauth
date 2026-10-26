@@ -1,5 +1,5 @@
 /**
- * Seed-then-migrate test for migration 0039: a realm's dynamic registration
+ * Seed-then-migrate test for migration 0040: a realm's dynamic registration
  * allowlist cannot hold a scope with the reserved `admin:` prefix (ADR-019
  * Decision 7, #507).
  *
@@ -9,7 +9,7 @@
  * must agree, which the last test pins.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
- * and upgraded through 0038, then 0039, so a later migration cannot change
+ * and upgraded through 0039, then 0040, so a later migration cannot change
  * what this test sees.
  */
 import { rmSync } from 'node:fs';
@@ -25,10 +25,10 @@ import { isReservedAdminScope } from '@qauth-labs/shared-validation';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const MIGRATION_IDX = 39;
+const MIGRATION_IDX = 40;
 const CONSTRAINT = 'realms_dynamic_registration_scopes_not_admin';
 
-describe('migration 0039 — no admin: scope in the dynamic registration allowlist (seed-then-migrate)', () => {
+describe('migration 0040 — no admin: scope in the dynamic registration allowlist (seed-then-migrate)', () => {
   let container: StartedPostgres | undefined;
   let pool: Pool | undefined;
   let dockerUp = false;

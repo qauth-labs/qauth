@@ -14,7 +14,7 @@ export const ADMIN_PERMISSIONS_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/admin-permissions.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const ADMIN_PERMISSIONS_PAGE_LAST_VERIFIED = '2026-10-25';
+export const ADMIN_PERMISSIONS_PAGE_LAST_VERIFIED = '2026-10-26';
 
 /** Where the registry lives, as the page names it. */
 const REGISTRY_PATH = 'apps/auth-server/src/app/helpers/admin-permissions.ts';
@@ -39,6 +39,7 @@ const CLASS_MEANING: Readonly<Record<PermissionClass, string>> = {
     'Performs a security operation, defined by its effect in ADR-019 Decision 7, such as changing what can authenticate an account or what a token asserts.',
 };
 
+/** The Scopes table: each admin scope, the class it allows and what that class means. */
 function scopeTable(): string {
   const lines = ['| Scope | Allows | Meaning |', '| --- | --- | --- |'];
   for (const permissionClass of PERMISSION_CLASSES) {
@@ -53,6 +54,7 @@ function permissionRow(permission: AdminPermission): string {
   return `| ${code(permission.id)} | ${permission.class} | ${code(ADMIN_SCOPES[permission.class])} | ${code(permission.resource)} | ${tableCell(permission.description)} |`;
 }
 
+/** The Permissions table: one row per grantable permission, in catalog order. */
 function permissionTable(permissions: readonly AdminPermission[]): string {
   return [
     '| Permission | Class | Scope | Resource | Description |',
@@ -61,6 +63,7 @@ function permissionTable(permissions: readonly AdminPermission[]): string {
   ].join('\n');
 }
 
+/** The Built-in roles table: each role's classes and the permission ids it grants. */
 function roleTable(roles: Readonly<Record<BuiltInRoleName, BuiltInRole>>): string {
   const lines = ['| Role | Classes | Permissions | Description |', '| --- | --- | --- | --- |'];
   for (const role of Object.values(roles)) {
@@ -73,6 +76,7 @@ function roleTable(roles: Readonly<Record<BuiltInRoleName, BuiltInRole>>): strin
   return lines.join('\n');
 }
 
+/** The Retired permissions section: a table, or a sentence when none is retired. */
 function retiredSection(retired: readonly AdminPermission[]): string {
   if (retired.length === 0) {
     return 'No permission has been retired.';
@@ -87,7 +91,11 @@ function retiredSection(retired: readonly AdminPermission[]): string {
   ].join('\n');
 }
 
-/** The whole page, before formatting. */
+/**
+ * The whole page, before formatting, rendered from `registry` and the built-in
+ * `roles` over it. The test that generates the page formats it with Oxfmt and
+ * compares it with the committed file.
+ */
 export function renderAdminPermissionsPage(
   registry: PermissionRegistry,
   roles: Readonly<Record<BuiltInRoleName, BuiltInRole>>
@@ -103,10 +111,12 @@ lastVerified: '${ADMIN_PERMISSIONS_PAGE_LAST_VERIFIED}'
 
 <!-- Generated from ${REGISTRY_PATH} by its tests. Do not edit by hand: change the registry and run \`pnpm nx test auth-server -- -u\`. -->
 
-The admin API authorizes a request by scope and by role
+The admin API is to authorize each request by scope and by role
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decision 7).
 A role grants permissions. The token's scopes decide which classes of those permissions this
-token may use. This page lists the scopes, every permission and the built-in roles. It is
+token may use. This page lists the scopes, every permission and the built-in roles, and states
+the rule the admin API will enforce. No admin API route reads the catalog yet, so the rule
+protects nothing today; the admin scopes are already reserved, as listed below. The page is
 generated from the registry in \`${REGISTRY_PATH}\`.
 
 ## Scopes
@@ -118,13 +128,14 @@ ${scopeTable()}
 - A request that needs a write permission and a security permission needs both scopes.
 - Scopes are matched exactly and case-sensitively (RFC 6749 §3.3).
 - Every scope that starts with \`admin:\`, in any case, is reserved for the admin API. Dynamic
-  registration refuses one with \`invalid_client_metadata\`, a Client ID Metadata Document that
-  asks for one is refused, the developer API refuses one, a realm's dynamic registration
-  allowlist cannot hold one, and discovery never lists one.
+  registration and the developer API refuse one with \`invalid_client_metadata\`, a Client ID
+  Metadata Document that asks for one is refused, a realm's dynamic registration allowlist
+  cannot hold one, and discovery never lists one.
 
 ## How a request is authorized
 
-A permission is effective for a request when both hold:
+Under the rule the admin API will enforce, a permission is effective for a request when both
+hold:
 
 1. one of the caller's admin roles grants it, and
 2. the token carries the scope of its class.

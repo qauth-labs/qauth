@@ -745,7 +745,9 @@ registered with the rest (RFC 7591 §2 lets the server narrow the request). A
 scope that starts with `admin:`, in any case, is different: it is reserved for
 the admin API, whose clients only an operator provisions, so the whole request
 is refused with `invalid_client_metadata`. A CIMD document whose `scope` holds
-one is refused too (`invalid_client`), and a realm's allowlist cannot hold one.
+one is refused too: its `client_id` resolves to no client, which the
+authorization endpoint answers with `invalid_request` and the token endpoint
+with `invalid_client`. A realm's allowlist cannot hold one.
 The three admin scopes and what they allow are on the
 [admin permissions](/reference/admin-permissions/) page.
 

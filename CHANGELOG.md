@@ -764,13 +764,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (clients that register `admin:` scopes)**: every scope that starts
   with `admin:`, in any case, is reserved for the admin API ([#507]).
   `POST /oauth/register` now refuses a request that asks for one with
-  `invalid_client_metadata`, where before it dropped any scope outside the
-  realm's allowlist; a Client ID Metadata Document whose `scope` holds one is
-  refused (`invalid_client`); discovery never lists one in `scopes_supported`;
-  the developer API (`POST /api/clients`, and `PATCH /api/clients/{id}` when it
-  changes the scopes) refuses one with `400`; and the boot refuses
-  `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it names one. Migration 0039
-  removes such entries from every realm's
+  `invalid_client_metadata` in `error` (RFC 7591 §3.2.2), where before it
+  dropped any scope outside the realm's allowlist; a Client ID Metadata
+  Document whose `scope` holds one resolves to no client (the authorization
+  endpoint answers `invalid_request`, the token endpoint `invalid_client`);
+  discovery never lists one in `scopes_supported`; the developer API
+  (`POST /api/clients`, and `PATCH /api/clients/{id}` when it changes the
+  scopes) refuses one with the 400 `invalid_client_metadata` problem document
+  ([#513]); and the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it
+  names one. Migration 0040 removes such entries from every realm's
   `dynamic_registration_allowed_scopes`, keeping the others in their order,
   then adds the CHECK `realms_dynamic_registration_scopes_not_admin`; the
   realms repository refuses the same with `400`. Clients that already hold such

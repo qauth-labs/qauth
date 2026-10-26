@@ -1145,6 +1145,33 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 
+  // #507: a PATCH cannot add a reserved admin scope either.
+  it('rejects a PATCH that adds an admin: scope even when the realm allowlist lists it', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({ id: 'realm-1', dynamicRegistrationAllowedScopes: ['openid', 'Admin:Write'] })
+    );
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { scopes: ['openid', 'Admin:Write'] },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toMatchObject({
+      name: 'InvalidClientMetadataError',
+      message: 'invalid_client_metadata',
+      errorDescription:
+        'scope not permitted: Admin:Write (the admin: prefix is reserved for the admin API)',
+    });
+    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+
   it('stores a repeated scope once, on create and on PATCH', async () => {
     // The allowlist check accepted any number of repeats of an allowed scope,
     // so one row could hold `openid` 116,000 times (~1 MiB), and every list

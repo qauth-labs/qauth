@@ -248,7 +248,14 @@ describe('validateAndNormalize', () => {
           allowedScopes,
           NO_CUSTOM_SCHEMES
         )
-      ).toThrow(/^invalid_client_metadata: scopes starting with "admin:" are reserved/);
+      ).toThrow(
+        expect.objectContaining({
+          name: 'InvalidClientMetadataError',
+          message: 'invalid_client_metadata',
+          errorDescription:
+            'scopes starting with admin: are reserved for the admin API and cannot be registered',
+        })
+      );
     }
   );
 
@@ -259,7 +266,7 @@ describe('validateAndNormalize', () => {
         [...allowedScopes, 'admin:read'],
         NO_CUSTOM_SCHEMES
       )
-    ).toThrow(BadRequestError);
+    ).toThrow(InvalidClientMetadataError);
   });
 
   it('leaves scopes that only contain "admin" to the allowlist', () => {

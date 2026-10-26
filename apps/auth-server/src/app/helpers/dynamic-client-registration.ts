@@ -259,9 +259,11 @@ export function validateAndNormalize(
   if (scopeString && scopeString.trim().length > 0) {
     const requested = scopeString.split(/\s+/).filter((s) => s.length > 0);
     if (reservedAdminScopesIn(requested).length > 0) {
+      // No double quote in the text: RFC 6749 §5.2 leaves it out of
+      // `error_description`, and the error handler would blank it.
       rejectRegistration(
         'invalid_client_metadata',
-        'scopes starting with "admin:" are reserved for the admin API and cannot be registered'
+        'scopes starting with admin: are reserved for the admin API and cannot be registered'
       );
     }
     scopes = [...new Set(requested.filter((s) => realmAllowedScopes.includes(s)))];

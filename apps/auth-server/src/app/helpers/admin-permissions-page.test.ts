@@ -145,6 +145,16 @@ describe('the admin permissions page (#507)', () => {
     ).toEqual([]);
   });
 
+  // No admin route reads the catalog yet (#517 adds the first): the page
+  // states the rule the admin API will enforce, never that it protects today.
+  // The route that starts enforcing it changes this sentence and this test.
+  it('says that no admin API route enforces the rule yet', () => {
+    expect(page.replace(/\s+/g, ' ')).toContain(
+      'No admin API route reads the catalog yet, so the rule protects nothing today'
+    );
+    expect(page).not.toMatch(/The admin API authorizes/);
+  });
+
   it('says that no permission has been retired yet', () => {
     expect(sectionOf(page, 'Retired permissions')).toContain('No permission has been retired.');
   });

@@ -3,15 +3,17 @@ title: Admin permissions
 description: The admin scopes, every permission of the admin API with its class, and the built-in admin roles, generated from the registry in apps/auth-server.
 sidebar:
   order: 6
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-26'
 ---
 
 <!-- Generated from apps/auth-server/src/app/helpers/admin-permissions.ts by its tests. Do not edit by hand: change the registry and run `pnpm nx test auth-server -- -u`. -->
 
-The admin API authorizes a request by scope and by role
+The admin API is to authorize each request by scope and by role
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decision 7).
 A role grants permissions. The token's scopes decide which classes of those permissions this
-token may use. This page lists the scopes, every permission and the built-in roles. It is
+token may use. This page lists the scopes, every permission and the built-in roles, and states
+the rule the admin API will enforce. No admin API route reads the catalog yet, so the rule
+protects nothing today; the admin scopes are already reserved, as listed below. The page is
 generated from the registry in `apps/auth-server/src/app/helpers/admin-permissions.ts`.
 
 ## Scopes
@@ -27,13 +29,14 @@ generated from the registry in `apps/auth-server/src/app/helpers/admin-permissio
 - A request that needs a write permission and a security permission needs both scopes.
 - Scopes are matched exactly and case-sensitively (RFC 6749 §3.3).
 - Every scope that starts with `admin:`, in any case, is reserved for the admin API. Dynamic
-  registration refuses one with `invalid_client_metadata`, a Client ID Metadata Document that
-  asks for one is refused, the developer API refuses one, a realm's dynamic registration
-  allowlist cannot hold one, and discovery never lists one.
+  registration and the developer API refuse one with `invalid_client_metadata`, a Client ID
+  Metadata Document that asks for one is refused, a realm's dynamic registration allowlist
+  cannot hold one, and discovery never lists one.
 
 ## How a request is authorized
 
-A permission is effective for a request when both hold:
+Under the rule the admin API will enforce, a permission is effective for a request when both
+hold:
 
 1. one of the caller's admin roles grants it, and
 2. the token carries the scope of its class.

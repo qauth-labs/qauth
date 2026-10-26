@@ -303,19 +303,24 @@ describe('property: admin:write alone never reaches a security permission (#507)
     return tokens;
   }
 
-  function assertNoSecurity(
+  /**
+   * The security permissions `role` reaches with `token`, each described for
+   * the failure message; the property holds when there are none. Collected and
+   * asserted once per test: one `expect` per permission made the seeded run
+   * slow enough to time out on a loaded runner.
+   */
+  function securityReached(
     registry: PermissionRegistry,
     role: readonly string[],
     token: string | string[],
     context: string
-  ) {
-    for (const id of effectivePermissions(role, token, registry)) {
-      const permission = registry.get(id);
-      expect(
-        permission?.class,
-        `${context}: role ${JSON.stringify(role)} with token ${JSON.stringify(token)} reached ${id}`
-      ).not.toBe('security');
-    }
+  ): string[] {
+    return [...effectivePermissions(role, token, registry)]
+      .filter((id) => registry.get(id)?.class === 'security')
+      .map(
+        (id) =>
+          `${context}: role ${JSON.stringify(role)} with token ${JSON.stringify(token)} reached ${id}`
+      );
   }
 
   it('holds for every role over the real catalog', () => {
@@ -332,18 +337,21 @@ describe('property: admin:write alone never reaches a security permission (#507)
     const universe = [...catalog, ...strays];
     expect(universe.length).toBeLessThanOrEqual(16);
     let checked = 0;
+    const reached: string[] = [];
     for (let mask = 0; mask < 1 << universe.length; mask++) {
       const role = universe.filter((_, bit) => (mask & (1 << bit)) !== 0);
       for (const token of tokens) {
-        assertNoSecurity(PERMISSION_REGISTRY, role, token, 'real catalog');
+        reached.push(...securityReached(PERMISSION_REGISTRY, role, token, 'real catalog'));
         checked++;
       }
     }
+    expect(reached).toEqual([]);
     // The security-admin role, with every security permission, is among them.
     expect(checked).toBe((1 << universe.length) * tokens.length);
   });
 
   it('holds for seeded random catalogs and roles', () => {
+    const reached: string[] = [];
     for (let seed = 1; seed <= 200; seed++) {
       const random = generator(seed);
       const size = 1 + random.int(24);
@@ -372,9 +380,12 @@ describe('property: admin:write alone never reaches a security permission (#507)
         roles.push(ids(registry.all).filter(() => random.next() < 0.5));
       }
       for (const role of roles) {
-        for (const token of tokens) assertNoSecurity(registry, role, token, `seed ${seed}`);
+        for (const token of tokens) {
+          reached.push(...securityReached(registry, role, token, `seed ${seed}`));
+        }
       }
     }
+    expect(reached).toEqual([]);
   });
 
   it('would catch a broken intersection: the same roles do reach security with admin:security', () => {

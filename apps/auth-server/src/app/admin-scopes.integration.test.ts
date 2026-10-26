@@ -7,10 +7,12 @@ import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
+  E2E_PASSWORD,
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  registerPasswordAccount,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
@@ -21,10 +23,13 @@ import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
  * Postgres and Redis.
  *
  * - `POST /oauth/register` refuses a registration that asks for an admin
- *   scope, and stores no client.
+ *   scope with RFC 7591's bare `invalid_client_metadata`, and stores no
+ *   client.
+ * - `POST /api/clients` and `PATCH /api/clients/{id}` refuse one with the
+ *   `invalid_client_metadata` problem document (#513), and store nothing.
  * - A Client ID Metadata Document (the fixture below) whose `scope` holds an
- *   admin scope is refused at `/oauth/authorize`, and no client row is
- *   materialised from it.
+ *   admin scope is refused at `/oauth/authorize` (its `client_id` resolves to
+ *   no client, `invalid_request`), and no client row is materialised from it.
  * - Neither discovery document lists an admin scope.
  * - The realm's dynamic registration allowlist cannot hold one, through the
  *   repository or by hand, and the boot refuses a seed list that names one.
@@ -131,10 +136,90 @@ describe('the reserved admin: scopes (real containers)', () => {
         const before = await clientCount();
         const response = await register(`openid ${adminScope}`);
         expect(response.statusCode).toBe(400);
-        expect(response.body).toContain('invalid_client_metadata');
+        expect(response.headers['content-type']).toMatch(/^application\/json(?:;|$)/);
+        // RFC 7591 §3.2.2: the bare code in `error`, the text beside it.
+        expect(response.json()).toEqual({
+          error: 'invalid_client_metadata',
+          error_description:
+            'scopes starting with admin: are reserved for the admin API and cannot be registered',
+        });
         expect(await clientCount()).toBe(before);
       }
     );
+  });
+
+  describe('the developer API (/api/clients)', () => {
+    /** A developer's access token from the first-party password sign-in. */
+    async function developerToken(): Promise<string> {
+      await registerPasswordAccount(app(), 'admin-scopes-dev@example.com');
+      const signedIn = await app().inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email: 'admin-scopes-dev@example.com', password: E2E_PASSWORD },
+      });
+      expect(signedIn.statusCode).toBe(200);
+      return signedIn.json<{ access_token: string }>().access_token;
+    }
+
+    /** The `invalid_client_metadata` problem document (RFC 9457, #513). */
+    function expectInvalidClientMetadata(response: Awaited<ReturnType<FastifyInstance['inject']>>) {
+      expect(response.statusCode).toBe(400);
+      expect(response.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+      expect(response.json()).toMatchObject({
+        status: 400,
+        code: 'invalid_client_metadata',
+        detail: expect.stringContaining('the admin: prefix is reserved for the admin API'),
+      });
+    }
+
+    it.each([...ADMIN_SCOPE_LIST, 'Admin:Other'])(
+      'POST refuses a client that asks for %s, and stores nothing',
+      async (adminScope) => {
+        const token = await developerToken();
+        const before = await clientCount();
+        const response = await app().inject({
+          method: 'POST',
+          url: '/api/clients',
+          headers: { authorization: `Bearer ${token}` },
+          payload: {
+            name: 'Admin-scoped',
+            redirectUris: ['https://app.example.com/callback'],
+            scopes: ['openid', adminScope],
+          },
+        });
+        expectInvalidClientMetadata(response);
+        expect(await clientCount()).toBe(before);
+      }
+    );
+
+    it('PATCH refuses to add an admin scope to a client, and leaves its scopes', async () => {
+      const token = await developerToken();
+      const created = await app().inject({
+        method: 'POST',
+        url: '/api/clients',
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          name: 'Ordinary',
+          redirectUris: ['https://app.example.com/callback'],
+          scopes: ['openid'],
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const { id } = created.json<{ id: string }>();
+
+      const response = await app().inject({
+        method: 'PATCH',
+        url: `/api/clients/${id}`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { scopes: ['openid', 'admin:write'] },
+      });
+      expectInvalidClientMetadata(response);
+      const { rows } = await db().query<{ scopes: string[] }>(
+        'SELECT scopes FROM oauth_clients WHERE id = $1',
+        [id]
+      );
+      expect(rows[0].scopes).toEqual(['openid']);
+    });
   });
 
   describe('a Client ID Metadata Document', () => {
@@ -150,6 +235,15 @@ describe('the reserved admin: scopes (real containers)', () => {
         code_challenge_method: 'S256',
       });
       return app().inject({ method: 'GET', url: `/oauth/authorize?${query}` });
+    }
+
+    /**
+     * A `client_id` that resolves to no client is answered in place with
+     * `invalid_request` (RFC 6749 §4.1.2.1, #513); why goes to the event only.
+     */
+    function expectUnresolvedClient(response: Awaited<ReturnType<typeof authorize>>): void {
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: 'invalid_request' });
     }
 
     function serveDocument(scope: string) {
@@ -176,8 +270,7 @@ describe('the reserved admin: scopes (real containers)', () => {
       async (scope) => {
         serveDocument(scope);
         const response = await authorize();
-        expect(response.statusCode).toBe(400);
-        expect(response.body).toContain('invalid_client');
+        expectUnresolvedClient(response);
         expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
         expect(await clientCount(CIMD_CLIENT_ID)).toBe(0);
       }
@@ -189,9 +282,7 @@ describe('the reserved admin: scopes (real containers)', () => {
       expect(await clientCount(CIMD_CLIENT_ID)).toBe(1);
 
       serveDocument('openid admin:security');
-      const response = await authorize();
-      expect(response.statusCode).toBe(400);
-      expect(response.body).toContain('invalid_client');
+      expectUnresolvedClient(await authorize());
     });
   });
 
