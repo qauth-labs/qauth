@@ -126,6 +126,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   how to add it, the IAM policy of the signer role (`kms:Encrypt` and
   `kms:Decrypt` on the one key) and what happens during a KMS outage.
 
+- **The KEK in a Vault Transit key** ([#578], ADR-019 Decision 9). The optional
+  package `@qauth-labs/keys-vault` keeps the key-encryption key in a key of
+  Vault's Transit engine: `KEK_PROVIDER=vault` makes the signer load it, and it
+  sends data keys to Transit `encrypt` and `decrypt` with the key's associated
+  data as the Transit `context`. Signing stays local. The key must be created
+  with `derived=true`: Vault ignores the context of a key that is not derived,
+  so the provider refuses one. `kekRef` is the key's path and version
+  (`vault:transit/keys/qauth-kek#v2`), so a Transit key rotation shows which
+  rows to re-wrap. Settings are `KEK_VAULT_ADDR` (`https` only),
+  `KEK_VAULT_TRANSIT_KEY`, and optionally `KEK_VAULT_TRANSIT_MOUNT`,
+  `KEK_VAULT_NAMESPACE` and `KEK_VAULT_CA_CERT_FILE`; the provider logs in
+  with a token from `KEK_VAULT_TOKEN_FILE` or with AppRole
+  (`KEK_VAULT_ROLE_ID`, `KEK_VAULT_SECRET_ID_FILE`), never with a credential
+  in a variable. It renews the token before it expires and logs in again at its
+  maximum TTL; a revoked token fails with `KEK_ACCESS_DENIED`. The auth server
+  does not depend on the package and its image does not carry it; the
+  package's README gives the exact Vault policy of the signer role, which the
+  new container suite applies to a Vault dev server.
+
 - **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
   ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
   URL (plain `http` only on `localhost`, for development) without a trailing
@@ -973,6 +992,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
+[#578]: https://github.com/qauth-labs/qauth/issues/578
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#827]: https://github.com/qauth-labs/qauth/issues/827
