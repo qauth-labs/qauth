@@ -19,7 +19,7 @@ beforeEach(() => {
   emitUserEventMock.mockClear();
 });
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -39,18 +39,12 @@ vi.mock('../../../config/env', () => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
     REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
 // Mock only the network layer so CIMD resolution runs against a fixture doc.
-vi.mock('../../helpers/ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
-    '../../helpers/ssrf-safe-fetch'
-  );
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
 import { env } from '../../../config/env';
 import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
@@ -890,8 +884,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   }
 
   it('rejects when redirect_uri is not in the CIMD document (mismatch)', async () => {
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/other-cb']));
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://app.example.com/other-cb']));
 
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
@@ -934,8 +928,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   ])(
     'refuses a CIMD document that lists a non-loopback http redirect_uri, even for %s',
     async (_label, requested) => {
-      ssrfSafeGet.mockReset();
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockReset();
+      egressGet.mockResolvedValue(
         cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
       );
 
@@ -976,8 +970,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   );
 
   it('happy path: resolves CIMD client, materialises it, and proceeds to login/consent', async () => {
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
 
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
@@ -1010,8 +1004,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   it('prompt=none with no session: shows login_required on the issuer instead of redirecting (RFC 9700 §4.11.2)', async () => {
     // Anyone who can host a document names a CIMD client's redirect URI; the
     // AS has no reason to trust it as an automatic redirect target.
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://login-qauth.attacker.example/sign-in']));
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://login-qauth.attacker.example/sign-in']));
 
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);

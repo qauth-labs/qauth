@@ -3,6 +3,7 @@ import {
   type JwsAlgorithm,
   type SigningKey,
 } from '@qauth-labs/core-crypto';
+import { type EgressSource, isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -10,7 +11,7 @@ import { env } from '../../config/env';
 import { REDIS_KEYS } from '../constants/redis-keys';
 import { ASSERTION_SIGNING_ALG_VALUES_SUPPORTED } from '../schemas/oauth';
 import { resolveIssuerIdentifier } from './discovery';
-import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
+import { egressGet } from './egress-get';
 
 /**
  * Trusted-issuer signing-key resolution for the Identity Assertion
@@ -59,12 +60,26 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
  *
  * ## Every fetch follows the CIMD pattern
  *
- * Both outbound requests go through {@link ssrfSafeGet}: https-only, no
- * credentials in the URL, DNS-pinned IP validation (TOCTOU-safe), redirects
- * surfaced as errors rather than followed, response size bound, per-request
- * timeout. Non-200 is rejected by this module (the fetcher reports status; it
- * does not judge it). See `fetchAndValidateCimdDocument` for the reference
- * shape this mirrors.
+ * Both outbound requests go through the egress client ({@link egressGet}):
+ * https-only, no credentials in the URL, DNS-pinned IP validation
+ * (TOCTOU-safe), redirects refused rather than followed, response size bound,
+ * per-request timeout. Non-200 is rejected by this module (the fetcher reports
+ * status; it does not judge it). See `fetchAndValidateCimdDocument` for the
+ * reference shape this mirrors.
+ *
+ * The two fetches have different sources (ADR-019 Decision 8). The discovery
+ * URL is built from the operator's `ID_JAG_TRUSTED_ISSUERS`, so it is an
+ * `operator` destination: a deployment allowlist entry that names its host or
+ * range for the request's realm lets it reach a private address. The
+ * `jwks_uri` is named by the fetched discovery document, a `remote_document`
+ * destination that never uses the allowlist. An issuer whose keys sit on a
+ * private address therefore cannot be used from discovery alone; that needs
+ * its endpoints in configuration (the upstream provider work, #432 to #435).
+ *
+ * The caches below are per issuer, not per realm. For a public issuer, the
+ * only kind that resolves keys end to end, the realm changes nothing; the
+ * allowlist only decides whether one realm's discovery fetch may reach a
+ * private address.
  *
  * ## How often an issuer is dialled
  *
@@ -470,18 +485,21 @@ async function fetchJsonDocument<T>(
   fastify: FastifyInstance,
   url: string,
   schema: z.ZodType<T>,
-  what: string
+  what: 'discovery' | 'jwks',
+  destination: { source: EgressSource; realm: string }
 ): Promise<T | undefined> {
   let result;
   try {
-    result = await ssrfSafeGet(url, {
+    result = await egressGet(fastify, url, {
+      purpose: what === 'discovery' ? 'id-jag-discovery' : 'id-jag-jwks',
+      source: destination.source,
+      realm: destination.realm,
       timeoutMs: env.ID_JAG_FETCH_TIMEOUT_MS,
       maxBytes: env.ID_JAG_MAX_DOCUMENT_BYTES,
-      allowPrivateAddresses: env.ID_JAG_ALLOW_PRIVATE_ADDRESSES,
     });
   } catch (err) {
     fastify.log.debug(
-      { url, what, blocked: err instanceof SsrfBlockedError },
+      { url, what, blocked: isEgressError(err) && err.outcome === 'blocked' },
       'ID-JAG issuer document fetch failed'
     );
     return undefined;
@@ -525,6 +543,7 @@ async function fetchJsonDocument<T>(
 async function resolveIssuerMetadata(
   fastify: FastifyInstance,
   issuer: string,
+  realm: string,
   forceRefresh: boolean
 ): Promise<IssuerMetadata | undefined> {
   const cacheKey = REDIS_KEYS.ID_JAG_DISCOVERY(issuer);
@@ -534,7 +553,7 @@ async function resolveIssuerMetadata(
   }
 
   const metadata = await fetchUnlessRecentlyFailed(fastify, issuer, 'discovery', () =>
-    fetchIssuerMetadata(fastify, issuer)
+    fetchIssuerMetadata(fastify, issuer, realm)
   );
   if (!metadata) return undefined;
 
@@ -542,16 +561,22 @@ async function resolveIssuerMetadata(
   return metadata;
 }
 
-/** Fetch and validate an issuer's discovery document, uncached. */
+/**
+ * Fetch and validate an issuer's discovery document, uncached. The URL comes
+ * from the operator's trusted-issuer list, so it is an `operator` destination
+ * of `realm`.
+ */
 async function fetchIssuerMetadata(
   fastify: FastifyInstance,
-  issuer: string
+  issuer: string,
+  realm: string
 ): Promise<IssuerMetadata | undefined> {
   const metadata = await fetchJsonDocument(
     fastify,
     `${issuer}/.well-known/openid-configuration`,
     issuerMetadataSchema,
-    'discovery'
+    'discovery',
+    { source: 'operator', realm }
   );
   if (!metadata) return undefined;
 
@@ -565,9 +590,9 @@ async function fetchIssuerMetadata(
 
   // The jwks_uri comes from the TRUSTED issuer's own metadata — never from an
   // assertion — but it is still remote input, so it is re-checked here and then
-  // re-guarded by `ssrfSafeGet`. https-only is asserted explicitly so a plain
-  // `http://` value is refused with a clear reason instead of deep inside the
-  // fetcher.
+  // fetched as a `remote_document` destination, which the deployment allowlist
+  // never opens. https-only is asserted explicitly so a plain `http://` value
+  // is refused with a clear reason instead of deep inside the egress client.
   let jwksUrl: URL;
   try {
     jwksUrl = new URL(metadata.jwks_uri);
@@ -583,11 +608,15 @@ async function fetchIssuerMetadata(
   return metadata;
 }
 
-/** Fetch (or read from cache) an allowlisted issuer's JWK Set. */
+/**
+ * Fetch (or read from cache) an allowlisted issuer's JWK Set, from the
+ * `jwks_uri` its discovery document named: a `remote_document` destination.
+ */
 async function resolveIssuerJwks(
   fastify: FastifyInstance,
   issuer: string,
   jwksUri: string,
+  realm: string,
   forceRefresh: boolean
 ): Promise<IssuerJwks | undefined> {
   const cacheKey = REDIS_KEYS.ID_JAG_JWKS(issuer);
@@ -597,7 +626,10 @@ async function resolveIssuerJwks(
   }
 
   const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', () =>
-    fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks')
+    fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks', {
+      source: 'remote_document',
+      realm,
+    })
   );
   if (!jwks) return undefined;
 
@@ -628,9 +660,14 @@ function selectJwk(jwks: IssuerJwks, keyId: string | undefined) {
  * Build the deployment's ID-JAG issuer key resolver.
  *
  * @param fastify - Server instance (redis for the bounded cache, log for
- *   operator-visible refusal reasons).
+ *   operator-visible refusal reasons, the egress client for the fetches).
+ * @param realm - The name of the realm the assertion is presented to: the
+ *   deployment allowlist entries that name it apply to the discovery fetch.
  */
-export function createIdJagIssuerKeyResolver(fastify: FastifyInstance): IdJagIssuerKeyResolver {
+export function createIdJagIssuerKeyResolver(
+  fastify: FastifyInstance,
+  realm: string
+): IdJagIssuerKeyResolver {
   return async (request) => {
     // ALLOWLIST FIRST — before any network call, any cache read, any parsing.
     // An unlisted issuer costs one canonicalisation and one string comparison.
@@ -643,10 +680,16 @@ export function createIdJagIssuerKeyResolver(fastify: FastifyInstance): IdJagIss
     const forceRefresh = request.forceRefresh === true;
     if (forceRefresh && !(await claimRefresh(fastify, identifier))) return undefined;
 
-    const metadata = await resolveIssuerMetadata(fastify, identifier, forceRefresh);
+    const metadata = await resolveIssuerMetadata(fastify, identifier, realm, forceRefresh);
     if (!metadata) return undefined;
 
-    const jwks = await resolveIssuerJwks(fastify, identifier, metadata.jwks_uri, forceRefresh);
+    const jwks = await resolveIssuerJwks(
+      fastify,
+      identifier,
+      metadata.jwks_uri,
+      realm,
+      forceRefresh
+    );
     if (!jwks) return undefined;
 
     const jwk = selectJwk(jwks, request.keyId);

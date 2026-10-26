@@ -79,7 +79,6 @@ function resetMockEnv(): void {
     ID_JAG_JWKS_REFRESH_COOLDOWN: 30,
     ID_JAG_JWKS_NEGATIVE_CACHE_TTL: 30,
     ID_JAG_MAX_DOCUMENT_BYTES: 65536,
-    ID_JAG_ALLOW_PRIVATE_ADDRESSES: false,
     ID_JAG_CLOCK_SKEW_LEEWAY: 60,
     ID_JAG_MAX_ASSERTION_LIFETIME: 300,
     ID_JAG_ISSUED_LIFETIME: 300,
@@ -89,18 +88,13 @@ resetMockEnv();
 
 vi.mock('../../../config/env', () => ({ env: mockEnv }));
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
 
-vi.mock('../../helpers/ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
-    '../../helpers/ssrf-safe-fetch'
-  );
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
 import { createFakeSessionService } from '../../../testing/browser-sessions';
+import { blockedEgress } from '../../../testing/egress';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
-import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
 import { emitUserEvent, userEventFor } from '../../helpers/user-events';
 import tokenRoute from './token';
 
@@ -123,7 +117,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetMockEnv();
-  ssrfSafeGet.mockReset();
+  egressGet.mockReset();
 });
 
 interface TestContext {
@@ -3905,7 +3899,7 @@ async function wireTrustedIdp(): Promise<CryptoKey> {
   const publicKey = await importSPKI(IDP_KEYS.publicKeyPem, 'EdDSA');
   const jwk = await exportJWK(publicKey);
 
-  ssrfSafeGet.mockImplementation(async (url: string) => {
+  egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
     if (url === `${IDP_ISSUER}/.well-known/openid-configuration`) {
       return {
         status: 200,
@@ -4166,7 +4160,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidGrantError);
     // Fail-closed BEFORE any network call.
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects an issuer that is not on the allowlist, without fetching anything', async () => {
@@ -4177,7 +4171,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { iss: 'https://evil.example' })))
     ).rejects.toBeInstanceOf(InvalidGrantError);
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects an `aud` that is not this authorization server', async () => {
@@ -4229,7 +4223,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(
       invoke(fastify, ctx, bearerRequest(`${header}.${payload}.`))
     ).rejects.toBeInstanceOf(InvalidGrantError);
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects a MAC-algorithm assertion', async () => {
@@ -4253,7 +4247,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(invoke(fastify, ctx, bearerRequest(macAssertion))).rejects.toBeInstanceOf(
       InvalidGrantError
     );
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects a REPLAYED assertion (same jti twice)', async () => {
@@ -5407,8 +5401,8 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       pkjwtClient({ jwks: null, jwksUri: 'https://internal.example/jwks.json' })
     );
-    ssrfSafeGet.mockRejectedValue(
-      new SsrfBlockedError('CIMD host resolves to a non-public address (10.9.8.7)')
+    egressGet.mockRejectedValue(
+      blockedEgress('CIMD host resolves to a non-public address (10.9.8.7)')
     );
 
     const error = await runToken(handler, {

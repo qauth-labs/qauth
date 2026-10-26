@@ -2,7 +2,7 @@ import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
+const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
     CIMD_ENABLED: true,
     CIMD_TRUST_POLICY: 'accept-any-https' as const,
@@ -11,25 +11,21 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
-  ssrfSafeGet: vi.fn(),
+  egressGet: vi.fn(),
 }));
 
 vi.mock('../../config/env', () => ({ env: ENV }));
 
-vi.mock('./ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('./ssrf-safe-fetch')>('./ssrf-safe-fetch');
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('./egress-get', () => ({ egressGet }));
 
+import { blockedEgress } from '../../testing/egress';
 import {
   assertJwksMutuallyExclusive,
   fetchClientJwkSet,
   parseClientJwkSet,
   resolveClientKeySet,
 } from './client-jwks';
-import { SsrfBlockedError } from './ssrf-safe-fetch';
 
 const PUBLIC_JWK = { kty: 'EC', crv: 'P-256', x: 'abc', y: 'def', kid: 'k1' };
 const JWKS_URI = 'https://client.example.com/jwks.json';
@@ -50,7 +46,6 @@ function fastifyStub() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  ENV.CIMD_ALLOW_PRIVATE_ADDRESSES = false;
 });
 
 describe('parseClientJwkSet', () => {
@@ -146,14 +141,14 @@ describe('parseClientJwkSet — only typed members the verifier reads reach jose
     (fastify.redis.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       JSON.stringify({ keys: [{ ...PUBLIC_JWK, key_ops: ['verify', nested(50)] }] })
     );
-    ssrfSafeGet.mockResolvedValue({
+    egressGet.mockResolvedValue({
       status: 200,
       body: JSON.stringify({ keys: [PUBLIC_JWK] }),
       headers: {},
     });
 
     await expect(fetchClientJwkSet(fastify, JWKS_URI)).resolves.toEqual({ keys: [PUBLIC_JWK] });
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -174,7 +169,7 @@ describe('assertJwksMutuallyExclusive (RFC 7591 §2)', () => {
 
 describe('fetchClientJwkSet', () => {
   it('fetches through the SSRF-guarded path with private addresses disallowed', async () => {
-    ssrfSafeGet.mockResolvedValue({
+    egressGet.mockResolvedValue({
       status: 200,
       body: JSON.stringify({ keys: [PUBLIC_JWK] }),
       headers: {},
@@ -183,16 +178,18 @@ describe('fetchClientJwkSet', () => {
     await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).resolves.toEqual({
       keys: [PUBLIC_JWK],
     });
-    expect(ssrfSafeGet).toHaveBeenCalledWith(JWKS_URI, {
+    // A client-supplied URL: never a deployment allowlist destination.
+    expect(egressGet).toHaveBeenCalledWith(expect.anything(), JWKS_URI, {
+      purpose: 'client-jwks',
+      source: 'client',
       timeoutMs: 5000,
       maxBytes: 65536,
-      allowPrivateAddresses: false,
     });
   });
 
   it('serves a cached key set without re-fetching', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue({
+    egressGet.mockResolvedValue({
       status: 200,
       body: JSON.stringify({ keys: [PUBLIC_JWK] }),
       headers: {},
@@ -201,32 +198,32 @@ describe('fetchClientJwkSet', () => {
     await fetchClientJwkSet(fastify, JWKS_URI);
     await fetchClientJwkSet(fastify, JWKS_URI);
 
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a target that resolves to a private address', async () => {
-    ssrfSafeGet.mockRejectedValue(new SsrfBlockedError('resolves to a non-public address'));
+    egressGet.mockRejectedValue(blockedEgress('resolves to a non-public address'));
     await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/fetch blocked/),
     });
   });
 
   it('rejects a non-200 response', async () => {
-    ssrfSafeGet.mockResolvedValue({ status: 500, body: '', headers: {} });
+    egressGet.mockResolvedValue({ status: 500, body: '', headers: {} });
     await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/returned 500/),
     });
   });
 
   it('rejects a document that is not JSON', async () => {
-    ssrfSafeGet.mockResolvedValue({ status: 200, body: '<html>', headers: {} });
+    egressGet.mockResolvedValue({ status: 200, body: '<html>', headers: {} });
     await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not valid JSON/),
     });
   });
 
   it('rejects a fetched document carrying private key material', async () => {
-    ssrfSafeGet.mockResolvedValue({
+    egressGet.mockResolvedValue({
       status: 200,
       body: JSON.stringify({ keys: [{ ...PUBLIC_JWK, d: 'secret' }] }),
       headers: {},
@@ -238,7 +235,7 @@ describe('fetchClientJwkSet', () => {
 
   it('does not cache a rejected document', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue({ status: 200, body: '{"keys":[]}', headers: {} });
+    egressGet.mockResolvedValue({ status: 200, body: '{"keys":[]}', headers: {} });
     await expect(fetchClientJwkSet(fastify, JWKS_URI)).rejects.toThrow(InvalidClientError);
     expect(fastify.redis.set).not.toHaveBeenCalled();
   });
@@ -259,7 +256,7 @@ describe('resolveClientKeySet', () => {
     await expect(
       resolveClientKeySet(fastifyStub(), { ...base, jwks: { keys: [PUBLIC_JWK] } })
     ).resolves.toEqual({ keys: [PUBLIC_JWK] });
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects a client registered with both forms', async () => {

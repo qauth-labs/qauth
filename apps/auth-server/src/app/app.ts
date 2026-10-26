@@ -6,6 +6,7 @@ import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
+import { egressPlugin, type EgressPluginOptions } from '@qauth-labs/fastify-plugin-egress';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import { type DeliveryRoute, eventDeliveryPlugin } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
@@ -132,6 +133,13 @@ export interface AppOptions {
    * lands (#538). A suite that watches the role passes a route of its own.
    */
   eventDeliveryRoutes?: readonly DeliveryRoute[];
+  /**
+   * TEST SUPPORT — builds the egress client (#481) instead of the production
+   * one: a suite passes `createTestEgressClient` to reach a local fixture
+   * server. The egress plugin refuses it unless NODE_ENV is `test`, and
+   * `main.ts` never sets it.
+   */
+  egressClientFactory?: EgressPluginOptions['createClient'];
 }
 
 declare module 'fastify' {
@@ -150,6 +158,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     realmLookup,
     eventTelemetryLimits,
     eventDeliveryRoutes,
+    egressClientFactory,
     ...pluginOptions
   } = opts;
 
@@ -254,6 +263,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       commandTimeout: env.REDIS_COMMAND_TIMEOUT,
       lazyConnect: true,
     },
+  });
+
+  // The SSRF-safe egress client (ADR-019 Decision 8, #481): `fastify.egress`,
+  // over the deployment allowlist that EGRESS_ALLOWLIST_PATH names, read once
+  // here. Every outbound call the routes make for a configuration value or a
+  // request — CIMD documents, client and issuer JWKS, ID-JAG discovery — goes
+  // through it, naming who set the destination. The list lives only in that
+  // file: not in the database, and no route reads or edits it.
+  await fastify.register(egressPlugin, {
+    ...(env.EGRESS_ALLOWLIST_PATH === undefined
+      ? {}
+      : { allowlistPath: env.EGRESS_ALLOWLIST_PATH }),
+    ...(egressClientFactory === undefined ? {} : { createClient: egressClientFactory }),
   });
 
   // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the

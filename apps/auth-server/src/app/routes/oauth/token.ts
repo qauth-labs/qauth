@@ -2064,6 +2064,7 @@ async function handleJwtBearer(
     assertion = await validateIdJagAssertion(fastify, {
       assertion: body.assertion,
       expectedClientId: client.clientId,
+      realm: requestRealm(request).name,
     });
   } catch (err) {
     // Every distinct refusal reason is recorded for the operator and collapsed

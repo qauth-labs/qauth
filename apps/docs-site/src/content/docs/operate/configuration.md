@@ -153,11 +153,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Server
 
-| Key                     | Role       | Default    | Since | Description                                                                                                               |
-| ----------------------- | ---------- | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- |
-| `REQUEST_TIMEOUT_MS`    | deployment | `60000`    | 0.1.0 | How long, in milliseconds, a client may take to send one complete request before the server answers `408`; at least 1000. |
-| `SECURITY_HSTS_ENABLED` | deployment | `true`     | 0.1.0 | Send the `Strict-Transport-Security` header; keep it on in production.                                                    |
-| `SECURITY_HSTS_MAX_AGE` | deployment | `31536000` | 0.1.0 | The `max-age`, in seconds, of the `Strict-Transport-Security` header.                                                     |
+| Key                     | Role       | Default    | Since | Description                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ---------- | ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EGRESS_ALLOWLIST_PATH` | deployment | unset      | 0.2.0 | A JSON file of hosts and address ranges, each for the realms it lists, that outbound calls to destinations the operator or a realm admin set may reach although they are not public; read once at boot, and never applied to a destination that a client, an end user or a fetched document supplies. |
+| `REQUEST_TIMEOUT_MS`    | deployment | `60000`    | 0.1.0 | How long, in milliseconds, a client may take to send one complete request before the server answers `408`; at least 1000.                                                                                                                                                                             |
+| `SECURITY_HSTS_ENABLED` | deployment | `true`     | 0.1.0 | Send the `Strict-Transport-Security` header; keep it on in production.                                                                                                                                                                                                                                |
+| `SECURITY_HSTS_MAX_AGE` | deployment | `31536000` | 0.1.0 | The `max-age`, in seconds, of the `Strict-Transport-Security` header.                                                                                                                                                                                                                                 |
 
 ### Logs and metrics
 
@@ -265,21 +266,19 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Client registration
 
-| Key                            | Role       | Default | Since | Description                                                                                                                                                                                 |
-| ------------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CIMD_ALLOW_PRIVATE_ADDRESSES` | deployment | `false` | 0.1.0 | Let metadata document and client `jwks_uri` fetches reach loopback, private and link-local addresses, for a test server on localhost; refused when `NODE_ENV=production`. Development only. |
-| `CIMD_CACHE_DEFAULT_TTL`       | deployment | `300`   | 0.1.0 | How long, in seconds, a fetched metadata document is cached when its response states no lifetime.                                                                                           |
-| `CIMD_CACHE_MAX_TTL`           | deployment | `3600`  | 0.1.0 | The longest time, in seconds, a fetched metadata document is cached, whatever its response states.                                                                                          |
-| `CIMD_FETCH_TIMEOUT_MS`        | deployment | `5000`  | 0.1.0 | The deadline, in milliseconds, for one whole metadata document fetch.                                                                                                                       |
-| `CIMD_MAX_DOCUMENT_BYTES`      | deployment | `65536` | 0.1.0 | The largest metadata document, in bytes, the server accepts.                                                                                                                                |
-| `DYNAMIC_CLIENT_BADGE_DAYS`    | deployment | `30`    | 0.1.0 | How many days after dynamic registration the consent screen marks a client as newly registered; `0` turns the mark off.                                                                     |
-| `MAX_CLIENTS_PER_DEVELOPER`    | deployment | `100`   | 0.1.0 | The most OAuth clients one developer account may own, at least 1.                                                                                                                           |
+| Key                         | Role       | Default | Since | Description                                                                                                             |
+| --------------------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_CACHE_DEFAULT_TTL`    | deployment | `300`   | 0.1.0 | How long, in seconds, a fetched metadata document is cached when its response states no lifetime.                       |
+| `CIMD_CACHE_MAX_TTL`        | deployment | `3600`  | 0.1.0 | The longest time, in seconds, a fetched metadata document is cached, whatever its response states.                      |
+| `CIMD_FETCH_TIMEOUT_MS`     | deployment | `5000`  | 0.1.0 | The deadline, in milliseconds, for one whole metadata document fetch.                                                   |
+| `CIMD_MAX_DOCUMENT_BYTES`   | deployment | `65536` | 0.1.0 | The largest metadata document, in bytes, the server accepts.                                                            |
+| `DYNAMIC_CLIENT_BADGE_DAYS` | deployment | `30`    | 0.1.0 | How many days after dynamic registration the consent screen marks a client as newly registered; `0` turns the mark off. |
+| `MAX_CLIENTS_PER_DEVELOPER` | deployment | `100`   | 0.1.0 | The most OAuth clients one developer account may own, at least 1.                                                       |
 
 ### Enterprise-managed authorization (ID-JAG)
 
 | Key                              | Role       | Default | Since | Description                                                                                                                                                                                                    |
 | -------------------------------- | ---------- | ------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | deployment | `false` | 0.1.0 | Let issuer discovery and JWKS fetches reach loopback, private and link-local addresses, for a test server on localhost; refused when `NODE_ENV=production`. Development only.                                  |
 | `ID_JAG_CLOCK_SKEW_LEEWAY`       | deployment | `60`    | 0.1.0 | The clock skew, in seconds, allowed when checking an assertion's `exp`, `nbf` and `iat`; at most 300.                                                                                                          |
 | `ID_JAG_FETCH_TIMEOUT_MS`        | deployment | `5000`  | 0.1.0 | The deadline, in milliseconds, for each fetch of a trusted issuer's discovery document and JWKS.                                                                                                               |
 | `ID_JAG_ISSUED_LIFETIME`         | deployment | `300`   | 0.1.0 | The lifetime, in seconds, of an ID-JAG the server mints; at most 3600.                                                                                                                                         |
@@ -403,6 +402,15 @@ A renamed key keeps working under its old name for the deprecation window.
 | ------------------------ | -------------------------- | ---------------- |
 | `REQUIRE_EMAIL_VERIFIED` | `REQUIRE_VERIFIED_ACCOUNT` | 0.1.0            |
 
+## Removed keys
+
+The server no longer reads these keys and refuses to start while one is set, whatever its value. The error names the key and what replaces it.
+
+| Key                              | Removed in | Instead                                                                                                                                                                                                                                                         |
+| -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES`   | 0.2.0      | A metadata document or client jwks_uri never reaches a private address now; list an operator-set private destination in the file EGRESS_ALLOWLIST_PATH names, and reach a test server through createTestEgressClient.                                           |
+| `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | 0.2.0      | A trusted issuer's discovery URL on a private address is listed, for its realms, in the file EGRESS_ALLOWLIST_PATH names; the jwks_uri its discovery document names never reaches a private address. Tests reach a local issuer through createTestEgressClient. |
+
 ## Adding a key
 
-A pull request that adds, renames or removes a key registers the change in the same pull request: an entry in `libs/server/config/src/lib/registry/keys/`, with its tier, role, default and one sentence, and a regenerated page. A stable key also appears in `.env.example`. A test fails until all three agree.
+A pull request that adds, renames or removes a key registers the change in the same pull request: an entry in `libs/server/config/src/lib/registry/keys/`, with its tier, role, default and one sentence, and a regenerated page; a removed key moves to `registry/removed.ts`. A stable key also appears in `.env.example`. A test fails until all three agree.

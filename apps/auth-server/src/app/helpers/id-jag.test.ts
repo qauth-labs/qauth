@@ -161,6 +161,7 @@ describe('validateIdJagAssertion — happy path', () => {
     const validated = await validateIdJagAssertion(fastify, {
       assertion,
       expectedClientId: CLIENT_ID,
+      realm: 'master',
       resolver: trustedResolver(),
     });
 
@@ -182,6 +183,7 @@ describe('validateIdJagAssertion — happy path', () => {
     const validated = await validateIdJagAssertion(fastify, {
       assertion,
       expectedClientId: CLIENT_ID,
+      realm: 'master',
       resolver: trustedResolver(),
     });
 
@@ -199,6 +201,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'disabled'
@@ -213,6 +216,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: untrustedResolver,
       }),
       'unresolvable_key'
@@ -227,6 +231,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'unresolvable_key'
@@ -256,6 +261,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion: `${header}.${payload}.`,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver,
       }),
       'unsupported_algorithm'
@@ -281,7 +287,12 @@ describe('validateIdJagAssertion — deny paths', () => {
     const resolver = trustedResolver();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, { assertion, expectedClientId: CLIENT_ID, resolver }),
+      validateIdJagAssertion(fastify, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        realm: 'master',
+        resolver,
+      }),
       'unsupported_algorithm'
     );
     expect(resolver).not.toHaveBeenCalled();
@@ -296,6 +307,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'unsupported_typ'
@@ -312,6 +324,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'signature_invalid'
@@ -326,6 +339,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'signature_invalid'
@@ -340,6 +354,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'audience_invalid'
@@ -365,6 +380,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'unsupported_constraint'
@@ -380,6 +396,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const result = await validateIdJagAssertion(fastify, {
       assertion,
       expectedClientId: CLIENT_ID,
+      realm: 'master',
       resolver: trustedResolver(),
     });
 
@@ -395,6 +412,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'signature_invalid'
@@ -411,6 +429,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'lifetime_invalid'
@@ -426,6 +445,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'lifetime_invalid'
@@ -440,6 +460,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'claims_invalid'
@@ -454,6 +475,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'claims_invalid'
@@ -468,6 +490,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'claims_invalid'
@@ -483,6 +506,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'claims_invalid'
@@ -496,6 +520,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion: 'not-a-jwt',
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'malformed'
@@ -513,6 +538,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver({ identifier: 'https://someone-else.example.com' }),
       }),
       'issuer_invalid'
@@ -538,7 +564,12 @@ describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
       const assertion = await makeAssertion({ iss: selfIssuer });
 
       await expectRejection(
-        validateIdJagAssertion(fastify, { assertion, expectedClientId: CLIENT_ID, resolver }),
+        validateIdJagAssertion(fastify, {
+          assertion,
+          expectedClientId: CLIENT_ID,
+          realm: 'master',
+          resolver,
+        }),
         'self_issued'
       );
       // Refused before any key lookup, so a self-issued assertion cannot drive a fetch.
@@ -562,6 +593,7 @@ describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
       validateIdJagAssertion(fastify, {
         assertion: minted.assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver,
       }),
       'self_issued'
@@ -576,10 +608,20 @@ describe('validateIdJagAssertion — replay protection', () => {
     const resolver = trustedResolver();
 
     await expect(
-      validateIdJagAssertion(fastify, { assertion, expectedClientId: CLIENT_ID, resolver })
+      validateIdJagAssertion(fastify, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        realm: 'master',
+        resolver,
+      })
     ).resolves.toBeDefined();
     await expectRejection(
-      validateIdJagAssertion(fastify, { assertion, expectedClientId: CLIENT_ID, resolver }),
+      validateIdJagAssertion(fastify, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        realm: 'master',
+        resolver,
+      }),
       'replayed'
     );
   });
@@ -597,6 +639,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     await validateIdJagAssertion(fastify, {
       assertion,
       expectedClientId: CLIENT_ID,
+      realm: 'master',
       resolver: trustedResolver(),
     });
 
@@ -617,6 +660,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: 'some-other-client',
+        realm: 'master',
         resolver,
       }),
       'client_mismatch'
@@ -625,7 +669,12 @@ describe('validateIdJagAssertion — replay protection', () => {
 
     // The rightful client can still redeem it.
     await expect(
-      validateIdJagAssertion(fastify, { assertion, expectedClientId: CLIENT_ID, resolver })
+      validateIdJagAssertion(fastify, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        realm: 'master',
+        resolver,
+      })
     ).resolves.toBeDefined();
   });
 
@@ -647,6 +696,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       validateIdJagAssertion(fastify, {
         assertion: await makeAssertion({ jti: 'shared-jti' }),
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver,
       })
     ).resolves.toBeDefined();
@@ -658,6 +708,7 @@ describe('validateIdJagAssertion — replay protection', () => {
           key: secondPrivate,
         }),
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver,
       })
     ).resolves.toBeDefined();
@@ -668,6 +719,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       validateIdJagAssertion(fastify, {
         assertion: await makeAssertion({ jti: 'shared-jti' }),
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver,
       }),
       'replayed'
@@ -683,6 +735,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'replay_store_unavailable'
@@ -697,6 +750,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       validateIdJagAssertion(fastify, {
         assertion,
         expectedClientId: CLIENT_ID,
+        realm: 'master',
         resolver: trustedResolver(),
       }),
       'signature_invalid'

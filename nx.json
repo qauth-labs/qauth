@@ -75,6 +75,7 @@
         "libs/fastify/plugins/ssf/*",
         "libs/fastify/plugins/sessions/*",
         "libs/fastify/plugins/dpop/*",
+        "libs/fastify/plugins/egress/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
         "libs/keys/aws-kms/*"
@@ -115,6 +116,7 @@
         "libs/fastify/plugins/ssf/*",
         "libs/fastify/plugins/sessions/*",
         "libs/fastify/plugins/dpop/*",
+        "libs/fastify/plugins/egress/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
         "libs/keys/aws-kms/*"

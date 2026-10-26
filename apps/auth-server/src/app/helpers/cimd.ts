@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import { InvalidClientError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -14,7 +15,7 @@ import {
   clientJwkSetSchema,
 } from './client-jwks';
 import { validateRedirectUri } from './dynamic-client-registration';
-import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
+import { egressGet } from './egress-get';
 
 /**
  * Client ID Metadata Documents (CIMD) resolver.
@@ -27,8 +28,11 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
  * (fallback) → manual.
  *
  * Security-critical invariants enforced here:
- *   - The document is fetched through {@link ssrfSafeGet} (SSRF guards,
- *     https-only, no redirects, DNS-pinned IP validation) — CIMD §6.
+ *   - The document is fetched through the egress client ({@link egressGet}:
+ *     https-only, no redirects, DNS-pinned IP validation) — CIMD §6. The
+ *     `client_id` is the client's own URL, so the fetch has `source: client`
+ *     and the deployment allowlist never applies to it (ADR-019 Decision 8).
+ *     A metadata document on a private address is unreachable.
  *   - `client_id` inside the document MUST equal the URL it was fetched
  *     from, byte-for-byte. This binds the document to its own URL and
  *     prevents a document hosted at URL A from claiming to be client B.
@@ -554,13 +558,14 @@ export async function fetchAndValidateCimdDocument(
 
   let result;
   try {
-    result = await ssrfSafeGet(clientId, {
+    result = await egressGet(fastify, clientId, {
+      purpose: 'cimd',
+      source: 'client',
       timeoutMs: env.CIMD_FETCH_TIMEOUT_MS,
       maxBytes: env.CIMD_MAX_DOCUMENT_BYTES,
-      allowPrivateAddresses: env.CIMD_ALLOW_PRIVATE_ADDRESSES,
     });
   } catch (err) {
-    if (err instanceof SsrfBlockedError) {
+    if (isEgressError(err) && err.outcome === 'blocked') {
       // Distinguish in the error chain for the caller's audit log, but still
       // present invalid_client to the client.
       throw new InvalidClientError(`CIMD fetch blocked: ${err.message}`);

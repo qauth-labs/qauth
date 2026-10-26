@@ -111,8 +111,8 @@ export interface ConfigKey {
    */
   readonly experimentalValues: readonly string[];
   /**
-   * The key exists for test and development stacks only, such as a switch
-   * that turns off an SSRF guard so a test can reach a localhost server.
+   * The key exists for test and development stacks only, such as `VITEST`,
+   * which the test runner sets.
    */
   readonly developmentOnly: boolean;
 }
