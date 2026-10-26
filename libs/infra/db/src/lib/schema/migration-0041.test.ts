@@ -2,8 +2,9 @@
  * Migration 0041 links each refresh-token family to the authorization code
  * whose redemption started it (ADR-017 Decision 10, #627): one nullable column
  * on `refresh_tokens`, its foreign key (`ON DELETE SET NULL`) and a unique
- * partial index. Nothing else: no row is rewritten (the column starts NULL)
- * and no other table is touched.
+ * partial index, after locking both tables in the order a redemption takes
+ * them. Nothing else: no row is rewritten (the column starts NULL) and no
+ * other table is touched.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -44,8 +45,12 @@ describe('migration 0041 (refresh family ↔ authorization code link)', () => {
     expect(entry?.idx).toBe(41);
   });
 
-  it('holds exactly the column, its foreign key and the unique partial index', () => {
+  it('locks authorization_codes, then refresh_tokens, then holds exactly the column, its foreign key and the unique partial index', () => {
+    // The locks come first and in the order a redemption takes them, so the
+    // migration cannot deadlock with one (see migration-0041.integration.test.ts).
     expect(statementsOf(MIGRATION_TAG).map((statement) => statement.replace(/\s+/g, ' '))).toEqual([
+      'LOCK TABLE "authorization_codes" IN SHARE ROW EXCLUSIVE MODE;',
+      'LOCK TABLE "refresh_tokens" IN ACCESS EXCLUSIVE MODE;',
       'ALTER TABLE "refresh_tokens" ADD COLUMN "authorization_code_id" uuid;',
       'ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_authorization_code_id_authorization_codes_id_fk" FOREIGN KEY ("authorization_code_id") REFERENCES "public"."authorization_codes"("id") ON DELETE set null ON UPDATE no action;',
       'CREATE UNIQUE INDEX "idx_refresh_tokens_authorization_code_id" ON "refresh_tokens" USING btree ("authorization_code_id") WHERE "refresh_tokens"."authorization_code_id" IS NOT NULL;',

@@ -161,15 +161,30 @@ SELECT count(*) FROM refresh_tokens;
 With many rows, run the migration at a quiet hour, and keep the proxy's and
 the clients' timeouts above the expected pause.
 
+Migration 0038 can also be aborted by a deadlock. It locks `refresh_tokens`
+first and `authorization_codes` after, while every code redemption, on either
+release, locks them the other way round: it spends its code, then stores the
+refresh token it buys. A redemption that spends its code while the runner holds
+`refresh_tokens` waits for the runner, the runner then waits for that
+redemption's lock on `authorization_codes`, and PostgreSQL aborts one of the
+two. When it aborts the runner, the whole upgrade is rolled back (nothing is
+half-applied) and the runner exits non-zero; run it again. To avoid it, run an
+upgrade from a release before 0038 with the token endpoint drained: stop
+routing traffic to the auth servers, or scale them to zero, while the runner
+works, or at the quietest hour you have. Migration 0038 is left as it is;
+migration 0041 takes its locks in the redemption's order and cannot deadlock
+this way.
+
 ### Migration 0041 reads `refresh_tokens` once more
 
 Migration 0041 ([#627](https://github.com/qauth-labs/qauth/issues/627)) links
 each refresh-token family to the authorization code that started it. It adds a
 column that starts empty, so it rewrites no row, but its foreign key and index
-each read the whole table while the runner holds the lock 0038 described. The
-foreign key also locks `authorization_codes` against writes until the runner
-commits, so minting a code at `/oauth/authorize` or on the consent screen,
-redeeming one at `/oauth/token` and a logout wait too, on nodes of either
+each read the whole table while the runner holds the lock 0038 described. It
+first locks `authorization_codes` against writes, then `refresh_tokens`, in the
+order a redemption takes them, so it cannot deadlock with one. So minting a
+code at `/oauth/authorize` or on the consent screen, redeeming one at
+`/oauth/token` and a logout wait until the runner commits, on nodes of either
 version. On the same virtual machine, against a `postgres:18-alpine` container
 with 1,000,000 rows in `refresh_tokens` (531 MB), it took 1.3 s, and a token
 insert waited for it. Upgrading from a release before 0038 runs 0038 and 0041

@@ -112,10 +112,15 @@ describe('refresh-token rotation lock', () => {
 
     const sql = texts(queries);
     const lock = sql.findIndex((t) => /pg_advisory_xact_lock\(/.test(t));
+    const family = sql.findIndex((t) => t.startsWith('select "family_id"'));
     const update = sql.findIndex((t) => t.startsWith('update "refresh_tokens"'));
     expect(sql[lock]).toContain('"user_id"');
     expect(sql[lock]).toContain('"authorization_code_id"');
     expect(queries[lock].values).toContain(CODE_ID);
+    // The family is named under the lock, before the UPDATE.
+    expect(family).toBeGreaterThan(lock);
+    expect(update).toBeGreaterThan(family);
+    expect(queries[family].values).toContain(CODE_ID);
     // The whole family, found through the token that carries the link.
     expect(sql[update]).toContain('"family_id" in (select "family_id"');
     expect(queries[update].values).toContain(CODE_ID);

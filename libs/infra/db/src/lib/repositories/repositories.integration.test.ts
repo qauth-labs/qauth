@@ -822,7 +822,10 @@ describe('repository integration (real Postgres)', () => {
         authorizationCodeId: otherCode.id,
       });
 
-      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toBe(1);
+      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toEqual({
+        familyId: first.familyId,
+        revokedCount: 1,
+      });
 
       expect(await tokenRow(child.id)).toMatchObject({
         revoked: true,
@@ -831,8 +834,11 @@ describe('repository integration (real Postgres)', () => {
       // The rotated parent keeps the reason it was revoked for first.
       expect((await tokenRow(first.id)).revokedReason).toBe('rotated');
       expect((await tokenRow(otherFamily.id)).revoked).toBe(false);
-      // A second replay finds nothing left to revoke.
-      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toBe(0);
+      // A second replay finds nothing left to revoke, and still names the family.
+      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toEqual({
+        familyId: first.familyId,
+        revokedCount: 0,
+      });
     });
 
     it('revokeFamilyByAuthorizationCode revokes nothing for a code that started no family', async () => {
@@ -844,7 +850,10 @@ describe('repository integration (real Postgres)', () => {
       // An unlinked family of the same user stays live.
       const unlinked = await seedFamilyToken(user.id, client.id, 'd'.repeat(64));
 
-      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toBe(0);
+      expect(await tokens.revokeFamilyByAuthorizationCode(code.id, 'code_replay')).toEqual({
+        familyId: null,
+        revokedCount: 0,
+      });
       expect((await tokenRow(unlinked.id)).revoked).toBe(false);
     });
 

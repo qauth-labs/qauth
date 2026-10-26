@@ -222,18 +222,20 @@ Notes:
 - The authorization code is single-use and short-lived; the same
   `redirect_uri` (exactly as sent to `/oauth/authorize`, loopback port
   included) and a PKCE-matching `code_verifier` are mandatory. A missing
-  `redirect_uri` is `invalid_grant`, like a different one: QAuth keeps RFC 6749's
-  rule for codes from a browser redirect, although OAuth 2.1 drops the
-  parameter.
+  `redirect_uri` is `invalid_grant`, like a different one, with the
+  `error_description` `redirect_uri is required for this code`: QAuth keeps
+  RFC 6749's rule for codes from a browser redirect, although OAuth 2.1 drops
+  the parameter. The code is not spent, so send the request again with it.
 - **Redeem a code once.** A second redemption is refused with `invalid_grant`
   and, when it is otherwise a valid request (your client, the same
   `redirect_uri`, the right `code_verifier`, DPoP key and `resource`), revokes
-  every refresh token the first one led to (OAuth 2.1 §4.1.3): QAuth cannot
+  every token the first one led to (OAuth 2.1 §4.1.3): the refresh tokens of
+  its family, and every access token issued from the code or in that family,
+  which userinfo, introspection and token exchange then refuse. QAuth cannot
   tell a retry from an attacker who copied the code. So do not retry a token
   request that may have reached the server; send the user through
-  `/oauth/authorize` again instead. Access tokens already issued stay valid
-  until they expire, and a code is recognised as spent until the hourly purge
-  deletes it, some time after its five-minute lifetime.
+  `/oauth/authorize` again instead. A code is recognised as spent until the
+  hourly purge deletes it, some time after its five-minute lifetime.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`refresh_token` is present only when the user has a stored consent** for
@@ -292,7 +294,8 @@ verifies the signature against the JWKS and checks `iss`, `exp`, `aud`, and scop
 
 Renew an access token without re-prompting the user. QAuth **rotates** the
 refresh token on every use and detects replay (RFC 9700 §2.2.2): reusing a
-already-rotated token revokes the entire token family. That holds for as long
+already-rotated token revokes the entire token family, and the access tokens
+issued in it. That holds for as long
 as the family has a live token: the hourly `purge-expired` job deletes a family
 only once its newest token has expired, rotated tokens included.
 
@@ -629,17 +632,24 @@ Every way of ending a grant stops new tokens being minted from it:
 
 | Revocation                                                    | Ends                                                                                                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `/oauth/revoke` with a refresh token, or a replayed one       | That token's whole rotation family                                                                                                    |
+| `/oauth/revoke` with a refresh token                          | That token's whole rotation family                                                                                                    |
+| A replayed refresh token, or a replayed authorization code    | The whole rotation family, and every access token issued in it or from the code (denylisted by `jti` until it would have expired)     |
 | `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                                                   |
 | Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                                          |
 | `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
 
-**Access tokens already issued under the grant are not reached.** They are
-stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`, 900 s by
-default) wherever they are accepted: at resource servers that verify them
-locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
+**Otherwise, access tokens already issued under the grant are not reached.**
+They are stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`,
+900 s by default) wherever they are accepted: at resource servers that verify
+them locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
 `subject_token`. Only an access token revoked by value, at `/oauth/revoke` or
-as the token presented to `/auth/logout`, is refused before then. A short
+as the token presented to `/auth/logout`, or by a replay of the grant it came
+from, is refused before then, and only where the denylist is consulted:
+introspection, userinfo, token exchange and QAuth's own bearer-protected
+routes, not a resource server that verifies the JWT locally. A replay revokes
+the access tokens QAuth recorded when it issued them, in Redis; one issued
+while Redis could not record it, or a replay while Redis is unavailable, leaves
+the token valid until it expires, and the server logs it. A short
 access-token lifetime is what bounds this window. A delegated token from token
 exchange, and an ID-JAG minted from one, never outlive the subject token they
 were derived from.

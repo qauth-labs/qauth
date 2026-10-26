@@ -45,6 +45,8 @@ const REDIRECT_URI = 'https://client.example.com/callback';
 const SCOPES = ['openid', 'email'];
 const EMAIL = 'replay-owner@example.test';
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
+const RESOURCE_SERVER_ID = 'replay-resource-server';
+const RESOURCE_SERVER_SECRET = 'replay-resource-server-secret-of-sufficient-length';
 
 /** The two places a code is minted: `/oauth/authorize` skipping consent, and the consent form. */
 type MintPath = 'consent skip' | 'consent screen';
@@ -126,6 +128,19 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     if (path === 'consent skip') {
       await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, SCOPES);
     }
+    // A confidential resource server for the client's tokens, which
+    // introspects them (a public client cannot authenticate there).
+    await app.repositories.oauthClients.create({
+      realmId: realm.id,
+      clientId: RESOURCE_SERVER_ID,
+      clientSecretHash: await app.passwordHasher.hashPassword(RESOURCE_SERVER_SECRET),
+      tokenEndpointAuthMethod: 'client_secret_post',
+      name: 'Replay resource server',
+      redirectUris: [],
+      grantTypes: ['client_credentials'],
+      audience: [CLIENT_ID],
+      enabled: true,
+    });
     const jar = await signInWithPassword(app, EMAIL);
     return jar.header() as string;
   }
@@ -226,12 +241,60 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     return rows;
   }
 
-  /** The `reason` of every `token.request_failed` event, in the order they were recorded. */
-  async function tokenFailureReasons(app: FastifyInstance): Promise<unknown[]> {
-    const { rows } = await app.dbPool.query<{ data: { reason?: string } }>(
+  /** The `data` of every `token.request_failed` event, in the order they were recorded. */
+  async function tokenFailures(app: FastifyInstance): Promise<Record<string, unknown>[]> {
+    const { rows } = await app.dbPool.query<{ data: Record<string, unknown> }>(
       `SELECT data FROM events WHERE type = 'urn:qauth:event:token.request_failed:v1-rc.0' ORDER BY seq`
     );
-    return rows.map((row) => row.data.reason);
+    return rows.map((row) => row.data);
+  }
+
+  /** The `reason` of every `token.request_failed` event, in the order they were recorded. */
+  async function tokenFailureReasons(app: FastifyInstance): Promise<unknown[]> {
+    return (await tokenFailures(app)).map((data) => data['reason']);
+  }
+
+  /**
+   * Whether an access token still works: userinfo serves it (OIDC Core §5.3)
+   * and introspection by the resource server reports it active (RFC 7662
+   * §2.2). Both consult the revocation denylist.
+   */
+  async function accessTokenWorks(
+    app: FastifyInstance,
+    accessToken: string
+  ): Promise<{ userinfo: number; active: unknown }> {
+    const userinfo = await app.inject({
+      method: 'GET',
+      url: '/oauth/userinfo',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    const introspection = await app.inject({
+      method: 'POST',
+      url: '/oauth/introspect',
+      headers: FORM,
+      payload: new URLSearchParams({
+        token: accessToken,
+        client_id: RESOURCE_SERVER_ID,
+        client_secret: RESOURCE_SERVER_SECRET,
+      }).toString(),
+    });
+    expect(introspection.statusCode).toBe(200);
+    return {
+      userinfo: userinfo.statusCode,
+      active: (introspection.json() as { active: unknown }).active,
+    };
+  }
+
+  /** The id of the refresh family `code` started. */
+  async function familyIdOf(app: FastifyInstance, code: string): Promise<string> {
+    const { rows } = await app.dbPool.query<{ family_id: string }>(
+      `SELECT f.family_id FROM refresh_tokens f
+       JOIN authorization_codes c ON c.id = f.authorization_code_id
+       WHERE c.code = $1`,
+      [code]
+    );
+    if (rows[0] === undefined) throw new Error('the code started no family');
+    return rows[0].family_id;
   }
 
   it.each<MintPath>(['consent skip', 'consent screen'])(
@@ -243,13 +306,25 @@ describe('authorization code replay revokes its refresh family (#627, real conta
 
       const first = await exchange(app, code, verifier);
       expect(first.statusCode).toBe(200);
-      const issued = first.json() as { refresh_token?: string };
+      const issued = first.json() as { access_token: string; refresh_token?: string };
       if (issued.refresh_token === undefined)
         throw new Error('the exchange issued no refresh token');
       // One rotation, so the family has a token the code row does not name.
       const rotated = await refresh(app, issued.refresh_token);
       expect(rotated.statusCode).toBe(200);
-      const latest = (rotated.json() as { refresh_token: string }).refresh_token;
+      const { access_token: rotatedAccessToken, refresh_token: latest } = rotated.json() as {
+        access_token: string;
+        refresh_token: string;
+      };
+      expect(await accessTokenWorks(app, issued.access_token)).toEqual({
+        userinfo: 200,
+        active: true,
+      });
+      expect(await accessTokenWorks(app, rotatedAccessToken)).toEqual({
+        userinfo: 200,
+        active: true,
+      });
+      const familyId = await familyIdOf(app, code);
 
       const replay = await exchange(app, code, verifier);
 
@@ -268,7 +343,26 @@ describe('authorization code replay revokes its refresh family (#627, real conta
         revoked_reason: 'code_replay',
         authorization_code_id: null,
       });
-      expect(await tokenFailureReasons(app)).toEqual(['code_replay']);
+      expect(await tokenFailures(app)).toEqual([
+        {
+          grantType: 'authorization_code',
+          error: 'invalid_grant',
+          reason: 'code_replay',
+          refreshFamilyId: familyId,
+          revokedRefreshCount: 1,
+        },
+      ]);
+
+      // Every access token issued from the code is revoked (OAuth 2.1 §4.1.3
+      // "all access tokens"): the redemption's and the rotation's.
+      expect(await accessTokenWorks(app, issued.access_token)).toEqual({
+        userinfo: 401,
+        active: false,
+      });
+      expect(await accessTokenWorks(app, rotatedAccessToken)).toEqual({
+        userinfo: 401,
+        active: false,
+      });
 
       // The client's refresh token is dead from now on.
       const afterwards = await refresh(app, latest);
@@ -300,8 +394,50 @@ describe('authorization code replay revokes its refresh family (#627, real conta
       expect.objectContaining({ revoked: true, revoked_reason: 'code_replay' }),
     ]);
     expect(await tokenFailureReasons(app)).toEqual(['code_replay']);
-    const refreshToken = (winner.json() as { refresh_token: string }).refresh_token;
+    const { access_token: accessToken, refresh_token: refreshToken } = winner.json() as {
+      access_token: string;
+      refresh_token: string;
+    };
     expect((await refresh(app, refreshToken)).statusCode).toBe(400);
+    // The loser found the access token the winner recorded before it committed.
+    expect(await accessTokenWorks(app, accessToken)).toEqual({ userinfo: 401, active: false });
+  }, 60_000);
+
+  it('a replayed refresh token revokes every access token issued in its family (RFC 9700 §4.14.2)', async () => {
+    const app = server();
+    const cookie = await signedInUser(app, 'consent skip');
+    const { code, verifier } = await authorize(app, cookie, 'consent skip');
+    const first = (await exchange(app, code, verifier)).json() as {
+      access_token: string;
+      refresh_token: string;
+    };
+    const rotated = await refresh(app, first.refresh_token);
+    expect(rotated.statusCode).toBe(200);
+    const { access_token: rotatedAccessToken } = rotated.json() as { access_token: string };
+    const familyId = await familyIdOf(app, code);
+
+    // The rotated-away refresh token again: a copy someone else holds.
+    const replay = await refresh(app, first.refresh_token);
+
+    expect(replay.statusCode).toBe(400);
+    expect(replay.json()).toMatchObject({ error: 'invalid_grant' });
+    expect(await tokenFailures(app)).toEqual([
+      {
+        grantType: 'refresh_token',
+        error: 'invalid_grant',
+        reason: 'refresh_replay',
+        refreshFamilyId: familyId,
+        revokedRefreshCount: 1,
+      },
+    ]);
+    expect(await accessTokenWorks(app, first.access_token)).toEqual({
+      userinfo: 401,
+      active: false,
+    });
+    expect(await accessTokenWorks(app, rotatedAccessToken)).toEqual({
+      userinfo: 401,
+      active: false,
+    });
   }, 60_000);
 
   it('a consent form posted with a challenge the mint refuses answers 400 and writes no code', async () => {
@@ -386,7 +522,10 @@ describe('authorization code replay revokes its refresh family (#627, real conta
       const missing = await exchange(app, code, verifier, extra);
 
       expect(missing.statusCode).toBe(400);
-      expect(missing.json()).toMatchObject({ error: 'invalid_grant' });
+      expect(missing.json()).toEqual({
+        error: 'invalid_grant',
+        error_description: 'redirect_uri is required for this code',
+      });
       expect(await tokenFailureReasons(app)).toEqual(['redirect_uri_missing']);
       // Refused before the code is spent: the client can still redeem it.
       const redeemed = await exchange(app, code, verifier);

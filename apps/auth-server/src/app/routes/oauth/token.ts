@@ -39,6 +39,7 @@ import {
   resolveAccessTokenLifespanSeconds,
   resolveEnvironmentPolicy,
 } from '../../helpers/environment-policy';
+import { recordGrantAccessToken, revokeGrantAccessTokens } from '../../helpers/grant-access-tokens';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import {
   idJagCredentialProviderType,
@@ -59,7 +60,12 @@ import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
 import { inactiveSubjectTokenError } from '../../helpers/token-subject';
-import { emitUserEvent, failureData, oauthErrorCode } from '../../helpers/user-events';
+import {
+  emitUserEvent,
+  type EventTransaction,
+  failureData,
+  oauthErrorCode,
+} from '../../helpers/user-events';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
@@ -572,6 +578,12 @@ function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: Environm
   });
 }
 
+/** What a replay's `token.request_failed` adds: the family it revoked, and how much of it. */
+interface ReplayRevocation {
+  readonly refreshFamilyId?: string;
+  readonly revokedRefreshCount: number;
+}
+
 /**
  * Record a refused token request (`token.request_failed`) for a grant
  * handler: the dispatch's realm, the authenticated client as the actor, the
@@ -580,23 +592,42 @@ function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: Environm
  * @param error - the OAuth `error` code the response carries
  * @param reason - why, as a `snake_case` code
  * @param userId - the end user the grant is for, when known
+ * @param options - `tx`, the transaction of the change the refusal made (a
+ *   replay's revocation), so the event commits with it (ADR-019 Decision 8);
+ *   `revocation`, what that change revoked
  */
 async function emitRequestFailed(
   ctx: HandlerContext<{ grant_type: string }>,
   error: string,
   reason: string,
-  userId: string | null = null
+  userId: string | null = null,
+  options: { tx?: EventTransaction; revocation?: ReplayRevocation } = {}
 ): Promise<void> {
   await emitUserEvent(
     ctx.request,
     TOKEN_REQUEST_FAILED,
-    { grantType: ctx.body.grant_type, error, reason },
-    { realmId: ctx.realmId, userId, clientId: ctx.client.clientId, actor: 'client' }
+    { grantType: ctx.body.grant_type, error, reason, ...options.revocation },
+    {
+      ...(options.tx === undefined ? {} : { tx: options.tx }),
+      realmId: ctx.realmId,
+      userId,
+      clientId: ctx.client.clientId,
+      actor: 'client',
+    }
   );
 }
 
 /** What a caller is told about an authorization code it cannot redeem. */
 const UNUSABLE_CODE = 'Invalid or expired authorization code';
+
+/**
+ * What a caller is told when it leaves out `redirect_uri` for a code that
+ * needs it. Only a client that passed authentication and holds a code it was
+ * issued gets this far, so the answer tells it nothing about the code it did
+ * not already know, and tells a client written for OAuth 2.1 alone what to
+ * send.
+ */
+const REDIRECT_URI_REQUIRED = 'redirect_uri is required for this code';
 
 /** What a caller is told about a refresh token it cannot use. */
 const UNUSABLE_REFRESH_TOKEN = 'Invalid or expired refresh token';
@@ -613,7 +644,7 @@ const UNUSABLE_REFRESH_TOKEN = 'Invalid or expired refresh token';
  *
  * - A redemption that loses is the second redemption of its code, a replay:
  *   once the losing transaction has rolled back, {@link rejectCodeReplay}
- *   revokes the family the winner started and answers `invalid_grant`.
+ *   revokes what the winner issued and answers `invalid_grant`.
  * - A refusal that burns the grant (a disabled user, the agent-mode cap) finds
  *   it burned already and gives its own answer, `invalid_grant` or
  *   `invalid_scope`.
@@ -635,26 +666,46 @@ async function spendGrant(spend: () => Promise<unknown>): Promise<boolean> {
 }
 
 /**
- * Deny a second redemption of an authorization code and revoke the
- * refresh-token family the first one started (OAuth 2.1 §4.1.3 "SHOULD revoke
- * (when possible) all access tokens and refresh tokens previously issued based
- * on that authorization code"; ADR-017 Decision 10).
+ * Deny a second redemption of an authorization code and revoke what the first
+ * one issued (OAuth 2.1 §4.1.3 "SHOULD revoke (when possible) all access
+ * tokens and refresh tokens previously issued based on that authorization
+ * code"; ADR-017 Decision 10): the refresh family it started, rotations
+ * included, and every access token issued from the code or in that family
+ * that has not expired.
  *
  * Reached two ways: the code was already spent when read, or a concurrent
  * redemption spent it between the read and this request's compare-and-set.
  * Both are the same event. A code a logout or a consent revocation spent
- * started no family, so nothing is revoked for it. Access tokens the first
- * redemption issued are self-contained JWTs and stay valid until they expire.
+ * issued nothing, so nothing is revoked for it.
+ *
+ * The family's revocation and the `token.request_failed` event commit in one
+ * transaction (ADR-019 Decision 8). The access tokens go on the denylist, in
+ * Redis, after that commit.
  */
 async function rejectCodeReplay(
   ctx: HandlerContext<TokenExchangeAuthCodeBody>,
   authCode: { id: string; userId: string }
 ): Promise<never> {
-  await ctx.fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode(
-    authCode.id,
-    'code_replay'
-  );
-  await emitRequestFailed(ctx, 'invalid_grant', 'code_replay', authCode.userId);
+  const { fastify } = ctx;
+  const family = await fastify.db.transaction(async (tx) => {
+    const revoked = await fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode(
+      authCode.id,
+      'code_replay',
+      tx
+    );
+    await emitRequestFailed(ctx, 'invalid_grant', 'code_replay', authCode.userId, {
+      tx,
+      revocation: {
+        ...(revoked.familyId === null ? {} : { refreshFamilyId: revoked.familyId }),
+        revokedRefreshCount: revoked.revokedCount,
+      },
+    });
+    return revoked.familyId;
+  });
+  await revokeGrantAccessTokens(fastify, {
+    authorizationCodeId: authCode.id,
+    refreshFamilyId: family,
+  });
   throw new InvalidGrantError(UNUSABLE_CODE);
 }
 
@@ -700,7 +751,7 @@ async function handleAuthorizationCode(
   // port the client actually listened on, so there is nothing to relax here.
   if (!body.redirect_uri) {
     await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_missing', authCode.userId);
-    throw new InvalidGrantError('Invalid or expired authorization code');
+    throw new InvalidGrantError(REDIRECT_URI_REQUIRED);
   }
   if (body.redirect_uri !== authCode.redirectUri) {
     await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_mismatch', authCode.userId);
@@ -932,6 +983,12 @@ async function handleAuthorizationCode(
       ...dpopConfirmation(ctx),
       expiresInOverride: accessTokenExpiresIn,
     });
+    // Recorded against the code and the family it starts, before the commit,
+    // so a second redemption of the code can revoke it (ADR-017 Decision 10).
+    await recordGrantAccessToken(fastify, accessToken, {
+      authorizationCodeId: authCode.id,
+      refreshFamilyId: refresh?.familyId ?? null,
+    });
 
     // OIDC Core §3.1.3.3: when the granted scope includes `openid`, the token
     // response also carries an ID token asserting the end-user's authentication
@@ -1112,20 +1169,34 @@ async function handleClientCredentials(
  *
  * RFC 9700 §2.2.2 / OAuth 2.1 §4.3.1: presenting a refresh token that is no
  * longer live means either the client or an attacker holds a copy, so every
- * token descended from the same grant is revoked. Reached two ways — the token
- * was already revoked when read, or a concurrent request rotated it between
- * the read and this request's compare-and-set — and both are the same event.
+ * token descended from the same grant is revoked: the family's refresh tokens
+ * and every access token issued in it that has not expired. Reached two ways —
+ * the token was already revoked when read, or a concurrent request rotated it
+ * between the read and this request's compare-and-set — and both are the same
+ * event.
+ *
+ * The family's revocation and the `token.request_failed` event commit in one
+ * transaction (ADR-019 Decision 8). The access tokens go on the denylist, in
+ * Redis, after that commit.
  */
 async function rejectRefreshTokenReplay(
   ctx: HandlerContext<TokenExchangeRefreshBody>,
   storedToken: { userId: string; familyId: string }
 ): Promise<never> {
-  await ctx.fastify.repositories.refreshTokens.revokeFamily(
-    storedToken.familyId,
-    'replay_detected'
-  );
-  await emitRequestFailed(ctx, 'invalid_grant', 'refresh_replay', storedToken.userId);
-  throw new InvalidGrantError('Invalid or expired refresh token');
+  const { fastify } = ctx;
+  await fastify.db.transaction(async (tx) => {
+    const revokedRefreshCount = await fastify.repositories.refreshTokens.revokeFamily(
+      storedToken.familyId,
+      'replay_detected',
+      tx
+    );
+    await emitRequestFailed(ctx, 'invalid_grant', 'refresh_replay', storedToken.userId, {
+      tx,
+      revocation: { refreshFamilyId: storedToken.familyId, revokedRefreshCount },
+    });
+  });
+  await revokeGrantAccessTokens(fastify, { refreshFamilyId: storedToken.familyId });
+  throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
 }
 
 /**
@@ -1385,6 +1456,9 @@ async function handleRefreshToken(
       ...dpopConfirmation(ctx),
       expiresInOverride: accessTokenExpiresIn,
     });
+    // Recorded against the family before the commit, so a replay of its code
+    // or of one of its refresh tokens can revoke it (ADR-017 Decision 10).
+    await recordGrantAccessToken(fastify, signed, { refreshFamilyId: storedToken.familyId });
     await emitUserEvent(
       request,
       TOKEN_ISSUED,

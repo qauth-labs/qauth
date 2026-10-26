@@ -29,6 +29,13 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+// The access-token records of a grant (#627) live in Redis; their own suite
+// covers them. Here: what the route asks of them, and when.
+vi.mock('../../helpers/grant-access-tokens', () => ({
+  recordGrantAccessToken: vi.fn(async () => undefined),
+  revokeGrantAccessTokens: vi.fn(async () => 0),
+}));
+
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
@@ -100,11 +107,14 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
 
 import { createFakeSessionService } from '../../../testing/browser-sessions';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
+import { recordGrantAccessToken, revokeGrantAccessTokens } from '../../helpers/grant-access-tokens';
 import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
 import { emitUserEvent, userEventFor } from '../../helpers/user-events';
 import tokenRoute from './token';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+const recordGrantAccessTokenMock = vi.mocked(recordGrantAccessToken);
+const revokeGrantAccessTokensMock = vi.mocked(revokeGrantAccessTokens);
 
 /** The realm every request of this file reaches the route in (#487). */
 const REALM = testRealm({ id: 'realm-1', name: 'default' });
@@ -119,6 +129,8 @@ function emittedData(type: string): unknown[] {
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
+  recordGrantAccessTokenMock.mockClear();
+  revokeGrantAccessTokensMock.mockClear();
 });
 
 afterEach(() => {
@@ -214,7 +226,9 @@ function createFastifyStub() {
         // request won the race, undefined when the token was already rotated.
         revokeIfActive: vi.fn().mockResolvedValue({ id: 'rotated-row' }),
         revokeFamily: vi.fn().mockResolvedValue(0),
-        revokeFamilyByAuthorizationCode: vi.fn().mockResolvedValue(0),
+        revokeFamilyByAuthorizationCode: vi
+          .fn()
+          .mockResolvedValue({ familyId: null, revokedCount: 0 }),
       },
       oauthConsents: {
         // Deny-by-default: no stored consent means no refresh token on the
@@ -2009,6 +2023,9 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   });
 
   describe('a second redemption of a code (OAuth 2.1 draft-16 §4.1.3, RFC 6749 §4.1.2, RFC 9700 §4.2.4)', () => {
+    /** The refresh family the first redemption started. */
+    const CODE_FAMILY_ID = '0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42';
+
     /** The authorization-code stub, with the code read as spent a second ago and `fields` over it. */
     function setupSpentCode(fields: Record<string, unknown> = {}) {
       const stub = setupAuthCodeStub();
@@ -2020,26 +2037,90 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     it('denies a replayed code with invalid_grant and revokes the refresh family it started', async () => {
       const { fastify, ctx, authCode } = setupSpentCode();
+      const tx = { tx: 'replay' };
+      const steps: string[] = [];
+      (fastify.db.transaction as unknown as Mock).mockImplementation(
+        async (cb: (tx: unknown) => Promise<unknown>) => {
+          steps.push('begin');
+          const result = await cb(tx);
+          steps.push('commit');
+          return result;
+        }
+      );
+      (
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode as unknown as Mock
+      ).mockImplementation(async () => {
+        steps.push('revoke family');
+        return { familyId: CODE_FAMILY_ID, revokedCount: 2 };
+      });
+      revokeGrantAccessTokensMock.mockImplementationOnce(async () => {
+        steps.push('revoke access tokens');
+        return 1;
+      });
       await tokenRoute(fastify);
       const handler = ctx.handler;
       if (!handler) throw new Error('Handler missing');
 
       await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
-      expect(
-        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
-      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
       // Nothing is issued and the code is not spent again.
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
       expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
-      expect(fastify.db.transaction).not.toHaveBeenCalled();
+      // The family's revocation and its event commit together (ADR-019
+      // Decision 8); the access tokens of the code and of the family go on
+      // the denylist after that commit.
+      expect(
+        fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay', tx);
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
         TOKEN_REQUEST_FAILED,
-        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_replay' },
-        expect.objectContaining({ userId: 'user-uuid-1', clientId: 'test-client-1' })
+        {
+          grantType: 'authorization_code',
+          error: 'invalid_grant',
+          reason: 'code_replay',
+          refreshFamilyId: CODE_FAMILY_ID,
+          revokedRefreshCount: 2,
+        },
+        expect.objectContaining({ tx, userId: 'user-uuid-1', clientId: 'test-client-1' })
       );
+      expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
+        authorizationCodeId: authCode.id,
+        refreshFamilyId: CODE_FAMILY_ID,
+      });
+      expect(steps).toEqual(['begin', 'revoke family', 'commit', 'revoke access tokens']);
       expect(emittedData(TOKEN_ISSUED)).toEqual([]);
+    });
+
+    it('revokes the access token of a code that started no refresh family', async () => {
+      const { fastify, ctx, authCode } = setupSpentCode();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
+        authorizationCodeId: authCode.id,
+        refreshFamilyId: null,
+      });
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        {
+          grantType: 'authorization_code',
+          error: 'invalid_grant',
+          reason: 'code_replay',
+          revokedRefreshCount: 0,
+        },
+      ]);
+    });
+
+    it('still answers invalid_grant when the access tokens cannot be revoked', async () => {
+      const { fastify, ctx } = setupSpentCode();
+      revokeGrantAccessTokensMock.mockResolvedValueOnce(undefined);
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
     });
 
     it('treats a replay past the code’s expiry as a replay too', async () => {
@@ -2051,7 +2132,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
       expect(
         fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
-      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay', expect.anything());
     });
 
     // OAuth 2.1 draft-16 §7.5.3: whoever holds the code but not the client's
@@ -2165,7 +2246,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
       expect(
         fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
-      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay', expect.anything());
       expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
     });
 
@@ -2176,26 +2257,28 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       // throws NotFoundError. No second token for the same code; the family
       // the winner started is revoked once the losing transaction is over.
       const { fastify, ctx, authCode } = setupAuthCodeStub();
-      let open = false;
+      let transactions = 0;
+      let open: number | undefined;
       (fastify.db.transaction as unknown as Mock).mockImplementation(
         async (cb: (tx: unknown) => Promise<unknown>) => {
-          open = true;
+          transactions += 1;
+          open = transactions;
           try {
-            return await cb({ tx: true });
+            return await cb({ tx: transactions });
           } finally {
-            open = false;
+            open = undefined;
           }
         }
       );
       (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
         new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
       );
-      const revokedInTransaction: boolean[] = [];
+      const revokedInTransaction: (number | undefined)[] = [];
       (
         fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode as unknown as Mock
       ).mockImplementation(async () => {
         revokedInTransaction.push(open);
-        return 2;
+        return { familyId: CODE_FAMILY_ID, revokedCount: 2 };
       });
       await tokenRoute(fastify);
       const handler = ctx.handler;
@@ -2210,12 +2293,23 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
       expect(
         fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
-      ).toHaveBeenCalledWith(authCode.id, 'code_replay');
-      // After the losing transaction, so the winner's family is committed.
-      expect(revokedInTransaction).toEqual([false]);
+      ).toHaveBeenCalledWith(authCode.id, 'code_replay', { tx: 2 });
+      // In a transaction of its own after the losing one, so the winner's
+      // family is committed.
+      expect(revokedInTransaction).toEqual([2]);
+      expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
+        authorizationCodeId: authCode.id,
+        refreshFamilyId: CODE_FAMILY_ID,
+      });
       expect(emittedData(TOKEN_ISSUED)).toEqual([]);
       expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
-        { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_replay' },
+        {
+          grantType: 'authorization_code',
+          error: 'invalid_grant',
+          reason: 'code_replay',
+          refreshFamilyId: CODE_FAMILY_ID,
+          revokedRefreshCount: 2,
+        },
       ]);
     });
 
@@ -2249,6 +2343,56 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     );
   });
 
+  // ADR-017 Decision 10: a second redemption revokes the access token too, so
+  // it is recorded against the code and the family it starts, before the
+  // redemption commits.
+  it('records the access token against the code and the family it starts, inside the redemption', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    let open = false;
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        open = true;
+        try {
+          return await cb({ tx: 'redemption' });
+        } finally {
+          open = false;
+        }
+      }
+    );
+    const recordedInTransaction: boolean[] = [];
+    recordGrantAccessTokenMock.mockImplementationOnce(async () => {
+      recordedInTransaction.push(open);
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const [family] = (fastify.repositories.refreshTokens.create as unknown as Mock).mock.calls[0];
+    expect(recordGrantAccessTokenMock).toHaveBeenCalledWith(fastify, 'signed.jwt.token', {
+      authorizationCodeId: authCode.id,
+      refreshFamilyId: (family as { familyId: string }).familyId,
+    });
+    expect(recordedInTransaction).toEqual([true]);
+  });
+
+  it('records the access token against the code alone when no refresh family starts', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(recordGrantAccessTokenMock).toHaveBeenCalledWith(fastify, 'signed.jwt.token', {
+      authorizationCodeId: authCode.id,
+      refreshFamilyId: null,
+    });
+  });
+
   // ADR-017 Decision 10: whether the parameter is needed depends on the code,
   // so a missing value is a mismatch (RFC 6749 §5.2 invalid_grant), not a
   // malformed request.
@@ -2263,7 +2407,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       const handler = ctx.handler;
       if (!handler) throw new Error('Handler missing');
 
-      await expect(handler(baseRequest(body), createReply())).rejects.toThrow(InvalidGrantError);
+      const refused = await handler(baseRequest(body), createReply()).catch(
+        (error: unknown) => error
+      );
+      expect(refused).toBeInstanceOf(InvalidGrantError);
+      // Says what to send: a client written for OAuth 2.1 alone leaves the
+      // parameter out (the caller has already authenticated).
+      expect(refused).toMatchObject({ errorDescription: 'redirect_uri is required for this code' });
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
       expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
@@ -2758,6 +2908,42 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     ]);
   });
 
+  it('records the rotated access token against the family, inside the rotation', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+    let open = false;
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        open = true;
+        try {
+          return await cb({ tx: 'rotation' });
+        } finally {
+          open = false;
+        }
+      }
+    );
+    const recordedInTransaction: boolean[] = [];
+    recordGrantAccessTokenMock.mockImplementationOnce(async () => {
+      recordedInTransaction.push(open);
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('rotated.jwt.token');
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(refreshRequest(), createReply());
+
+    expect(recordGrantAccessTokenMock).toHaveBeenCalledWith(fastify, 'rotated.jwt.token', {
+      refreshFamilyId: storedToken.familyId,
+    });
+    expect(recordedInTransaction).toEqual([true]);
+  });
+
   it('signs inside the rotation transaction, before token.issued, so a signing failure records none', async () => {
     // As for a code: a token that cannot be signed rolls the rotation back,
     // so the presented refresh token stays live and no token.issued commits.
@@ -2970,11 +3156,32 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
 
-    // Family-wide revocation triggered with the correct family_id + reason.
+    // Family-wide revocation triggered with the correct family_id + reason,
+    // in the transaction of the event that records it (ADR-019 Decision 8).
+    const [[, , tx]] = (fastify.repositories.refreshTokens.revokeFamily as unknown as Mock).mock
+      .calls;
+    expect(tx).toBeDefined();
     expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
       storedToken.familyId,
-      'replay_detected'
+      'replay_detected',
+      tx
     );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: 'refresh_token',
+        error: 'invalid_grant',
+        reason: 'refresh_replay',
+        refreshFamilyId: storedToken.familyId,
+        revokedRefreshCount: 3,
+      },
+      expect.objectContaining({ tx })
+    );
+    // Every access token issued in the family goes on the denylist too.
+    expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
+      refreshFamilyId: storedToken.familyId,
+    });
     // Replay path must NOT mint a new token.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
@@ -3012,16 +3219,26 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
       storedToken.familyId,
-      'replay_detected'
+      'replay_detected',
+      expect.anything()
     );
     // The lost race is the replay it is: no token.issued, one refusal.
     expect(emittedData(TOKEN_ISSUED)).toEqual([]);
     expect(emitUserEventMock).toHaveBeenCalledWith(
       expect.anything(),
       TOKEN_REQUEST_FAILED,
-      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_replay' },
+      {
+        grantType: 'refresh_token',
+        error: 'invalid_grant',
+        reason: 'refresh_replay',
+        refreshFamilyId: storedToken.familyId,
+        revokedRefreshCount: 2,
+      },
       expect.objectContaining({ userId: storedToken.userId, clientId: 'confidential-client' })
     );
+    expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
+      refreshFamilyId: storedToken.familyId,
+    });
   });
 
   describe("the realm's sso_max_lifespan caps the family (ADR-019 Decision 3, #552)", () => {
@@ -3161,11 +3378,18 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledTimes(1);
       expect(setup.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
         REFRESH_FAMILY_ID,
-        'replay_detected'
+        'replay_detected',
+        expect.anything()
       );
       expect(setup.fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
       expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
-        { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_replay' },
+        {
+          grantType: 'refresh_token',
+          error: 'invalid_grant',
+          reason: 'refresh_replay',
+          refreshFamilyId: REFRESH_FAMILY_ID,
+          revokedRefreshCount: 0,
+        },
       ]);
     });
 

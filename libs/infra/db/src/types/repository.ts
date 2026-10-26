@@ -304,6 +304,14 @@ export interface EmailVerificationTokensRepository {
   deleteExpired(tx?: DbClient): Promise<EmailVerificationToken[]>;
 }
 
+/** What revoking the refresh family an authorization code started found and did. */
+export interface RefreshFamilyRevocation {
+  /** The family the code's redemption started; `null` when it started none. */
+  readonly familyId: string | null;
+  /** How many of the family's tokens this call revoked. */
+  readonly revokedCount: number;
+}
+
 /**
  * Refresh tokens repository interface
  */
@@ -369,14 +377,14 @@ export interface RefreshTokensRepository {
    * Triggered when a spent code is redeemed again (OAuth 2.1 §4.1.3).
    * Already-revoked rows keep their original `revokedReason`.
    *
-   * @returns Count of rows whose state was changed by this call; 0 when the
-   *   code started no family.
+   * @returns The family the code started (`null` when none) and the count of
+   *   rows whose state was changed by this call.
    */
   revokeFamilyByAuthorizationCode(
     authorizationCodeId: string,
     reason: string,
     tx?: DbClient
-  ): Promise<number>;
+  ): Promise<RefreshFamilyRevocation>;
   /**
    * Revoke all active tokens for a user
    * Useful for "logout all sessions" functionality

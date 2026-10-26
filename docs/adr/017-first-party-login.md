@@ -113,6 +113,20 @@
 > event of a registered type, in the transaction of the change it records. The audit rules of §11
 > hold for the event's `data`; the row fields it names map to the envelope (`ip_address` to
 > `request.ip`, `userId` to the subject). No rule changed.
+>
+> **Amended 2026-10-26** with #627, which builds Decision 10's replay revocation (F0). A second
+> redemption of a code is recorded as the registered type `token.request_failed` with the reason
+> `code_replay`, and the family it revoked in `refreshFamilyId` and `revokedRefreshCount`, in the
+> transaction of the revocation. `oauth.token.code_replay` predates the event contract of ADR-018
+> §3 and is not a type. The revocation also has a condition this record did not state: it happens
+> only for a second redemption that is otherwise a valid request (the code's client, its
+> `redirect_uri`, its PKCE verifier, its DPoP key and a `resource` inside its binding). OAuth 2.1
+> -16 §7.5.3 "Authorization Code Injection" says the server "SHOULD NOT revoke any issued tokens
+> when receiving a replayed authorization code that contains invalid parameters", so whoever holds a
+> code but not the client's credentials or verifier cannot end the client's tokens with it. A replay
+> that fails a check is refused for that check and revokes nothing. The revocation reaches the
+> access tokens issued from the code and in its family as well, through the `jti` denylist. Decision
+> 10 is edited in place.
 
 ## Context
 
@@ -1214,7 +1228,9 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
   on the code, so a missing value counts as a mismatch, not as a missing parameter
   (`invalid_request`).
 - Challenge codes live 60 s; browser codes keep `AUTHORIZATION_CODE_TTL_MS`. A second redemption of
-  any code is denied and revokes the family issued from it, audited as `oauth.token.code_replay`.
+  any code is denied. When it is otherwise a valid request (OAuth 2.1 -16 §7.5.3), it also revokes
+  the refresh family and the access tokens issued from the code, and is recorded as
+  `token.request_failed` with the reason `code_replay` (amended 2026-10-26).
 - Refresh-family lifetime (question 23, decided 2026-10-09). When a realm's `sso_max_lifespan` is
   set, it caps every refresh family in that realm. When it is unset, today's sliding
   `REFRESH_TOKEN_LIFESPAN` is unchanged. As of 2026-10-09 the column exists on `realms`, is

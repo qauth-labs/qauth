@@ -47,7 +47,7 @@ entities:
 actions:
   RefreshToken.revokeAllForUser:
     # internal: invoked by core.logout, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:313
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:326
     body:
       type: object
       required: [userId]

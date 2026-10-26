@@ -20,7 +20,7 @@ import {
   type StartedPostgres,
   startPostgresContainer,
 } from '@qauth-labs/shared-testing';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const MIGRATION_IDX = 41;
@@ -170,6 +170,96 @@ describe('migration 0041 — refresh family to authorization code link (seed-the
       [seeded.userId, seeded.clientId]
     );
   });
+
+  /** Wait until `count` sessions of the database are waiting on a lock. */
+  async function lockWaits(count: number): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const { rows } = await db().query<{ waiting: number }>(
+        `SELECT count(*)::int AS waiting FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock'`
+      );
+      if ((rows[0]?.waiting ?? 0) >= count) return;
+      if (Date.now() > deadline) throw new Error(`fewer than ${count} sessions wait on a lock`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // A redemption, on either release, spends its code in authorization_codes
+  // and then inserts its refresh token. Here the migration waits behind a
+  // transaction that holds refresh_tokens (a rotation in flight), and a
+  // redemption arrives while it waits. Had the migration taken refresh_tokens
+  // first and authorization_codes only for its foreign key, the two would wait
+  // on each other once the rotation committed, and PostgreSQL would abort one
+  // of them as a deadlock (40P01), the migration included.
+  it('does not deadlock with a redemption that arrives while it waits for refresh_tokens', async () => {
+    if (!container) throw new Error('no container');
+    const seeded = await seedGrant();
+    const {
+      rows: [code],
+    } = await db().query<{ id: string }>(
+      `INSERT INTO authorization_codes
+         (code, oauth_client_id, user_id, redirect_uri, code_challenge, expires_at)
+       VALUES ('code-2', $1, $2, 'https://app.example.com/cb', 'challenge', $3) RETURNING id`,
+      [seeded.clientId, seeded.userId, Date.now() + 60_000]
+    );
+    const rotation = new Client({ connectionString: container.connectionString });
+    const redemption = new Client({ connectionString: container.connectionString });
+    await rotation.connect();
+    await redemption.connect();
+    try {
+      await rotation.query('BEGIN');
+      await rotation.query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, expires_at, family_created_at)
+         VALUES (repeat('r', 64), $1, $2, 1, 1)`,
+        [seeded.userId, seeded.clientId]
+      );
+
+      const migrated = migrate();
+      await lockWaits(1);
+
+      // The previous release's redemption: spend the code, then store the
+      // refresh token it buys, in one transaction.
+      const redeemed = (async () => {
+        await redemption.query('BEGIN');
+        await redemption.query(
+          'UPDATE authorization_codes SET used = true, used_at = $2 WHERE id = $1 AND used = false',
+          [code.id, Date.now()]
+        );
+        await redemption.query(
+          `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, expires_at, family_created_at)
+           VALUES (repeat('s', 64), $1, $2, 1, 1)`,
+          [seeded.userId, seeded.clientId]
+        );
+        await redemption.query('COMMIT');
+      })();
+      await lockWaits(2);
+
+      await rotation.query('COMMIT');
+
+      const outcomes = await Promise.allSettled([migrated, redeemed]);
+      expect(
+        outcomes.map((outcome) =>
+          outcome.status === 'fulfilled'
+            ? 'committed'
+            : ((outcome.reason as { code?: string }).code ?? String(outcome.reason))
+        )
+      ).toEqual(['committed', 'committed']);
+    } finally {
+      await rotation.end();
+      await redemption.end();
+    }
+
+    const { rows: column } = await db().query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'refresh_tokens' AND column_name = 'authorization_code_id'`
+    );
+    expect(column).toHaveLength(1);
+    const { rows: stored } = await db().query(
+      `SELECT count(*)::int AS n FROM refresh_tokens WHERE token_hash IN (repeat('r', 64), repeat('s', 64))`
+    );
+    expect(stored).toEqual([{ n: 2 }]);
+  }, 60_000);
 
   it('clears the link when the code is deleted and keeps the token', async () => {
     const seeded = await seedGrant();

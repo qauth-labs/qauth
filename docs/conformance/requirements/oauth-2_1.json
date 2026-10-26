@@ -16,9 +16,9 @@
       "section": "4.1.3",
       "level": "SHOULD",
       "quote": "If a second valid token request is made with the same authorization code as a previously successful token request, the authorization server MUST deny the request and SHOULD revoke (when possible) all access tokens and refresh tokens previously issued based on that authorization code.",
-      "applies": "POST /oauth/token, authorization_code grant. The replay answers `invalid_grant` and revokes the refresh-token family the first redemption started, rotations included, found through `refresh_tokens.authorization_code_id`; it is recorded as `token.request_failed` with reason `code_replay`. A replay is recognised until the hourly purge job deletes the spent code, at the earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes). Access tokens are self-contained JWTs and stay valid until they expire: revoking them is not possible without a per-token denylist, which the \"(when possible)\" of the text allows.",
+      "applies": "POST /oauth/token, authorization_code grant. The replay answers `invalid_grant` and revokes the refresh-token family the first redemption started, rotations included, found through `refresh_tokens.authorization_code_id`; it is recorded as `token.request_failed` with reason `code_replay`, `refreshFamilyId` and `revokedRefreshCount`, in the transaction of the revocation. Every access token issued from the code or in that family is recorded at issuance (`jti` and `exp`, in Redis) and, after that transaction commits, put on the revocation denylist that userinfo, introspection, token exchange and every bearer-protected route consult. A replay is recognised until the hourly purge job deletes the spent code, at the earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes). \"(When possible)\": an access token issued while Redis could not record it, or a replay while Redis cannot be written, leaves that token valid until it expires; both are logged.",
       "status": "covered",
-      "evidenceMatch": "revokes the refresh family|family revoked"
+      "evidenceMatch": "revokes the refresh family|family revoked|revokes the access token"
     },
     {
       "id": "oauth-2_1-7_5_3-no-revoke-on-invalid-replay",

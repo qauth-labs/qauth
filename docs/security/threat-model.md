@@ -128,7 +128,9 @@ A break of any of these is a finding:
   is the default audience of a grant that named no `resource` for a client with
   no configured `audience`. A token whose `aud` names only other resource
   servers is refused.
-- A refresh token is single-use. Reusing one revokes its whole family.
+- A refresh token is single-use. Reusing one revokes its whole family, and
+  the access tokens issued in it. So does redeeming an authorization code a
+  second time (ADR-017 Decision 10).
 - An authorization code is issued only with the user's consent, or when an
   active consent already covers the requested scopes at every requested
   RFC 8707 resource.
@@ -137,7 +139,8 @@ A break of any of these is a finding:
 - Revoking a consent, a token, or a user's access stops new tokens being
   minted from it. Access tokens already issued are not reached: they stay valid
   until they expire unless revoked by value, at `/oauth/revoke` or as the token
-  presented to `/auth/logout` (current design, recorded in ADR-014).
+  presented to `/auth/logout` (current design, recorded in ADR-014), or by a
+  replay of the grant they came from.
 - A disabled user gets no tokens.
 - A client an operator suspended gets no authorization codes and cannot
   authenticate, whatever its owner's `enabled` says. Only an operator lifts a

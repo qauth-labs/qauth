@@ -7,9 +7,9 @@
       "section": "4.2.4",
       "level": "SHOULD",
       "quote": "Therefore, [RFC6749] further recommends that, when an attempt is made to redeem a code twice, the authorization server SHOULD revoke all tokens issued previously based on that code.",
-      "applies": "POST /oauth/token, authorization_code grant. A second redemption that is otherwise a valid request revokes the refresh-token family the first redemption started; access tokens, self-contained JWTs, stay valid until they expire.",
+      "applies": "POST /oauth/token, authorization_code grant. A second redemption that is otherwise a valid request revokes the refresh-token family the first redemption started, and puts every access token issued from the code or in that family on the revocation denylist (see the oauth-2_1 rows for when that is not possible).",
       "status": "covered",
-      "evidenceMatch": "revokes the refresh family|family revoked"
+      "evidenceMatch": "revokes the refresh family|family revoked|revokes the access token"
     }
   ]
 }

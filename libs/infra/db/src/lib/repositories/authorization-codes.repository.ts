@@ -120,9 +120,11 @@ export function createAuthorizationCodesRepository(
      * Invalidate all unredeemed codes for a user
      * Useful for security events (logout, password change, account compromise)
      *
-     * Expiry is not part of the predicate: a redemption checks it in
-     * `findByCode` only, so a code that expired right after that read is still
-     * spent by the `markUsed` that follows and must be caught here too.
+     * Expiry is not part of the predicate: a redemption checks it only on its
+     * read (the token endpoint's `handleAuthorizationCode`, through
+     * `findByCodeIncludingUsed`), so a code that expired right after that read
+     * is still spent by the `markUsed` that follows and must be caught here
+     * too.
      *
      * @param userId - User ID whose codes should be invalidated
      * @param tx - Optional transaction client

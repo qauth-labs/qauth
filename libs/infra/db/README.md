@@ -304,7 +304,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
   - `create()`, `findByCode()`, `findByCodeIncludingUsed()` (spent and expired codes too, so a second redemption is recognised as a replay), `markUsed()`
 - **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
-  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`, `revokeFamilyByAuthorizationCode(codeId, reason)` (the family whose first token carries `authorization_code_id`)
+  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`, `revokeFamilyByAuthorizationCode(codeId, reason, tx?)` (the family whose first token carries `authorization_code_id`; returns `{ familyId, revokedCount }`)
 - **`createEmailVerificationTokensRepository(db)`**: Verification tokens
   - `create()`, `findByTokenHash()`, `markUsed()`, `deleteExpired()`
 

@@ -2,7 +2,12 @@ import { NotFoundError } from '@qauth-labs/shared-errors';
 import { and, eq, gt, gte, inArray, lt, notExists, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
-import type { NewRefreshToken, RefreshToken, RefreshTokensRepository } from '../../types';
+import type {
+  NewRefreshToken,
+  RefreshFamilyRevocation,
+  RefreshToken,
+  RefreshTokensRepository,
+} from '../../types';
 import { DbClient } from '../db';
 import { refreshTokens } from '../schema/tokens';
 
@@ -257,23 +262,31 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      * @param authorizationCodeId - The code row's id
      * @param reason - Recorded as `revokedReason`
      * @param tx - Optional transaction client
-     * @returns Count of rows revoked by this call; 0 when the code started no
-     *   family (no stored consent, a previous release redeemed it) or the
-     *   family is already revoked.
+     * @returns The family the code started, `null` when it started none (no
+     *   stored consent, a previous release redeemed it), and the count of rows
+     *   revoked by this call: 0 also when the family is already revoked.
      */
     async revokeFamilyByAuthorizationCode(
       authorizationCodeId: string,
       reason: string,
       tx?: DbClient
-    ): Promise<number> {
+    ): Promise<RefreshFamilyRevocation> {
       const now = Date.now();
 
-      const run = async (invoker: DbClient): Promise<number> => {
+      const run = async (invoker: DbClient): Promise<RefreshFamilyRevocation> => {
         await lockUserTokens(
           invoker,
           'revoke',
           sql`select ${refreshTokens.userId} from ${refreshTokens} where ${refreshTokens.authorizationCodeId} = ${authorizationCodeId}`
         );
+
+        // Read under the lock, so a second replay still names the family it
+        // finds already revoked.
+        const [first] = await invoker
+          .select({ familyId: refreshTokens.familyId })
+          .from(refreshTokens)
+          .where(eq(refreshTokens.authorizationCodeId, authorizationCodeId))
+          .limit(1);
 
         const updated = await invoker
           .update(refreshTokens)
@@ -296,7 +309,7 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
           )
           .returning({ id: refreshTokens.id });
 
-        return updated.length;
+        return { familyId: first?.familyId ?? null, revokedCount: updated.length };
       };
 
       return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));

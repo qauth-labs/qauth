@@ -7,9 +7,9 @@
       "section": "4.1.2",
       "level": "MUST",
       "quote": "If an authorization code is used more than once, the authorization server MUST deny the request and SHOULD revoke (when possible) all tokens previously issued based on that authorization code.",
-      "applies": "POST /oauth/token, authorization_code grant. The MUST half: a spent code answers `invalid_grant`. The SHOULD half: a replay that is otherwise a valid request revokes the refresh-token family the first redemption started (see the oauth-2_1 rows for the conditions and for access tokens).",
+      "applies": "POST /oauth/token, authorization_code grant. The MUST half: a spent code answers `invalid_grant`. The SHOULD half: a replay that is otherwise a valid request revokes the refresh-token family the first redemption started and the access tokens issued from the code or in that family (see the oauth-2_1 rows for the conditions and for when an access token cannot be revoked).",
       "status": "covered",
-      "evidenceMatch": "revokes the refresh family|family revoked"
+      "evidenceMatch": "revokes the refresh family|family revoked|revokes the access token"
     }
   ]
 }
