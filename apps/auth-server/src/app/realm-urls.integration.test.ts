@@ -9,14 +9,19 @@ import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
+  CookieJar,
+  decodeHtmlEntities,
   decodeJwtClaims,
   E2E_PASSWORD,
   E2E_REALM_NAME,
   type E2eInfrastructure,
+  extractCsrfToken,
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  registerPasswordAccount,
   resetE2eState,
+  signInWithPassword,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
 import type { RealmRow } from './helpers/request-realm';
@@ -47,6 +52,10 @@ const UNTRUSTED_PEER = '192.0.2.7';
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const REDIRECT_URI = 'https://client.example.com/callback';
 const APP_CLIENT_ID = 'urls-app';
+/** A client the user is asked to consent to: not operator-provisioned. */
+const CONSENT_CLIENT_ID = 'urls-consent';
+/** An endpoint host of the default realm (DEFAULT_REALM_ENDPOINT_HOSTS). */
+const ENDPOINT_HOST = 'auth-internal.example.com';
 const MACHINE_CLIENT_ID = 'urls-machine';
 const MACHINE_SECRET = 'machine-client-secret-of-sufficient-length-42';
 
@@ -314,6 +323,41 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     return response.json<Record<string, unknown>>();
   }
 
+  async function revoke(
+    app: FastifyInstance,
+    host: string,
+    clientId: string,
+    token: string
+  ): Promise<LightMyRequestResponse> {
+    return app.inject({
+      method: 'POST',
+      url: '/oauth/revoke',
+      headers: { ...FORM, host },
+      payload: new URLSearchParams({
+        token,
+        token_type_hint: 'access_token',
+        client_id: clientId,
+        client_secret: MACHINE_SECRET,
+      }).toString(),
+    });
+  }
+
+  /** A public client that is not operator-provisioned, so the user is asked to consent. */
+  async function seedConsentClient(app: FastifyInstance, realm: RealmRow): Promise<void> {
+    await app.repositories.oauthClients.create({
+      realmId: realm.id,
+      clientId: CONSENT_CLIENT_ID,
+      clientSecretHash: 'unused-public-client',
+      tokenEndpointAuthMethod: 'none',
+      name: 'URL test consent app',
+      redirectUris: [REDIRECT_URI],
+      scopes: ['openid'],
+      grantTypes: ['authorization_code'],
+      enabled: true,
+      requirePkce: true,
+    });
+  }
+
   async function dpopClientCredentials(
     app: FastifyInstance,
     headers: Record<string, string>,
@@ -474,12 +518,21 @@ describe('every absolute URL comes from the realm row (#490)', () => {
   it('keeps working with a JWT_ISSUER that ends with a slash: discovery drops it, the token pin keeps it', async () => {
     const { app, realmA } = await boot({ JWT_ISSUER: `${ISSUER_A}/` });
     await seedIntrospectingClient(app, realmA, 'urls-a');
+    await seedAppClient(app, realmA);
 
     const document = (
       await discovery(app, '/.well-known/openid-configuration', { host: HOST_A })
     ).json<Record<string, unknown>>();
     expect(document['issuer']).toBe(ISSUER_A);
     expect(document['token_endpoint']).toBe(`${ISSUER_A}/oauth/token`);
+
+    // RFC 9207 §2.4: the `iss` of an authorization response is the discovery
+    // `issuer`, byte for byte, so a client's simple string comparison holds.
+    const authorize = await silentAuthorize(app, { host: HOST_A });
+    expect(authorize.statusCode).toBe(302);
+    expect(new URL(authorize.headers['location'] as string).searchParams.get('iss')).toBe(
+      document['issuer']
+    );
 
     // Tokens still carry JWT_ISSUER as written (until #491), and the realm's
     // introspection pin accepts them.
@@ -522,6 +575,163 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     const quiet: Record<string, unknown>[] = [];
     await boot({}, quiet);
     expect(quiet.filter((line) => line['variable'] === 'EMAIL_BASE_URL')).toEqual([]);
+
+    // Optional since #490: unset (blank, as `${EMAIL_BASE_URL:-}` in compose
+    // expands to), the server boots, warns about nothing and links mail to
+    // the issuer.
+    const unset: Record<string, unknown>[] = [];
+    const { app: withoutBase } = await boot({ EMAIL_BASE_URL: '' }, unset);
+    expect(unset.filter((line) => line['variable'] === 'EMAIL_BASE_URL')).toEqual([]);
+    expect(
+      await registrationMailLink(withoutBase, 'unset@example.com', { host: HOST_A }, UNTRUSTED_PEER)
+    ).toBe(ISSUER_A);
+  }, 180_000);
+
+  it('lets a spoofed X-Forwarded-* from an untrusted peer change no consent iss', async () => {
+    const { app, realmA } = await boot();
+    await seedConsentClient(app, realmA);
+    const email = 'consent-spoof@example.com';
+    await registerPasswordAccount(app, email);
+    const jar = await signInWithPassword(app, email);
+
+    for (const [index, spoofed] of SPOOFED_HEADER_SETS.entries()) {
+      const headers = { host: HOST_A, ...spoofed };
+      const send = (options: {
+        method: 'GET' | 'POST';
+        url: string;
+        headers?: Record<string, string>;
+        payload?: string;
+      }) =>
+        app.inject({
+          ...options,
+          headers: { ...headers, ...options.headers, cookie: jar.header() as string },
+          remoteAddress: UNTRUSTED_PEER,
+        });
+
+      const authorize = await send({
+        method: 'GET',
+        url: `/oauth/authorize?${new URLSearchParams({
+          response_type: 'code',
+          client_id: CONSENT_CLIENT_ID,
+          redirect_uri: REDIRECT_URI,
+          scope: 'openid',
+          state: `consent-${index}`,
+          code_challenge: pkcePair().challenge,
+          code_challenge_method: 'S256',
+        }).toString()}`,
+      });
+      expect(authorize.statusCode).toBe(302);
+      const consentUrl = authorize.headers['location'] as string;
+      expect(consentUrl.startsWith('/ui/consent?')).toBe(true);
+
+      const screen = await send({ method: 'GET', url: consentUrl });
+      expect(screen.statusCode).toBe(200);
+      jar.absorb(screen.headers['set-cookie']);
+      const hidden = Object.fromEntries(
+        [...screen.body.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)].map(
+          ([, name, value]) => [name, decodeHtmlEntities(value)]
+        )
+      );
+      // Both answers of the consent screen are authorization responses.
+      const decision = index % 2 === 0 ? 'deny' : 'allow';
+      const decided = await send({
+        method: 'POST',
+        url: '/ui/consent',
+        headers: FORM,
+        payload: new URLSearchParams({
+          ...hidden,
+          csrf_token: extractCsrfToken(screen.body),
+          decision,
+        }).toString(),
+      });
+      expect(decided.statusCode).toBe(302);
+      const location = new URL(decided.headers['location'] as string);
+      expect(`${location.origin}${location.pathname}`).toBe(REDIRECT_URI);
+      expect(location.searchParams.get('iss')).toBe(ISSUER_A);
+      if (decision === 'deny') {
+        expect(location.searchParams.get('error')).toBe('access_denied');
+      } else {
+        expect(location.searchParams.get('code')).not.toBeNull();
+      }
+
+      for (const response of [authorize, screen, decided]) {
+        expect(JSON.stringify(response.headers)).not.toContain('evil.example.net');
+        expect(response.body).not.toContain('evil.example.net');
+      }
+    }
+  }, 180_000);
+
+  it('builds no URL on an endpoint host: its answers name the issuer (DEFAULT_REALM_ENDPOINT_HOSTS)', async () => {
+    const { app, realmA } = await boot({ DEFAULT_REALM_ENDPOINT_HOSTS: ENDPOINT_HOST });
+    await seedMachineClient(app, realmA);
+    await seedAppClient(app, realmA);
+
+    // The documents are the same bytes as on the primary host.
+    for (const path of [
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/openid-configuration',
+    ]) {
+      const viaEndpoint = await discovery(app, path, { host: ENDPOINT_HOST });
+      expect(viaEndpoint.statusCode).toBe(200);
+      expect(viaEndpoint.body).toBe((await discovery(app, path, { host: HOST_A })).body);
+      expect(viaEndpoint.body).not.toContain(ENDPOINT_HOST);
+    }
+
+    // A DPoP proof names the published token endpoint, not the endpoint host's.
+    const key = await dpopKey();
+    const steered = await dpopClientCredentials(
+      app,
+      { host: ENDPOINT_HOST },
+      await proof(key, `https://${ENDPOINT_HOST}/oauth/token`)
+    );
+    expect(steered.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+    const honest = await dpopClientCredentials(
+      app,
+      { host: ENDPOINT_HOST },
+      await proof(key, `${ISSUER_A}/oauth/token`)
+    );
+    expect(honest.statusCode).toBe(200);
+
+    // A registration through the endpoint host links its mail to the issuer.
+    expect(
+      await registrationMailLink(
+        app,
+        'endpoint@example.com',
+        { host: ENDPOINT_HOST },
+        UNTRUSTED_PEER
+      )
+    ).toBe(ISSUER_A);
+
+    // The browser routes answer only on the primary host.
+    const authorize = await silentAuthorize(app, { host: ENDPOINT_HOST });
+    expect(authorize.statusCode).toBe(421);
+    expect(authorize.headers['location']).toBeUndefined();
+  }, 120_000);
+
+  it("documents, until #491, that realm B's own tokens carry realm A's issuer: A accepts them, B does not", async () => {
+    const { app, realmA, realmB } = await boot();
+    // The same client_id names a client in each realm (#487).
+    await seedIntrospectingClient(app, realmA, 'urls-client');
+    await seedIntrospectingClient(app, realmB, 'urls-client');
+
+    // Realm B mints it, but every token is still signed with JWT_ISSUER.
+    const tokenOfB = await clientCredentialsToken(app, HOST_B, 'urls-client');
+    expect(decodeJwtClaims(tokenOfB)['iss']).toBe(ISSUER_A);
+
+    // Realm B pins its own issuer, so it refuses its own token: introspection
+    // reports it inactive, and revocation answers 200 (RFC 7009 §2.2) but
+    // denylists nothing.
+    expect(await introspect(app, HOST_B, 'urls-client', tokenOfB)).toEqual({ active: false });
+    expect((await revoke(app, HOST_B, 'urls-client', tokenOfB)).statusCode).toBe(200);
+
+    // Realm A accepts it: the issuer is A's, and the client_id names a client
+    // of A. Introspection reports it active, so B's revocation did nothing...
+    expect(await introspect(app, HOST_A, 'urls-client', tokenOfB)).toMatchObject({
+      active: true,
+    });
+    // ...and A's revocation denylists it.
+    expect((await revoke(app, HOST_A, 'urls-client', tokenOfB)).statusCode).toBe(200);
+    expect(await introspect(app, HOST_A, 'urls-client', tokenOfB)).toEqual({ active: false });
   }, 120_000);
 
   it("builds a trusted proxy's request on the row of the realm it names, never on the header's text", async () => {

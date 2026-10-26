@@ -480,8 +480,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
   // For 'mock' provider, providerConfig is undefined (no config needed)
 
-  // EMAIL_BASE_URL is still required but no longer read (#490). Say so when it
-  // names another base than the default realm's issuer, where the links went.
+  // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
+  // set to another base than the default realm's issuer, where the links went.
   const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
   if (emailBaseUrlIgnored !== undefined) {
     fastify.log.warn(

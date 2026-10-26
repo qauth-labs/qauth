@@ -152,7 +152,9 @@ services:
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@qauth.dev}
       EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-QAuth}
-      EMAIL_BASE_URL: ${EMAIL_BASE_URL:-http://localhost:3000}
+      # Optional and not read since 0.2.0: mail links start at the realm's
+      # issuer. Blank when unset, which the schema reads as unset.
+      EMAIL_BASE_URL: ${EMAIL_BASE_URL:-}
       EMAIL_VERIFICATION_TOKEN_EXPIRY: ${EMAIL_VERIFICATION_TOKEN_EXPIRY:-86400}
       EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: ${EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND:-true}
       # Resend provider (only needed if EMAIL_PROVIDER=resend)

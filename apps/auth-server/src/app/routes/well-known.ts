@@ -5,7 +5,6 @@ import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
 import { JWKS_CACHE_CONTROL } from '../constants';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
-import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 import { realmIssuer } from '../helpers/realm-url';
 import { requestRealm } from '../helpers/request-realm';
 import { SsfNotFoundError } from '../helpers/ssf-errors';
@@ -32,29 +31,13 @@ const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
  *
  * All are unauthenticated and aggressively cacheable. They MUST NOT
  * be rate-limited as aggressively as auth endpoints: clients hit them
- * during bootstrap and cache responses locally. Each takes the global
- * ceiling, `RATE_LIMIT_MAX` requests per `RATE_LIMIT_WINDOW` seconds, stated
- * on the route (see `rateLimit` below).
+ * during bootstrap and cache responses locally.
  */
 export default async function (fastify: FastifyInstance) {
   // ADR-018 §5 (#477): the experimental items that are on, read once from the
   // configuration, which does not change while the server runs. Each adds the
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
-
-  // The global ceiling (`plugins/rate-limit.ts`), stated on each route of this
-  // file rather than inherited: the same numbers and the same key, the
-  // request's realm and client address, as every other limit of the app. A
-  // route with a `config.rateLimit` of its own is counted in a bucket of its
-  // own, so these documents and the routes on the global ceiling do not use
-  // up each other's budget. Stated here, the limit is also visible where the
-  // route is, to a reader and to CodeQL's `js/missing-rate-limiting`, which
-  // cannot follow the global registration into this plugin.
-  const rateLimit = {
-    max: env.RATE_LIMIT_MAX,
-    timeWindow: env.RATE_LIMIT_WINDOW * 1000,
-    keyGenerator: realmRateLimitKey,
-  };
 
   const buildInput = (request: FastifyRequest) => ({
     // ADR-019 Decision 1 (#490): the issuer of the realm the request's host
@@ -87,7 +70,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
-      config: { surface: 'meta', rateLimit },
+      config: { surface: 'meta' },
     },
     async (request, reply) => {
       reply
@@ -106,7 +89,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
-      config: { surface: 'meta', rateLimit },
+      config: { surface: 'meta' },
     },
     async (request, reply) => {
       reply
@@ -125,7 +108,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
-      config: { surface: 'meta', rateLimit },
+      config: { surface: 'meta' },
     },
     async (_request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.
@@ -161,7 +144,7 @@ export default async function (fastify: FastifyInstance) {
           // problem document (#513).
           'x-qauth-errors': [404],
         },
-        config: { surface: 'meta', rateLimit },
+        config: { surface: 'meta' },
       },
       async (request, reply) => {
         if (!realmRunsTransmitter(request)) throw new SsfNotFoundError();

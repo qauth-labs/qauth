@@ -52,13 +52,20 @@ export const LOG_REDACT_PATHS = [
  * Fastify's request log line carries `req.url` verbatim — path AND query
  * string — and pino's path-based `redact` works on object keys, so a bearer
  * secret that arrives as a query parameter would reach the sink in the clear
- * even though `LOG_REDACT_PATHS` names it. QAuth puts exactly one such secret
- * in a query string: the same-device Response Code the wallet's browser brings
- * back to `/ui/wallet-login/return?response_code=…` (OID4VP 1.0 §8.2 and
- * §14.2, #405, ADR-013). The code is single-use and short-lived, but a log
- * line outlives both, and a value that must "ensure only the receiver of the
- * redirect can fetch and process the Authorization Response" has no business
- * in a log shipper.
+ * even though `LOG_REDACT_PATHS` names it. QAuth puts two such secrets in a
+ * query string:
+ *
+ * - `response_code`: the same-device Response Code the wallet's browser brings
+ *   back to `/ui/wallet-login/return?response_code=…` (OID4VP 1.0 §8.2 and
+ *   §14.2, #405, ADR-013). The code is single-use and short-lived, but a log
+ *   line outlives both, and a value that must "ensure only the receiver of the
+ *   redirect can fetch and process the Authorization Response" has no
+ *   business in a log shipper.
+ * - `token`: the email verification token in the link a verification mail
+ *   carries, `<issuer>/auth/verify?token=…` (#490). Opening the link sends a
+ *   GET with the token in the query, logged by the request line and, while no
+ *   route serves that GET, by the unknown-route line; the token proves the
+ *   mailbox until it is used or expires.
  *
  * Names are matched case-sensitively, as query parameter names are, and in
  * every spelling the route would accept: Fastify's querystring parser
@@ -80,7 +87,7 @@ export const LOG_REDACT_PATHS = [
  * a 429 from `@fastify/rate-limit` is thrown from an `onRequest` hook BEFORE the
  * return route runs, so on that line the code is not even spent yet.
  */
-export const LOG_REDACTED_QUERY_PARAMETERS = ['response_code'] as const;
+export const LOG_REDACTED_QUERY_PARAMETERS = ['response_code', 'token'] as const;
 
 /**
  * Query parameter names this module knows how to spell tolerantly: the RFC

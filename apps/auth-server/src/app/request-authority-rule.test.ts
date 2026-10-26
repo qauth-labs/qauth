@@ -85,6 +85,9 @@ const REQUEST =
   'request: { host: string; hostname: string; port: number; protocol: string; url: string; ' +
   'headers: Record<string, string | undefined>; raw: { headers: Record<string, string | undefined> } }';
 
+/** The type import the samples that name a request type start with. */
+const FR = "import type { FastifyRequest } from 'fastify';\n";
+
 const SAMPLES: readonly Sample[] = [
   {
     kind: 'authority',
@@ -191,6 +194,104 @@ const SAMPLES: readonly Sample[] = [
     what: 'the Forwarded header',
     code: `export const read = (${REQUEST}) => request.headers.forwarded;\n`,
   },
+  // Wrappers that only retype or guard the value, looked through (#490 review).
+  {
+    kind: 'authority',
+    what: '(request as FastifyRequest).hostname',
+    code: `${FR}export const read = (request: unknown) => (request as FastifyRequest).hostname;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'any value retyped to a FastifyRequest',
+    code: `${FR}export const read = (value: unknown) => (value as FastifyRequest).hostname;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'a request under satisfies',
+    code: `${FR}export const read = (request: FastifyRequest) => (request satisfies FastifyRequest).protocol;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'an angle-bracket assertion to IncomingMessage',
+    code: "import type { IncomingMessage } from 'node:http';\nexport const read = (value: unknown) => (<IncomingMessage>value).headers.host;\n",
+  },
+  {
+    kind: 'authority',
+    what: 'request.headers!.host',
+    code: `export const read = (${REQUEST}) => request.headers!.host;\n`,
+  },
+  {
+    kind: 'authority',
+    what: '(request.headers as Record<string, string>).host',
+    code: `export const read = (${REQUEST}) => (request.headers as Record<string, string>).host;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'a Host header destructured from retyped headers',
+    code: `export function read(${REQUEST}) {\n  const { host } = request.headers as Record<string, string>;\n  return host;\n}\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'an optional chain to the Host header',
+    code: `export const read = (request?: { headers?: Record<string, string> }) => request?.headers?.host;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'request.headers[`host`]',
+    code: `export const read = (${REQUEST}) => request.headers[\`host\`];\n`,
+  },
+  // A request under another name, known by its declared type.
+  {
+    kind: 'authority',
+    what: 'a FastifyRequest parameter under another name',
+    code: `${FR}export const read = (incoming: FastifyRequest) => incoming.host;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'a FastifyRequest<…> parameter under another name, destructured',
+    code: `${FR}export function read(incoming: FastifyRequest<{ Body: { a: string } }>) {\n  const { hostname } = incoming;\n  return hostname;\n}\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'a variable declared as an IncomingMessage',
+    code: "import type { IncomingMessage } from 'node:http';\nexport function read(value: unknown) {\n  const message: IncomingMessage = value as never;\n  return message.headers['x-real-host'] ?? message.rawHeaders;\n}\n",
+  },
+  // What else carries the authority.
+  {
+    kind: 'authority',
+    what: 'request.raw.rawHeaders',
+    code: `${FR}export const read = (request: FastifyRequest) => request.raw.rawHeaders;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'request.raw.socket.encrypted',
+    code: `${FR}export const read = (request: FastifyRequest) => request.raw.socket.encrypted;\n`,
+  },
+  {
+    kind: 'authority',
+    what: 'req.connection.encrypted',
+    code: 'export const read = (req: { connection: { encrypted?: boolean } }) => req.connection.encrypted;\n',
+  },
+  {
+    kind: 'authority',
+    what: 'encrypted destructured from a socket',
+    code: `${FR}export function read(request: FastifyRequest) {\n  const { encrypted } = request.raw.socket as { encrypted?: boolean };\n  return encrypted;\n}\n`,
+  },
+  {
+    kind: 'allowed',
+    what: 'the host of a parameter declared as a URL',
+    code: 'export const read = (incoming: URL) => incoming.host;\n',
+  },
+  {
+    kind: 'allowed',
+    what: "the socket's remote port",
+    code: `${FR}export const read = (request: FastifyRequest) => request.raw.socket.remotePort;\n`,
+  },
+  {
+    kind: 'allowed',
+    what: 'a host of a value retyped to something that is no request',
+    code: 'export const read = (value: unknown) => (value as { host: string }).host;\n',
+  },
   {
     kind: 'allowed',
     what: 'the url destructured from a request',
@@ -289,7 +390,7 @@ beforeAll(() => {
       messages.get(`${index}|${diagnostic.filename}`)?.push(diagnostic.message);
     }
   });
-}, 60_000);
+}, 180_000);
 
 afterAll(() => {
   if (sandbox) rmSync(sandbox, { recursive: true, force: true });

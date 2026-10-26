@@ -49,7 +49,8 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
 - its protected header carries `typ: at+jwt` (RFC 9068 §2.1), whatever
   `requireAccessTokenTyp` is set to;
 - its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
-  accepts only the deployment's issuer, `JWT_ISSUER`;
+  accepts only the token issuer of the request's realm (ADR-019 Decision 1): `JWT_ISSUER` as
+  written for the realm whose issuer it is, and the realm's own issuer for any other realm;
 - it carries `sub`, `exp` and `jti`, with `sub` and `jti` non-empty strings;
 - its `aud` holds exactly one value, the family's audience. A token with several audiences is
   refused even when one of them is the family's;
@@ -61,11 +62,12 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
   suspended; any other token must name a user of that realm who is enabled;
 - it carries every scope the route lists.
 
-A family audience and the deployment's issuer read the same in every realm, and an access token
-names no realm, so the subject decides which realm a token belongs to. A user's token is therefore
-refused in every realm but the user's. A `client_id` names a client per realm, so a token of a
-`client_id` that names an enabled client in two realms passes in both, until each realm has its
-own issuer.
+A family audience reads the same in every realm. Every token still carries `JWT_ISSUER` until
+tokens are signed per realm (#491), so under the default issuer rule only the realm whose issuer
+that is admits a token, and any other realm refuses every token until then. The subject is checked
+in the request's realm as well, whatever issuer rule a family uses: a user's token is refused in
+every realm but the user's, and a `client_credentials` token in every realm whose client of that
+`client_id` is missing, disabled or suspended.
 
 A request that presents no token is refused with 401 `unauthorized` and a challenge that names no
 error, `WWW-Authenticate: Bearer realm="OAuth"`. A token that fails, its subject included, is

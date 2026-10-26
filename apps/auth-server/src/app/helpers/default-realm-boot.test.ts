@@ -20,6 +20,10 @@ import type { RealmRow } from './request-realm';
  */
 
 describe('emailBaseUrlWarning (#490)', () => {
+  it('says nothing when EMAIL_BASE_URL is unset, the key being optional', () => {
+    expect(emailBaseUrlWarning(undefined, 'https://auth.example.com')).toBe(undefined);
+  });
+
   it('says nothing when EMAIL_BASE_URL is the issuer, a trailing slash aside', () => {
     expect(emailBaseUrlWarning('https://auth.example.com', 'https://auth.example.com')).toBe(
       undefined

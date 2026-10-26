@@ -84,9 +84,14 @@ export const EMAIL_BASE_URL_IGNORED_WARNING =
  * The warning to log when `EMAIL_BASE_URL` names another base than the default
  * realm's issuer (#490): mailed links used to start at `EMAIL_BASE_URL` and
  * now start at the realm's issuer, so a deployment that set the two apart
- * sees its links move. Undefined when the two agree, a trailing slash aside.
+ * sees its links move. Undefined when `EMAIL_BASE_URL` is unset, the key being
+ * optional, or when the two agree, a trailing slash aside.
  */
-export function emailBaseUrlWarning(emailBaseUrl: string, jwtIssuer: string): string | undefined {
+export function emailBaseUrlWarning(
+  emailBaseUrl: string | undefined,
+  jwtIssuer: string
+): string | undefined {
+  if (emailBaseUrl === undefined) return undefined;
   return resolveIssuerIdentifier(emailBaseUrl) === resolveIssuerIdentifier(jwtIssuer)
     ? undefined
     : EMAIL_BASE_URL_IGNORED_WARNING;
