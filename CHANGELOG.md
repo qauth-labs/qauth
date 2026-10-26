@@ -604,6 +604,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs site's new **Reverse Proxy** page (`operate/reverse-proxy`) lists the
   rules proxy-neutrally, with the file layout. The ceremony app has not shipped
   yet, so the configuration is not yet a working front for browser sign-in.
+- **A Shared Signals Framework transmitter** ([#410], ADR-018 §3, ADR-019
+  Decisions 8 and 9). Experimental and off by default: with
+  `SSF_TRANSMITTER_ENABLED=true`, a realm whose new `ssf_transmitter_enabled`
+  column is on serves `/.well-known/ssf-configuration` (SSF 1.0 §7) and stream
+  management under `/ssf/` (§8.1): one push stream per receiver, its status,
+  subjects and verification. A realm whose own switch is off answers the `404`
+  of a route that does not exist. A receiver is an OAuth client using its own
+  `client_credentials` token with the `ssf:stream` scope and the realm's issuer
+  as audience; a token whose audience also names another realm's issuer, or
+  whose client no longer holds the scope, is refused. Security Event Tokens
+  come out of the event store through the delivery role (RFC 8935 push, retried
+  on its schedule; a `400` ends a delivery only with a known SET error); the
+  signer signs them with the realm's `event_signing` key, and the `jti` is the
+  event id on every retry. The SET keys are published apart, at
+  `/ssf/jwks.json`, the metadata's `jwks_uri`; the realm JWKS at
+  `/.well-known/jwks.json` holds only token keys, and so does the signer's
+  `getJwks` (`REALM_JWKS_PURPOSES` is `token_signing` alone), so a verifier
+  that skips the `typ` check cannot take a SET for an access token. A paused
+  stream's events are held without spending attempts and sent within 30
+  seconds of it being enabled: delivery routes gain a `hold` outcome for that.
+  `endpoint_url` is checked through the egress client at registration and at
+  every delivery; the receiver's `authorization_header` is stored encrypted
+  with the realm's `data_at_rest` key, and the delivery role's signer grant
+  gains `decrypt` for a `delivery:` context only, to send it. The delivery role
+  reads only the event subject of each stream subject, not the subject the
+  receiver sent.
+  `GET /ssf/status` adds `delivery_status`, the pending deliveries and the latest
+  failed attempt; a refused and an unreachable endpoint both read
+  `destination_unreachable` there. With `SSF_TRANSMITTER_ENABLED` off, SSF
+  deliveries left from when it was on hold back no event retention. Until the
+  event mapping of #540, verification events are the only SETs sent. The docs
+  site's new **SSF transmitter** page (`operate/ssf-transmitter`) walks through
+  a receiver and the verification event.
+- **Schema**: migration 0039 adds `ssf_streams`, `ssf_stream_subjects`,
+  `realms.ssf_transmitter_enabled` (default off) and an index on
+  `event_deliveries` that finds a destination's latest failed delivery ([#410]).
+  Expand-only; the index build holds back delivery writes while it runs.
 
 ### Changed
 
@@ -983,6 +1020,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nx` command by up to about 50 seconds before Nx falls back to the local
   cache.
 
+[#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
 [#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435

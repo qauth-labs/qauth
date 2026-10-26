@@ -15,6 +15,7 @@ import { ADMIN_EVENT_TYPES } from './types/admin';
 import { CLIENT_EVENT_TYPES } from './types/client';
 import { OAUTH_EVENT_TYPES } from './types/oauth';
 import { REQUEST_EVENT_TYPES } from './types/request';
+import { SSF_EVENT_TYPES } from './types/ssf';
 import { USER_EVENT_TYPES } from './types/user';
 import { WALLET_EVENT_TYPES } from './types/wallet';
 
@@ -28,6 +29,7 @@ export const EVENT_TYPES = [
   ...CLIENT_EVENT_TYPES,
   ...WALLET_EVENT_TYPES,
   ...REQUEST_EVENT_TYPES,
+  ...SSF_EVENT_TYPES,
   ...ADMIN_EVENT_TYPES,
 ] as const;
 

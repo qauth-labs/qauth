@@ -359,7 +359,7 @@ only when an operator sets `HYBRID_SIGNING_ENABLED=true`. A hybrid token **is**
 an ordinary Ed25519 compact JWS — the ML-DSA-65 signature is detached and carried
 alongside it, never inside the compact string — so classical verifiers are
 unaffected. See the
-[verifier guide](../../../docs/hybrid-signing-verifier-guide.md).
+[verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).
 
 #### `signHybridAccessToken(payload, keys, issuer, expiresIn, backend): Promise<HybridSignedToken>`
 

@@ -54,10 +54,11 @@ deploy workflow's path filter accounts for this (see below); a filter of
 
 ## Guarded by drift checks
 
-`pnpm exec nx test docs-site` runs four invariants
+`pnpm exec nx test docs-site` runs six invariants
 (`src/invariants/*.ts`) that fail the build on: broken `path:line` anchors,
-missing OpenAPI endpoint coverage, unresolvable internal links, and
-undated/false status claims. The deploy workflow runs this before building,
+missing OpenAPI endpoint coverage, unresolvable internal links,
+undated/false status claims, closed issues still named as open work, and
+overdue spec pins. The deploy workflow runs this before building,
 so a guard failure blocks the deploy — it does not publish a broken site.
 
 ## Deployment
@@ -85,7 +86,7 @@ Two settings in `netlify.toml` are load-bearing, and both are documented at the
 lines that set them:
 
 - **`PNPM_VERSION`.** The root `package.json` declares
-  `engines.pnpm: ">=11.0.0"` but pins the exact version only inside each
+  `engines.pnpm: ">=12.14.0"` but pins the exact version only inside each
   workflow's `pnpm/action-setup` input, so an external builder has nothing to
   read it from. Unset, Netlify activates its bundled pnpm and the install fails
   with `ERR_PNPM_UNSUPPORTED_ENGINE` before anything is built. Keep it in step

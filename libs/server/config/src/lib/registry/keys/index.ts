@@ -12,6 +12,7 @@ import { PASSKEY_KEYS } from './passkeys';
 import { RATE_LIMIT_KEYS } from './rate-limits';
 import { REGISTRATION_KEYS } from './registration';
 import { SERVER_KEYS } from './server';
+import { SSF_KEYS } from './ssf';
 import { STORAGE_KEYS } from './storage';
 import { TOKEN_KEYS } from './tokens';
 
@@ -26,6 +27,7 @@ export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...EVENT_TELEMETRY_KEYS,
   ...EVENT_DELIVERY_KEYS,
   ...EVENT_RETENTION_KEYS,
+  ...SSF_KEYS,
   ...STORAGE_KEYS,
   ...TOKEN_KEYS,
   ...DPOP_KEYS,
