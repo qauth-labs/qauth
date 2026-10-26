@@ -96,13 +96,44 @@ function answerOf(
   return { status: response.statusCode, body };
 }
 
+/** One stored event, as the comparison sees it: no id, time or request data. */
+interface EventSeen {
+  readonly realm_id: string;
+  readonly type: string;
+  readonly subject_id: string | null;
+  readonly data: unknown;
+}
+
+/**
+ * Send one request and read the events it stored. Requests are sent one at a
+ * time, so the events after the highest `seq` seen before are this request's.
+ */
+async function sendAndReadEvents(
+  app: FastifyInstance,
+  send: () => Promise<LightMyRequestResponse>
+): Promise<{ response: LightMyRequestResponse; events: EventSeen[] }> {
+  const before = await app.dbPool.query<{ seq: string }>(
+    'SELECT coalesce(max(seq), 0)::text AS seq FROM events'
+  );
+  const response = await send();
+  const { rows } = await app.dbPool.query<EventSeen>(
+    `SELECT realm_id, type, subject_id, data FROM events
+     WHERE seq > $1::bigint ORDER BY seq`,
+    [before.rows[0]?.seq ?? '0']
+  );
+  return { response, events: rows };
+}
+
 function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)] as number;
 }
 
 /**
- * Send `realmAValue` and `randomValue` alternately and expect the same answer.
+ * Send `realmAValue` and `randomValue` alternately and expect the same answer,
+ * and the same events stored: an event that recorded realm A's user as the
+ * subject at realm B, or a reason only a found row can have, tells the value
+ * apart as surely as the response would.
  *
  * The time check compares medians with a tolerance (50 ms or half the slower
  * median): both sides run the same single statement, and the token, introspection
@@ -113,6 +144,7 @@ function median(values: readonly number[]): number {
  * @returns the realm-A value's answer, for assertions of its own.
  */
 async function expectSameAnswerAsRandom(
+  app: FastifyInstance,
   send: (value: string) => Promise<LightMyRequestResponse>,
   realmAValue: string,
   randomValue: string
@@ -122,11 +154,14 @@ async function expectSameAnswerAsRandom(
   let randomAnswer: { status: number; body: unknown } | undefined;
   for (let sample = 0; sample < TIMING_SAMPLES; sample += 1) {
     let start = performance.now();
-    realmAAnswer = answerOf(await send(realmAValue), realmAValue);
+    const realmA = await sendAndReadEvents(app, async () => send(realmAValue));
     times.realmA.push(performance.now() - start);
     start = performance.now();
-    randomAnswer = answerOf(await send(randomValue), randomValue);
+    const random = await sendAndReadEvents(app, async () => send(randomValue));
     times.random.push(performance.now() - start);
+    realmAAnswer = answerOf(realmA.response, realmAValue);
+    randomAnswer = answerOf(random.response, randomValue);
+    expect(realmA.events).toEqual(random.events);
   }
   expect(realmAAnswer, JSON.stringify({ realmAAnswer, randomAnswer })).toEqual(randomAnswer);
   const [a, r] = [median(times.realmA), median(times.random)];
@@ -298,6 +333,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const { code, verifier } = await codeOfRealmA(w);
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) => redeemCode(w.app, HOST_B, SECRET_B, value, verifier),
       code,
       randomBytes(32).toString('base64url')
@@ -314,6 +350,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const { refresh_token: refreshToken } = await tokensOfRealmA(w);
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) => refresh(w.app, HOST_B, SECRET_B, value),
       refreshToken,
       randomBytes(32).toString('hex')
@@ -330,6 +367,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const { refresh_token: refreshToken } = await tokensOfRealmA(w);
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) =>
         w.app.inject({
           method: 'POST',
@@ -366,6 +404,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
       });
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) => introspect(HOST_B, SECRET_B, value),
       accessToken,
       randomBytes(32).toString('base64url')
@@ -401,6 +440,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const w = await setUp();
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) =>
         w.app.inject({
           method: 'DELETE',
@@ -424,6 +464,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const w = await setUp();
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) =>
         w.app.inject({
           method: 'GET',
@@ -481,6 +522,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
       });
 
     const answer = await expectSameAnswerAsRandom(
+      w.app,
       async (value) => verify(HOST_B, value),
       token,
       randomBytes(32).toString('hex')
