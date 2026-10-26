@@ -52,7 +52,7 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
+import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import {
   refreshFamilyEnd,
   refreshFamilyEnded,
@@ -1003,7 +1003,7 @@ async function handleAuthorizationCode(
     // Signed here, after the compare-and-set and before the event: a lost
     // race mints nothing, and a signing failure rolls the redemption back, so
     // the code is not spent and `token.issued` records only tokens that exist.
-    const accessToken = await issueAccessToken(fastify, {
+    const accessToken = await issueAccessToken(fastify, requestRealm(request), {
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
@@ -1023,10 +1023,11 @@ async function handleAuthorizationCode(
     // response also carries an ID token asserting the end-user's authentication
     // to this client. `aud` is the client_id (NOT the resource audience used for
     // the access token), and the authorization request's `nonce` is echoed when
-    // present (OIDC Core §3.1.3.6). Signed with the same EdDSA key as the access
-    // token so a single JWKS verifies both.
+    // present (OIDC Core §3.1.3.6). Signed through the signer with the realm's
+    // keys (RS256 when the realm has an RS256 key, #309), so the realm's JWKS
+    // verifies both.
     const idToken = authCode.scopes.includes('openid')
-      ? await fastify.jwtUtils.signIdToken({
+      ? await fastify.jwtUtils.signIdToken(requestRealm(request), {
           sub: user.id,
           audience: client.clientId,
           // BREAKING (#259, data minimization): email claims are released only
@@ -1161,7 +1162,7 @@ async function handleClientCredentials(
 
   const aud = resolveAudience(client, requestedResource);
   await assertReservedAudiencesListed(ctx, aud);
-  const accessToken = await issueAccessToken(fastify, {
+  const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: client.clientId,
     clientId: client.clientId,
     scope: scopeString,
@@ -1486,7 +1487,7 @@ async function handleRefreshToken(
     // race mints nothing, and a signing failure rolls the rotation back, so
     // the presented token stays live and `token.issued` records only a token
     // that exists.
-    const signed = await issueAccessToken(fastify, {
+    const signed = await issueAccessToken(fastify, requestRealm(request), {
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
@@ -1655,19 +1656,16 @@ async function handleTokenExchange(
     throw new InvalidRequestError('unsupported actor_token_type');
   }
 
-  // GATE 3 — verify the subject token (EdDSA signature + exp + issuer). The
-  // issuer is pinned in `verifyAccessToken` (RFC 9700 mix-up defence), so a
-  // token minted by a different AS — even one sharing our signing key — fails
-  // verification here. Only QAuth's signing key + issuer verifies, so success
-  // establishes provenance; an unverifiable / expired / foreign-issuer token is
-  // "unacceptable" → invalid_request. The issuer is the one the request realm's
-  // tokens carry (#490), so a token naming another realm's issuer fails too.
-  const expectedIssuer = realmTokenIssuer(fastify, requestRealm(request));
+  // GATE 3 — verify the subject token (EdDSA signature + exp + issuer). It
+  // verifies only with the request realm's keys and its issuer is pinned in
+  // `verifyAccessToken` (RFC 9700 mix-up defence), so a token minted by a
+  // different AS or by another realm (#490, #491) fails verification here.
+  // Success establishes provenance; an unverifiable / expired / foreign-issuer
+  // token is "unacceptable" → invalid_request.
+  const verifyingRealm = tokenRealm(requestRealm(request));
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
-    subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token, {
-      issuer: expectedIssuer,
-    });
+    subjectPayload = await fastify.jwtUtils.verifyAccessToken(verifyingRealm, body.subject_token);
   } catch {
     await emitRequestFailed(ctx, 'invalid_request', 'subject_token_invalid');
     throw new InvalidRequestError('subject_token is not a valid access token');
@@ -1703,9 +1701,7 @@ async function handleTokenExchange(
   let actorPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>> | undefined;
   if (body.actor_token !== undefined) {
     try {
-      actorPayload = await fastify.jwtUtils.verifyAccessToken(body.actor_token, {
-        issuer: expectedIssuer,
-      });
+      actorPayload = await fastify.jwtUtils.verifyAccessToken(verifyingRealm, body.actor_token);
     } catch {
       await emitRequestFailed(ctx, 'invalid_request', 'actor_token_invalid');
       throw new InvalidRequestError('actor_token is not a valid access token');
@@ -1921,7 +1917,7 @@ async function handleTokenExchange(
   // agent learns the address only when the user's grant included it.
   const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
-  const accessToken = await issueAccessToken(fastify, {
+  const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
@@ -2135,7 +2131,7 @@ async function mintIdJagForExchange(args: {
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
-  const minted = await mintIdJag(requestRealm(request), {
+  const minted = await mintIdJag(fastify, requestRealm(request), {
     subject: user.id,
     audience: targetAuthorizationServer,
     resource: targetResource,
@@ -2383,7 +2379,7 @@ async function handleJwtBearer(
   const aud = resolveAudience(client, [assertion.resource]);
   // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
   await assertReservedAudiencesListed(ctx, aud, user.id);
-  const accessToken = await issueAccessToken(fastify, {
+  const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,

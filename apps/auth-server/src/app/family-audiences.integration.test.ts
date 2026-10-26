@@ -13,6 +13,7 @@ import {
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  provisionRealmKeys,
   registerPasswordAccount,
   resetE2eState,
   signInWithPassword,
@@ -564,11 +565,14 @@ describe('one audience per API family and a guard for each (#509, real container
     it('with the developer audience, is accepted wherever the legacy one is', async () => {
       const { userId } = await signInPortal('portal-next@example.com');
       // What #524's release mints: the system client, the developer audience.
-      const next = await app().jwtUtils.signAccessToken({
-        sub: userId,
-        clientId: 'system',
-        aud: API_FAMILY_AUDIENCES.developer,
-      });
+      const next = await app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        {
+          sub: userId,
+          clientId: 'system',
+          aud: API_FAMILY_AUDIENCES.developer,
+        }
+      );
 
       const clients = await call('/api/clients', next);
       expect(clients.statusCode).toBe(200);
@@ -607,11 +611,14 @@ describe('one audience per API family and a guard for each (#509, real container
     it("refuses a realm-A user's family token at realm B", async () => {
       await realmB();
       const userId = await registerPasswordAccount(app(), 'realm-a-dev@example.com');
-      const token = await app().jwtUtils.signAccessToken({
-        sub: userId,
-        clientId: 'system',
-        aud: API_FAMILY_AUDIENCES.developer,
-      });
+      const token = await app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        {
+          sub: userId,
+          clientId: 'system',
+          aud: API_FAMILY_AUDIENCES.developer,
+        }
+      );
 
       expect((await call(probePath('developer'), token)).statusCode).toBe(200);
       const atB = await call(probePath('developer'), token, HOST_B);
@@ -632,6 +639,49 @@ describe('one audience per API family and a guard for each (#509, real container
       const atB = await call(probePath('admin'), token, HOST_B);
       expect(atB.statusCode).toBe(401);
       expect(atB.json()).toMatchObject({ code: 'invalid_access_token' });
+    });
+
+    // #491: each realm signs with its own keys and names its own issuer, so a
+    // `client_id` that both realms enable no longer lets a token of one realm
+    // through at the other: the guard refuses it before it resolves a subject.
+    it('refuses a token of a client_id that both realms enable at the realm that did not mint it', async () => {
+      const b = await realmB();
+      await provisionRealmKeys(app(), 'beta');
+      const admin = API_FAMILY_AUDIENCES.admin;
+      await seedMachineClient('twin', [admin]);
+      await seedMachineClient('twin', [admin], { realmId: b });
+
+      const tokenOfA = (await machineToken('twin', admin)).json<{ access_token: string }>()
+        .access_token;
+      const tokenOfB = (
+        await app().inject({
+          method: 'POST',
+          url: '/oauth/token',
+          headers: { 'content-type': 'application/x-www-form-urlencoded', host: HOST_B },
+          payload: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: 'twin',
+            client_secret: CLIENT_SECRET,
+            scope: PROBE_SCOPE,
+            resource: admin,
+          }).toString(),
+        })
+      ).json<{ access_token: string }>().access_token;
+      expect(decodeJwtClaims(tokenOfA)['iss']).toBe('https://auth.example.com');
+      expect(decodeJwtClaims(tokenOfB)['iss']).toBe(`https://${HOST_B}`);
+
+      // Each token works in its own realm...
+      expect((await call(probePath('admin'), tokenOfA)).statusCode).toBe(200);
+      expect((await call(probePath('admin'), tokenOfB, HOST_B)).statusCode).toBe(200);
+      // ...and is refused in the other, though `twin` is an active client there.
+      for (const [token, host] of [
+        [tokenOfA, HOST_B],
+        [tokenOfB, undefined],
+      ] as const) {
+        const refused = await call(probePath('admin'), token, host);
+        expect(refused.statusCode).toBe(401);
+        expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
+      }
     });
   });
 

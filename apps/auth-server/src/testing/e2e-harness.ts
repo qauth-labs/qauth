@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
+import { bootRealmKeysWithKekEnv } from '@qauth-labs/fastify-plugin-signer';
 import {
   applyQauthMigrations,
   type StartedPostgres,
@@ -92,12 +93,30 @@ export async function startE2eInfrastructure(): Promise<E2eInfrastructure> {
   };
 }
 
-/** Per booted server: run its default realm boot step again. */
+/** Per booted server: run its default realm boot step and key boot step again. */
 const defaultRealmReboots = new WeakMap<FastifyInstance, () => Promise<unknown>>();
+
+/** Per booted server: run the key boot step for a realm, by name, with no key variables. */
+const realmKeyBoots = new WeakMap<FastifyInstance, (realmName: string) => Promise<unknown>>();
+
+/**
+ * Give a realm the server created after its boot (`realms.createWithPrimaryHost`)
+ * its standard keys, as the key boot step gives the default realm, RS256
+ * included (#485): the server signs a realm's tokens only with that realm's
+ * keys (#491), and creating a realm row creates none.
+ */
+export async function provisionRealmKeys(app: FastifyInstance, realmName: string): Promise<void> {
+  const boot = realmKeyBoots.get(app);
+  if (boot === undefined) {
+    throw new Error('provisionRealmKeys: the server was not booted by bootAuthServer');
+  }
+  await boot(realmName);
+}
 
 /**
  * Truncate every domain table and flush Redis, through the SERVER's own
- * connections, then put the default realm back as the boot step made it.
+ * connections, then put the default realm and its keys back as the boot steps
+ * made them.
  *
  * Deliberately not a second pool: the app already holds the only clients this
  * needs, and opening another would mean a test could reset a database the
@@ -249,6 +268,10 @@ export async function bootAuthServer(
       key.startsWith('DPOP_') ||
       key.startsWith('SSF_') ||
       key.startsWith('EVENT_DELIVERY_') ||
+      key.startsWith('JWT_') ||
+      key.startsWith('PQC_') ||
+      key === 'HYBRID_SIGNING_ENABLED' ||
+      key === 'SIGNING_ALGORITHM_MODE' ||
       key === 'TRUST_PROXY'
     ) {
       delete process.env[key];
@@ -262,6 +285,7 @@ export async function bootAuthServer(
 
   const { app, defaultRealmBootSettings } = await import('../app/app');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
+  const { keyVariableSettings } = await import('../app/helpers/key-variables');
   // The same module instance the app just loaded, since the registry was reset.
   const { env } = await import('../config/env');
 
@@ -313,12 +337,33 @@ export async function bootAuthServer(
   await server.ready();
   injectToRealmHost(server, new URL(env.JWT_ISSUER).host);
   if (defaultRealmBoot) {
-    defaultRealmReboots.set(server, () =>
-      bootDefaultRealm(
+    // The environment as this server booted with it: a later boot of another
+    // server rewrites `process.env`.
+    const bootEnvironment = { ...process.env };
+    const quiet = { info: () => undefined, warn: () => undefined };
+    const bootRealmKeys = (realmName: string, withVariables: boolean) =>
+      bootRealmKeysWithKekEnv(
+        {
+          db: server.db,
+          kekEnv: bootEnvironment,
+          warn: () => undefined,
+          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+          hybridSigning: env.HYBRID_SIGNING_ENABLED,
+          log: quiet,
+        },
+        {
+          realmName,
+          environmentKeys: withVariables ? keyVariableSettings(env, bootEnvironment) : {},
+        }
+      );
+    defaultRealmReboots.set(server, async () => {
+      await bootDefaultRealm(
         { db: server.db, realms: server.repositories.realms, log: server.log },
         defaultRealmBootSettings()
-      )
-    );
+      );
+      await bootRealmKeys(defaultRealmBootSettings().realmName, true);
+    });
+    realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
   }
 
   return {

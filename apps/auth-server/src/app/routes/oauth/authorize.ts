@@ -36,7 +36,7 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
+import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   evaluateStepUp,
@@ -348,10 +348,12 @@ export default async function (fastify: FastifyInstance) {
     } else {
       // bearer path
       try {
-        const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
-          // RFC 9700 mix-up defence: only accept a token this realm issued.
-          issuer: realmTokenIssuer(fastify, realm),
-        });
+        // RFC 9700 mix-up defence: only accept a token this realm issued,
+        // under its keys and its issuer (#491).
+        const payload = await fastify.jwtUtils.verifyAccessToken(
+          tokenRealm(realm),
+          bearer as string
+        );
         // Only the first-party login token: the system client's `client_id`,
         // its audience (or, for a token minted before #509, its `client_id`
         // as audience) and no delegation, exactly as the management API pins

@@ -38,6 +38,9 @@ import tokenRoute from './token';
 
 const SHORT_LIFESPAN = 900;
 
+/** The realm argument of every token the route signs: the request's (#491). */
+const IN_REQUEST_REALM = expect.objectContaining({ id: 'realm-1' });
+
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
 }
@@ -198,6 +201,7 @@ describe('token endpoint — environment-aware access-token lifespan (#197)', ()
 
     expect(body.expires_in).toBe(SHORT_LIFESPAN);
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ expiresInOverride: SHORT_LIFESPAN })
     );
   });
@@ -216,6 +220,7 @@ describe('token endpoint — environment-aware access-token lifespan (#197)', ()
 
     expect(body.expires_in).toBe(28800);
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ expiresInOverride: 28800 })
     );
   });
@@ -294,6 +299,7 @@ describe('token endpoint — HARD FLOORS hold even for a development client (#19
     await ctx.handler!(authCodeRequest(), createReply());
     // aud is bound to the code's resource, not widened by the dev profile.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: 'https://api.example.com' })
     );
   });

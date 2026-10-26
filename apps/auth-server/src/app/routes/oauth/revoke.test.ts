@@ -74,7 +74,6 @@ function createFastifyStub() {
     jwtUtils: {
       verifyAccessToken: vi.fn(),
       hashRefreshToken: (t: string) => `hash:${t}`,
-      getIssuer: () => ISSUER,
     },
     redis: {
       setex: vi.fn().mockResolvedValue('OK'),
@@ -322,6 +321,11 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
     );
 
     expect(reply.statusCode).toBe(200);
+    // Verified in the request's realm: its keys, its issuer pinned (#490, #491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: 'realm-1', issuer: ISSUER },
+      'access-token'
+    );
     expect(fastify.redis.setex).toHaveBeenCalledTimes(1);
     const [key, ttl] = (fastify.redis.setex as unknown as Mock).mock.calls[0];
     expect(key).toBe('revoked-access-token:jti-123');

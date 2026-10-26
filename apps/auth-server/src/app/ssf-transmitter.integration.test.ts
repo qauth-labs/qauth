@@ -20,6 +20,7 @@ import {
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
+  provisionRealmKeys,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
 
@@ -346,7 +347,7 @@ describe('the SSF transmitter (real containers)', () => {
       }
 
       const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
-      expect(jwks.json()).toEqual(await app.jwtUtils.getJwks());
+      expect(jwks.json()).toEqual(await app.jwtUtils.getJwks({ id: realmId }));
 
       // Events go on being written; none is fanned out to an SSF stream.
       await app.repositories.events.emitInOwnTransaction({
@@ -610,14 +611,15 @@ describe('the SSF transmitter (real containers)', () => {
         HOST_B
       );
       await setRealmSwitch(app, realm.name, true);
+      // The realm's own keys: its receiver's token is signed with them (#491).
+      await provisionRealmKeys(app, realm.name);
       const realmB = realm.id;
 
       const inA = await newReceiver(app, realmA);
       const inB = await newReceiver(app, realmB, { audience: ISSUER_B, host: HOST_B });
       const streamA = await createStream(app, inA);
-      // The second realm has no keys of its own (only the default realm's are
-      // made at boot), so its receiver sends no header to encrypt, and its
-      // SETs cannot be signed: what matters here is where its rows go.
+      // Its receiver sends no header to encrypt: what matters here is where
+      // its rows go.
       const streamB = await createStream(app, inB, 'https://other.egress.test/events', {
         host: HOST_B,
         authorizationHeader: null,
@@ -709,12 +711,17 @@ describe('the SSF transmitter (real containers)', () => {
         HOST_C
       );
       const realmC = await setRealmSwitch(app, realm.name, true);
+      await provisionRealmKeys(app, realm.name);
       // Realm A's client lists C's issuer in its audience too, and C has a
       // receiver with the same client_id.
       const clientId = `shared-${randomUUID()}`;
       const inA = await newReceiver(app, realmA, { clientId, audience: [ISSUER, ISSUER_C] });
-      await newReceiver(app, realmC, { clientId, audience: ISSUER_C, host: HOST_C });
+      const inC = await newReceiver(app, realmC, { clientId, audience: ISSUER_C, host: HOST_C });
 
+      // C's own token, of the same client_id, is a receiver's there...
+      expect((await call(app, inC, 'GET', '/ssf/stream', undefined, HOST_C)).statusCode).toBe(200);
+      // ...and A's is refused outright: realm C's keys did not sign it, and it
+      // names A's issuer (#491).
       const response = await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_C);
       problemOf(response, 401, 'invalid_access_token');
       expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);

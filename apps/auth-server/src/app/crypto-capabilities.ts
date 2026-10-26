@@ -39,27 +39,30 @@ import type { JwsAlgorithm } from '@qauth-labs/core-crypto';
 import type { VerifierCryptoCapabilities } from '@qauth-labs/fastify-plugin-federation';
 
 /**
- * The signing key material the operator has actually provisioned, taken straight
- * from the parsed env.
+ * The signing key material the deployment actually holds: the token keys as
+ * the default realm's key store holds them, and the OID4VP verifier's key and
+ * chain as the parsed env configures them.
  *
- * Passed in rather than read from `../config/env` here so this stays a pure
- * function: the boot gate's behaviour is then provable in a unit test that does
- * not need a valid environment, which is the same property
+ * Passed in rather than read from `../config/env` or the store here so this
+ * stays a pure function: the boot gate's behaviour is then provable in a unit
+ * test that does not need a valid environment, which is the same property
  * `createConfiguredProviders` is built around.
  */
 export interface ProvisionedSigningKeys {
   /**
-   * `JWT_RS256_PRIVATE_KEY` / `_PATH` after resolution (#309). `undefined` when
-   * the operator configured no RS256 key, which is the default posture.
+   * The algorithms of the default realm's active `token_signing` keys, as its
+   * key store holds them (#491): `EdDSA`, `RS256` when it has an RS256 key
+   * (#309), and `ML-DSA-65` with hybrid signing. Never read from the key
+   * variables, which only the key boot step reads.
    */
-  readonly rs256PrivateKey: string | undefined;
+  readonly tokenSigningAlgorithms: readonly string[];
   /**
    * `OID4VP_VERIFIER_SIGNING_KEY` / `_PATH` after resolution (#377) — the ES256
    * key QAuth signs an OID4VP Authorization Request with.
    *
-   * A DIFFERENT key set from the two above, and deliberately named as such. The
-   * `rs256PrivateKey` field is a TOKEN-ISSUANCE key whose public half is
-   * published in `GET /.well-known/jwks.json`; this one proves QAuth's identity
+   * A DIFFERENT key set from the token keys above, and deliberately named as
+   * such. Those are TOKEN-ISSUANCE keys whose public halves are published in
+   * `GET /.well-known/jwks.json`; this one proves QAuth's identity
    * to a WALLET and is published nowhere. #298's risk note: *"the two key sets
    * must not be interchangeable."*
    */
@@ -100,14 +103,16 @@ export interface ProvisionedSigningKeys {
  */
 export function deriveCryptoCapabilities(keys: ProvisionedSigningKeys): VerifierCryptoCapabilities {
   const signingKeyProvisioned = {
-    // The env schema REQUIRES an EdDSA key (`JWT_PRIVATE_KEY` or its `_PATH`)
-    // and refuses to parse without one, so any deployment that reached this
-    // function has one. This is the algorithm every QAuth token is signed with.
-    EdDSA: true,
-    // OPTIONAL and env-provisioned (#309). Absent by default, and when it is
-    // absent nothing in this build can produce an RS256 signature — claiming it
-    // unconditionally was the same category of error as claiming ES256.
-    RS256: keys.rs256PrivateKey !== undefined && keys.rs256PrivateKey.trim().length > 0,
+    // The algorithm every QAuth access token is signed with. The key boot step
+    // leaves the default realm an active EdDSA key or refuses to start, but the
+    // answer is still read from the store rather than assumed.
+    EdDSA: keys.tokenSigningAlgorithms.includes('EdDSA'),
+    // A realm holds an RS256 key when one was imported from a variable,
+    // created by an operator, or generated for a fresh deployment (#309,
+    // #485). Without one nothing in this build can produce an RS256 signature
+    // — claiming it unconditionally was the same category of error as
+    // claiming ES256.
+    RS256: keys.tokenSigningAlgorithms.includes('RS256'),
     // OPTIONAL and env-provisioned (#377), and the ONLY entry whose predicate
     // reads two variables rather than one. #298 landed `sign(..., 'ES256', ...)`
     // years before anything could use it; what was missing was never the

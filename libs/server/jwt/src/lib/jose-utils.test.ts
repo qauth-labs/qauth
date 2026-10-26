@@ -1,7 +1,7 @@
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
-import { decodeJwtUnsafe } from './jose-utils';
+import { decodeJwtUnsafe, decodeProtectedHeaderUnsafe } from './jose-utils';
 import { signAccessToken } from './jwt-service';
 import { generateEdDSAKeyPair } from './key-management';
 
@@ -61,5 +61,23 @@ describe('decodeJwtUnsafe', () => {
 
   it('throws JWTInvalidError when the token is structurally malformed', () => {
     expect(() => decodeJwtUnsafe('not.a.jwt')).toThrow(JWTInvalidError);
+  });
+});
+
+describe('decodeProtectedHeaderUnsafe', () => {
+  it('reads the protected header of a compact JWS', async () => {
+    const { privateKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-1', clientId: 'client-1' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(decodeProtectedHeaderUnsafe(token)).toEqual({ alg: 'EdDSA', typ: 'at+jwt' });
+  });
+
+  it.each(['not-a-jwt', 'not.a.jwt', ''])('throws JWTInvalidError for %j', (token) => {
+    expect(() => decodeProtectedHeaderUnsafe(token)).toThrow(JWTInvalidError);
   });
 });

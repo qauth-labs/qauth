@@ -106,6 +106,9 @@ export function keyInactiveWarning(
  * are still signed with it, so it stays set.
  *
  * @throws Error when the realm does not exist
+ * @throws KeyCreationRefusedError (`HYBRID_PAIR_INCOMPLETE`) when hybrid
+ *   signing is on and the realm's active token keys are half a pair: the
+ *   ML-DSA-65 key is missing
  * @throws the errors of `bootRealmKeys`: an `InvalidConfigurationError` names
  *   the variables when a configured key cannot be imported, when an import
  *   would use the published development KEK, for half a hybrid pair, or for a
@@ -122,14 +125,29 @@ export async function bootRealmKeysByName(
     );
   }
 
-  const result = await bootRealmKeys({
-    store: createRepositoryKeyStore(deps.db),
-    kekProvider: deps.kekProvider,
-    enabledSignatureAlgorithms: deps.enabledSignatureAlgorithms,
-    hybridSigning: deps.hybridSigning,
-    realmId: realm.id,
-    environmentKeys: settings.environmentKeys,
-  });
+  let result: RealmKeysBootResult;
+  try {
+    result = await bootRealmKeys({
+      store: createRepositoryKeyStore(deps.db),
+      kekProvider: deps.kekProvider,
+      enabledSignatureAlgorithms: deps.enabledSignatureAlgorithms,
+      hybridSigning: deps.hybridSigning,
+      realmId: realm.id,
+      environmentKeys: settings.environmentKeys,
+    });
+  } catch (error) {
+    // Hybrid signing on, and the realm's active token keys are an EdDSA key
+    // without its ML-DSA-65 half: tokens would be signed classical-only, so
+    // the boot is refused (#491). Say what the operator can do today, before
+    // rotation through the store ships (#542).
+    if (error instanceof KeyCreationRefusedError && error.reason === 'HYBRID_PAIR_INCOMPLETE') {
+      throw new KeyCreationRefusedError(
+        'HYBRID_PAIR_INCOMPLETE',
+        `HYBRID_SIGNING_ENABLED=true needs the realm's token keys as a hybrid pair, but the realm "${realm.name}" holds an active EdDSA key without its ML-DSA-65 key. Set JWT_PRIVATE_KEY and JWT_MLDSA_PRIVATE_KEY to a new pair, which replaces the stored key at boot, or turn hybrid signing off.`
+      );
+    }
+    throw error;
+  }
 
   deps.log.info(
     {

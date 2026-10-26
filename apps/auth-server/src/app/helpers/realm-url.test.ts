@@ -1,12 +1,6 @@
-import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 
-import { buildRealmUrl, realmIssuer, realmTokenIssuer } from './realm-url';
-
-/** A server whose JWT plugin signs every token with `signedIssuer`. */
-function serverSigningWith(signedIssuer: string): FastifyInstance {
-  return { jwtUtils: { getIssuer: () => signedIssuer } } as unknown as FastifyInstance;
-}
+import { buildRealmUrl, realmIssuer, tokenRealm } from './realm-url';
 
 describe('realmIssuer', () => {
   it('is the stored issuer, byte for byte', () => {
@@ -47,28 +41,15 @@ describe('buildRealmUrl', () => {
   );
 });
 
-describe('realmTokenIssuer', () => {
-  it('is the realm issuer for the realm the JWT plugin signs for', () => {
-    const fastify = serverSigningWith('https://a.example.com');
-
-    expect(realmTokenIssuer(fastify, { issuer: 'https://a.example.com' })).toBe(
-      'https://a.example.com'
-    );
+describe('tokenRealm', () => {
+  it("is the realm's id and its stored issuer, which its tokens carry", () => {
+    expect(tokenRealm({ id: 'realm-a', issuer: 'https://a.example.com' })).toEqual({
+      id: 'realm-a',
+      issuer: 'https://a.example.com',
+    });
   });
 
-  it('keeps the trailing slash JWT_ISSUER gives the tokens, which the realm row drops', () => {
-    const fastify = serverSigningWith('https://a.example.com/');
-
-    expect(realmTokenIssuer(fastify, { issuer: 'https://a.example.com' })).toBe(
-      'https://a.example.com/'
-    );
-  });
-
-  it("is another realm's own issuer, never the plugin's", () => {
-    const fastify = serverSigningWith('https://a.example.com/');
-
-    expect(realmTokenIssuer(fastify, { issuer: 'https://b.example.com' })).toBe(
-      'https://b.example.com'
-    );
+  it('refuses a realm with no issuer, which the resolver never lets through', () => {
+    expect(() => tokenRealm({ id: 'realm-a', issuer: null })).toThrow(/has no issuer/);
   });
 });

@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { API_FAMILY_AUDIENCES, type ApiFamily } from '../api-conventions/families';
 import { isClientUsable } from './client-status';
-import { realmTokenIssuer } from './realm-url';
+import { realmIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
 
@@ -25,17 +25,14 @@ export type IssuerResolver = (
 ) => boolean | Promise<boolean>;
 
 /**
- * The default {@link IssuerResolver}: the token issuer of the request's realm,
- * `realmTokenIssuer` (ADR-019 Decision 1, #490), as the issuer pins of
- * introspection, revocation and logout.
- *
- * For the realm `JWT_ISSUER` names, that is `JWT_ISSUER` as written, the `iss`
- * every token this server mints carries today. Any other realm accepts only its
- * own issuer, so it refuses those tokens until each realm's tokens carry its
- * own `iss` (#491).
+ * The default {@link IssuerResolver}: the issuer of the request's realm
+ * (ADR-019 Decision 1), the `iss` the signer gives every token the realm
+ * issues (#491), as the issuer pins of `requireJwt`, introspection,
+ * revocation and logout. The token has already verified with the realm's own
+ * keys, so a token minted in another realm never reaches this rule.
  */
 export const requestRealmIssuer: IssuerResolver = (issuer, request) =>
-  issuer === realmTokenIssuer(request.server, requestRealm(request));
+  issuer === realmIssuer(requestRealm(request));
 
 /**
  * What a token's `sub` may name on a family route (#509):
@@ -130,8 +127,9 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  * user is refused with the one wording every route uses for a subject that is
  * not an active user (`inactiveSubjectError`), so the answer does not say
  * whether the account exists in another realm. A `client_id` names a client
- * per realm; under the default issuer rule a token of a `client_id` that two
- * realms enable passes only at the realm whose issuer it names.
+ * per realm, but a token verifies only with the keys of the realm that issued
+ * it and under its issuer (#491), so a token of a `client_id` that two realms
+ * enable passes only at the realm that minted it.
  */
 async function assertSubjectOfRealm(
   request: FastifyRequest,

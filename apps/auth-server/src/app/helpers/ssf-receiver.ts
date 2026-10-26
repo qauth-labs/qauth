@@ -39,7 +39,9 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
  * already answered 404 for a realm that does not run the transmitter.
  *
  * - `requireJwt` checks the access token: signature, `typ`, issuer,
- *   revocation and, with DPoP on, its proof.
+ *   revocation and, with DPoP on, its proof. The token verifies only with the
+ *   keys of the request's realm and only under its issuer (#491), so a token
+ *   minted in another realm is refused there outright.
  * - The token is a client's own (`client_credentials`): `sub` is its
  *   `client_id`, and it carries no `act`, so no user's or agent's delegated
  *   token manages a stream.
@@ -47,11 +49,8 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
  *   a token without it is a 403 (RFC 6750 §3.1, `insufficient_scope`).
  * - Its `aud` names the realm's issuer, the transmitter: a token minted for
  *   another resource, which that resource holds, cannot manage streams.
- * - Its `aud` names no other realm's issuer. An access token names no realm
- *   and a `client_id` is unique only within one, so a token minted in
- *   another realm, for a client of the same `client_id` whose audience lists
- *   this realm's issuer too, would otherwise pass. Per-realm `iss` (#491)
- *   will pin a token to its realm further.
+ * - Its `aud` names no other realm's issuer: a token valid here is never
+ *   also one another realm's transmitter would take.
  * - The client exists in this realm, is enabled and not suspended, and still
  *   holds the `ssf:stream` scope, as deliveries require: a receiver whose
  *   scope was taken away stops managing its stream at once, not when its

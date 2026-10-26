@@ -171,7 +171,7 @@ export default async function (fastify: FastifyInstance) {
         // `email` scope, and this first-party token is granted no scope
         // (ANT-2026-2O0T72HY). Nothing that accepts it reads them; the
         // session below keeps the sign-in address for display.
-        const accessToken = await issueAccessToken(fastify, {
+        const accessToken = await issueAccessToken(fastify, realm, {
           sub: user.id,
           clientId: systemClient.clientId,
           aud: resolveAudience(systemClient),

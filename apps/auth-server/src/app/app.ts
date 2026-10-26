@@ -44,10 +44,10 @@ import {
   type EventTelemetry,
   eventTelemetrySettings,
 } from './helpers/event-telemetry';
-import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
+import { keyVariableSettings } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
-import { realmIssuer } from './helpers/realm-url';
+import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
@@ -78,16 +78,31 @@ import { securityHeadersPlugin } from './plugins/security-headers';
  * `./crypto-capabilities` for which key material each entry is derived from,
  * and why response encryption — which needs no operator key — is the one entry
  * answered by the build rather than by the configuration (#377 Phase C).
+ *
+ * The token keys are the default realm's, as its key store holds them (#491),
+ * never the key variables. `tokenSigningAlgorithms` names the algorithms of its
+ * active `token_signing` keys.
  */
-const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities({
-  rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
-  // The OID4VP verifier's own key and chain (#377). Read here as CONFIGURED
-  // rather than as validated: validation happens inside `app()` below and is a
-  // boot refusal, so a deployment that reaches a request with this descriptor
-  // has already had its chain accepted.
-  verifierEs256PrivateKey: resolveVerifierSigningKeyPem(env),
-  verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
-});
+function cryptoCapabilities(tokenSigningAlgorithms: readonly string[]): VerifierCryptoCapabilities {
+  return deriveCryptoCapabilities({
+    tokenSigningAlgorithms,
+    // The OID4VP verifier's own key and chain (#377). Read here as CONFIGURED
+    // rather than as validated: validation happens inside `app()` below and is a
+    // boot refusal, so a deployment that reaches a request with this descriptor
+    // has already had its chain accepted.
+    verifierEs256PrivateKey: resolveVerifierSigningKeyPem(env),
+    verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
+  });
+}
+
+/**
+ * The token algorithms the gate is first checked against, while the server
+ * registers: the key boot step, which runs when the server is ready, leaves
+ * the default realm an active EdDSA `token_signing` key or refuses to start
+ * (`provisionRealmKeys`). Once it has run, the gate is checked again against
+ * the keys the store holds.
+ */
+const BOOT_TOKEN_SIGNING_ALGORITHMS: readonly string[] = Object.freeze(['EdDSA']);
 
 /**
  * The settings the default realm's boot step (#484) reads, from the
@@ -202,28 +217,36 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // the job runner starts.
   if (defaultRealmBoot) {
     await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
-
-    // The signer's wiring and the default realm's key boot step (ADR-019
-    // Decision 9, #485). The plugin loads the KEK: NODE_ENV=production refuses
-    // to start without one. Its `onReady` hook runs after the default realm's,
-    // which creates the realm: under the realm's key lock it imports each key
-    // variable the realm's encrypted store lacks, creates the standard keys
-    // still missing (an RS256 signing key too on a fresh deployment), and
-    // warns about every key variable still set. Tokens and the session cookie
-    // keep using the variables until they move onto the signer (#491, #493).
-    // A signing variable that holds a new key replaces the stored key until
-    // rotation through the store ships (#544, #551).
-    await fastify.register(signerPlugin, {
-      db: fastify.db,
-      kekEnv: process.env,
-      enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
-      hybridSigning: env.HYBRID_SIGNING_ENABLED,
-      realmKeysBoot: {
-        realmName: env.DEFAULT_REALM_NAME,
-        environmentKeys: keyVariableSettings(env, process.env),
-      },
-    });
   }
+
+  // The signer's wiring (ADR-019 Decision 9, #464). The plugin loads the KEK:
+  // NODE_ENV=production refuses to start without one. Every token is signed
+  // through it, with the keys of the request's realm (#491), so it registers
+  // on every boot; it reads nothing until the first signature.
+  //
+  // With the database steps on, it also runs the default realm's key boot
+  // step (#485). Its `onReady` hook runs after the default realm's, which
+  // creates the realm: under the realm's key lock it imports each key variable
+  // the realm's encrypted store lacks, creates the standard keys still missing
+  // (an RS256 signing key too on a fresh deployment), and warns about every key
+  // variable still set. A signing variable that holds a new key replaces the
+  // stored key until rotation through the store ships (#544, #551); otherwise
+  // tokens never read the variables. The session cookie keeps its variable
+  // until it moves onto the signer (#493).
+  await fastify.register(signerPlugin, {
+    db: fastify.db,
+    kekEnv: process.env,
+    enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+    hybridSigning: env.HYBRID_SIGNING_ENABLED,
+    ...(defaultRealmBoot
+      ? {
+          realmKeysBoot: {
+            realmName: env.DEFAULT_REALM_NAME,
+            environmentKeys: keyVariableSettings(env, process.env),
+          },
+        }
+      : {}),
+  });
 
   // Request-id propagation (#128), ahead of the realm resolver below: both
   // are `onRequest` hooks of this scope and run in registration order, so a
@@ -302,7 +325,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // decides WHETHER the wallet provider exists, the profile decides WHAT POSTURE
   // it runs with. An enabled deployment carrying no profile — one whose Client
   // Identifier Prefix needs unprovisioned X.509 material, or one whose declared
-  // signing/encryption mandates exceed CRYPTO_CAPABILITIES above — throws here
+  // signing/encryption mandates exceed `cryptoCapabilities` above — throws here
   // and refuses to boot, rather than serving wallet flows with an unstated or
   // unmeetable posture.
   // Issuer trust (#236), the OTHER trust direction: which credential ISSUERS a
@@ -408,43 +431,62 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // message. Nothing about the request path changes — see the helper.
   assertSubjectResolutionProvisioned(env, provisioned);
 
+  const providerSettings = {
+    walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,
+    verifierProfileId: env.OID4VP_VERIFIER_PROFILE,
+    // What the operator provisioned for revocation checking (#297). A profile
+    // declaring `requireCredentialStatus: true` — `haip-1.0` does — refuses to
+    // start when either half is missing, naming which one. Threaded rather
+    // than defaulted: the default is the refusing value, and a bootstrap that
+    // HAS the answer must state it.
+    credentialStatusProvisioned: credentialStatusProvisioningOf({
+      trustAnchorPems: statusListTrustAnchorPems,
+      uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
+    }),
+    // What the operator provisioned for key-storage assurance (#308/#379). A
+    // profile declaring `keyStorageAssurance: 'required'` — `haip-1.0` does —
+    // refuses to start unless something can establish it. Before #379 this
+    // option was never passed, so `assertKeyStorageAssuranceProvisioned` sat
+    // permanently in its refusing state: a constant, not a predicate.
+    //
+    // Only the TRANSITIVE path is provisionable today. The direct path
+    // (verifying an Appendix D attestation conveyed into the presentation)
+    // needs the same certificate surface #233 owes the line below.
+    keyStorageAssuranceProvisioned: keyStorageAssuranceProvisioningOf(env.OID4VP_ATTESTING_ISSUERS),
+    // What the operator provisioned for the VERIFIER identity (#377) — the
+    // ES256 key and the X.509 chain a wallet establishes QAuth's identity
+    // from. Derived from the material that VALIDATED above rather than from
+    // the raw variables, so the marker set the gate reads can never claim a
+    // capability the chain did not earn: a chain that failed to anchor took
+    // the boot down before this line, and a deployment that configured
+    // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
+    // requiring a WRPAC refuse.
+    provisionedVerifierMaterial: provisioned,
+  };
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
-      walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,
-      verifierProfileId: env.OID4VP_VERIFIER_PROFILE,
-      cryptoCapabilities: CRYPTO_CAPABILITIES,
-      // What the operator provisioned for revocation checking (#297). A profile
-      // declaring `requireCredentialStatus: true` — `haip-1.0` does — refuses to
-      // start when either half is missing, naming which one. Threaded rather
-      // than defaulted: the default is the refusing value, and a bootstrap that
-      // HAS the answer must state it.
-      credentialStatusProvisioned: credentialStatusProvisioningOf({
-        trustAnchorPems: statusListTrustAnchorPems,
-        uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
-      }),
-      // What the operator provisioned for key-storage assurance (#308/#379). A
-      // profile declaring `keyStorageAssurance: 'required'` — `haip-1.0` does —
-      // refuses to start unless something can establish it. Before #379 this
-      // option was never passed, so `assertKeyStorageAssuranceProvisioned` sat
-      // permanently in its refusing state: a constant, not a predicate.
-      //
-      // Only the TRANSITIVE path is provisionable today. The direct path
-      // (verifying an Appendix D attestation conveyed into the presentation)
-      // needs the same certificate surface #233 owes the line below.
-      keyStorageAssuranceProvisioned: keyStorageAssuranceProvisioningOf(
-        env.OID4VP_ATTESTING_ISSUERS
-      ),
-      // What the operator provisioned for the VERIFIER identity (#377) — the
-      // ES256 key and the X.509 chain a wallet establishes QAuth's identity
-      // from. Derived from the material that VALIDATED above rather than from
-      // the raw variables, so the marker set the gate reads can never claim a
-      // capability the chain did not earn: a chain that failed to anchor took
-      // the boot down before this line, and a deployment that configured
-      // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
-      // requiring a WRPAC refuse.
-      provisionedVerifierMaterial: provisioned,
+      ...providerSettings,
+      cryptoCapabilities: cryptoCapabilities(BOOT_TOKEN_SIGNING_ALGORITHMS),
     }),
   });
+  // The gate again, once the key boot step has run (its hook is earlier):
+  // against the token algorithms of the default realm's stored keys (#491),
+  // which refuses the boot when they cannot meet the profile.
+  if (defaultRealmBoot) {
+    fastify.addHook('onReady', async () => {
+      const realm = await fastify.repositories.realms.findByName(env.DEFAULT_REALM_NAME);
+      if (realm === undefined) {
+        throw new Error(`The default realm "${env.DEFAULT_REALM_NAME}" does not exist`);
+      }
+      const keys = await fastify.signer.getVerificationKeys('local', realm.id, 'token_signing');
+      createConfiguredProviders({
+        ...providerSettings,
+        cryptoCapabilities: cryptoCapabilities(
+          keys.filter((key) => key.status === 'active').map((key) => key.algorithm)
+        ),
+      });
+    });
+  }
 
   // Configure email provider from environment variables
   const emailProvider = env.EMAIL_PROVIDER;
@@ -504,37 +546,17 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     },
   });
 
-  // The `kid`s the key store gives the imported keys (#485): the RFC 7638
-  // thumbprint, or JWT_RS256_KID when set. Published here too, so the JWKS
-  // names each key as the store does. The ML-DSA key keeps JWT_MLDSA_KID
-  // alone: the plugin resolves a hybrid token's ML-DSA key by `pqc_kid`, and
-  // a kid that appeared now would refuse every hybrid token issued without one.
-  const ed25519KeyId = await thumbprintKid(env.JWT_PRIVATE_KEY);
-  const rs256KeyId =
-    env.JWT_RS256_PRIVATE_KEY === undefined
-      ? undefined
-      : env.JWT_RS256_KID || (await thumbprintKid(env.JWT_RS256_PRIVATE_KEY));
-
+  // Tokens (ADR-019 Decisions 1 and 9, #491). The plugin holds no key: every
+  // access, ID and hybrid token is signed through the signer with the keys of
+  // its realm, which names the realm's issuer as `iss` and its key as `kid`,
+  // and every token is verified with the keys the signer lists for the
+  // request's realm, under that realm's issuer. The key variables reach only
+  // the key boot step above.
   await fastify.register(jwtPlugin, {
-    privateKey: env.JWT_PRIVATE_KEY,
-    publicKey: env.JWT_PUBLIC_KEY,
-    ...(ed25519KeyId === undefined ? {} : { keyId: ed25519KeyId }),
-    issuer: env.JWT_ISSUER,
+    signer: fastify.signer,
+    requestRealm: (request) => tokenRealm(requestRealm(request)),
     accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
-    // RS256 ID-token signing (#309), OPTIONAL and env-provisioned. When the
-    // RS256 key is set, the plugin signs ID tokens with RS256 by default,
-    // publishes the RSA public key in the JWKS, and discovery advertises
-    // RS256 — unblocking OIDC Basic/Config OP certification (#286). Absent →
-    // EdDSA-only, exactly as before. Access tokens always stay EdDSA. Spread
-    // conditionally so unset keys never appear as `undefined` options.
-    ...(env.JWT_RS256_PRIVATE_KEY
-      ? {
-          rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
-          ...(env.JWT_RS256_PUBLIC_KEY ? { rs256PublicKey: env.JWT_RS256_PUBLIC_KEY } : {}),
-          ...(rs256KeyId ? { rs256KeyId } : {}),
-        }
-      : {}),
     // RFC 7009 revocation: the shared `requireJwt` preHandler consults this
     // Redis-backed denylist after verification so a revoked access token is
     // rejected everywhere it is used as a bearer credential. Resolved lazily
@@ -550,25 +572,16 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
             verifyResourceRequestProof(fastify, request, token, claims),
         }
       : {}),
-    // ADR-005: when hybrid signing is enabled, publish the ML-DSA public key as
-    // an AKP JWK on /.well-known/jwks.json alongside the Ed25519 OKP key
-    // (#246), AND mint live hybrid access tokens (#275). The config's fail-fast
-    // coupling guarantees the seed is present when the flag is on; the plugin
-    // additionally refuses to start if it is not. Default OFF.
+    // ADR-005: when hybrid signing is enabled, mint live hybrid access tokens
+    // (#275) with the realm's hybrid pair. The key boot step refuses to start
+    // a deployment whose realm holds half a pair; the plugin refuses to start
+    // when SIGNING_ALGORITHM_MODE does not enable ML-DSA-65. Default OFF.
     //
     // #248 F7/F11: the plugin resolves the ML-DSA backend through
     // `getSignatureBackend`, so it must see the operator's SIGNING_ALGORITHM_MODE
     // allowlist rather than a hardcoded literal.
-    ...(env.HYBRID_SIGNING_ENABLED
-      ? {
-          mlDsaSeed: env.JWT_MLDSA_PRIVATE_KEY,
-          mlDsaKeyId: env.JWT_MLDSA_KID,
-          hybridSigningEnabled: true,
-          // #248 F7/F11: honour the operator-enabled algorithm set at the live
-          // call site instead of a hardcoded allowlist.
-          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
-        }
-      : {}),
+    hybridSigningEnabled: env.HYBRID_SIGNING_ENABLED,
+    enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
   });
 
   // Rate limiting (T3). This position IS load-bearing: it MUST stay ahead of
@@ -642,7 +655,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // of the signer. Its routes are the SSF route while the transmitter is on
   // and a test's own; with none it does nothing but publish its metrics. It
   // rides the default realm boot switch, as every database step at boot
-  // does: a boot without a database has no signer either.
+  // does: a boot without a database delivers nothing.
   if (defaultRealmBoot) {
     await fastify.register(eventDeliveryPlugin, {
       db: fastify.db,

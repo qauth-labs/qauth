@@ -135,9 +135,7 @@ function createFastifyStub() {
       return route;
     },
     requireJwt: vi.fn(),
-    jwtUtils: {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
-    },
+    jwtUtils: {},
     repositories: {
       users: {
         findById: vi.fn() as unknown as Mock,
@@ -745,7 +743,6 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('accepts the Bearer header and returns the same claims as GET', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi
         .fn()
         .mockReturnValue({ scheme: 'Bearer', token: 'header.token' }),
@@ -777,7 +774,6 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('accepts a form-encoded access_token body and returns the same claims (RFC 6750 §2.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       // No Authorization header on the body-token path.
       extractCredentialFromHeader: vi.fn().mockReturnValue(null),
     };
@@ -810,7 +806,6 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('rejects when neither a header nor a body token is present (missing token → 401)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi.fn().mockReturnValue(null),
     };
     (fastify.requireJwt as unknown as Mock).mockRejectedValue(
@@ -833,7 +828,6 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('rejects the token being supplied by more than one method (RFC 6750 §2.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi
         .fn()
         .mockReturnValue({ scheme: 'Bearer', token: 'header.token' }),
@@ -856,7 +850,6 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('does not accept a token from the query string (RFC 6750 §2.3)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi.fn().mockReturnValue(null),
     };
     await userinfoRoute(fastify);
@@ -877,7 +870,6 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('ignores a body access_token when the content-type is not form-encoded', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi.fn().mockReturnValue(null),
     };
     // With no valid token source, requireJwt throws the missing-token error.
@@ -1060,7 +1052,6 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
   it('applies the same rule to POST (shared handler)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi.fn().mockReturnValue(null),
     };
     (fastify.requireJwt as unknown as Mock).mockImplementation(
@@ -1162,7 +1153,6 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
   it('applies the same rule to POST (shared handler)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractCredentialFromHeader: vi.fn().mockReturnValue(null),
     };
     (fastify.requireJwt as unknown as Mock).mockImplementation(

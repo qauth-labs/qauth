@@ -534,10 +534,10 @@ describe('every absolute URL comes from the realm row (#490)', () => {
       document['issuer']
     );
 
-    // Tokens still carry JWT_ISSUER as written (until #491), and the realm's
-    // introspection pin accepts them.
+    // Tokens carry the realm's issuer as discovery publishes it, without the
+    // slash (#491), and the realm's introspection pin accepts them.
     const token = await clientCredentialsToken(app, HOST_A, 'urls-a');
-    expect(decodeJwtClaims(token)['iss']).toBe(`${ISSUER_A}/`);
+    expect(decodeJwtClaims(token)['iss']).toBe(document['issuer']);
     expect(await introspect(app, HOST_A, 'urls-a', token)).toMatchObject({ active: true });
   }, 120_000);
 

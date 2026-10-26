@@ -37,18 +37,21 @@ import { REDIS_KEYS } from '../constants/redis-keys';
  * to classical-only, which is exactly what #248 F1 exists to prevent.
  *
  * @param fastify - Server instance (jwtUtils + redis).
+ * @param realm - The realm the token is issued in: its keys sign it, and its
+ *   issuer is the `iss` (#491).
  * @param payload - Access-token claims, as accepted by `signAccessToken`.
  * @returns The compact Ed25519 JWS to return as `access_token`.
  */
 export async function issueAccessToken(
   fastify: FastifyInstance,
-  payload: Parameters<FastifyInstance['jwtUtils']['signAccessToken']>[0]
+  realm: { readonly id: string },
+  payload: Parameters<FastifyInstance['jwtUtils']['signAccessToken']>[1]
 ): Promise<string> {
   if (!fastify.jwtUtils.isHybridSigningEnabled()) {
-    return fastify.jwtUtils.signAccessToken(payload);
+    return fastify.jwtUtils.signAccessToken(realm, payload);
   }
 
-  const hybrid = await fastify.jwtUtils.signHybridAccessToken(payload);
+  const hybrid = await fastify.jwtUtils.signHybridAccessToken(realm, payload);
   await storePqcSignature(fastify, hybrid);
   return hybrid.token;
 }

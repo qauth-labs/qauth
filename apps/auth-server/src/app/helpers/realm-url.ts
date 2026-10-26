@@ -1,6 +1,3 @@
-import type { FastifyInstance } from 'fastify';
-
-import { resolveIssuerIdentifier } from './discovery';
 import type { RealmRow } from './request-realm';
 
 /**
@@ -68,21 +65,17 @@ export function realmMailLink(realm: RealmUrlSource): { readonly baseUrl: string
 }
 
 /**
- * The `iss` the access tokens of a realm carry, for the issuer pin of a
- * verification (RFC 9700 §4.4 mix-up defence).
+ * The realm a token is signed for or verified in, as the JWT plugin takes it
+ * (ADR-019 Decisions 1 and 9, #491): its id, whose keys sign and verify the
+ * token, and its issuer, the `iss` the signer puts in the token and every
+ * verification pins (RFC 9700 §4.4 mix-up defence). A token another realm
+ * issued names another issuer and verifies with none of this realm's keys.
  *
- * Every token is still signed with the JWT plugin's issuer, `JWT_ISSUER` as
- * written, until the tokens are signed per realm (#491). For the realm whose
- * issuer that is, the pin is that value: when `JWT_ISSUER` ends with a slash,
- * the tokens keep it while the realm row and discovery drop it, and pinning the
- * row's form would refuse every token the server issued. For any other realm
- * the pin is the realm's own issuer, so a token that names another realm's
- * issuer is refused there. Until #491 that includes the tokens such a realm
- * issues itself, which carry `JWT_ISSUER`: no route creates a second realm yet,
- * and #491 gives each realm's tokens its own `iss`.
+ * @throws Error when the realm has no issuer, as {@link realmIssuer} does
  */
-export function realmTokenIssuer(fastify: FastifyInstance, realm: RealmUrlSource): string {
-  const issuer = realmIssuer(realm);
-  const signedIssuer = fastify.jwtUtils.getIssuer();
-  return resolveIssuerIdentifier(signedIssuer) === issuer ? signedIssuer : issuer;
+export function tokenRealm(realm: Pick<RealmRow, 'id' | 'issuer'>): {
+  readonly id: string;
+  readonly issuer: string;
+} {
+  return { id: realm.id, issuer: realmIssuer(realm) };
 }

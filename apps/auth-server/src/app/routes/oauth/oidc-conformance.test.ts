@@ -6,21 +6,26 @@
  *
  *  1. Discovery (`/.well-known/openid-configuration`) advertises the OIDC
  *     fields a relying party needs (issuer, jwks_uri, signing alg, claims).
- *  2. JWKS (`/.well-known/jwks.json`) publishes the EdDSA public key.
+ *  2. JWKS (`/.well-known/jwks.json`) publishes the realm's EdDSA public key.
  *  3. The token endpoint's ID token (minted here via the real `jwtUtils`
  *     plugin) decodes and validates against the server's published key —
  *     correct `iss`, `aud`, `exp`/`iat`, echoed `nonce`, and identity claims
  *     (OIDC Core 1.0 §2, §3.1.3.6, §3.1.3.7).
  *
- * The jwt plugin and discovery builder used here are the SAME ones the
- * production routes use, so a green run asserts real conformance of the wiring
- * — only the HTTP framing around them is reconstructed for hermeticity.
+ * The jwt plugin, the signer and the discovery builder used here are the SAME
+ * ones the production routes use, so a green run asserts real conformance of
+ * the wiring — only the HTTP framing around them is reconstructed for
+ * hermeticity. Since #491 every token is signed per realm through the signer:
+ * the realm's keys live in the real in-process signer over an in-memory key
+ * store (`createTestSigner`), which sets `iss` from the realm row and stamps
+ * the `kid` of the realm key that signed.
  *
- * Crypto stays inside the jwt plugin per the project's security boundary: the
- * test signs and verifies through `app.jwtUtils` and only generates a raw
- * Ed25519 key pair (via `node:crypto`) to seed the plugin. It deliberately
- * does NOT import `jose` or `@qauth-labs/server-jwt` directly, keeping within
- * the auth-server dependency graph.
+ * Crypto stays inside the jwt plugin and the signer per the project's security
+ * boundary: the test signs and verifies through `app.jwtUtils`, and checks a
+ * published JWK with `node:crypto` alone. It deliberately does NOT import
+ * `jose` or `@qauth-labs/server-jwt` directly, keeping within the auth-server
+ * dependency graph; the one token it signs by hand (a foreign signature with
+ * no `kid`) is signed with `node:crypto` too.
  *
  * Known gaps have ONE home, and it is not this comment: the requirement rows
  * under `docs/conformance/requirements/` carry them as `manual`, `waived` and
@@ -30,15 +35,27 @@
  * `oidc-discovery-1_0.json` and `oidc-core-1_0.json`. See
  * `docs/conformance/README.md`.
  *
- * ID token signature verification is asserted INDIRECTLY via `jwtUtils.verifyAccessToken`
- * (the same EdDSA public key the JWKS publishes) plus a cross-key rejection
- * test, rather than re-importing the JWK in the test process — since #283 that
- * call rejects an ID token on its RFC 9068 `typ`, but only AFTER the signature
- * has verified, so reaching the `typ` error is itself the signature assertion.
+ * ID token signature verification is asserted twice: DIRECTLY, by checking the
+ * signature against the JWK the server publishes under the token's `kid`, and
+ * INDIRECTLY via `jwtUtils.verifyAccessToken` with the realm's keys plus
+ * cross-key and cross-realm rejection tests — since #283 that call rejects an
+ * ID token on its RFC 9068 `typ`, but only AFTER the signature has verified,
+ * so reaching the `typ` error is itself the signature assertion.
  */
-import { createPublicKey, createVerify, generateKeyPairSync } from 'node:crypto';
+import {
+  createPublicKey,
+  createVerify,
+  generateKeyPairSync,
+  type KeyObject,
+  sign,
+  verify,
+} from 'node:crypto';
 
-import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
+import { jwtPlugin, type TokenRealm } from '@qauth-labs/fastify-plugin-jwt';
+import {
+  createTestSigner,
+  type TestSigner,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -47,69 +64,83 @@ vi.mock('../../../config/env', () => ({
 }));
 
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
+import { tokenRealm } from '../../helpers/realm-url';
 import { authorizeQuerySchema } from '../../schemas/oauth';
 import wellKnownRoutes from '../well-known';
 
 const ISSUER = 'https://auth.test.example.com';
+/** The issuer of the server's second realm, which no request here belongs to. */
+const OTHER_ISSUER = 'https://other.test.example.com';
 const CLIENT_ID = 'test-client-oidc';
 const ACCESS_TOKEN_LIFESPAN = 900;
 
-/** Generate a fresh extractable Ed25519 key pair as PEM strings. */
-function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  return {
-    privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
-    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
-  };
-}
-
-/** Generate a fresh RSA-2048 private key as a PKCS#8 PEM string (#309). */
-function generateRsaPrivatePem(): string {
-  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  return privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-}
-
-/** Kids used when RS256 is enabled so the EdDSA and RSA keys are distinguishable. */
-const ED_KID = 'ed25519-2026';
-const RS256_KID = 'rsa-2026';
-
 interface BuildAppOptions {
-  /** When set, configure an RS256 ID-token signing key (#309). */
+  /** Give the request realm an RS256 `token_signing` key beside its EdDSA key (#309). */
   rs256?: boolean;
+  /**
+   * The request realm's id; a new UUID when absent. Another server's realm may
+   * share it, so a test can tell keys apart from realm ids.
+   */
+  realmId?: string;
+}
+
+/** A server, its signer and its realms. */
+interface TestServer {
+  readonly app: FastifyInstance;
+  readonly signer: TestSigner;
+  /** The realm every request belongs to, as the JWT plugin takes it. */
+  readonly realm: TokenRealm;
+  /** A second realm of the same signer, with keys and an issuer of its own. */
+  readonly otherRealm: TokenRealm;
 }
 
 /**
- * Build a Fastify app with the REAL jwt plugin (keyed by a fresh EdDSA pair,
- * plus a fresh RS256 key when `rs256` is set) and the production discovery
- * routes.
+ * Build a Fastify app with the REAL jwt plugin over the real in-memory signer
+ * and the production discovery routes. The signer holds two realms, each with
+ * fresh keys of its own: the request realm (with an RS256 key too when `rs256`
+ * is set) and a second realm no request belongs to.
  */
-async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
-  const { privateKeyPem, publicKeyPem } = generateEd25519Pem();
+async function buildApp(options: BuildAppOptions = {}): Promise<TestServer> {
+  const signer = createTestSigner();
+  const realmId = await signer.addRealm({
+    issuer: ISSUER,
+    rs256: options.rs256 === true,
+    ...(options.realmId === undefined ? {} : { id: options.realmId }),
+  });
+  const otherRealmId = await signer.addRealm({ issuer: OTHER_ISSUER });
+  const row = testRealm({ id: realmId, issuer: ISSUER });
 
   const app = Fastify({ logger: false });
   await app.register(jwtPlugin, {
-    privateKey: privateKeyPem,
-    publicKey: publicKeyPem,
-    issuer: ISSUER,
+    signer: signer.signer,
+    // As app.ts wires it: a request's tokens are its realm's.
+    requestRealm: () => tokenRealm(row),
     accessTokenLifespan: ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: 86400,
-    // #309: enable RS256 ID-token signing with a DISTINCT kid from the EdDSA key
-    // so the JWKS is unambiguously addressable and the certification suite can
-    // resolve the RSA key.
-    ...(options.rs256
-      ? {
-          keyId: ED_KID,
-          rs256PrivateKey: generateRsaPrivatePem(),
-          rs256KeyId: RS256_KID,
-        }
-      : {}),
   });
   // The realm resolver's decoration (#486): discovery is the request realm's.
-  supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: ISSUER }));
+  supplyRequestRealm(app, row);
   await app.register(wellKnownRoutes);
   await app.ready();
 
-  return app;
+  return {
+    app,
+    signer,
+    realm: tokenRealm(row),
+    otherRealm: { id: otherRealmId, issuer: OTHER_ISSUER },
+  };
+}
+
+/** The `kid` of the realm's active `token_signing` key of `algorithm`, as the signer lists it. */
+async function activeKid(server: TestServer, algorithm: string): Promise<string> {
+  const keys = await server.signer.signer.getVerificationKeys(
+    'local',
+    server.realm.id,
+    'token_signing'
+  );
+  const key = keys.find((candidate) => candidate.algorithm === algorithm);
+  if (key === undefined) throw new Error(`The realm has no ${algorithm} key`);
+  return key.kid;
 }
 
 /** Fetch and parse the OIDC discovery document via HTTP inject. */
@@ -147,9 +178,37 @@ function decodeHeader(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
 }
 
+/** Import a published JWK as a `node:crypto` public key (no jose / server-jwt import). */
+function importJwk(jwk: Record<string, unknown> | undefined): KeyObject {
+  return createPublicKey({ key: jwk, format: 'jwk' } as unknown as Parameters<
+    typeof createPublicKey
+  >[0]);
+}
+
+/** Whether `token`'s EdDSA signature verifies under `key`, with `node:crypto` only. */
+function verifiesEdDsa(token: string, key: KeyObject): boolean {
+  const [h, p, s] = token.split('.');
+  return verify(null, Buffer.from(`${h}.${p}`), key, Buffer.from(s, 'base64url'));
+}
+
+/**
+ * An ID token signed by hand with a fresh Ed25519 key no realm holds, and with
+ * no `kid` header, as a release before tokens named their key (#491) signed
+ * one. The verifier then tries each EdDSA key of the realm, so the token
+ * reaches the signature check itself. Signed with `node:crypto` only.
+ */
+function forgeKidlessIdToken(claims: Record<string, unknown>): string {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const encode = (part: Record<string, unknown>) =>
+    Buffer.from(JSON.stringify(part)).toString('base64url');
+  const signingInput = `${encode({ alg: 'EdDSA', typ: 'JWT' })}.${encode(claims)}`;
+  const signature = sign(null, Buffer.from(signingInput), privateKey);
+  return `${signingInput}.${signature.toString('base64url')}`;
+}
+
 describe('OIDC conformance — discovery document', () => {
   it('advertises the issuer, endpoints, and JWKS URI consistently', async () => {
-    const app = await buildApp();
+    const { app } = await buildApp();
     try {
       const doc = await fetchDiscovery(app);
       expect(doc['issuer']).toBe(ISSUER);
@@ -165,7 +224,7 @@ describe('OIDC conformance — discovery document', () => {
   it('declares EdDSA as the only ID token signing algorithm when no RS256 key is configured (#309 backward-compat)', async () => {
     // Baseline (no RS256 key): discovery MUST stay EdDSA-only, exactly as before
     // RS256 support existed. The RS256-present case is covered separately below.
-    const app = await buildApp();
+    const { app } = await buildApp();
     try {
       const doc = await fetchDiscovery(app);
       expect(doc['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
@@ -178,7 +237,7 @@ describe('OIDC conformance — discovery document', () => {
   });
 
   it('advertises request/request_uri as unsupported, matching what the authorize parser does (#286)', async () => {
-    const app = await buildApp();
+    const { app } = await buildApp();
     try {
       const doc = await fetchDiscovery(app);
 
@@ -209,7 +268,7 @@ describe('OIDC conformance — discovery document', () => {
   });
 
   it('lists the claims emitted in the ID token / userinfo', async () => {
-    const app = await buildApp();
+    const { app } = await buildApp();
     try {
       const doc = await fetchDiscovery(app);
       expect(doc['claims_supported']).toEqual(
@@ -233,7 +292,8 @@ describe('OIDC conformance — discovery document', () => {
 
 describe('OIDC conformance — JWKS', () => {
   it('publishes a single EdDSA Ed25519 key (no private component) when RS256 is not configured', async () => {
-    const app = await buildApp();
+    const server = await buildApp();
+    const { app } = server;
     try {
       const jwks = await fetchJwks(app);
       expect(jwks.keys).toHaveLength(1);
@@ -246,6 +306,8 @@ describe('OIDC conformance — JWKS', () => {
       expect(jwk['d']).toBeUndefined();
       // The public component MUST be present so relying parties can verify.
       expect(typeof jwk['x']).toBe('string');
+      // Under the kid of the realm's active EdDSA key, the kid its tokens name.
+      expect(jwk['kid']).toBe(await activeKid(server, 'EdDSA'));
     } finally {
       await app.close();
     }
@@ -265,7 +327,7 @@ describe('OIDC conformance — JWKS', () => {
  */
 describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => {
   it('advertises RS256 first, then EdDSA, in discovery when an RS256 key is configured', async () => {
-    const app = await buildApp({ rs256: true });
+    const { app } = await buildApp({ rs256: true });
     try {
       const doc = await fetchDiscovery(app);
       expect(doc['id_token_signing_alg_values_supported']).toEqual(['RS256', 'EdDSA']);
@@ -275,7 +337,8 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
   });
 
   it('publishes a distinct-kid RSA JWK with no private members alongside the EdDSA key', async () => {
-    const app = await buildApp({ rs256: true });
+    const server = await buildApp({ rs256: true });
+    const { app } = server;
     try {
       const jwks = await fetchJwks(app);
       // Two keys: the EdDSA OKP active key and the RS256 RSA key.
@@ -294,8 +357,10 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
 
       // Distinct kids so a verifier resolves (kid, alg) unambiguously — the
       // certification suite checks the RSA key's kid differs from the EdDSA one.
-      expect(okp?.['kid']).toBe(ED_KID);
-      expect(rsa?.['kid']).toBe(RS256_KID);
+      // Each is the kid of the realm's active key of that algorithm.
+      expect(okp?.['kid']).toBe(await activeKid(server, 'EdDSA'));
+      expect(rsa?.['kid']).toBe(await activeKid(server, 'RS256'));
+      expect(typeof rsa?.['kid']).toBe('string');
       expect(rsa?.['kid']).not.toBe(okp?.['kid']);
 
       // Private RSA members MUST never be exposed (RFC 7517 §9.3).
@@ -308,10 +373,11 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
   });
 
   it('signs the ID token with RS256 and it verifies against the published RSA JWK', async () => {
-    const app = await buildApp({ rs256: true });
+    const server = await buildApp({ rs256: true });
+    const { app, realm } = server;
     try {
       const nonce = 'n-rs256-conformance';
-      const idToken = await app.jwtUtils.signIdToken({
+      const idToken = await app.jwtUtils.signIdToken(realm, {
         sub: 'user-rs256-1',
         audience: CLIENT_ID,
         email: 'rs256@example.com',
@@ -326,7 +392,7 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
       const header = decodeHeader(idToken);
       expect(header['alg']).toBe('RS256');
       expect(header['typ']).toBe('JWT');
-      expect(header['kid']).toBe(RS256_KID);
+      expect(header['kid']).toBe(await activeKid(server, 'RS256'));
 
       // Resolve the RSA JWK the server publishes and verify the RS256 signature
       // with node:crypto only (no jose / server-jwt import).
@@ -335,11 +401,9 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
       expect(rsaJwk).toBeDefined();
       // The header kid resolves to exactly the published RSA JWK.
       expect(header['kid']).toBe(rsaJwk?.['kid']);
+      expect(jwks.keys.filter((k) => k['kid'] === header['kid'])).toEqual([rsaJwk]);
 
-      const rsaKey = createPublicKey({
-        key: rsaJwk,
-        format: 'jwk',
-      } as unknown as Parameters<typeof createPublicKey>[0]);
+      const rsaKey = importJwk(rsaJwk);
       const [h, p, s] = idToken.split('.');
       const signatureValid = createVerify('RSA-SHA256')
         .update(`${h}.${p}`)
@@ -362,19 +426,23 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
   });
 
   it('does NOT verify the RS256 ID token against the EdDSA key (algorithm separation)', async () => {
-    const app = await buildApp({ rs256: true });
+    const { app, realm } = await buildApp({ rs256: true });
     try {
-      const idToken = await app.jwtUtils.signIdToken({
+      const idToken = await app.jwtUtils.signIdToken(realm, {
         sub: 'user-rs256-2',
         audience: CLIENT_ID,
       });
 
       // The RS256-signed ID token must not verify under the OKP (EdDSA) key —
       // the access-token verifier is pinned to EdDSA and rejects it on the
-      // signature/algorithm before any claim is read.
+      // algorithm before any key is tried or any claim is read.
       await expect(
-        app.jwtUtils.verifyAccessToken(idToken, { audience: CLIENT_ID })
-      ).rejects.toThrow();
+        app.jwtUtils.verifyAccessToken(realm, idToken, { audience: CLIENT_ID })
+      ).rejects.toThrow(/signed with EdDSA/);
+
+      // Nor does it verify under the published OKP key itself.
+      const okp = (await fetchJwks(app)).keys.find((k) => k['kty'] === 'OKP');
+      expect(verifiesEdDsa(idToken, importJwk(okp))).toBe(false);
     } finally {
       await app.close();
     }
@@ -383,11 +451,11 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
 
 describe('OIDC conformance — ID token validation against the published key (OIDC Core §2)', () => {
   it('mints an ID token that verifies against the server key with all required claims', async () => {
-    const app = await buildApp();
+    const { app, realm } = await buildApp();
     try {
       const nonce = 'n-0S6_WzA2Mj';
-      // Mint via the SAME jwtUtils the token endpoint uses.
-      const idToken = await app.jwtUtils.signIdToken({
+      // Mint via the SAME jwtUtils the token endpoint uses, for the request realm.
+      const idToken = await app.jwtUtils.signIdToken(realm, {
         sub: 'user-uuid-1',
         audience: CLIENT_ID,
         email: 'user@example.com',
@@ -396,14 +464,22 @@ describe('OIDC conformance — ID token validation against the published key (OI
         nonce,
       });
 
-      // The JWKS publishes the public half of the signing key.
+      // The JWKS publishes the public half of the signing key, under the kid
+      // the token's header names.
       const jwks = await fetchJwks(app);
       expect(jwks.keys).toHaveLength(1);
+      const [jwk] = jwks.keys;
+      const header = decodeHeader(idToken);
+      expect(header['alg']).toBe('EdDSA');
+      expect(header['kid']).toBe(jwk['kid']);
+
+      // SIGNATURE, asserted directly: it verifies under the published JWK.
+      expect(verifiesEdDsa(idToken, importJwk(jwk))).toBe(true);
 
       // SIGNATURE, asserted indirectly (#283). `verifyAccessToken` runs the full
-      // EdDSA verification against this server's key BEFORE it inspects `typ`,
+      // EdDSA verification against the realm's key BEFORE it inspects `typ`,
       // so reaching the `at+jwt` rejection proves the signature validated — a
-      // foreign-key token dies earlier with a signature error, which the
+      // foreign-key token dies earlier with a key or signature error, which the
       // cross-key test below pins. This is the same key the JWKS publishes.
       //
       // The pre-#283 form of this test verified the ID token by calling the
@@ -411,7 +487,7 @@ describe('OIDC conformance — ID token validation against the published key (OI
       // the cross-token confusion RFC 9068 `typ` closes. It cannot be written
       // that way any more, and that is the point.
       await expect(
-        app.jwtUtils.verifyAccessToken(idToken, { audience: CLIENT_ID })
+        app.jwtUtils.verifyAccessToken(realm, idToken, { audience: CLIENT_ID })
       ).rejects.toThrow(/typ is not at\+jwt/);
 
       // CLAIMS, read from the token whose signature was just established.
@@ -432,16 +508,16 @@ describe('OIDC conformance — ID token validation against the published key (OI
       expect(claims['email_verified']).toBe(true);
       expect(claims['name']).toBe('Ada Lovelace');
       expect(claims['token_use']).toBe('id');
-      expect(decodeHeader(idToken)['typ']).toBe('JWT');
+      expect(header['typ']).toBe('JWT');
     } finally {
       await app.close();
     }
   });
 
   it('omits nonce/name/email when not supplied to the signer', async () => {
-    const app = await buildApp();
+    const { app, realm } = await buildApp();
     try {
-      const idToken = await app.jwtUtils.signIdToken({
+      const idToken = await app.jwtUtils.signIdToken(realm, {
         sub: 'user-uuid-2',
         audience: CLIENT_ID,
       });
@@ -458,7 +534,7 @@ describe('OIDC conformance — ID token validation against the published key (OI
   });
 
   it('BREAKING #229: a user with no verified email gets an ID token with the claim keys ABSENT, never null (OIDC Core §5.1, §5.3.2)', async () => {
-    const app = await buildApp();
+    const { app, realm } = await buildApp();
     try {
       // Post-#229 the token endpoint passes NO email pair to the signer when
       // trust-ordered resolution finds no verified attribute (route-level
@@ -466,7 +542,7 @@ describe('OIDC conformance — ID token validation against the published key (OI
       // the serialized ID token must not contain the keys at all — an
       // explicit-null or present-but-false emission would pass a
       // toBeUndefined() check but violates the omitted-entirely contract.
-      const idToken = await app.jwtUtils.signIdToken({
+      const idToken = await app.jwtUtils.signIdToken(realm, {
         sub: 'user-uuid-3',
         audience: CLIENT_ID,
         name: 'No Verified Email',
@@ -485,9 +561,9 @@ describe('OIDC conformance — ID token validation against the published key (OI
   });
 
   it('rejects an ID token whose audience does not match the relying party', async () => {
-    const app = await buildApp();
+    const { app, realm } = await buildApp();
     try {
-      const idToken = await app.jwtUtils.signIdToken({
+      const idToken = await app.jwtUtils.signIdToken(realm, {
         sub: 'user-uuid-3',
         audience: CLIENT_ID,
       });
@@ -499,7 +575,7 @@ describe('OIDC conformance — ID token validation against the published key (OI
       // call also rejects this token on `typ`, so a bare `toThrow(JWTInvalidError)`
       // would keep passing even if the audience check were deleted.
       await expect(
-        app.jwtUtils.verifyAccessToken(idToken, { audience: 'some-other-client' })
+        app.jwtUtils.verifyAccessToken(realm, idToken, { audience: 'some-other-client' })
       ).rejects.toThrow(/"aud" claim/);
     } finally {
       await app.close();
@@ -507,24 +583,75 @@ describe('OIDC conformance — ID token validation against the published key (OI
   });
 
   it('rejects an ID token signed by a different server key (foreign signature)', async () => {
-    const app = await buildApp();
-    const otherApp = await buildApp(); // independent key pair
+    const server = await buildApp();
+    const { app, realm } = server;
+    // An independent server whose realm has the SAME id and issuer, but keys
+    // of its own: only the key tells its tokens apart.
+    const other = await buildApp({ realmId: realm.id });
     try {
       // Mint on the OTHER server, then attempt to verify against THIS server's
-      // key — a relying party bound to this server's JWKS must reject it.
-      const foreignIdToken = await otherApp.jwtUtils.signIdToken({
+      // realm — a relying party bound to this server's JWKS must reject it.
+      const foreignIdToken = await other.app.jwtUtils.signIdToken(other.realm, {
         sub: 'user-uuid-4',
         audience: CLIENT_ID,
       });
+      expect(decodeClaims(foreignIdToken)['iss']).toBe(ISSUER);
+      const jwks = await fetchJwks(app);
+      expect(jwks.keys.map((k) => k['kid'])).not.toContain(decodeHeader(foreignIdToken)['kid']);
 
       // Message-pinned for the same reason as the audience case above: the #283
-      // `typ` check must not be able to stand in for the signature check.
+      // `typ` check must not be able to stand in for the key check. The token
+      // names a key this realm does not publish, so no key of the realm is
+      // tried at all.
       await expect(
-        app.jwtUtils.verifyAccessToken(foreignIdToken, { audience: CLIENT_ID })
+        app.jwtUtils.verifyAccessToken(realm, foreignIdToken, { audience: CLIENT_ID })
+      ).rejects.toThrow(/no key of this realm verifies it/);
+
+      // A foreign token with no `kid` (as a release before #491 signed one) is
+      // tried against each EdDSA key of the realm, and fails on the signature
+      // itself.
+      const now = Math.floor(Date.now() / 1000);
+      const forged = forgeKidlessIdToken({
+        iss: ISSUER,
+        aud: CLIENT_ID,
+        sub: 'user-uuid-4',
+        iat: now,
+        exp: now + ACCESS_TOKEN_LIFESPAN,
+        token_use: 'id',
+      });
+      await expect(
+        app.jwtUtils.verifyAccessToken(realm, forged, { audience: CLIENT_ID })
       ).rejects.toThrow(/signature/i);
     } finally {
       await app.close();
-      await otherApp.close();
+      await other.app.close();
+    }
+  });
+
+  it('rejects an ID token another realm of the same server signed (ADR-019 Decision 1, #491)', async () => {
+    const { app, realm, otherRealm } = await buildApp();
+    try {
+      const idToken = await app.jwtUtils.signIdToken(otherRealm, {
+        sub: 'user-uuid-5',
+        audience: CLIENT_ID,
+      });
+      // The signer gives the token its own realm's issuer and key.
+      expect(decodeClaims(idToken)['iss']).toBe(OTHER_ISSUER);
+      // It is genuine in its own realm: the signature verifies there, so the
+      // #283 `typ` check is what refuses it as an access token.
+      await expect(
+        app.jwtUtils.verifyAccessToken(otherRealm, idToken, { audience: CLIENT_ID })
+      ).rejects.toThrow(/typ is not at\+jwt/);
+
+      // The request realm's JWKS does not publish the key that signed it, and
+      // no key of the request realm verifies it.
+      const jwks = await fetchJwks(app);
+      expect(jwks.keys.map((k) => k['kid'])).not.toContain(decodeHeader(idToken)['kid']);
+      await expect(
+        app.jwtUtils.verifyAccessToken(realm, idToken, { audience: CLIENT_ID })
+      ).rejects.toThrow(/no key of this realm verifies it/);
+    } finally {
+      await app.close();
     }
   });
 });

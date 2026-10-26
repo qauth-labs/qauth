@@ -1,11 +1,8 @@
-import { createPrivateKey, createPublicKey } from 'node:crypto';
-
 import type {
   EnvironmentKeySettings,
   EnvironmentKeySource,
 } from '@qauth-labs/fastify-plugin-signer';
 import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
-import { calculateJwkThumbprint, type JWK } from 'jose';
 
 /**
  * The key variables of a deployment from before the key store, handed to the
@@ -34,8 +31,8 @@ export interface KeyVariableConfig {
 /**
  * The key settings for the boot step: each key whose variable is set.
  *
- * - The ML-DSA-65 seed only with hybrid signing on: the JWT plugin reads it
- *   only then, and the store keeps it only as the second key of a hybrid pair.
+ * - The ML-DSA-65 seed only with hybrid signing on: the store keeps it only as
+ *   the second key of a hybrid pair.
  * - `SESSION_COOKIE_SECRET` only when the operator set it, and never the
  *   development default the configuration falls back to: a fresh deployment
  *   generates its cookie key instead.
@@ -102,24 +99,4 @@ export function keyVariableSettings(
     // fills an unset one with the development default.
     ...(cookieSecret === undefined || cookieSecret.variables.length === 0 ? {} : { cookieSecret }),
   };
-}
-
-/**
- * The `kid` the key store gives a key from a PEM private key when no `kid` is
- * configured: the RFC 7638 SHA-256 thumbprint of its public key, derived with
- * `node:crypto`. The JWT plugin publishes the same `kid`, so the served JWKS
- * names each key as the store does.
- *
- * @returns the thumbprint, or `undefined` when the PEM does not parse; the
- *   JWT plugin and the key boot step each refuse such a key with their own
- *   message
- */
-export async function thumbprintKid(privateKeyPem: string): Promise<string | undefined> {
-  let jwk: JWK;
-  try {
-    jwk = createPublicKey(createPrivateKey(privateKeyPem)).export({ format: 'jwk' }) as JWK;
-  } catch {
-    return undefined;
-  }
-  return calculateJwkThumbprint(jwk, 'sha256');
 }

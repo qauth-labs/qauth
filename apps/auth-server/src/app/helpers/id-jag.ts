@@ -1,12 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import {
-  importPrivateSigningKey,
-  type JwsAlgorithm,
-  sign,
-  type SigningKey,
-  verifyWithHeader,
-} from '@qauth-labs/core-crypto';
+import { verifyWithHeader } from '@qauth-labs/core-crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -94,7 +88,7 @@ export const ID_JAG_TYP = 'oauth-id-jag+jwt';
  * foreign AS has no introspection relationship with QAuth, so a hybrid ID-JAG
  * would be unverifiable at exactly the party that must verify it.
  */
-const ID_JAG_SIGNING_ALGORITHM: JwsAlgorithm = 'EdDSA';
+const ID_JAG_SIGNING_ALGORITHM = 'EdDSA';
 
 /**
  * Why an inbound assertion was refused.
@@ -592,25 +586,6 @@ export interface MintedIdJag {
 }
 
 /**
- * Signing keys imported from PEM, memoised per PEM string.
- *
- * The key is imported once rather than on every mint (`importPKCS8` is not
- * free), and keyed by the PEM itself so a test that boots two servers with
- * different keys never shares one. The map is bounded by the number of distinct
- * configured keys — operator data, never request data — so it cannot grow.
- */
-const signingKeyCache = new Map<string, Promise<SigningKey>>();
-
-function idJagSigningKey(): Promise<SigningKey> {
-  const pem = env.JWT_PRIVATE_KEY;
-  const cached = signingKeyCache.get(pem);
-  if (cached) return cached;
-  const imported = importPrivateSigningKey(pem, ID_JAG_SIGNING_ALGORITHM);
-  signingKeyCache.set(pem, imported);
-  return imported;
-}
-
-/**
  * Mint an ID-JAG (draft §3.1 / §4.3.4, EMA §4.3).
  *
  * The exact claim set:
@@ -634,14 +609,17 @@ function idJagSigningKey(): Promise<SigningKey> {
  *    pointless) or reject the assertion (making it harmful). The delegation
  *    DEPTH bound is still enforced by the caller before minting.
  *
- * Signed with the same EdDSA key as access tokens (see
- * {@link ID_JAG_SIGNING_ALGORITHM}), so the target AS verifies it from QAuth's
- * published JWKS with no extra provisioning. `iss` is the CANONICAL issuer
+ * Signed through the signer with the realm's active EdDSA `token_signing` key,
+ * the key of its access tokens (see {@link ID_JAG_SIGNING_ALGORITHM}), so the
+ * target AS verifies it from the realm's published JWKS with no extra
+ * provisioning; the signer sets `iss` to the realm's issuer and names the key
+ * in the `kid` header (#491). `iss` is the CANONICAL issuer
  * identifier — byte-identical to what discovery publishes — because that is the
  * string the target AS allowlists.
  */
 export async function mintIdJag(
-  realm: RealmUrlSource,
+  fastify: FastifyInstance,
+  realm: { readonly id: string },
   options: MintIdJagOptions
 ): Promise<MintedIdJag> {
   const jti = randomUUID();
@@ -649,23 +627,27 @@ export async function mintIdJag(
     env.ID_JAG_ISSUED_LIFETIME,
     options.maxLifetimeSeconds ?? env.ID_JAG_ISSUED_LIFETIME
   );
+  const issuedAt = Math.floor(Date.now() / 1000);
 
   const claims: Record<string, unknown> = {
     jti,
     sub: options.subject,
+    // Single-valued on purpose: the consume side refuses a multi-valued `aud`
+    // for the reason documented there.
+    aud: options.audience,
     resource: options.resource,
     client_id: options.clientId,
     ...(options.scope !== undefined && options.scope.length > 0 ? { scope: options.scope } : {}),
+    iat: issuedAt,
+    exp: issuedAt + expiresIn,
   };
 
-  const assertion = await sign(claims, await idJagSigningKey(), ID_JAG_SIGNING_ALGORITHM, {
-    issuer: realmIssuer(realm),
-    expiresIn,
-    // Single-valued on purpose: `sign` passes a string straight through to
-    // `aud`, and the consume side refuses a multi-valued `aud` for the reason
-    // documented there.
-    audience: options.audience,
+  const assertion = await fastify.signer.signJws('local', {
+    realmId: realm.id,
+    purpose: 'token_signing',
     typ: ID_JAG_TYP,
+    algorithm: ID_JAG_SIGNING_ALGORITHM,
+    claims,
   });
 
   return { assertion, expiresIn, jti };

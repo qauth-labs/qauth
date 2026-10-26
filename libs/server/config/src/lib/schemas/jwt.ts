@@ -52,21 +52,29 @@ function resolveKey(
  * JWT environment configuration schema
  * JWT token generation and validation settings
  *
+ * Tokens are signed with each realm's keys in the encrypted key store (ADR-019
+ * Decision 9, #491). The key variables are read only by the default realm's
+ * key boot step, which imports a key the store lacks: at the first boot after
+ * the upgrade, or to replace a stored key until rotation through the store
+ * ships. All of them are optional; a fresh deployment without them generates
+ * its keys.
+ *
  * Supports both environment variables and file paths:
- * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (one required)
+ * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (both optional)
  * - JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH (both optional)
  */
 export const jwtEnvSchema = z
   .object({
     /**
-     * EdDSA private key in PEM format (optional if JWT_PRIVATE_KEY_PATH is provided)
-     * Used to sign JWT tokens
+     * EdDSA private key in PEM format (optional). The key boot step imports it
+     * into the default realm's key store when the store lacks it; tokens are
+     * signed with the stored key.
      */
     JWT_PRIVATE_KEY: z.string().optional(),
 
     /**
-     * Path to EdDSA private key file in PEM format (optional if JWT_PRIVATE_KEY is provided)
-     * Used to sign JWT tokens
+     * Path to EdDSA private key file in PEM format (optional). Takes precedence
+     * over JWT_PRIVATE_KEY.
      */
     JWT_PRIVATE_KEY_PATH: z.string().optional(),
 
@@ -159,32 +167,12 @@ export const jwtEnvSchema = z
      */
     REFRESH_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(604800),
   })
-  .superRefine((data, ctx) => {
-    // Validate that at least one private key source is provided
-    const hasPrivateKey = data.JWT_PRIVATE_KEY && data.JWT_PRIVATE_KEY.trim().length > 0;
-    const hasPrivateKeyPath = !!data.JWT_PRIVATE_KEY_PATH;
-
-    if (!hasPrivateKey && !hasPrivateKeyPath) {
-      ctx.addIssue({
-        code: 'custom',
-        message:
-          'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH',
-        path: ['JWT_PRIVATE_KEY'],
-      });
-    }
-  })
   .transform((data) => {
-    // Resolve private key: prefer file path, fallback to direct key
+    // Resolve the OPTIONAL private key: prefer file path, fallback to direct key.
+    // Undefined when unconfigured: the key store holds the realm's keys.
     const privateKey = resolveKey(data.JWT_PRIVATE_KEY, data.JWT_PRIVATE_KEY_PATH);
 
-    // Private key is guaranteed to be defined after superRefine validation
-    if (!privateKey) {
-      throw new Error(
-        'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH'
-      );
-    }
-
-    // Resolve public key only if private key exists: prefer file path, fallback to direct key
+    // Resolve public key: prefer file path, fallback to direct key
     const publicKey = resolveKey(data.JWT_PUBLIC_KEY, data.JWT_PUBLIC_KEY_PATH);
 
     // Resolve the OPTIONAL RS256 key pair (#309). Undefined when unconfigured,

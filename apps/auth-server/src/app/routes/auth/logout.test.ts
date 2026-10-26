@@ -133,7 +133,6 @@ function createFastifyStub() {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
       decodeTokenUnsafe: vi.fn(),
-      getIssuer: vi.fn().mockReturnValue('https://auth.example.com'),
     },
     sessionService: sessions.service,
     redis: {
@@ -176,9 +175,11 @@ describe('POST /auth/logout', () => {
     const reply = createReply();
     const result = await handler(logoutRequest(), reply);
 
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('valid.access.jwt', {
-      issuer: 'https://auth.example.com',
-    });
+    // Verified in the request's realm: its keys, its issuer pinned (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: 'realm-1', issuer: 'https://auth.example.com' },
+      'valid.access.jwt'
+    );
     expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
       VALID_USER.id,
       'logout'

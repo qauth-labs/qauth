@@ -6,7 +6,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
-import { realmTokenIssuer } from '../../helpers/realm-url';
+import { tokenRealm } from '../../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { revokeJti } from '../../helpers/token-revocation';
@@ -160,10 +160,9 @@ async function tryRevokeAccessToken(
 ): Promise<boolean> {
   let payload;
   try {
-    // RFC 9700 mix-up defence: only a token this realm issued (#490).
-    payload = await fastify.jwtUtils.verifyAccessToken(token, {
-      issuer: realmTokenIssuer(fastify, realm),
-    });
+    // RFC 9700 mix-up defence: only a token this realm issued, under its
+    // keys and its issuer (#490, #491).
+    payload = await fastify.jwtUtils.verifyAccessToken(tokenRealm(realm), token);
   } catch {
     // Invalid/expired/foreign-issuer token — nothing to revoke.
     return false;

@@ -1,10 +1,9 @@
-import { createPublicKey, generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync } from 'node:crypto';
 
 import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
-import { calculateJwkThumbprint } from 'jose';
 import { describe, expect, it } from 'vitest';
 
-import { type KeyVariableConfig, keyVariableSettings, thumbprintKid } from './key-variables';
+import { type KeyVariableConfig, keyVariableSettings } from './key-variables';
 
 const ED25519 = generateKeyPairSync('ed25519');
 const ED25519_PEM = ED25519.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -86,20 +85,5 @@ describe('keyVariableSettings', () => {
         {}
       )
     ).toEqual({});
-  });
-});
-
-describe('thumbprintKid', () => {
-  it('is the RFC 7638 thumbprint of the public key', async () => {
-    const expected = await calculateJwkThumbprint(
-      createPublicKey(ED25519_PUBLIC_PEM).export({ format: 'jwk' }),
-      'sha256'
-    );
-
-    await expect(thumbprintKid(ED25519_PEM)).resolves.toBe(expected);
-  });
-
-  it('is undefined for a value that is not a PEM key', async () => {
-    await expect(thumbprintKid('not a key')).resolves.toBeUndefined();
   });
 });

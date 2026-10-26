@@ -280,8 +280,10 @@ describe('POST /auth/login', () => {
 
     const result = await handler(request, reply);
 
-    // aud comes from the system client's audience (single-item array → string)
+    // aud comes from the system client's audience (single-item array → string);
+    // the token is signed in the request's realm (#491)
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'realm-1' }),
       expect.objectContaining({
         sub: user.id,
         clientId: 'system',
@@ -450,11 +452,14 @@ describe('POST /auth/login', () => {
 
     // Full-payload strictness kept from the #228 before-fixture: exact object.
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
-    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith({
-      sub: 'user-1',
-      clientId: 'system',
-      aud: 'https://auth.example.com',
-    });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'realm-1' }),
+      {
+        sub: 'user-1',
+        clientId: 'system',
+        aud: 'https://auth.example.com',
+      }
+    );
     // The provider is resolved from the registry — it is load-bearing, not
     // decorative (ADR-003).
     expect(fastify.providerRegistry.resolve).toHaveBeenCalledWith('password');
@@ -494,7 +499,7 @@ describe('POST /auth/login', () => {
     expect(result).toMatchObject({ access_token: 'jwt', token_type: 'Bearer' });
     // Omitted means the KEYS are absent from the signed claims — never null.
     const signedClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in signedClaims).toBe(false);
     expect('email_verified' in signedClaims).toBe(false);
   });

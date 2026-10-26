@@ -178,7 +178,6 @@ function makeFastify() {
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
-      getIssuer: () => 'https://auth.example.com',
     },
     sessionService: sessions.service,
     sessionUtils: {
@@ -1039,7 +1038,6 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
       jwtUtils: {
         extractFromHeader: vi.fn(),
         verifyAccessToken: vi.fn(),
-        getIssuer: () => 'https://auth.example.com',
       },
       sessionUtils: {
         getSession: vi.fn(),
@@ -2314,8 +2312,8 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
 });
 
 describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)', () => {
-  // The issuer of the realm this suite's requests are resolved to (REALM), and
-  // the one makeFastify()'s jwtUtils.getIssuer() signs tokens with.
+  // The issuer of the realm this suite's requests are resolved to (REALM),
+  // the `iss` of the tokens the realm signs (#491).
   const RAW_ISSUER = 'https://auth.example.com';
 
   /**
@@ -2345,7 +2343,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     bearer?: 'valid' | 'invalid';
     /**
      * The issuer of the request's realm, to prove `iss` tracks the realm row
-     * verbatim (#490). The JWT plugin keeps `RAW_ISSUER`.
+     * verbatim (#490).
      */
     realmIssuer?: string;
   }
@@ -2507,10 +2505,11 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   it("pins a Bearer token to the request realm's issuer (ADR-019 Decision 1, #490)", async () => {
     const { fastify, state } = await run({ bearer: 'valid', realmIssuer: 'https://b.example.com' });
     // The audience is assertManagementToken's to check (#509), so the
-    // verification pins only the issuer.
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('bearer.token', {
-      issuer: 'https://b.example.com',
-    });
+    // verification pins only the realm: its keys and its issuer (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: REALM.id, issuer: 'https://b.example.com' },
+      'bearer.token'
+    );
     expect(issOf(state.redirected)).toBe('https://b.example.com');
   });
 
