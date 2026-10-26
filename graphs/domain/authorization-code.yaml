@@ -1,6 +1,6 @@
-# The hand-written overlay of AuthorizationCode, the authorization_codes table. The entity and its fields are
-# generated from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal action
-# core.logout invokes. The token flow (#609) adds consume and the examples.
+# The hand-written overlay of AuthorizationCode, the authorization_codes table. The entity and its fields are generated
+# from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal actions core.logout
+# and core.consent invoke. The token flow (#609) adds consume and the examples.
 schema: delurio-graph/0
 kind: domain
 id: qauth
@@ -20,3 +20,41 @@ actions:
         every AuthorizationCode of the user that is not used yet gets used = true and usedAt = now, expired or not,
         so none can be redeemed
       - 'it waits for a redemption in flight, which holds its code row until the refresh token it mints is committed'
+
+  AuthorizationCode.mint:
+    # internal: invoked by core.consent, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:29
+    body:
+      type: object
+      required:
+        - code
+        - oauthClientId
+        - userId
+        - redirectUri
+        - codeChallenge
+        - codeChallengeMethod
+        - scopes
+        - resource
+        - expiresAt
+      properties:
+        code: { type: string, maxLength: 255 } # 32 random bytes, base64url: a credential, in no example
+        oauthClientId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        redirectUri: { type: string } # the redirect_uri of the request, as sent
+        codeChallenge: { type: string, minLength: 43, maxLength: 128 }
+        codeChallengeMethod: { const: S256 }
+        nonce: { type: [string, 'null'] }
+        authTime: { type: integer } # when the browser session signed in, epoch ms
+        assuranceLevel: { enum: [substantial, high, null] } # null for a password sign-in
+        sessionExpiresAt: { type: integer } # the session's absolute end, which caps the refresh family
+        scopes: { type: array, items: { type: string } } # the scopes the consent page showed
+        resource: { type: array, items: { type: string, format: uri } } # the resources it named
+        state: { type: [string, 'null'] }
+        dpopJkt: { type: [string, 'null'], pattern: '^[A-Za-z0-9_-]{43}$' }
+        expiresAt: { type: integer } # AUTHORIZATION_CODE_TTL_MS (five minutes) after the mint
+    result: { returns: AuthorizationCode }
+    sideEffects:
+      - 'a new AuthorizationCode, not used, which /oauth/token redeems once before expiresAt'
+      - >-
+        a code equal to a stored one fails on the unique index of code, and core.consent draws another, up to three
+        times
