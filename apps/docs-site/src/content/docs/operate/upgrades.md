@@ -190,6 +190,12 @@ with 1,000,000 rows in `refresh_tokens` (531 MB), it took 1.3 s, and a token
 insert waited for it. Upgrading from a release before 0038 runs 0038 and 0041
 in the one transaction, so the two pauses add up.
 
+The same release records each access token it issues from a code or a refresh
+family in Redis, so that a replay can deny-list them. It sets those records'
+lifetimes with `EXPIRE` and its `NX` and `GT` options, which need **Redis 7.0
+or later**. The bundled Compose file runs Redis 7; check the version of a Redis
+you run yourself.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

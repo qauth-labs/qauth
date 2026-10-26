@@ -128,9 +128,11 @@ A break of any of these is a finding:
   is the default audience of a grant that named no `resource` for a client with
   no configured `audience`. A token whose `aud` names only other resource
   servers is refused.
-- A refresh token is single-use. Reusing one revokes its whole family, and
-  the access tokens issued in it. So does redeeming an authorization code a
-  second time (ADR-017 Decision 10).
+- A refresh token is single-use. Reusing one revokes its whole family. So does
+  redeeming an authorization code a second time (ADR-017 Decision 10). The
+  access tokens issued from that code or family are revoked too, as far as
+  Redis recorded them at issuance and can deny-list them; one issued while
+  Redis could not record it stays valid until it expires.
 - An authorization code is issued only with the user's consent, or when an
   active consent already covers the requested scopes at every requested
   RFC 8707 resource.
