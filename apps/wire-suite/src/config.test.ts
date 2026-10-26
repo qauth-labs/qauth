@@ -30,9 +30,22 @@ describe('wire-suite configuration', () => {
       baseUrl: 'http://localhost:3000',
       adminUrl: 'http://localhost:3000',
       confidentialClient: { id: 'wire-confidential', secret: 'secret' },
+      ssfTransmitter: false,
     });
     expect(readWireConfig({ ...COMPLETE, QAUTH_ADMIN_URL: 'http://localhost:3100' }).adminUrl).toBe(
       'http://localhost:3100'
+    );
+  });
+
+  it('expects the SSF transmitter only when QAUTH_WIRE_SSF_TRANSMITTER=1', () => {
+    expect(readWireConfig({ ...COMPLETE, QAUTH_WIRE_SSF_TRANSMITTER: '1' }).ssfTransmitter).toBe(
+      true
+    );
+    expect(readWireConfig({ ...COMPLETE, QAUTH_WIRE_SSF_TRANSMITTER: '0' }).ssfTransmitter).toBe(
+      false
+    );
+    expect(() => readWireConfig({ ...COMPLETE, QAUTH_WIRE_SSF_TRANSMITTER: 'yes' })).toThrow(
+      WireConfigError
     );
   });
 

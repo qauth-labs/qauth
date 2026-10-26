@@ -184,11 +184,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Events
 
-| Key                                  | Role       | Default | Since | Description                                                                                                                                 |
-| ------------------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVENT_DELIVERY_MAX_ATTEMPTS`        | deployment | `12`    | 0.2.0 | The attempts an event delivery to a webhook or another route gets before it ends `failed`; a failed delivery stays in the delivery history. |
-| `EVENT_DELIVERY_RETRY_INITIAL_DELAY` | deployment | `30`    | 0.2.0 | Seconds an event delivery waits after its first failed attempt; each later wait doubles, less up to 20% at random.                          |
-| `EVENT_DELIVERY_RETRY_MAX_DELAY`     | deployment | `21600` | 0.2.0 | The longest wait between two attempts of an event delivery, in seconds; at least `EVENT_DELIVERY_RETRY_INITIAL_DELAY`.                      |
+| Key                                  | Role       | Default | Since | Description                                                                                                                                                                                                             |
+| ------------------------------------ | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVENT_DELIVERY_MAX_ATTEMPTS`        | deployment | `12`    | 0.2.0 | The attempts an event delivery to a webhook or another route gets before it ends `failed`; a failed delivery stays in the delivery history.                                                                             |
+| `EVENT_DELIVERY_RETRY_INITIAL_DELAY` | deployment | `30`    | 0.2.0 | Seconds an event delivery waits after its first failed attempt; each later wait doubles, less up to 20% at random.                                                                                                      |
+| `EVENT_DELIVERY_RETRY_MAX_DELAY`     | deployment | `21600` | 0.2.0 | The longest wait between two attempts of an event delivery, in seconds; at least `EVENT_DELIVERY_RETRY_INITIAL_DELAY`.                                                                                                  |
+| `SSF_TRANSMITTER_ENABLED`            | deployment | `false` | 0.2.0 | Turn the Shared Signals Framework transmitter on (`/.well-known/ssf-configuration`, stream management under `/ssf/`, push delivery of Security Event Tokens) for each realm whose `ssf_transmitter_enabled` is also on. |
 
 ### Database and Redis
 

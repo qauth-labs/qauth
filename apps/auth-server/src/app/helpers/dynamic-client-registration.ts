@@ -1,4 +1,4 @@
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
 import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
 
 import { hasOnlyUriCharacters } from '../schemas/common';
@@ -24,15 +24,41 @@ export type DynRegGrantType =
  * These follow RFC 7591 §3.2.2 ("invalid_client_metadata", "invalid_redirect_uri",
  * "invalid_software_statement" — the latter is n/a for us in MVP).
  *
- * We surface them as a `BadRequestError` whose message is the error code
- * (matching how the rest of the codebase encodes OAuth error codes into
- * `error` — see InvalidClientError, etc.). The `details` go in the log;
- * callers should not leak internal state to responders.
+ * Each is its own error class, whose message is the bare code and whose
+ * `errorDescription` is the text, so `/oauth/register` answers RFC 7591
+ * §3.2.2's `{ error, error_description }` and the management API answers the
+ * problem code of the same name (#513).
  */
 export type DynamicRegistrationErrorCode = 'invalid_client_metadata' | 'invalid_redirect_uri';
 
 export function rejectRegistration(code: DynamicRegistrationErrorCode, description: string): never {
-  throw new BadRequestError(`${code}: ${description}`);
+  throw code === 'invalid_redirect_uri'
+    ? new InvalidRedirectUriError(description)
+    : new InvalidClientMetadataError(description);
+}
+
+/**
+ * The `schemaErrorFormatter` of `POST /oauth/register` (RFC 7591 §3.2.2,
+ * #513): a body the schema refuses is invalid client metadata, or an invalid
+ * redirect URI when every failing field is under `redirect_uris`. Fastify
+ * attaches the issues to the returned error as `validation`, so the log line
+ * still carries them; the wire gets the code and the fields' messages.
+ */
+export function registrationSchemaError(
+  issues: readonly { instancePath?: string; message?: string }[]
+): InvalidClientMetadataError | InvalidRedirectUriError {
+  const description = issues
+    .slice(0, 5)
+    .map(({ instancePath, message }) =>
+      instancePath ? `${instancePath}: ${message ?? 'Invalid value'}` : (message ?? 'Invalid value')
+    )
+    .join('; ');
+  const redirectUrisOnly =
+    issues.length > 0 &&
+    issues.every(({ instancePath }) => (instancePath ?? '').startsWith('/redirect_uris'));
+  return redirectUrisOnly
+    ? new InvalidRedirectUriError(description)
+    : new InvalidClientMetadataError(description);
 }
 
 /**
@@ -168,8 +194,9 @@ export interface NormalizedRegistrationRequest {
  *   authorization_code (public client posture) when not explicitly
  *   declared as confidential.
  *
- * Throws `BadRequestError` with an RFC 7591 error code in the message on
- * any policy violation. Returns a normalized shape ready to persist.
+ * Throws `InvalidClientMetadataError` or `InvalidRedirectUriError` (the
+ * RFC 7591 §3.2.2 code, via `rejectRegistration`) on any policy violation.
+ * Returns a normalized shape ready to persist.
  */
 export function validateAndNormalize(
   body: DynamicClientRegistrationRequest,

@@ -1,6 +1,8 @@
 import {
   BadRequestError,
   ForbiddenError,
+  InvalidClientMetadataError,
+  InvalidRedirectUriError,
   JWTInvalidError,
   NotFoundError,
 } from '@qauth-labs/shared-errors';
@@ -508,7 +510,9 @@ describe('POST /api/clients (create) — #86', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toBeInstanceOf(
+      InvalidRedirectUriError
+    );
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
@@ -525,7 +529,7 @@ describe('POST /api/clients (create) — #86', () => {
           authedRequest({ body: { name: 'Bad', redirectUris: [uri] } }),
           createReply().reply
         )
-      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      ).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
 
       (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
@@ -539,7 +543,7 @@ describe('POST /api/clients (create) — #86', () => {
           }),
           createReply().reply
         )
-      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      ).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
     }
   );
@@ -582,8 +586,8 @@ describe('POST /api/clients (create) — #86', () => {
 
     it('refuses a bare scheme on create and on update when the setting is empty', async () => {
       const { fastify, create, update } = await createAndUpdate(cursorCallback);
-      await expect(create()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: cursor:/);
-      await expect(update()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: cursor:/);
+      await expect(create()).rejects.toBeInstanceOf(InvalidRedirectUriError);
+      await expect(update()).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
       expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
     });
@@ -604,8 +608,8 @@ describe('POST /api/clients (create) — #86', () => {
     it('still refuses a bare scheme that is not listed', async () => {
       env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
       const { fastify, create, update } = await createAndUpdate('myapp:/callback');
-      await expect(create()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: myapp:/);
-      await expect(update()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: myapp:/);
+      await expect(create()).rejects.toBeInstanceOf(InvalidRedirectUriError);
+      await expect(update()).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
       expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
     });
@@ -626,7 +630,9 @@ describe('POST /api/clients (create) — #86', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
@@ -644,7 +650,9 @@ describe('POST /api/clients (create) — #86', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
   });
 
   it('rejects a client_credentials token subject (non-UUID) from creating clients', async () => {
@@ -854,7 +862,9 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 
@@ -1032,7 +1042,9 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     // Rejected before hashing or persisting.
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
@@ -1056,9 +1068,12 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
-      /^scope not permitted: admin:read \(the admin: prefix is reserved for the admin API\)$/
-    );
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toMatchObject({
+      name: 'InvalidClientMetadataError',
+      message: 'invalid_client_metadata',
+      errorDescription:
+        'scope not permitted: admin:read (the admin: prefix is reserved for the admin API)',
+    });
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
@@ -1124,7 +1139,9 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 
@@ -1223,7 +1240,9 @@ describe('redirect_uris required for user-involving grants (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidRedirectUriError
+    );
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
@@ -1246,7 +1265,9 @@ describe('redirect_uris required for user-involving grants (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(
+      InvalidRedirectUriError
+    );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 

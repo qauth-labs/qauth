@@ -1,8 +1,13 @@
+import { buildTransmitterMetadata } from '@qauth-labs/fastify-plugin-ssf';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
+import { JWKS_CACHE_CONTROL } from '../constants';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
+import { requestRealm } from '../helpers/request-realm';
+import { SsfNotFoundError } from '../helpers/ssf-errors';
+import { realmRunsTransmitter } from '../helpers/ssf-receiver';
 
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
@@ -12,19 +17,18 @@ import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../h
 const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
 
 /**
- * The key set is cached for at most five minutes (ADR-019 Decision 9), so a
- * key that is unpublished leaves relying parties' caches within that window.
- */
-const JWKS_CACHE_CONTROL = 'public, max-age=300';
-
-/**
  * Well-known discovery endpoints:
  *
  * - `GET /.well-known/oauth-authorization-server` — RFC 8414 AS metadata.
  * - `GET /.well-known/openid-configuration`       — OIDC Discovery 1.0.
- * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS.
+ * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS: the token
+ *   keys only. The SSF transmitter's SET keys are published apart, at
+ *   `/ssf/jwks.json` (d-1026-09).
  *
- * All three are unauthenticated and aggressively cacheable. They MUST NOT
+ * - `GET /.well-known/ssf-configuration`          — SSF 1.0 §7 transmitter
+ *   metadata, registered only while SSF_TRANSMITTER_ENABLED is on (#410).
+ *
+ * All are unauthenticated and aggressively cacheable. They MUST NOT
  * be rate-limited as aggressively as auth endpoints: clients hit them
  * during bootstrap and cache responses locally.
  */
@@ -119,4 +123,36 @@ export default async function (fastify: FastifyInstance) {
       return reply.send(jwks);
     }
   );
+
+  // Shared Signals Framework transmitter metadata (SSF 1.0 §7, #410). No
+  // route at all while SSF_TRANSMITTER_ENABLED is off; 404 for a realm whose
+  // own switch is off. Every URL comes from the realm's issuer, which is the
+  // `iss` of the SETs the realm's signer issues (§7.1).
+  if (fastify.ssf) {
+    fastify.get(
+      '/.well-known/ssf-configuration',
+      {
+        schema: {
+          description:
+            'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the transmitter’s own JWKS (`/ssf/jwks.json`), which verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
+          tags: ['Discovery', 'Shared Signals'],
+          'x-qauth-stability': 'experimental',
+          // SSF 1.0 §7 defines no error body: the 404 is the `not_found`
+          // problem document (#513).
+          'x-qauth-errors': [404],
+        },
+        config: { surface: 'meta' },
+      },
+      async (request, reply) => {
+        const realm = requestRealm(request);
+        if (!realmRunsTransmitter(request) || realm.issuer === null) {
+          throw new SsfNotFoundError();
+        }
+        reply
+          .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
+          .header('Content-Type', 'application/json; charset=utf-8');
+        return reply.send(buildTransmitterMetadata(realm.issuer));
+      }
+    );
+  }
 }

@@ -338,7 +338,8 @@ describe('realm key boot integration (real Postgres)', () => {
     ]);
     const id = await realmId();
     const jwks = await app.signer.getJwks('local', id);
-    expect(jwks.keys.map((key) => key.alg).sort()).toEqual(['EdDSA', 'EdDSA', 'RS256']);
+    // The token keys; the event key is published apart (d-1026-09).
+    expect(jwks.keys.map((key) => key.alg).sort()).toEqual(['EdDSA', 'RS256']);
     for (const key of jwks.keys) expect(key.kid).toEqual(expect.any(String));
     // The cookie and data-at-rest keys work.
     const secrets = await app.signer.getCookieSecrets('local', id);

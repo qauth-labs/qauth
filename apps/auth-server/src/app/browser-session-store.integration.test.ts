@@ -332,6 +332,7 @@ describe('browser sessions on the session service (#488, real containers)', () =
       headers: { host: HOST_B, cookie: jar.header() as string },
     });
     expect(atB.statusCode).toBe(401);
+    expect(atB.json()).toMatchObject({ status: 401, code: 'unauthorized' });
     // The lookup named realm B, which holds no session with that sid, and the
     // stale cookie is cleared there.
     expect(lookups).toHaveBeenCalledWith(

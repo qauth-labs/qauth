@@ -115,7 +115,7 @@ body:
       label: References
       description: Related documents, PRD sections, external documentation links (optional)
       placeholder: |
-        - MVP-PRD.md - Phase X, Section Y
+        - docs/adr/018-1-0-scope-and-stability.md - Section N
         - [Fastify Documentation](https://www.fastify.io/)
         - [Drizzle ORM Docs](https://orm.drizzle.team/)
       render: markdown

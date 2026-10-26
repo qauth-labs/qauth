@@ -189,6 +189,14 @@ export const realms = pgTable(
     adminEventRetentionDays: integer('admin_event_retention_days')
       .notNull()
       .default(ADMIN_EVENT_RETENTION_DEFAULT_DAYS),
+    /**
+     * Whether the realm runs the Shared Signals Framework transmitter (issue
+     * #410): its `/.well-known/ssf-configuration`, its stream management and
+     * the deliveries to its streams. It counts only while the deployment's
+     * SSF_TRANSMITTER_ENABLED is on. Off by default: an operator turns it on
+     * for each realm that has receivers.
+     */
+    ssfTransmitterEnabled: boolean('ssf_transmitter_enabled').notNull().default(false),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

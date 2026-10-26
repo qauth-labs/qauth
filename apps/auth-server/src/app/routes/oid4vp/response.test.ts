@@ -1754,6 +1754,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
 
       await expect(handler(makeRequest(accepted), reply)).rejects.toMatchObject({
         statusCode: 400,
+        message: 'invalid_request',
       });
 
       expect(sent).toEqual([]);
@@ -1779,7 +1780,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
           }),
           reply
         )
-      ).rejects.toMatchObject({ statusCode: 400 });
+      ).rejects.toMatchObject({ statusCode: 400, message: 'invalid_request' });
 
       expect(sent).toEqual([]);
       expect(reply.header).not.toHaveBeenCalled();
@@ -1797,6 +1798,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
 
       await expect(handler(makeRequest({ response: 'not.a.jwe' }), reply)).rejects.toMatchObject({
         statusCode: 400,
+        message: 'invalid_request',
       });
 
       expect(sent).toEqual([]);

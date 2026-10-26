@@ -11,3 +11,4 @@ export * from './lib/legacy';
 export * from './lib/payload-rules';
 export * from './lib/registry';
 export * from './lib/types/admin';
+export * from './lib/types/ssf';

@@ -170,6 +170,7 @@ export default async function (fastify: FastifyInstance) {
           'Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). Password must meet strength requirements.',
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 422],
         body: registerSchema,
         response: {
           202: registerResponseSchema,

@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  InvalidClientMetadataError,
+  InvalidRedirectUriError,
+  JWTInvalidError,
+  NotFoundError,
+} from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
 import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -196,9 +202,12 @@ async function resolveClientPolicy(
  *   least one `redirect_uri`; without one the client can never complete a
  *   user-agent flow (mirrors DCR's `redirect_uris is required …` rejection).
  *
- * Throws `BadRequestError` (→ HTTP 400) on any violation. Each call site has
- * already resolved the effective grant/response/auth/redirect values (request
- * value or persisted value for partial updates).
+ * Throws on any violation what `/oauth/register` throws for the same one
+ * (#513): `InvalidRedirectUriError` (400 `invalid_redirect_uri`) for the
+ * missing redirect URIs, `InvalidClientMetadataError` (400
+ * `invalid_client_metadata`) for the rest. Each call site has already resolved
+ * the effective grant/response/auth/redirect values (request value or
+ * persisted value for partial updates).
  */
 function assertGrantResponseConsistency(input: {
   grantTypes: string[];
@@ -209,20 +218,24 @@ function assertGrantResponseConsistency(input: {
   const { grantTypes, responseTypes, tokenEndpointAuthMethod, redirectUris } = input;
 
   if (grantTypes.includes('authorization_code') && !responseTypes.includes('code')) {
-    throw new BadRequestError('authorization_code grant requires the "code" response type');
+    throw new InvalidClientMetadataError(
+      'authorization_code grant requires the "code" response type'
+    );
   }
   if (!grantTypes.includes('authorization_code') && responseTypes.length > 0) {
-    throw new BadRequestError('response_types without authorization_code grant is not supported');
+    throw new InvalidClientMetadataError(
+      'response_types without authorization_code grant is not supported'
+    );
   }
   if (tokenEndpointAuthMethod === 'none' && grantTypes.includes('client_credentials')) {
-    throw new BadRequestError(
+    throw new InvalidClientMetadataError(
       'client_credentials grant requires a confidential client (token_endpoint_auth_method must not be "none")'
     );
   }
   const userInvolving =
     grantTypes.includes('authorization_code') || grantTypes.includes('refresh_token');
   if (userInvolving && redirectUris.length === 0) {
-    throw new BadRequestError(
+    throw new InvalidRedirectUriError(
       'redirect_uris is required for grants that involve a user-agent (authorization_code / refresh_token)'
     );
   }
@@ -267,24 +280,25 @@ async function resolveRealmAllowedScopes(
 
 /**
  * Cap requested `scopes` against the realm allowlist, rejecting anything
- * outside it (RFC 7591 `invalid_client_metadata` equivalent). Empty allowlist
- * means no custom scopes are permitted. Throws `BadRequestError` → HTTP 400.
+ * outside it with `InvalidClientMetadataError` (400 `invalid_client_metadata`,
+ * as `/oauth/register` answers it; #513). Empty allowlist means no custom
+ * scopes are permitted.
  *
  * A scope with the reserved `admin:` prefix is refused whatever the allowlist
- * says (#507), as dynamic registration refuses it: the allowlist cannot hold
- * one, but this list may come from the environment when the realm's seed
- * write failed.
+ * says (#507), with the same code, as dynamic registration refuses it: the
+ * allowlist cannot hold one, but this list may come from the environment when
+ * the realm's seed write failed.
  */
 function assertScopesAllowed(requested: string[], realmAllowedScopes: string[]): void {
   const reserved = reservedAdminScopesIn(requested);
   if (reserved.length > 0) {
-    throw new BadRequestError(
+    throw new InvalidClientMetadataError(
       `scope not permitted: ${reserved.join(' ')} (the admin: prefix is reserved for the admin API)`
     );
   }
   const disallowed = requested.filter((s) => !realmAllowedScopes.includes(s));
   if (disallowed.length > 0) {
-    throw new BadRequestError(`scope not permitted: ${disallowed.join(' ')}`);
+    throw new InvalidClientMetadataError(`scope not permitted: ${disallowed.join(' ')}`);
   }
 }
 
@@ -350,6 +364,7 @@ export default async function (fastify: FastifyInstance) {
           'List the OAuth clients owned by the authenticated developer. Scoped by oauth_clients.developer_id. Requires a developer Bearer access token. Never returns the client secret. (Phase 2.2, issue #85.)',
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [401],
         security: [{ bearerAuth: [] }],
         response: { 200: listClientsResponseSchema },
       },
@@ -430,6 +445,7 @@ export default async function (fastify: FastifyInstance) {
           'Create an OAuth client owned by the authenticated developer. The server generates the client_id and (for confidential clients) a client_secret; the plaintext secret is returned in THIS response only and never again. Requires a developer Bearer access token. (Phase 2.2, issue #86.)',
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 403],
         security: [{ bearerAuth: [] }],
         body: createClientRequestSchema,
         response: { 201: createClientResponseSchema },
@@ -579,6 +595,7 @@ export default async function (fastify: FastifyInstance) {
           "Get one of the authenticated developer's OAuth clients by id. Returns 404 if the client does not exist or is owned by another developer (no existence enumeration). Never returns the client secret. (Phase 2.2, issue #87.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: clientSchema },
@@ -606,6 +623,7 @@ export default async function (fastify: FastifyInstance) {
           "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled is the owner's switch and may be set either way; it does not lift an operator's suspension (the read-only suspended field), which only the operator can. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         body: updateClientRequestSchema,
@@ -702,6 +720,7 @@ export default async function (fastify: FastifyInstance) {
           "Delete one of the developer's OAuth clients. Returns 404 if the client does not exist or is owned by another developer. After deletion the client can no longer authenticate. (Phase 2.2, issue #89.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 204: z.null() },
@@ -740,6 +759,7 @@ export default async function (fastify: FastifyInstance) {
           "Issue a new client_secret for one of the developer's OAuth clients. The previous secret is invalidated immediately and the new plaintext secret is returned in THIS response only. Returns 404 if the client does not exist or is owned by another developer; 400 for a public client that has no secret. (Phase 2.2, issue #90.)",
         tags: ['Clients'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 404],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: regenerateSecretResponseSchema },

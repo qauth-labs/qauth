@@ -24,6 +24,7 @@ import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import { signerPlugin } from '@qauth-labs/fastify-plugin-signer';
+import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
@@ -126,9 +127,9 @@ export interface AppOptions {
    */
   eventTelemetryLimits?: Partial<EventLogQueueLimits>;
   /**
-   * The event delivery routes (#460). None until the webhook (#538) and SSF
-   * (#410) routes land, and the delivery role then does nothing; a suite
-   * that watches the role passes a route of its own.
+   * Event delivery routes beside the server's own (#460): the SSF route
+   * while SSF_TRANSMITTER_ENABLED is on (#410), and the webhook route once it
+   * lands (#538). A suite that watches the role passes a route of its own.
    */
   eventDeliveryRoutes?: readonly DeliveryRoute[];
 }
@@ -586,14 +587,28 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // propagation (#128) is registered above, ahead of the realm resolver.
   await fastify.register(metricsPlugin);
 
+  // The Shared Signals Framework transmitter (ADR-018 §3, #410). Off by
+  // default: `fastify.ssf` is null, no SSF route registers below, and the
+  // delivery role gets no SSF route, so no SSF delivery row is ever written.
+  // On, it builds the push route over the stream repository and the egress
+  // client; the routes, the metadata and the deliveries then serve each realm
+  // whose own switch is on.
+  await fastify.register(ssfPlugin, { enabled: env.SSF_TRANSMITTER_ENABLED });
+  const deliveryRoutes: readonly DeliveryRoute[] = [
+    ...(fastify.ssf === null ? [] : [fastify.ssf.deliveryRoute]),
+    ...(eventDeliveryRoutes ?? []),
+  ];
+
   // Background jobs (ADR-019 Decision 8): purge-expired, and event retention
   // (#536), which reads the delivery routes' enabled destinations and falls
-  // back to the retention seeds for a realm whose row is gone. The runner
-  // starts on `onReady` and stops on `onClose`, so it needs the database and
-  // metrics plugins above it; it registers no route, so nothing below depends
-  // on its position.
+  // back to the retention seeds for a realm whose row is gone. With the SSF
+  // transmitter off no node serves `ssf`, so an SSF position or delivery left
+  // from when it was on holds no event back. The runner starts on `onReady`
+  // and stops on `onClose`, so it needs the database and metrics plugins
+  // above it; it registers no route, so nothing below depends on its position.
   await fastify.register(jobsPlugin, {
-    deliveryRoutes: eventDeliveryRoutes ?? [],
+    deliveryRoutes,
+    unservedDeliveryKinds: fastify.ssf === null ? [SSF_DELIVERY_KIND] : [],
     eventRetentionFallback: {
       userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
@@ -606,14 +621,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // EVENT_DELIVERY_* keys set. It starts on `onReady` and stops on `onClose`
   // once its attempts in flight end, so it needs the database, the signer
   // and the metrics above it, and it signs only through a `delivery` handle
-  // of the signer. No route exists yet, so it does nothing but publish its
-  // metrics. It rides the default realm boot switch, as every database step
-  // at boot does: a boot without a database has no signer either.
+  // of the signer. Its routes are the SSF route while the transmitter is on
+  // and a test's own; with none it does nothing but publish its metrics. It
+  // rides the default realm boot switch, as every database step at boot
+  // does: a boot without a database has no signer either.
   if (defaultRealmBoot) {
     await fastify.register(eventDeliveryPlugin, {
       db: fastify.db,
       signer: fastify.signer,
-      routes: eventDeliveryRoutes ?? [],
+      routes: deliveryRoutes,
       registry: fastify.metrics.registry,
       settings: {
         maxAttempts: env.EVENT_DELIVERY_MAX_ATTEMPTS,

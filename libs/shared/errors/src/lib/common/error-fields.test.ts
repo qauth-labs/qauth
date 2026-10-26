@@ -47,7 +47,7 @@ describe('error code/statusCode contract (F-14)', () => {
     expect(err.name).toBe('TokenAlreadyUsedError');
     expect(err.message).toBe('Token has already been used');
     expect(err.statusCode).toBe(409);
-    expect(err.code).toBe('TOKEN_ALREADY_USED');
+    expect(err.code).toBe('VERIFICATION_TOKEN_USED');
   });
 
   it('codes are unique across these classes', () => {
