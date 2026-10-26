@@ -644,6 +644,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (clients of the non-OAuth routes)**: every route that is not an
+  OAuth protocol endpoint answers an error with an RFC 9457 problem document,
+  `application/problem+json` ([#513], ADR-019 Decision 7): `type`, `title`,
+  `status`, `detail`, `instance`, a stable lower-case `code` and `trace_id`
+  (the request id), plus `errors[]` with a `pointer` and a `message` for a
+  validation failure and for weak-password feedback under `/password`. The old
+  `{ error, statusCode, code, feedback, details }` body is gone, from the
+  `/auth`, `/api`, `/consents` and `/ui` routes, the well-known documents, the
+  wallet-link API, the 404 for a path no route serves, the router's own refusals
+  (a path that is not valid percent-encoding, 400; an over-long path parameter,
+  414 `uri_too_long`) and a request that cannot be read (400, 408
+  `request_timeout`, 431 `request_header_fields_too_large`). Each code has its own
+  problem type, listed on the docs site's new **Problem types** page
+  (`reference/problem-types`), and one registry maps every class of
+  `@qauth-labs/shared-errors`, and every error class a route defines, to its
+  code. A 401 or 403 on a bearer-protected route also carries a
+  `WWW-Authenticate` challenge; a 403 says `insufficient_scope` only when a
+  wider token would be let through. A request that presents no credentials
+  answers `unauthorized`, and its challenge names no error (RFC 6750 §3.1); a
+  token that was presented and refused answers `invalid_access_token` or
+  `access_token_expired`, with `error="invalid_token"` in the challenge. A
+  one-time email verification token that is refused answers
+  `invalid_verification_token`, and a duplicate `already_exists`.
+  `POST /api/clients` and `PATCH /api/clients/{id}` refuse client metadata
+  with the codes dynamic registration answers: `invalid_client_metadata` for a
+  scope outside the realm's allowlist, a grant and response type that do not
+  fit together or a public `client_credentials` client, and
+  `invalid_redirect_uri` for a missing `redirect_uris`. The root's own answers
+  carry the request id in `X-Request-Id` (`REQUEST_ID_HEADER`) too, as its
+  `trace_id`, and a missing Swagger UI file under `/docs` answers the
+  `not_found` document. `GET /consents` and `DELETE
+  /consents/{id}` answer a request without a browser session with the 401
+  `unauthorized` problem document too, with no challenge (they answered
+  `{ "consents": [] }` and an empty body). The SSF transmitter's routes
+  ([#410]) answer problem documents as well, SSF 1.0 defining no error body:
+  a realm that does not run the transmitter gets the `not_found` document of a
+  path no route serves, and a token without `ssf:stream` a 403 whose challenge
+  names that scope.
+- **BREAKING (OAuth clients that read QAuth's own members)**: the OAuth protocol
+  endpoints (token, authorize, introspect, revoke, register, userinfo and the
+  wallet-facing OID4VP endpoints) answer only the members their specification
+  defines, `error` and `error_description` ([#513]). `code`, `statusCode`,
+  `feedback` and `retryAfter` are gone; the `Retry-After` and
+  `WWW-Authenticate` headers stay. Two shapes are fixed on the way: an unknown
+  `grant_type` answers `unsupported_grant_type` (RFC 6749 §5.2) instead of a
+  validation error, and dynamic registration answers `invalid_client_metadata`
+  or `invalid_redirect_uri` bare in `error`, with the text in
+  `error_description` (RFC 7591 §3.2.2), also for a body its schema refuses. A
+  validation failure answers `invalid_request`, the rate limiter's 429
+  `temporarily_unavailable`, and a 5xx `server_error`. At `/oauth/authorize`, a
+  `client_id` that names no client answers `invalid_request` (it was
+  `invalid_client`). Redeeming a code whose user has been deleted answers 400
+  `invalid_grant`, as for a disabled user (it was a 404 naming the user's id),
+  and so does a code or refresh token another request spent or revoked first
+  (it was a 404 `invalid_request`). The `authorization.failed` event of a
+  `client_id` that names no client records `error: "invalid_request"`, the
+  code the caller is answered (it recorded `invalid_client`). More shapes that
+  change at these endpoints:
+  - userinfo answers every 401 with `error: "invalid_token"` (it was prose in
+    `error`); a request without a token gets a challenge with no error code;
+  - `/oauth/register` answers a developer token that is not valid with 401
+    `invalid_token`, and the developer's client limit with 403
+    `access_denied` (both were prose in `error`); RFC 7591 defines no error
+    for the limit;
+  - a 421 (a host no realm answers for) answers `invalid_request`, as do a body
+    too large (413), an unsupported media type (415) and any other refusal
+    Fastify raises before the route runs;
+  - a validation failure carries no `details[]` any more; `error_description`
+    names the fields.
+- A refusal that several routes raise now reads one way everywhere ([#513]): an
+  access token whose subject is not an active user answers `invalid_access_token` on a
+  problem route and `invalid_token` at userinfo, in one wording that does not
+  say whether the account was deleted or disabled; a `subject_token` naming no
+  active user answers `invalid_request` in one wording; the consent page refuses
+  an unknown client, a refused redirect URI and a malformed `dpop_jkt` with the
+  same code as `/oauth/authorize`, and a disabled or suspended client with
+  `unauthorized_client` (it was `invalid_client`); a CSRF mismatch answers
+  `invalid_csrf_token`.
+- The OpenAPI documents list each operation's error responses, referencing the
+  shared `Problem` schema, or `OAuthError` on an OAuth protocol endpoint
+  ([#513]). Neither schema refuses members it does not name: RFC 9457 §3.2
+  and RFC 6749 §5.2 let a type or an extension add some, and a client ignores
+  those it does not know.
+
+  **Action for clients**: branch on `code` and the status of a problem document,
+  or on `error` and the status of an OAuth body, never on `title`, `detail` or
+  `error_description`. The developer portal ships updated with this release.
+
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
   `libs/sdk/resource-guard`, and its names follow: `ResourceGuard`,
@@ -1006,6 +1094,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#513]: https://github.com/qauth-labs/qauth/issues/513
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552

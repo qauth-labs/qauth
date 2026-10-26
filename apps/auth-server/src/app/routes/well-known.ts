@@ -6,7 +6,8 @@ import { listEnabledExperimental } from '../../config/experimental-features';
 import { JWKS_CACHE_CONTROL } from '../constants';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
 import { requestRealm } from '../helpers/request-realm';
-import { realmRunsTransmitter, SsfNotFoundError } from '../helpers/ssf-receiver';
+import { SsfNotFoundError } from '../helpers/ssf-errors';
+import { realmRunsTransmitter } from '../helpers/ssf-receiver';
 
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
@@ -136,6 +137,9 @@ export default async function (fastify: FastifyInstance) {
             'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the transmitter’s own JWKS (`/ssf/jwks.json`), which verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
           tags: ['Discovery', 'Shared Signals'],
           'x-qauth-stability': 'experimental',
+          // SSF 1.0 §7 defines no error body: the 404 is the `not_found`
+          // problem document (#513).
+          'x-qauth-errors': [404],
         },
         config: { surface: 'meta' },
       },

@@ -16,6 +16,11 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
 import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
 import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
+import {
+  answerFrameworkError,
+  answerRouteNotFound,
+  answerUnknownRouteBeforeBody,
+} from '../app/helpers/request-bounds';
 
 /**
  * TEST SUPPORT — booting the REAL auth-server against throwaway containers
@@ -271,9 +276,19 @@ export async function bootAuthServer(
     // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
     // TRUST_PROXY hop, and `request.ip` reads `X-Forwarded-For` likewise.
     trustProxy: env.TRUST_PROXY,
+    // As in `main.ts`: the router's own refusals answer problem documents (#513).
+    frameworkErrors: answerFrameworkError,
+    // As in `main.ts`: the request id travels in REQUEST_ID_HEADER, which the
+    // root's own answers echo too.
+    requestIdHeader: env.REQUEST_ID_HEADER,
   });
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
+  // As in `main.ts`: a path no route serves is answered before its body is
+  // read, with the `not_found` problem document (#513).
+  server.addHook('onRequest', answerUnknownRouteBeforeBody);
+  // As in `main.ts`: `reply.callNotFound()` answers that document too.
+  server.setNotFoundHandler(answerRouteNotFound);
   // `fp()` only lifts ENCAPSULATION: the same plugins register in the same order
   // and every route is identical, but `db`/`dbPool`/`redis` land on the root
   // instance instead of inside the app's own scope, which is what lets

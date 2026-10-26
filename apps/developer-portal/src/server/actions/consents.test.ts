@@ -130,7 +130,7 @@ describe('consent server functions', () => {
     vi.mocked(readSessionCookie).mockReturnValue(validSession);
     vi.mocked(authServerClient.listConsents).mockResolvedValue({
       ok: false,
-      error: { code: 'INTERNAL', message: 'boom', status: 500 },
+      error: { code: 'UNKNOWN', message: 'Internal error', status: 500 },
     });
 
     const result = await listConsentsHandler();

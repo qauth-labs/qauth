@@ -66,6 +66,16 @@ function stableHeaders(response: LightMyRequestResponse): Record<string, unknown
   );
 }
 
+/**
+ * A problem document without its `trace_id`, which is the request id and so
+ * differs between any two requests (#513). Every other member must match.
+ */
+function stableProblem(response: LightMyRequestResponse): Record<string, unknown> {
+  const { trace_id: traceId, ...rest } = response.json() as Record<string, unknown>;
+  expect(traceId).toEqual(expect.any(String));
+  return rest;
+}
+
 describe('registration does not reveal whether an address is registered (real containers)', () => {
   let infra: E2eInfrastructure | undefined;
   let jwt: PemKeyPair | undefined;
@@ -182,8 +192,9 @@ describe('registration does not reveal whether an address is registered (real co
       const loginFree = await login(app, FREE, ATTACKER_PASSWORD);
 
       expect(loginTaken.statusCode).toBe(401);
+      expect(loginTaken.json()).toMatchObject({ status: 401, code: 'invalid_credentials' });
       expect(loginFree.statusCode).toBe(loginTaken.statusCode);
-      expect(loginFree.body).toBe(loginTaken.body);
+      expect(stableProblem(loginFree)).toEqual(stableProblem(loginTaken));
       expect(stableHeaders(loginFree)).toEqual(stableHeaders(loginTaken));
 
       // The same through the hosted login page. The page echoes the typed

@@ -23,7 +23,7 @@ import {
   SUBJECT_KEY_MAX,
   verificationRequestSchema,
 } from '@qauth-labs/fastify-plugin-ssf';
-import { BadRequestError, TooManyRequestsError } from '@qauth-labs/shared-errors';
+import { TooManyRequestsError } from '@qauth-labs/shared-errors';
 import { scanValues, ssfStreamVerificationRequested } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -31,11 +31,12 @@ import { z } from 'zod';
 
 import { JWKS_CACHE_CONTROL } from '../../constants';
 import { REDIS_KEYS } from '../../constants/redis-keys';
+import { answerRouteNotFound } from '../../helpers/request-bounds';
 import { requestRealm } from '../../helpers/request-realm';
+import { SsfNotFoundError, SsfStreamExistsError } from '../../helpers/ssf-errors';
 import {
   createRequireSsfReceiver,
   realmRunsTransmitter,
-  SsfNotFoundError,
   type SsfReceiver,
   ssfReceiverOf,
 } from '../../helpers/ssf-receiver';
@@ -68,6 +69,16 @@ import { emitUserEvent } from '../../helpers/user-events';
  * registration, and the push route checks it again at every delivery. Its
  * `authorization_header` is stored encrypted with the realm's `data_at_rest`
  * key and never returned.
+ *
+ * ERRORS (#513). SSF 1.0 §8.1 and RFC 8935 give stream management statuses
+ * but define no error body, so none of these is an OAuth protocol endpoint:
+ * every error is an RFC 9457 problem document (ADR-019 Decision 7). A request
+ * the protocol refuses is an `SsfRequestError` (400 `bad_request`), a stream
+ * the receiver does not have an `SsfNotFoundError` (404 `not_found`), a second
+ * stream an `SsfStreamExistsError` (409 `conflict`); the registry in
+ * `api-conventions/error-classes.ts` maps each. The routes declare the
+ * `bearerAuth` security requirement, so a refused token's 401 and a missing
+ * scope's 403 carry an RFC 6750 §3 challenge too.
  */
 export const autoPrefix = '/ssf';
 
@@ -75,24 +86,16 @@ const TAGS = ['Shared Signals'];
 
 const streamIdQuerySchema = z.object({ stream_id: z.string().min(1).max(255) });
 
-/** A stream that already exists for the receiver (SSF 1.0 §8.1.1.1). */
-class StreamExistsError extends Error {
-  readonly statusCode = 409;
+/**
+ * The error statuses a stream management route answers by design (#513): a
+ * request the schema or the protocol refuses, a refused token, a token without
+ * `ssf:stream`, and a stream the receiver does not have or a realm that does
+ * not run the transmitter. The OpenAPI document adds 421, 429 and 500.
+ */
+const STREAM_ERRORS = [400, 401, 403, 404] as const;
 
-  constructor() {
-    super('The receiver already has a stream in this realm');
-  }
-}
-
-/** Run `check`, turning a refusal of the SSF protocol into a 400. */
-async function checked<T>(check: () => T | Promise<T>): Promise<T> {
-  try {
-    return await check();
-  } catch (error) {
-    if (error instanceof SsfRequestError) throw new BadRequestError(error.message);
-    throw error;
-  }
-}
+/** The receiver's access token (RFC 6750), as the OpenAPI document names it. */
+const BEARER = [{ bearerAuth: [] }];
 
 /** The transmitter; the routes exist only when it does. */
 function transmitterOf(fastify: FastifyInstance): SsfTransmitter {
@@ -114,12 +117,12 @@ export default async function (fastify: FastifyInstance) {
   const routes = fastify.withTypeProvider<ZodTypeProvider>();
 
   // A realm that does not run the transmitter answers as if these routes did
-  // not exist: Fastify's own 404, before the body is parsed or validated, so
-  // a malformed request gets no 400 that would give the routes away.
+  // not exist: the `not_found` problem document of a path no route serves,
+  // before the body is parsed or validated, so a malformed request gets no 400
+  // that would give the routes away.
   fastify.addHook('onRequest', async (request, reply) => {
     if (realmRunsTransmitter(request)) return;
-    reply.callNotFound();
-    return reply;
+    return answerRouteNotFound(request, reply);
   });
 
   const keyOf = (receiver: SsfReceiver, streamId: string) => ({
@@ -149,8 +152,8 @@ export default async function (fastify: FastifyInstance) {
     streamId: string,
     delivery: StreamConfigRequest['delivery']
   ) {
-    const checkedDelivery = await checked(() => checkDelivery(delivery));
-    await checked(() => transmitterOf(fastify).checkEndpoint(checkedDelivery.endpointUrl));
+    const checkedDelivery = checkDelivery(delivery);
+    await transmitterOf(fastify).checkEndpoint(checkedDelivery.endpointUrl);
     const authorizationHeader =
       checkedDelivery.authorizationHeader === null
         ? null
@@ -170,6 +173,11 @@ export default async function (fastify: FastifyInstance) {
     preHandler: requireSsfReceiver,
     config: { surface: 'api' as const },
   };
+  const streamSchema = {
+    tags: TAGS,
+    'x-qauth-stability': 'experimental' as const,
+    security: BEARER,
+  };
 
   // The transmitter's own JWKS (d-1026-09): the realm's active and retired
   // SET verification keys (`event_signing`, ADR-019 Decision 9), never a
@@ -188,6 +196,7 @@ export default async function (fastify: FastifyInstance) {
           'The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.',
         tags: TAGS,
         'x-qauth-stability': 'experimental',
+        'x-qauth-errors': [404],
       },
     },
     async (request, reply) => {
@@ -210,8 +219,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Create the receiver’s Shared Signals Framework stream (SSF 1.0 §8.1.1.1). Push delivery only; `endpoint_url` must be an https URL on a public address. A receiver has one stream per realm: a second create answers 409.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': [...STREAM_ERRORS, 409],
         body: streamConfigRequestSchema,
         response: { 201: streamConfigurationSchema },
       },
@@ -229,7 +238,7 @@ export default async function (fastify: FastifyInstance) {
         ...delivery,
         description: keptDescription(request.body.description),
       });
-      if (!stream) throw new StreamExistsError();
+      if (!stream) throw new SsfStreamExistsError();
       reply.header('Cache-Control', 'no-store').code(201);
       return reply.send(configurationOf(receiver, stream));
     }
@@ -242,8 +251,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Read the receiver’s stream (SSF 1.0 §8.1.1.2), or, without `stream_id`, list the streams it has in this realm.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         querystring: z.object({ stream_id: z.string().min(1).max(255).optional() }),
         response: { 200: z.union([streamConfigurationSchema, z.array(streamConfigurationSchema)]) },
       },
@@ -264,9 +273,9 @@ export default async function (fastify: FastifyInstance) {
   async function changeStream(request: FastifyRequest, replace: boolean) {
     const receiver = ssfReceiverOf(request);
     const body = request.body as StreamConfigRequest;
-    if (body.stream_id === undefined) throw new BadRequestError('stream_id is required');
+    if (body.stream_id === undefined) throw new SsfRequestError('stream_id is required');
     const current = await ownStream(receiver, body.stream_id);
-    await checked(() => assertTransmitterMembers(body, configurationOf(receiver, current)));
+    assertTransmitterMembers(body, configurationOf(receiver, current));
     let delivery =
       body.delivery !== undefined || replace
         ? await deliveryFor(receiver, current.id, body.delivery)
@@ -308,8 +317,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Update the receiver-supplied members of the stream (SSF 1.0 §8.1.1.3); a member left out stays. A transmitter-supplied member may be sent only with the value QAuth holds.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         body: streamConfigRequestSchema,
         response: { 200: streamConfigurationSchema },
       },
@@ -327,8 +336,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Replace the receiver-supplied members of the stream (SSF 1.0 §8.1.1.4); a member left out is removed, and `delivery` is required.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         body: streamConfigRequestSchema,
         response: { 200: streamConfigurationSchema },
       },
@@ -346,8 +355,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Delete the stream and its subjects (SSF 1.0 §8.1.1.5). Its deliveries still pending end without being sent.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         querystring: streamIdQuerySchema,
         response: { 204: z.null() },
       },
@@ -399,8 +408,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Read the stream’s status (SSF 1.0 §8.1.2.1). `delivery_status`, QAuth’s extension, reports the deliveries still pending and the latest failed attempt from the delivery history. An endpoint QAuth refused to reach and one it could not reach both read `destination_unreachable`.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         querystring: streamIdQuerySchema,
         response: { 200: streamStatusSchema },
       },
@@ -420,8 +429,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Set the stream’s status (SSF 1.0 §8.1.2.2): `enabled`, `paused` (events are held, however long, without spending attempts, and sent within 30 seconds of it being enabled again) or `disabled` (nothing is held).',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         body: statusUpdateRequestSchema,
         response: { 200: streamStatusSchema },
       },
@@ -450,7 +459,7 @@ export default async function (fastify: FastifyInstance) {
     // Bytes, not characters: the key is indexed, and a long multibyte subject
     // would pass a character count and fail the index.
     if (Buffer.byteLength(subjectKey) > SUBJECT_KEY_MAX) {
-      throw new BadRequestError('The subject is too long');
+      throw new SsfRequestError('The subject is too long');
     }
     return { subjectKey, eventSubject: eventSubjectOf(subject, issuerOf(receiver)) };
   }
@@ -462,8 +471,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         body: addSubjectRequestSchema,
         response: { 200: z.void().describe('An empty body (SSF 1.0 §8.1.3.2).') },
       },
@@ -485,7 +494,7 @@ export default async function (fastify: FastifyInstance) {
       // The receiver deleted the stream meanwhile.
       if (added === 'missing') throw new SsfNotFoundError('Stream not found');
       if (added === 'full') {
-        throw new BadRequestError(`A stream holds at most ${SSF_STREAM_SUBJECTS_MAX} subjects`);
+        throw new SsfRequestError(`A stream holds at most ${SSF_STREAM_SUBJECTS_MAX} subjects`);
       }
       return reply.code(200).send();
     }
@@ -498,8 +507,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Remove a subject from the stream (SSF 1.0 §8.1.3.3). A subject the stream does not have answers 204 as well.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': STREAM_ERRORS,
         body: removeSubjectRequestSchema,
         response: { 204: z.null() },
       },
@@ -520,8 +529,8 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description:
           'Ask for a verification event on the stream (SSF 1.0 §8.1.4.2). QAuth records the request as an event and pushes the verification Security Event Token to this stream only, with `state` returned as sent. A second request within `min_verification_interval` (10 seconds) answers 429.',
-        tags: TAGS,
-        'x-qauth-stability': 'experimental',
+        ...streamSchema,
+        'x-qauth-errors': [...STREAM_ERRORS, 429],
         body: verificationRequestSchema,
         response: { 204: z.null() },
       },
@@ -533,7 +542,7 @@ export default async function (fastify: FastifyInstance) {
       // The event store refuses a value shaped like a token or a key; refuse
       // it here with a 400 rather than fail the request with a 500.
       if (state !== undefined && scanValues(state).length > 0) {
-        throw new BadRequestError('state must not be shaped like a token or a key');
+        throw new SsfRequestError('state must not be shaped like a token or a key');
       }
       // Per receiver, not per stream: deleting the stream and creating
       // another does not reset the interval.

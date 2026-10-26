@@ -4,6 +4,9 @@ import {
   createJsonSchemaTransformObject,
 } from 'fastify-type-provider-zod';
 
+import { OAUTH_ERROR_MEDIA_TYPE, OAUTH_ERROR_SCHEMA_REF } from './api-conventions/oauth-error';
+import { PROBLEM_MEDIA_TYPE, PROBLEM_SCHEMA_REF, statusTitle } from './api-conventions/problem';
+
 /**
  * Where one HTTP operation stands under the ADR-018 §5 stability contract.
  * `experimental` operations sit behind a switch and may change in a minor
@@ -44,7 +47,78 @@ declare module 'fastify' {
     'x-qauth-effects'?: readonly string[];
     /** Set on every admin security operation: the console recommends a second admin. */
     'x-qauth-two-admin'?: 'recommended';
+    /**
+     * The error statuses the operation answers by design (#513), such as
+     * `[400, 401, 404]`. The OpenAPI document lists each one, and 421, 429 and
+     * 500, which any operation of a realm may answer, as a response carrying
+     * the route's error format: the shared `Problem` schema, or `OAuthError` on
+     * an OAuth protocol endpoint. A status the route's `response` already
+     * declares keeps that declaration. Documentation only: the key changes
+     * nothing at run time.
+     */
+    'x-qauth-errors'?: readonly number[];
   }
+}
+
+/** The extension keys the per-route transform leaves for the document transform. */
+const ERROR_STATUSES_KEY = 'x-qauth-error-statuses';
+const ERROR_FORMAT_KEY = 'x-qauth-error-format';
+
+/**
+ * The error statuses one operation's document lists (#513): the ones it
+ * declares, 429 unless the route has `rateLimit: false`, and 421 and 500,
+ * which every operation of a realm may answer (the realm resolver and an
+ * unexpected failure). A `none` route such as `/health` belongs to no realm
+ * and answers its own failures, so it adds only the 429.
+ */
+function documentedErrorStatuses(
+  declared: readonly number[] | undefined,
+  config: { surface?: string; rateLimit?: unknown } | undefined
+): number[] {
+  const statuses = new Set(declared ?? []);
+  if (config?.rateLimit !== false) statuses.add(429);
+  if (config?.surface !== 'none') {
+    statuses.add(421);
+    statuses.add(500);
+  }
+  return [...statuses].sort((a, b) => a - b);
+}
+
+/** The HTTP methods an OpenAPI path item holds operations under. */
+const OPERATION_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
+
+/**
+ * Add each operation's error responses (#513), from what
+ * {@link transformRoute} left on it: one entry per status, `application/json`
+ * with a `$ref` to `OAuthError` on an OAuth protocol endpoint, else
+ * `application/problem+json` with a `$ref` to `Problem`. A status the
+ * operation already declares is left as declared. The two extension keys are
+ * removed.
+ */
+function withErrorResponses<Document extends { paths?: unknown }>(document: Document): Document {
+  const paths = (document.paths ?? {}) as Record<string, Record<string, unknown>>;
+  for (const pathItem of Object.values(paths)) {
+    for (const method of OPERATION_METHODS) {
+      const operation = pathItem[method] as Record<string, unknown> | undefined;
+      if (operation === undefined) continue;
+      const statuses = (operation[ERROR_STATUSES_KEY] as number[] | undefined) ?? [];
+      const oauth = operation[ERROR_FORMAT_KEY] === 'oauth';
+      delete operation[ERROR_STATUSES_KEY];
+      delete operation[ERROR_FORMAT_KEY];
+      const responses = (operation['responses'] ?? {}) as Record<string, unknown>;
+      for (const status of statuses) {
+        if (Object.hasOwn(responses, String(status))) continue;
+        responses[String(status)] = {
+          description: statusTitle(status),
+          content: oauth
+            ? { [OAUTH_ERROR_MEDIA_TYPE]: { schema: { $ref: OAUTH_ERROR_SCHEMA_REF } } }
+            : { [PROBLEM_MEDIA_TYPE]: { schema: { $ref: PROBLEM_SCHEMA_REF } } },
+        };
+      }
+      operation['responses'] = responses;
+    }
+  }
+  return document;
 }
 
 /** Where `@fastify/swagger` and the Zod transform put named schemas. */
@@ -102,6 +176,31 @@ const zodToJsonConfig = { target: 'draft-2020-12' } as const;
 const addComponentSchemas = createJsonSchemaTransformObject({ zodToJsonConfig });
 
 /**
+ * The per-route transform: Zod to JSON Schema, then the route's error statuses
+ * and error format left on the operation for {@link withErrorResponses}, which
+ * cannot see the route.
+ */
+const zodTransform = createJsonSchemaTransform({ zodToJsonConfig });
+
+const transformRoute: SwaggerPlugin.SwaggerTransform = (input) => {
+  const { schema, url } = zodTransform(input);
+  const { 'x-qauth-errors': declared, ...rest } = schema as typeof schema & {
+    'x-qauth-errors'?: readonly number[];
+  };
+  const config = input.route.config as
+    | { surface?: string; rateLimit?: unknown; errorFormat?: string }
+    | undefined;
+  return {
+    url,
+    schema: {
+      ...rest,
+      [ERROR_STATUSES_KEY]: documentedErrorStatuses(declared, config),
+      [ERROR_FORMAT_KEY]: config?.errorFormat === 'oauth' ? 'oauth' : 'problem',
+    },
+  };
+};
+
+/**
  * `@fastify/swagger` registration options — the `openapi` object plus the
  * `transform` — shared verbatim by `main.ts` (the running server, `/docs`),
  * `openapi-export.ts` (the offline exporter that writes
@@ -150,7 +249,7 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
       },
     },
   },
-  transform: createJsonSchemaTransform({ zodToJsonConfig }),
+  transform: transformRoute,
   transformObject: (documentObject) =>
-    withReferencedSchemasOnly(addComponentSchemas(documentObject)),
+    withReferencedSchemasOnly(withErrorResponses(addComponentSchemas(documentObject))),
 };

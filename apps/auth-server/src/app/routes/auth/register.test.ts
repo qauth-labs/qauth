@@ -533,7 +533,6 @@ describe('POST /auth/register', () => {
       createReply()
     );
     await expect(refused).rejects.toBeInstanceOf(BadRequestError);
-    await expect(refused).rejects.toThrow(`Invalid realmId: ${other}`);
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.repositories.users.create).not.toHaveBeenCalled();
   });

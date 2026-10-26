@@ -401,7 +401,7 @@ describe('serializeErrorForLog', () => {
       type: 'UniqueConstraintError',
       message: `Unique constraint violated: idx_user_credentials_realm_provider_sub_unique: Failed query: ${query}: duplicate key value violates unique constraint "idx_user_credentials_realm_provider_sub_unique"`,
       constraint: 'idx_user_credentials_realm_provider_sub_unique',
-      code: 'UNIQUE_CONSTRAINT_VIOLATION',
+      code: 'ALREADY_EXISTS',
       statusCode: 409,
     });
     expect(parsed.err.stack).toContain('UniqueConstraintError: Unique constraint violated');
@@ -423,6 +423,29 @@ describe('serializeErrorForLog', () => {
       query,
     });
     expect(parsed.err).not.toHaveProperty('params');
+  });
+
+  it('keeps the raw request bytes of a parser error out of the line', async () => {
+    // Node's HTTP parser attaches what it could not parse, the request as
+    // sent, cookies and credentials included.
+    const rawPacket = Buffer.from(
+      'GET / HTTP/1.1\r\nCookie: __Host-qauth_session=s3cr3t-session\r\nAuthorization: Bearer s3cr3t-token\r\nX: \x00\r\n'
+    );
+    const parserError = Object.assign(new Error('Parse Error: Invalid header value char'), {
+      code: 'HPE_INVALID_HEADER_TOKEN',
+      bytesParsed: 42,
+      rawPacket,
+    });
+
+    const serialized = await logThroughFastify(parserError);
+
+    expect(serialized).not.toContain('s3cr3t');
+    expect(serialized).not.toContain('rawPacket');
+    expect(serializeErrorForLog(parserError)).toMatchObject({
+      code: 'HPE_INVALID_HEADER_TOKEN',
+      bytesParsed: 42,
+    });
+    expect(serializeErrorForLog(parserError)).not.toHaveProperty('rawPacket');
   });
 
   it('serializes an ordinary error as pino does', () => {

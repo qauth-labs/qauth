@@ -115,8 +115,9 @@ curl -s https://auth.example.com/ssf/stream \
 
 - QAuth checks `endpoint_url` through its egress client when the stream is created or changed: an
   address that is private, loopback, link-local or otherwise not public is refused with `400`
-  (`endpoint_url is refused`; the reason is in the server's log, not in the answer). It checks
-  again at every delivery, so a name that later resolves to such an address is refused then too.
+  (`bad_request`, with `endpoint_url is refused` as the `detail`; the reason is in the server's
+  log, not in the answer). It checks again at every delivery, so a name that later resolves to
+  such an address is refused then too.
 - `authorization_header` is sent with every push. QAuth stores it encrypted with the realm's
   `data_at_rest` key and never returns it. A `PATCH` whose `delivery` leaves it out and keeps the
   same `endpoint_url` keeps the stored header, so sending back what a read returned changes
@@ -166,6 +167,32 @@ The header names the signing key (`kid`) and `typ: secevent+jwt`. The `jti` is t
 and a retry sends the same SET, so the receiver drops a duplicate by its `jti`. A second
 verification request from the same receiver within 10 seconds (`min_verification_interval`)
 answers `429`, even for a stream it deleted and created again.
+
+## Errors
+
+SSF 1.0 gives stream management statuses but no error body, so QAuth answers every refusal on
+`/ssf/` and on the metadata the way it answers on every route that is not an OAuth protocol
+endpoint: an RFC 9457 problem document, `application/problem+json`, with a stable `code` and the
+`trace_id` the server logged the request under ([Problem types](/reference/problem-types/)).
+Branch on the status and `code`, never on `detail`:
+
+| Status | `code`                 | When                                                                                            |
+| ------ | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `400`  | `validation_error`     | The body or the query does not match the schema; `errors` names each field.                     |
+| `400`  | `bad_request`          | The protocol refuses the request: poll delivery, a refused `endpoint_url`, a mismatched member. |
+| `401`  | `unauthorized`         | The request carries no access token.                                                            |
+| `401`  | `invalid_access_token` | The token is not valid, not the receiver's own, or for another audience or realm.               |
+| `401`  | `access_token_expired` | The token has expired.                                                                          |
+| `403`  | `forbidden`            | The token lacks `ssf:stream`.                                                                   |
+| `404`  | `not_found`            | No such stream for this receiver, or a realm that does not run the transmitter.                 |
+| `409`  | `conflict`             | The receiver already has a stream in the realm.                                                 |
+| `429`  | `too_many_requests`    | A verification within `min_verification_interval`; `Retry-After` says when to try again.        |
+
+A `401` for a token that was presented carries
+`WWW-Authenticate: Bearer realm="OAuth", error="invalid_token"`; one for a request with no token
+carries `Bearer realm="OAuth"` alone (RFC 6750 §3.1). A `403` carries
+`error="insufficient_scope", scope="ssf:stream"` (RFC 6750 §3). A realm that does not run the
+transmitter answers exactly what a path no route serves answers.
 
 ## Watch deliveries
 

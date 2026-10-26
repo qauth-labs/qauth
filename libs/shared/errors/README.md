@@ -25,12 +25,17 @@ import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors'
 
 ### Authentication Errors
 
-Authentication-specific errors for JWT, tokens, and credentials.
+Authentication-specific errors for access tokens, email verification tokens and credentials.
+Their codes are the auth server's problem codes, upper-cased: an access token that is not valid is
+`INVALID_ACCESS_TOKEN`, an expired one `ACCESS_TOKEN_EXPIRED`, and a request that presents none
+`UNAUTHORIZED` (`MissingAccessTokenError`, RFC 6750 §3.1). The email verification token's are
+`INVALID_VERIFICATION_TOKEN`, `VERIFICATION_TOKEN_EXPIRED` and `VERIFICATION_TOKEN_USED`.
 
 ```typescript
 import {
   JWTExpiredError,
   JWTInvalidError,
+  MissingAccessTokenError,
   InvalidCredentialsError,
   TokenExpiredError,
   TokenAlreadyUsedError,
@@ -39,7 +44,12 @@ import {
   EmailAlreadyVerifiedError,
 } from '@qauth-labs/shared-errors';
 
-// JWT verification
+// A route that takes an access token, reached without one
+if (!credential) {
+  throw new MissingAccessTokenError(); // 401, code UNAUTHORIZED
+}
+
+// Access token verification
 try {
   const payload = await verifyAccessToken(token, publicKey);
 } catch (error) {
@@ -63,9 +73,9 @@ if (!credential.credentialData.email_verified) {
   throw new EmailNotVerifiedError(); // 403
 }
 
-// Token verification
+// Email verification token
 if (token.used) {
-  throw new TokenAlreadyUsedError(); // 400
+  throw new TokenAlreadyUsedError(); // 409, code VERIFICATION_TOKEN_USED
 }
 
 if (token.expiresAt < Date.now()) {
@@ -194,6 +204,8 @@ new UniqueConstraintError(constraint: string, cause?: unknown)
 - `name`: `'UniqueConstraintError'`
 - `message`: `"Unique constraint violated: {constraint}"`
 - `statusCode`: `409` (HTTP status code for REST API responses)
+- `code`: `'ALREADY_EXISTS'`; the auth server answers `already_exists` and never sends the
+  constraint name
 - `constraint`: The name of the violated constraint
 - `cause`: The original error that caused this error (if provided)
 
@@ -275,6 +287,7 @@ libs/shared/errors/
 │       │   ├── invalid-token.error.ts
 │       │   ├── jwt-expired.error.ts
 │       │   ├── jwt-invalid.error.ts
+│       │   ├── missing-access-token.error.ts
 │       │   ├── token-already-used.error.ts
 │       │   ├── token-expired.error.ts
 │       │   ├── weak-password.error.ts
@@ -367,49 +380,39 @@ export async function getUserById(id: string) {
 }
 ```
 
-## Example: REST API Error Handling
+## How the Auth Server Answers These Errors
 
-Error classes include HTTP status codes for easy REST API integration:
+A route throws the error and lets the auth server's global error handler
+(`apps/auth-server/src/app/plugins/error-handler.ts`) answer it; it never builds
+an error body itself:
 
 ```typescript
-import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
-import Fastify from 'fastify';
+import { NotFoundError } from '@qauth-labs/shared-errors';
 
-fastify.get('/users/:id', async (request, reply) => {
-  try {
-    const user = await fastify.repositories.users.findByIdOrThrow(request.params.id);
-    return { user };
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      // Use the statusCode property for HTTP responses
-      reply.code(error.statusCode).send({
-        error: error.message,
-        statusCode: error.statusCode,
-      });
-      return;
-    }
-    throw error;
-  }
-});
-
-fastify.post('/users', async (request, reply) => {
-  try {
-    const user = await fastify.repositories.users.create(request.body);
-    reply.code(201).send({ user });
-  } catch (error) {
-    if (error instanceof UniqueConstraintError) {
-      // Use the statusCode property (409 Conflict)
-      reply.code(error.statusCode).send({
-        error: error.message,
-        constraint: error.constraint,
-        statusCode: error.statusCode,
-      });
-      return;
-    }
-    throw error;
-  }
+fastify.get('/api/clients/:id', async (request) => {
+  const client = await fastify.repositories.oauthClients.findById(request.params.id);
+  if (!client) throw new NotFoundError('OAuthClient', request.params.id);
+  return client;
 });
 ```
+
+The handler answers in the route's error format (#513):
+
+- every route that is not an OAuth protocol endpoint answers an RFC 9457 problem
+  document (`application/problem+json`) whose `code` is the class's problem code,
+  `not_found` here;
+- an OAuth protocol endpoint answers `{ error, error_description? }`, where an
+  OAuth class (`InvalidGrantError`, `InvalidClientMetadataError`, …) names its own
+  token as its `message` and its prose as `errorDescription`.
+
+Each class is mapped to its problem code and its OAuth `error` once, in
+`apps/auth-server/src/app/api-conventions/error-classes.ts`. A new class in this
+package needs an entry there: a test fails when one is missing. The error classes
+a route or a server library defines itself (the SSF transmitter's, the
+auth server's `SignInRequiredError`) are mapped in the same file. The codes are
+published on the docs site's [Problem types](https://docs.qauth.dev/reference/problem-types/)
+page and are part of the 1.0 promise. The handler never sends a
+`UniqueConstraintError`'s constraint name or a 5xx's message to the caller.
 
 ## Development
 

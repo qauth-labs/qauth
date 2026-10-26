@@ -1004,8 +1004,10 @@ describe('POST /oauth/introspect route', () => {
     app.decorate('jwtUtils', { verifyAccessToken: vi.fn() } as any);
 
     supplyRequestRealm(app, REALM);
-    await app.register(introspectRoute);
+    // The error handler first, as the app registers it: a route registered
+    // before it keeps Fastify's default handler (#365).
     await app.register(errorHandler);
+    await app.register(introspectRoute);
 
     try {
       const response = await app.inject({
@@ -1021,13 +1023,14 @@ describe('POST /oauth/introspect route', () => {
         },
       });
 
+      // RFC 7662 §2.3 / RFC 6749 §5.2: the OAuth error body, nothing QAuth adds.
       expect(response.statusCode).toBe(400);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 400,
-      });
-      expect(json.error).toBeDefined();
+      expect(response.headers['content-type']).toMatch(/^application\/json(?:;|$)/);
+      const json = response.json() as Record<string, unknown>;
+      expect(json).toMatchObject({ error: 'invalid_request' });
+      for (const member of ['code', 'statusCode']) {
+        expect(json).not.toHaveProperty(member);
+      }
     } finally {
       await app.close();
     }

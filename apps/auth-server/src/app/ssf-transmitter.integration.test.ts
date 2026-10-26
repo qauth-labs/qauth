@@ -8,7 +8,7 @@ import {
   type FixtureServer,
 } from '@qauth-labs/fastify-plugin-ssf/src/testing/egress-network';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { createLocalJWKSet, decodeProtectedHeader, type JSONWebKeySet, jwtVerify } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -78,6 +78,25 @@ const PUSH = 'urn:ietf:rfc:8935';
 const VERIFICATION = 'https://schemas.openid.net/secevent/ssf/event-type/verification';
 const VERIFICATION_EVENT_TYPE = 'urn:qauth:event:ssf.stream.verification_requested:v1-rc.0';
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
+const PROBLEM_CONTENT_TYPE = /^application\/problem\+json(?:;|$)/;
+
+/**
+ * The problem document of an error answer (RFC 9457, #513), after checking its
+ * status, its media type and its code. SSF 1.0 §8.1 gives stream management
+ * statuses but no error body, so every `/ssf/` refusal is one.
+ */
+function problemOf(
+  response: LightMyRequestResponse,
+  status: number,
+  code: string
+): Record<string, unknown> {
+  expect(response.statusCode, response.body).toBe(status);
+  expect(response.headers['content-type'], response.body).toMatch(PROBLEM_CONTENT_TYPE);
+  const body = response.json<Record<string, unknown>>();
+  expect(body).toMatchObject({ status, code, trace_id: expect.any(String) });
+  for (const member of ['error', 'statusCode', 'message']) expect(body).not.toHaveProperty(member);
+  return body;
+}
 
 /** Public addresses the fixture DNS hands out; each is served by a local server. */
 const RECEIVER_ADDRESS = '93.184.215.14';
@@ -307,11 +326,13 @@ describe('the SSF transmitter (real containers)', () => {
       expect(stream).not.toBeNull();
 
       const missing = await app.inject({ method: 'GET', url: `/no-such-route-${randomUUID()}` });
-      expect(missing.statusCode).toBe(404);
+      problemOf(missing, 404, 'not_found');
+      // No route: the `not_found` problem of a path no route serves (#513).
       const metadata = await app.inject({ method: 'GET', url: '/.well-known/ssf-configuration' });
-      expect(metadata.statusCode).toBe(404);
-      expect(metadata.json()).toMatchObject({ error: 'Not Found', statusCode: 404 });
-      expect(metadata.json<{ message: string }>().message).toMatch(/^Route GET:/);
+      expect(problemOf(metadata, 404, 'not_found')).toMatchObject({
+        detail: 'No route serves GET /.well-known/ssf-configuration.',
+        instance: '/.well-known/ssf-configuration',
+      });
       for (const [method, url] of [
         ['POST', '/ssf/stream'],
         ['GET', '/ssf/status'],
@@ -319,8 +340,9 @@ describe('the SSF transmitter (real containers)', () => {
         ['GET', '/ssf/jwks.json'],
       ] as const) {
         const response = await app.inject({ method, url, payload: {} });
-        expect(response.statusCode, url).toBe(404);
-        expect(response.json<{ message: string }>().message, url).toMatch(/^Route /);
+        expect(problemOf(response, 404, 'not_found')['detail'], url).toBe(
+          `No route serves ${method} ${url}.`
+        );
       }
 
       const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
@@ -355,7 +377,7 @@ describe('the SSF transmitter (real containers)', () => {
       const app = await boot(on);
       await setRealmSwitch(app, E2E_REALM_NAME, false);
       const off = await app.inject({ method: 'GET', url: '/.well-known/ssf-configuration' });
-      expect(off.statusCode).toBe(404);
+      problemOf(off, 404, 'not_found');
 
       await setRealmSwitch(app, E2E_REALM_NAME, true);
       const response = await app.inject({ method: 'GET', url: '/.well-known/ssf-configuration' });
@@ -415,7 +437,8 @@ describe('the SSF transmitter (real containers)', () => {
       });
       expect(verify.statusCode, verify.body).toBe(204);
       const again = await call(app, who, 'POST', '/ssf/verify', { stream_id: streamId });
-      expect(again.statusCode).toBe(429);
+      problemOf(again, 429, 'too_many_requests');
+      expect(again.headers['retry-after']).toBe('10');
 
       await vi.waitFor(() => expect(receiver.requests).toHaveLength(1), {
         timeout: 15_000,
@@ -517,13 +540,20 @@ describe('the SSF transmitter (real containers)', () => {
       // The same claims on every attempt, and EdDSA signs them the same way.
       expect(new Set(tokens).size).toBe(1);
 
-      const rows = await app.repositories.eventDeliveries.listForEvent(eventId);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
-        status: 'delivered',
-        attemptCount: 3,
-        destinationId: streamId,
-      });
+      // The delivery role records the third attempt after the receiver has
+      // answered it, so the row may still read `pending` for a moment.
+      await vi.waitFor(
+        async () => {
+          const rows = await app.repositories.eventDeliveries.listForEvent(eventId);
+          expect(rows).toHaveLength(1);
+          expect(rows[0]).toMatchObject({
+            status: 'delivered',
+            attemptCount: 3,
+            destinationId: streamId,
+          });
+        },
+        { timeout: 5000, interval: 100 }
+      );
     });
 
     it('refuses a private endpoint at registration and at delivery', async () => {
@@ -539,8 +569,10 @@ describe('the SSF transmitter (real containers)', () => {
         const response = await call(app, who, 'POST', '/ssf/stream', {
           delivery: { method: PUSH, endpoint_url: endpoint },
         });
-        expect(response.statusCode, endpoint).toBe(400);
-        expect(response.json<{ error: string }>().error).toBe('endpoint_url is refused');
+        // The reason stays in the server's log; the detail says only this.
+        expect(problemOf(response, 400, 'bad_request')['detail'], endpoint).toBe(
+          'endpoint_url is refused'
+        );
       }
       expect(await app.repositories.ssfStreams.list(realmId, who.id)).toEqual([]);
 
@@ -592,12 +624,16 @@ describe('the SSF transmitter (real containers)', () => {
       });
 
       // A's token is no receiver of B, and A cannot name B's stream at its own host.
-      expect((await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_B)).statusCode).toBe(401);
-      expect((await call(app, inA, 'GET', `/ssf/stream?stream_id=${streamB}`)).statusCode).toBe(
-        404
+      problemOf(
+        await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_B),
+        401,
+        'invalid_access_token'
       );
-      expect((await call(app, inA, 'POST', '/ssf/verify', { stream_id: streamB })).statusCode).toBe(
-        404
+      problemOf(await call(app, inA, 'GET', `/ssf/stream?stream_id=${streamB}`), 404, 'not_found');
+      problemOf(
+        await call(app, inA, 'POST', '/ssf/verify', { stream_id: streamB }),
+        404,
+        'not_found'
       );
       expect((await call(app, inA, 'GET', '/ssf/stream')).json()).toEqual([
         expect.objectContaining({ stream_id: streamA }),
@@ -636,13 +672,22 @@ describe('the SSF transmitter (real containers)', () => {
       const otherAudience = await newReceiver(app, realmId, {
         audience: 'https://resource.example',
       });
-      // A valid token without the scope is a 403 (RFC 6750 §3.1); one for
-      // another resource is not valid here at all.
-      expect((await call(app, noScope, 'GET', '/ssf/stream')).statusCode).toBe(403);
+      // A valid token without the scope is a 403 whose challenge names the
+      // scope (RFC 6750 §3.1); one for another resource is not valid here at
+      // all. Both are problem documents (#513).
+      const forbidden = await call(app, noScope, 'GET', '/ssf/stream');
+      problemOf(forbidden, 403, 'forbidden');
+      expect(forbidden.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="ssf:stream"'
+      );
       const response = await call(app, otherAudience, 'GET', '/ssf/stream');
-      expect(response.statusCode).toBe(401);
+      problemOf(response, 401, 'invalid_access_token');
       expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
-      expect((await app.inject({ method: 'GET', url: '/ssf/stream' })).statusCode).toBe(401);
+      // No token at all is `unauthorized`, with a challenge that names no
+      // error (RFC 6750 §3.1).
+      const bare = await app.inject({ method: 'GET', url: '/ssf/stream' });
+      problemOf(bare, 401, 'unauthorized');
+      expect(bare.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
 
       // A receiver whose scope is taken away stops at once, not when its
       // token expires, as its deliveries do.
@@ -652,7 +697,7 @@ describe('the SSF transmitter (real containers)', () => {
         who.id,
       ]);
       const scopeGone = await call(app, who, 'GET', '/ssf/stream');
-      expect(scopeGone.statusCode).toBe(401);
+      problemOf(scopeGone, 401, 'invalid_access_token');
       expect(scopeGone.headers['www-authenticate']).toMatch(/error="invalid_token"/);
     });
 
@@ -671,7 +716,7 @@ describe('the SSF transmitter (real containers)', () => {
       await newReceiver(app, realmC, { clientId, audience: ISSUER_C, host: HOST_C });
 
       const response = await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_C);
-      expect(response.statusCode).toBe(401);
+      problemOf(response, 401, 'invalid_access_token');
       expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
     });
 
@@ -681,13 +726,13 @@ describe('the SSF transmitter (real containers)', () => {
       const who = await newReceiver(app, realmId);
       const streamId = await createStream(app, who);
 
-      expect(
-        (
-          await call(app, who, 'POST', '/ssf/stream', {
-            delivery: { method: PUSH, endpoint_url: 'https://receiver.egress.test/other' },
-          })
-        ).statusCode
-      ).toBe(409);
+      problemOf(
+        await call(app, who, 'POST', '/ssf/stream', {
+          delivery: { method: PUSH, endpoint_url: 'https://receiver.egress.test/other' },
+        }),
+        409,
+        'conflict'
+      );
 
       const patched = await call(app, who, 'PATCH', '/ssf/stream', {
         stream_id: streamId,
@@ -719,7 +764,9 @@ describe('the SSF transmitter (real containers)', () => {
         stream_id: streamId,
         aud: 'someone-else',
       });
-      expect(wrongAud.statusCode).toBe(400);
+      expect(problemOf(wrongAud, 400, 'bad_request')['detail']).toBe(
+        'aud is supplied by the transmitter and does not match'
+      );
 
       const replaced = await call(app, who, 'PUT', '/ssf/stream', {
         stream_id: streamId,
@@ -734,7 +781,7 @@ describe('the SSF transmitter (real containers)', () => {
       // A new endpoint never gets the old header.
       expect(await storedHeader()).toBeNull();
       const poll = await call(app, who, 'PUT', '/ssf/stream', { stream_id: streamId });
-      expect(poll.statusCode).toBe(400);
+      problemOf(poll, 400, 'bad_request');
 
       const paused = await call(app, who, 'POST', '/ssf/status', {
         stream_id: streamId,
@@ -752,9 +799,7 @@ describe('the SSF transmitter (real containers)', () => {
       expect((await call(app, who, 'DELETE', `/ssf/stream?stream_id=${streamId}`)).statusCode).toBe(
         204
       );
-      expect((await call(app, who, 'GET', `/ssf/stream?stream_id=${streamId}`)).statusCode).toBe(
-        404
-      );
+      problemOf(await call(app, who, 'GET', `/ssf/stream?stream_id=${streamId}`), 404, 'not_found');
       expect((await call(app, who, 'GET', '/ssf/stream')).json()).toEqual([]);
     });
 
@@ -825,19 +870,23 @@ describe('the SSF transmitter (real containers)', () => {
       const app = await boot(on);
       await setRealmSwitch(app, E2E_REALM_NAME, false);
       const unknown = await app.inject({ method: 'POST', url: '/no-such-route', payload: {} });
-      expect(unknown.statusCode).toBe(404);
+      const absent = problemOf(unknown, 404, 'not_found');
       for (const [method, url] of [
         ['POST', '/ssf/status'],
         ['POST', '/ssf/stream'],
         ['GET', '/ssf/status'],
         ['GET', '/ssf/jwks.json'],
       ] as const) {
-        // An empty body would fail validation: the 404 comes first.
+        // An empty body would fail validation: the 404 comes first. The
+        // document is the one of a path no route serves, but for the path
+        // and the request's own trace_id.
         const response = await app.inject({ method, url, payload: {} });
-        expect(response.statusCode, url).toBe(404);
-        expect(response.json(), url).toEqual({
-          ...unknown.json(),
-          message: `Route ${method}:${url} not found`,
+        const body = problemOf(response, 404, 'not_found');
+        expect(body, url).toEqual({
+          ...absent,
+          detail: `No route serves ${method} ${url}.`,
+          instance: url,
+          trace_id: body['trace_id'],
         });
       }
     });
@@ -855,7 +904,7 @@ describe('the SSF transmitter (real containers)', () => {
       );
       const second = await createStream(app, who);
       const again = await call(app, who, 'POST', '/ssf/verify', { stream_id: second });
-      expect(again.statusCode).toBe(429);
+      problemOf(again, 429, 'too_many_requests');
     });
 
     it('answers 404, not 500, when the receiver deletes its stream while a request on it runs', async () => {
@@ -879,9 +928,9 @@ describe('the SSF transmitter (real containers)', () => {
           stream_id: streamId,
           subject: { format: 'opaque', id: 'late' },
         });
-        expect(added.statusCode, added.body).toBe(404);
+        problemOf(added, 404, 'not_found');
         const verify = await call(app, who, 'POST', '/ssf/verify', { stream_id: streamId });
-        expect(verify.statusCode, verify.body).toBe(404);
+        problemOf(verify, 404, 'not_found');
       } finally {
         find.mockRestore();
       }

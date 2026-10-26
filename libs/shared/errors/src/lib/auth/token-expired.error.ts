@@ -1,9 +1,10 @@
 /**
- * Error thrown when a token has expired
+ * Error thrown when an email verification token has expired. An expired access
+ * token is a `JWTExpiredError`.
  */
 export class TokenExpiredError extends Error {
   readonly statusCode = 410;
-  readonly code = 'TOKEN_EXPIRED';
+  readonly code = 'VERIFICATION_TOKEN_EXPIRED';
 
   constructor(message = 'Verification token has expired') {
     super(message);

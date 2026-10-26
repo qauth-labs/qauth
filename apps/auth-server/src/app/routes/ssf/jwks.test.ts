@@ -82,11 +82,17 @@ describe('GET /ssf/jwks.json', () => {
 
     const res = await app.inject({ method: 'GET', url: '/ssf/jwks.json' });
 
+    // The `not_found` problem document of a path no route serves (#513).
     expect(res.statusCode).toBe(404);
+    expect(res.headers['content-type']).toMatch(/^application\/problem\+json/);
     expect(res.json()).toEqual({
-      message: 'Route GET:/ssf/jwks.json not found',
-      error: 'Not Found',
-      statusCode: 404,
+      type: 'https://docs.qauth.dev/reference/problem-types/#not-found',
+      title: 'Not found',
+      status: 404,
+      detail: 'No route serves GET /ssf/jwks.json.',
+      instance: '/ssf/jwks.json',
+      code: 'not_found',
+      trace_id: expect.any(String),
     });
     expect(getVerificationKeys).not.toHaveBeenCalled();
   });

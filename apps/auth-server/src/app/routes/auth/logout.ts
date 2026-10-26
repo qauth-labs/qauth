@@ -1,5 +1,5 @@
 import { type JWTPayload, refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import { JWTExpiredError, MissingAccessTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -16,6 +16,7 @@ import {
   verifySignedSessionId,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
+import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
@@ -43,6 +44,7 @@ export default async function (fastify: FastifyInstance) {
           "Log out the current user. Ends the user's hosted browser sessions, revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.",
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401],
         headers: logoutHeadersSchema,
         response: {
           200: logoutResponseSchema,
@@ -70,8 +72,10 @@ export default async function (fastify: FastifyInstance) {
         const token = fastify.jwtUtils.extractFromHeader(authHeader);
 
         if (!token) {
+          // No credential is not a refused token (RFC 6750 §3.1): 401
+          // `unauthorized`, with a challenge that names no error.
           throw withEventReason(
-            new JWTInvalidError(
+            new MissingAccessTokenError(
               'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
             ),
             'missing_token'
@@ -112,7 +116,7 @@ export default async function (fastify: FastifyInstance) {
         const tokenSub = claims.sub;
 
         if (!tokenSub) {
-          throw withEventReason(new JWTInvalidError('Invalid JWT token'), 'subject_not_a_user');
+          throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
         }
 
         // A subject that names no user, deleted since the token was minted,
@@ -120,10 +124,7 @@ export default async function (fastify: FastifyInstance) {
         // `invalid_token`): there is nothing left to sign out.
         const user = await fastify.repositories.users.findById(tokenSub);
         if (!user) {
-          throw withEventReason(
-            new JWTInvalidError('Access token subject is not a user'),
-            'subject_not_a_user'
-          );
+          throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
         }
         userId = user.id;
         realmId = user.realmId;

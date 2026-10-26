@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { serverPath, wireConfig } from '../../config';
-import { expectStandardError } from '../../helpers/error-shape';
+import { expectProblem } from '../../helpers/error-shape';
 
 const { baseUrl } = wireConfig();
 
-describe('the standard JSON error on an unknown route', () => {
+describe('RFC 9457 §3 — the problem document on an unknown route', () => {
   it.each(['GET', 'POST', 'DELETE'])(
-    'answers %s on a route that does not exist with 404',
+    'answers %s on a route that does not exist with a 404 not_found problem (§3.1)',
     async (method) => {
       const response = await fetch(
         serverPath(baseUrl, `/wire-suite/no-such-route/${randomUUID()}`),
@@ -22,7 +22,8 @@ describe('the standard JSON error on an unknown route', () => {
         }
       );
 
-      await expectStandardError(response, { status: 404 });
+      const problem = await expectProblem(response, { status: 404, code: 'not_found' });
+      expect(problem).not.toHaveProperty('statusCode');
     }
   );
 });
