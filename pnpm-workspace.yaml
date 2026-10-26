@@ -467,7 +467,6 @@ catalog:
   # a dev-tagged build, so a move is a reviewed change.
   '@typescript/native-preview': '7.0.0-dev.20260707.2'
   vitest: '^5.0.5'
-  '@fastify/autoload': '^6.5.1'
   '@fastify/cors': '^11.3.1'
   '@fastify/formbody': '^9.0.1'
   '@fastify/helmet': '^13.2.0'

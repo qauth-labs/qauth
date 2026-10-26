@@ -17,6 +17,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
+  serviceRolesEnvSchema,
   ssfEnvSchema,
   trustRegistryEnvSchema,
   webauthnEnvSchema,
@@ -37,8 +38,9 @@ const PRIVATE_ADDRESS_SWITCHES = [
  * The smallest `DB_POOL_MAX` the background jobs allow (#452). A running job
  * holds one pool connection for its advisory lock while its own queries take
  * others, so a pool of one would leave requests waiting until the lock is
- * released. Every node runs the jobs today; once roles land (#495), the rule
- * applies to a node whose roles hold a job.
+ * released. The rule applies to every process, whatever its roles (#495):
+ * each role but `admin` holds a job or will, and a pool of one connection
+ * would starve the requests of any role.
  */
 export const JOBS_MIN_DB_POOL_MAX = 2;
 
@@ -53,6 +55,10 @@ export const JOBS_MIN_DB_POOL_MAX = 2;
 export const envSchema = z
   .object({
     ...baseEnvSchema.shape,
+    // The role switch (ADR-019 Decision 8, #495): SERVICE_ROLES, default
+    // `all`, and the signer service's address and internal TLS files for a
+    // process without the signer. The app checks them at boot.
+    ...serviceRolesEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,

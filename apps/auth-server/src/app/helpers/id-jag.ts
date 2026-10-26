@@ -7,6 +7,7 @@ import {
   type SigningKey,
   verifyWithHeader,
 } from '@qauth-labs/core-crypto';
+import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -600,6 +601,13 @@ const signingKeyCache = new Map<string, Promise<SigningKey>>();
 
 function idJagSigningKey(): Promise<SigningKey> {
   const pem = env.JWT_PRIVATE_KEY;
+  // A process without the signer role holds no private key (#495): it cannot
+  // mint until signing moves to the signer service, and says so with a 503.
+  if (pem === undefined) {
+    return Promise.reject(
+      new TemporarilyUnavailableError(60, { reason: 'no_signing_key_on_this_process' })
+    );
+  }
   const cached = signingKeyCache.get(pem);
   if (cached) return cached;
   const imported = importPrivateSigningKey(pem, ID_JAG_SIGNING_ALGORITHM);

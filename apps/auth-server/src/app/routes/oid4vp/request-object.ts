@@ -64,7 +64,7 @@ import { readWalletRequestObject } from '../../helpers/wallet-login-flow';
 const MAX_REQUEST_OBJECT_HANDLE_LENGTH = 64;
 
 export default async function (fastify: FastifyInstance) {
-  // Flag gate (#232 / #299), repeated per route file because @fastify/autoload
+  // Flag gate (#232 / #299), repeated per route file because the route manifest
   // registers each one as its own encapsulated plugin — this does not inherit
   // `response.ts`'s. Checked at REGISTRATION, not per request: an endpoint that
   // does not exist cannot be probed, and a deployment that never opted into

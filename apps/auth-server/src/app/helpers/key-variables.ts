@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey } from 'node:crypto';
+import { createPublicKey } from 'node:crypto';
 
 import type {
   EnvironmentKeySettings,
@@ -110,14 +110,17 @@ export function keyVariableSettings(
  * `node:crypto`. The JWT plugin publishes the same `kid`, so the served JWKS
  * names each key as the store does.
  *
+ * The PEM may also be the public key itself: a process without the signer
+ * role (#495) has only that, and publishes the key under the same `kid`.
+ *
  * @returns the thumbprint, or `undefined` when the PEM does not parse; the
  *   JWT plugin and the key boot step each refuse such a key with their own
  *   message
  */
-export async function thumbprintKid(privateKeyPem: string): Promise<string | undefined> {
+export async function thumbprintKid(keyPem: string): Promise<string | undefined> {
   let jwk: JWK;
   try {
-    jwk = createPublicKey(createPrivateKey(privateKeyPem)).export({ format: 'jwk' }) as JWK;
+    jwk = createPublicKey(keyPem).export({ format: 'jwk' }) as JWK;
   } catch {
     return undefined;
   }

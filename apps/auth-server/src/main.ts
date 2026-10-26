@@ -105,7 +105,7 @@ server.setNotFoundHandler(answerRouteNotFound);
 // `server.register(app)` below. A child scope snapshots the parent's validator and
 // serializer compilers when it is created and Fastify does not propagate a later change
 // into existing children, so moving these into `start()` — or anywhere after the app is
-// registered — would silently return every autoloaded route to ajv validation, with no
+// registered — would silently return every route of the manifest to ajv validation, with no
 // error and no warning. That is the same failure mode as #365 (a handler registered too
 // late reaching nothing), here with a CVE behind it rather than an error shape.
 server.setValidatorCompiler(validatorCompiler);

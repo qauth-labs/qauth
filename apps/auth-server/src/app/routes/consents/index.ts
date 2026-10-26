@@ -77,9 +77,9 @@ async function ensureApiCsrfToken(
 }
 
 export default async function (fastify: FastifyInstance) {
-  // Paths are relative to this module's directory. `@fastify/autoload` is
-  // registered without `dirNameRoutePrefix: false` (app.ts), so the `consents/`
-  // directory already contributes the `/consents` prefix — the same way
+  // Paths are relative to this module's directory. The route manifest
+  // (`route-manifest.ts`) registers it under its directory's name, so the
+  // `consents/` directory already contributes the `/consents` prefix — the same way
   // `routes/oauth/authorize.ts` declares `/authorize` and is served at
   // `/oauth/authorize`. Declaring `/consents` here would publish
   // `/consents/consents`.

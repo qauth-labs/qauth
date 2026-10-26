@@ -109,7 +109,7 @@ export const OID4VP_REQUEST_OBJECT_PATH_PREFIX = '/oid4vp/request/';
  * parameter. Written here beside the two paths above for the same reason they
  * are together: every wallet-facing URL is built from one place, on one origin,
  * and none can drift from the route that serves it. The route registers the
- * path as a literal (`'/wallet-login/return'` under the `/ui` autoload prefix)
+ * path as a literal (`'/wallet-login/return'` under the `/ui` route prefix)
  * because the docs-site endpoint-coverage invariant reads route literals, not
  * constants; this constant is the EMITTING side's one spelling, and the
  * same-device E2E suite, which follows a real `redirect_uri` back into the

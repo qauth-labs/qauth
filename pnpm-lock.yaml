@@ -25,9 +25,6 @@ catalogs:
     '@commitlint/config-conventional':
       specifier: ^21.2.3
       version: 21.2.3
-    '@fastify/autoload':
-      specifier: ^6.5.1
-      version: 6.5.1
     '@fastify/cors':
       specifier: ^11.3.1
       version: 11.3.1
@@ -425,9 +422,6 @@ importers:
 
   apps/auth-server:
     dependencies:
-      '@fastify/autoload':
-        specifier: 'catalog:'
-        version: 6.5.1
       '@fastify/cors':
         specifier: 'catalog:'
         version: 11.3.1
@@ -2921,9 +2915,6 @@ packages:
 
   '@fastify/ajv-compiler@4.0.5':
     resolution: {integrity: sha512-KoWKW+MhvfTRWL4qrhUwAAZoaChluo0m0vbiJlGMt2GXvL4LVPQEjt8kSpHI3IBq5Rez8fg+XeH3cneztq+C7A==}
-
-  '@fastify/autoload@6.5.1':
-    resolution: {integrity: sha512-IW2DyejF1+SEEDTwbJriAcKtMcAy+y1cK04ZQj3p7WwwR/zgN+YYxzmM96L+AP48nNOCNKBGpyYJzgZ1HnubKA==}
 
   '@fastify/cors@11.3.1':
     resolution: {integrity: sha512-gZXNzd6FLHzOIfvoK4+Az3Wko2V6Y0MIsLxpyo4AEYl7a9q1JBPwPaxLea4nkr++8FCiJiPpYYo6E02uZW0dqw==}
@@ -11581,8 +11572,6 @@ snapshots:
       ajv: 8.20.0
       ajv-formats: 3.0.1
       fast-uri: 3.1.9
-
-  '@fastify/autoload@6.5.1': {}
 
   '@fastify/cors@11.3.1':
     dependencies:

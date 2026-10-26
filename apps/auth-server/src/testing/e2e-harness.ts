@@ -247,7 +247,13 @@ export async function bootAuthServer(
       key.startsWith('DPOP_') ||
       key.startsWith('SSF_') ||
       key.startsWith('EVENT_DELIVERY_') ||
-      key === 'TRUST_PROXY'
+      key === 'TRUST_PROXY' ||
+      // The role switch (#495): a process without the signer refuses a key
+      // variable another boot left behind, so the JWT keys go too.
+      key === 'SERVICE_ROLES' ||
+      key === 'SIGNER_URL' ||
+      key.startsWith('INTERNAL_TLS_') ||
+      key.startsWith('JWT_')
     ) {
       delete process.env[key];
     }
