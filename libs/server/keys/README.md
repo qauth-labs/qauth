@@ -251,8 +251,8 @@ A rotation follows the overlap rules of the automatic rotation (ADR-019, #542):
   `DEFAULT_KEY_PREPUBLISH_DAYS`).
 - A retired client-assertion key stays in the provider's JWKS for `retiredRetentionMs` (default 14
   days, `DEFAULT_KEY_RETIRED_RETENTION_DAYS`). A retired webhook secret signs nothing more.
-- `activateNextKey` takes scoped purposes only; the rotation job of #542 rotates the others. The
-  rotation settings of #542 set both windows.
+- `activateNextKey` takes scoped purposes only; the rotation job of #542 is to rotate the others.
+  That job, and the rotation settings that set both windows, are not built yet.
 
 `deleteScopedKeys` deletes every key of one scope, whatever its status, with their public rows. It is
 the hook the deletion of a subscription or a provider calls, in the same transaction (`tx`), so the
@@ -488,7 +488,8 @@ const signer = createInProcessSigner({
 - With hybrid signing off, `signHybrid` is refused and the ML-DSA-65 private key is never unwrapped
   (ADR-005, #248 F10).
 
-The remote signer of a distributed deployment (#497) implements the same interface.
+The remote signer of a distributed deployment (#497) is not built yet. It is to implement the same
+interface.
 
 ### Data at rest
 

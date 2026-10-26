@@ -5,8 +5,8 @@ Fastify plugin for the browser session service of
 the service's Postgres port over the database plugin's repositories and its Redis port over the cache
 plugin's client, and decorates the instance with `fastify.sessionService`.
 
-> **Status:** the auth-server registers it, and no route uses it yet. #488 moves the browser sign-in
-> and the session lookup onto it.
+> **Status:** the auth-server registers it. Since #488 the browser sign-in and the session lookup
+> run on it (`apps/auth-server/src/app/helpers/browser-session.ts`).
 
 ## Usage
 

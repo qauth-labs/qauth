@@ -24,8 +24,9 @@ the noble backend.
 
 ## Supply chain (#277, finding F4)
 
-The addon is `dlopen`-ed into the auth server on the signing path, so its bytes
-are part of the trust base. Four controls back that:
+A host that registers the addon `dlopen`s it on the signing path, so its bytes
+are part of the trust base. The auth server does not register it. Four controls
+back that:
 
 1. **Reproducible build from pinned source.** `rust-toolchain.toml` pins the
    exact compiler (never floating `stable`), `CARGO_INCREMENTAL=0`, build paths

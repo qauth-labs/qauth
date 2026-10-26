@@ -55,7 +55,7 @@ Add a scope where useful: `feat(auth): …`. Common scopes: `auth`, `oauth`, `db
 
 ## References
 
-- MVP-PRD.md - {relevant section}
+- docs/adr/{ADR file} - {relevant section}
 ```
 
 ## PR Body Template
@@ -75,17 +75,15 @@ Use `Fixes #N` for bug fixes, `Closes #N` for features.
 
 - **Labels**: `enhancement` (features), `bug` (fixes); add others as needed
   (e.g. `priority:high`, `auth`).
-- **Milestone**: the scheme is `MVP` plus a numbered track series (`T0`, `T1`, …),
-  whose titles carry a descriptive suffix — e.g. `T4 - Federation & PQC`. There has
-  never been a `Phase N` milestone; the "Phase" numbering in `MVP-PRD.md` is planning
-  vocabulary, not a milestone name. Read the live list before setting one, because
-  this file cannot stay ahead of it:
+- **Milestone**: new work goes on a release milestone of the 0.x → 1.0 path
+  (ADR-018 §2), whose titles carry a descriptive suffix — e.g. `v0.3 - Core and UIs
+  beta`. The older `MVP` and `T0`–`T6` milestones are finished history; never file new
+  work against them. There has never been a `Phase N` milestone. Read the live list
+  before setting one, because this file cannot stay ahead of it:
 
   ```bash
   gh api repos/qauth-labs/qauth/milestones --jq '.[] | "\(.title) (\(.state))"'
   ```
-
-  As of 2026-08-31, `MVP` is closed — do not file new work against it.
 
 ## Focused Skills
 
