@@ -541,6 +541,77 @@ describe('createIdJagIssuerKeyResolver — negative cache (#433)', () => {
     expect(redis.keys()).toContain(FAILED_KEY);
   });
 
+  // #481: whether the discovery fetch may reach a private address depends on
+  // the realm (the deployment allowlist), so a refusal by the address check
+  // says nothing about the issuer and must not hold it back for a realm the
+  // allowlist opens it for.
+  it('does not remember a discovery fetch the address check refused', async () => {
+    egressGet.mockRejectedValue(blockedEgress('resolves to a private address'));
+    const { fastify, redis } = fastifyStub();
+
+    await expect(
+      createIdJagIssuerKeyResolver(fastify, 'other')({ issuer: ISSUER, algorithm: 'EdDSA' })
+    ).resolves.toBeUndefined();
+    expect(redis.keys()).not.toContain(FAILED_KEY);
+
+    wireHappyPath([await publicJwk()]);
+    await expect(
+      createIdJagIssuerKeyResolver(fastify, REALM)({ issuer: ISSUER, algorithm: 'EdDSA' })
+    ).resolves.toBeDefined();
+  });
+
+  it('still remembers a discovery fetch refused for a reason no realm changes', async () => {
+    egressGet.mockRejectedValue(blockedEgress('redirect refused', 'redirect'));
+    const { fastify, redis } = fastifyStub();
+
+    await createIdJagIssuerKeyResolver(fastify, REALM)({ issuer: ISSUER, algorithm: 'EdDSA' });
+
+    expect(redis.keys()).toContain(FAILED_KEY);
+  });
+
+  it('still remembers a refused jwks_uri, which no realm may reach', async () => {
+    egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
+      if (url === DISCOVERY_URL) return ok({ issuer: ISSUER, jwks_uri: JWKS_URI });
+      throw blockedEgress('resolves to a private address');
+    });
+    const { fastify, redis } = fastifyStub();
+
+    await createIdJagIssuerKeyResolver(fastify, REALM)({ issuer: ISSUER, algorithm: 'EdDSA' });
+
+    expect(redis.keys()).toContain(FAILED_KEY);
+  });
+
+  it('shares a discovery fetch in flight within one realm only', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const jwk = await publicJwk();
+    egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
+      if (url === DISCOVERY_URL) {
+        await held;
+        return ok({ issuer: ISSUER, jwks_uri: JWKS_URI });
+      }
+      return ok({ keys: [jwk] });
+    });
+    const { fastify } = fastifyStub();
+    const request = { issuer: ISSUER, algorithm: 'EdDSA' as const };
+
+    const resolutions = [
+      createIdJagIssuerKeyResolver(fastify, REALM)(request),
+      createIdJagIssuerKeyResolver(fastify, REALM)(request),
+      createIdJagIssuerKeyResolver(fastify, 'other')(request),
+    ];
+    await vi.waitFor(() =>
+      expect(egressGet.mock.calls.filter(([, url]) => url === DISCOVERY_URL)).toHaveLength(2)
+    );
+    release();
+    await Promise.all(resolutions);
+
+    expect(egressGet.mock.calls.filter(([, url]) => url === DISCOVERY_URL)).toHaveLength(2);
+    expect(egressGet.mock.calls.map(([, , options]) => options.realm)).toEqual(
+      expect.arrayContaining([REALM, 'other'])
+    );
+  });
+
   it('writes no failure after a successful fetch', async () => {
     wireHappyPath([await publicJwk()]);
     const { fastify, redis } = fastifyStub();

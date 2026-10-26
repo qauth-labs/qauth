@@ -112,7 +112,10 @@ those two made.
 ```
 
 - `host` is matched exactly and case-insensitively against the URL's host, never with a wildcard.
-  Every address the host resolves to may then be dialled. An IP address is written as a `cidr`.
+  The private (`10/8`, `172.16/12`, `192.168/16`), shared (`100.64/10`) and unique-local (`fc00::/7`)
+  addresses it resolves to may then be dialled. Its DNS may be someone else's, so a host entry never
+  opens loopback, link-local or another special range: a `cidr` entry that names one does. An IP
+  address is written as a `cidr`.
 - `cidr` is an IPv4 or IPv6 range in its first-address form (`10.20.0.0/16`, not `10.20.0.7/16`).
   Every address of the URL's host must lie in a listed range or be public. An IPv4-mapped IPv6
   address (`::ffff:10.20.0.7`) is judged by its IPv4 address; a NAT64 or 6to4 address is not.
@@ -276,7 +279,8 @@ query string or a header.
 Every blocked or failed call is counted by purpose, outcome and reason. `egress.counts()` returns
 the counts. A `counter` option receives them too; a prom-client
 `Counter<'purpose' | 'outcome' | 'reason'>` fits. A `logger` option (pino-style `warn(fields,
-message)`) gets one line per call with `purpose`, `source`, `host`, `reason` and `outcome`.
+message)`) gets one line per call with `purpose`, `source`, `realm` (when the call names one),
+`host`, `reason` and `outcome`.
 
 ## Tests
 

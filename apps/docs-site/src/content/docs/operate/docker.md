@@ -593,8 +593,9 @@ Two client columns hold resource identifiers, and each does one job:
 
 ### Outbound calls and the egress allowlist
 
-Every outbound call the server makes for a configuration value or a request
-goes through one SSRF-safe egress client: `https` only, every address of the
+The outbound calls the server makes for a configuration value or a request (the
+CIMD, client `jwks_uri` and ID-JAG issuer fetches, the SSF push) go through one
+SSRF-safe egress client: `https` only, every address of the
 host checked, the connection pinned to the checked addresses, redirects checked
 the same way, time and size capped
 ([ADR-019 Decision 8](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
@@ -603,7 +604,9 @@ deployment allowlist names the host or range **and** the destination was set by
 the operator or a realm admin, for a realm the entry names. A destination that a
 client, an end user or a fetched document supplies (a CIMD `client_id`, a
 client's `jwks_uri`, the `jwks_uri` of an issuer's discovery document) never
-uses the allowlist.
+uses the allowlist. The wallet status-list fetch keeps its own URI-prefix
+allowlist for now, and the OpenTelemetry export and a KMS provider's SDK make
+their own connections.
 
 `EGRESS_ALLOWLIST_PATH` names the allowlist, a JSON file the operator writes:
 
@@ -618,6 +621,10 @@ uses the allowlist.
 
 - Each entry names one `host` (exact, no wildcard) or one `cidr` range, and the
   realms it applies to, by realm name.
+- A `host` entry opens the private (`10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`), shared (`100.64.0.0/10`) and unique-local (`fc00::/7`)
+  addresses its name resolves to. Loopback, link-local and other special
+  ranges open only through a `cidr` entry that names them.
 - The server reads the file once, at boot. A file that cannot be read or does
   not validate stops the boot, naming the variable, the file and the mistake; a
   file that group or others can write gives a warning.

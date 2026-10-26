@@ -114,7 +114,7 @@ export interface EgressLogger {
 export interface EgressClientOptions {
   /** Caps of every call, over {@link DEFAULT_EGRESS_LIMITS}. */
   limits?: Partial<EgressLimits>;
-  /** Gets one line per blocked or failed call: purpose, host and reason. */
+  /** Gets one line per blocked or failed call: purpose, source, realm, host and reason. */
   logger?: EgressLogger;
   /** Also counts blocked and failed calls, besides {@link EgressClient.counts}. */
   counter?: EgressCounter;
@@ -302,6 +302,7 @@ function buildEgressClient(
     err: unknown,
     purpose: string,
     source: EgressSource,
+    realm: string | undefined,
     host: string | undefined
   ): EgressError => {
     const failure =
@@ -322,7 +323,7 @@ function buildEgressClient(
     entry.reasons[reason] = (entry.reasons[reason] ?? 0) + 1;
     options.counter?.inc({ purpose, outcome, reason });
     options.logger?.warn(
-      { purpose, source, host, reason, outcome },
+      { purpose, source, ...(realm === undefined ? {} : { realm }), host, reason, outcome },
       outcome === 'blocked' ? 'egress call blocked' : 'egress call failed'
     );
     return new EgressError({ reason, outcome, purpose, host, message: failure.message });
@@ -347,7 +348,8 @@ function buildEgressClient(
   const request = async (call: EgressRequest): Promise<EgressResponse> => {
     const purpose = checkPurpose(call.purpose);
     const source = checkSource(call.source);
-    const permit = callPermit(source, checkRealm(call.realm));
+    const realm = checkRealm(call.realm);
+    const permit = callPermit(source, realm);
     if (!(EGRESS_METHODS as readonly string[]).includes(call.method)) {
       throw new TypeError(`egress method must be one of ${EGRESS_METHODS.join(', ')}`);
     }
@@ -467,7 +469,7 @@ function buildEgressClient(
         }
       });
     } catch (err) {
-      throw report(err, purpose, source, host);
+      throw report(err, purpose, source, realm, host);
     }
   };
 
@@ -477,7 +479,8 @@ function buildEgressClient(
   ): Promise<ValidatedDestination> => {
     const purpose = checkPurpose(validateOptions.purpose);
     const source = checkSource(validateOptions.source);
-    const permit = callPermit(source, checkRealm(validateOptions.realm));
+    const realm = checkRealm(validateOptions.realm);
+    const permit = callPermit(source, realm);
     const limits = mergeLimits(baseLimits, validateOptions.limits);
     try {
       return await withDeadline(limits, async (signal) => {
@@ -500,7 +503,7 @@ function buildEgressClient(
         };
       });
     } catch (err) {
-      throw report(err, purpose, source, hostForLog(url));
+      throw report(err, purpose, source, realm, hostForLog(url));
     }
   };
 

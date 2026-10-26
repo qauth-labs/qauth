@@ -100,6 +100,13 @@ const FORBIDDEN: readonly (readonly [what: string, code: string])[] = [
     'request on a require call',
     "export const send = (url: string) => require('https').request(url);\n",
   ],
+  [
+    'a destructuring of the module object',
+    "import * as https from 'node:https';\nconst { request } = https;\nexport { request };\n",
+  ],
+  ['a re-export of request', "export { request } from 'node:https';\n"],
+  ['export * from the module', "export * from 'node:http';\n"],
+  ['a dynamic import', "export const load = () => import('node:https');\n"],
 ];
 
 const ALLOWED: readonly (readonly [what: string, code: string])[] = [
@@ -117,6 +124,7 @@ const ALLOWED: readonly (readonly [what: string, code: string])[] = [
     'the egress client',
     "export const send = (egress: { request(r: object): Promise<unknown> }) =>\n  egress.request({ method: 'GET' });\n",
   ],
+  ['a re-export of another node:http export', "export { STATUS_CODES } from 'node:http';\n"],
   [
     'fetch in a page script string',
     "export const page = '<script>fetch(statusUrl).then(function () {});</script>';\n",

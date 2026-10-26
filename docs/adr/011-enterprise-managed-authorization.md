@@ -380,8 +380,11 @@ The rules that make this a trust model rather than a list:
   former escape hatch, `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD twin
   `CIMD_ALLOW_PRIVATE_ADDRESSES` are removed: set to any value, they stop the boot with
   a message that names `EGRESS_ALLOWLIST_PATH`. Tests reach a localhost IdP through the
-  test-only `createTestEgressClient`. The caches stay per issuer: for a public issuer
-  the realm changes nothing.
+  test-only `createTestEgressClient`. The caches stay per issuer, since a document is
+  the same whichever realm fetched it. A discovery fetch that the address check refuses
+  for one realm is not written to the negative cache, and concurrent discovery fetches
+  are shared only within a realm, so a realm without an allowlist entry cannot hold the
+  issuer back for a realm that has one.
 
 ### 5. Why an allowlist, and not the alternatives
 

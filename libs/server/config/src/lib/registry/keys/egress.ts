@@ -4,8 +4,8 @@ import { defineKeys } from '../types';
  * Egress (ADR-019 Decision 8, issue #481): the keys of `egressEnvSchema`.
  *
  * `advanced`: the allowlist's file format may still change in a minor
- * release while the callers of X (upstream providers, back-channel logout,
- * webhooks) move onto the egress client.
+ * release while the remaining outbound callers (upstream providers,
+ * back-channel logout, webhooks) move onto the egress client.
  */
 export const EGRESS_KEYS = defineKeys([
   {

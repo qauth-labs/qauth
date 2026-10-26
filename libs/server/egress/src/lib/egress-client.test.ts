@@ -740,6 +740,7 @@ describe('the deployment allowlist', () => {
     entries: [
       { cidr: '10.0.0.0/24', realms: ['acme'] },
       { host: 'internal.egress.test', realms: ['beta'] },
+      { host: 'loopback.egress.test', realms: ['beta'] },
       { cidr: '169.254.0.0/16', realms: ['acme'] },
       { cidr: '127.0.0.0/8', realms: ['acme'] },
     ],
@@ -828,7 +829,7 @@ describe('the deployment allowlist', () => {
     expect(literal).toMatchObject({ reason: 'address', outcome: 'blocked' });
   });
 
-  it('opens loopback only through an entry that lists it', async () => {
+  it('opens loopback through a range that lists it, never through a host entry', async () => {
     const res = await get(
       'https://loopback.egress.test/',
       { source: 'operator', realm: 'acme' },
@@ -908,6 +909,28 @@ describe('the deployment allowlist', () => {
       expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
     }
     expect(net.dialled).toEqual([]);
+  });
+
+  it('names the source and the realm in the log line of a refusal', async () => {
+    const warn = vi.fn();
+    await refusal(
+      get(
+        'https://internal.egress.test/',
+        { source: 'operator', realm: 'other' },
+        client({ allowlist, logger: { warn } })
+      )
+    );
+    expect(warn).toHaveBeenCalledWith(
+      {
+        purpose: 'test',
+        source: 'operator',
+        realm: 'other',
+        host: 'internal.egress.test',
+        reason: 'address',
+        outcome: 'blocked',
+      },
+      'egress call blocked'
+    );
   });
 
   it('refuses an allowlist that did not come from the parser', () => {

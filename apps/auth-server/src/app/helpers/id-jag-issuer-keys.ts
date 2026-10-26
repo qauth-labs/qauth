@@ -76,10 +76,13 @@ import { egressGet } from './egress-get';
  * private address therefore cannot be used from discovery alone; that needs
  * its endpoints in configuration (the upstream provider work, #432 to #435).
  *
- * The caches below are per issuer, not per realm. For a public issuer, the
- * only kind that resolves keys end to end, the realm changes nothing; the
- * allowlist only decides whether one realm's discovery fetch may reach a
- * private address.
+ * The caches below are per issuer, not per realm: a document is the same
+ * whichever realm fetched it, and the issuer is trusted deployment-wide. The
+ * realm decides only whether one realm's discovery fetch may reach a private
+ * address, so a discovery fetch the address check refuses is not a failure of
+ * the issuer: it is not written to the negative cache, where it would hold the
+ * issuer back for a realm the allowlist does open it for, and concurrent
+ * discovery fetches are shared only within one realm.
  *
  * ## How often an issuer is dialled
  *
@@ -372,6 +375,16 @@ async function fetchRecentlyFailed(fastify: FastifyInstance, issuer: string): Pr
  */
 const fetchesInFlight = new WeakMap<FastifyInstance, Map<string, Promise<unknown>>>();
 
+/**
+ * What a fetch yields when the address check refused a destination the
+ * deployment allowlist may open for another realm: no document, and nothing
+ * learnt about the issuer.
+ */
+const REFUSED_FOR_REALM = Symbol('refused for this realm');
+
+/** A document, `undefined` when the fetch failed, or {@link REFUSED_FOR_REALM}. */
+type Fetched<T> = T | undefined | typeof REFUSED_FOR_REALM;
+
 /** Run `fetch` unless the same `key` is already being fetched, then share that. */
 function shareInFlight<T>(
   fastify: FastifyInstance,
@@ -400,15 +413,19 @@ function shareInFlight<T>(
  * Every way a fetch can fail counts, not only a transport error: a non-200, a
  * body that does not parse or validate, a discovery document naming another
  * issuer. Each would fail the same way on the next request, and each costs the
- * issuer a request to find out.
+ * issuer a request to find out. A discovery fetch the address check refused
+ * ({@link REFUSED_FOR_REALM}) does not count: it sent nothing to the issuer,
+ * and another realm's allowlist entry may open the same address. Its run is
+ * shared only by requests of the same realm (`shareKey`).
  */
-function fetchUnlessRecentlyFailed<T>(
+async function fetchUnlessRecentlyFailed<T>(
   fastify: FastifyInstance,
   issuer: string,
   what: 'discovery' | 'jwks',
-  fetch: () => Promise<T | undefined>
+  shareKey: string,
+  fetch: () => Promise<Fetched<T>>
 ): Promise<T | undefined> {
-  return shareInFlight(fastify, `${what} ${issuer}`, async () => {
+  const fetched = await shareInFlight<Fetched<T>>(fastify, shareKey, async () => {
     if (await fetchRecentlyFailed(fastify, issuer)) {
       fastify.log.debug({ issuer, what }, 'ID-JAG issuer fetch skipped: a recent fetch failed');
       return undefined;
@@ -429,6 +446,7 @@ function fetchUnlessRecentlyFailed<T>(
     }
     return document;
   });
+  return fetched === REFUSED_FOR_REALM ? undefined : fetched;
 }
 
 /**
@@ -479,7 +497,9 @@ async function claimRefresh(fastify: FastifyInstance, issuer: string): Promise<b
  * non-200, unparseable body, schema mismatch) so no caller has to distinguish
  * them: for key resolution they are all "no key". The reason is logged at
  * `debug` for operators — never surfaced to the requester, which would turn the
- * AS into an oracle for what its network can reach.
+ * AS into an oracle for what its network can reach. An `operator` destination
+ * the address check refused yields {@link REFUSED_FOR_REALM} instead: the
+ * allowlist may open it for another realm.
  */
 async function fetchJsonDocument<T>(
   fastify: FastifyInstance,
@@ -487,7 +507,7 @@ async function fetchJsonDocument<T>(
   schema: z.ZodType<T>,
   what: 'discovery' | 'jwks',
   destination: { source: EgressSource; realm: string }
-): Promise<T | undefined> {
+): Promise<Fetched<T>> {
   let result;
   try {
     result = await egressGet(fastify, url, {
@@ -498,10 +518,11 @@ async function fetchJsonDocument<T>(
       maxBytes: env.ID_JAG_MAX_DOCUMENT_BYTES,
     });
   } catch (err) {
-    fastify.log.debug(
-      { url, what, blocked: isEgressError(err) && err.outcome === 'blocked' },
-      'ID-JAG issuer document fetch failed'
-    );
+    const blocked = isEgressError(err) && err.outcome === 'blocked';
+    fastify.log.debug({ url, what, blocked }, 'ID-JAG issuer document fetch failed');
+    if (blocked && err.reason === 'address' && destination.source === 'operator') {
+      return REFUSED_FOR_REALM;
+    }
     return undefined;
   }
 
@@ -552,8 +573,14 @@ async function resolveIssuerMetadata(
     if (cached) return cached;
   }
 
-  const metadata = await fetchUnlessRecentlyFailed(fastify, issuer, 'discovery', () =>
-    fetchIssuerMetadata(fastify, issuer, realm)
+  // Shared only within the realm: whether the fetch may reach the issuer
+  // depends on the realm (the deployment allowlist).
+  const metadata = await fetchUnlessRecentlyFailed(
+    fastify,
+    issuer,
+    'discovery',
+    `discovery ${issuer} ${realm}`,
+    () => fetchIssuerMetadata(fastify, issuer, realm)
   );
   if (!metadata) return undefined;
 
@@ -570,7 +597,7 @@ async function fetchIssuerMetadata(
   fastify: FastifyInstance,
   issuer: string,
   realm: string
-): Promise<IssuerMetadata | undefined> {
+): Promise<Fetched<IssuerMetadata>> {
   const metadata = await fetchJsonDocument(
     fastify,
     `${issuer}/.well-known/openid-configuration`,
@@ -578,7 +605,7 @@ async function fetchIssuerMetadata(
     'discovery',
     { source: 'operator', realm }
   );
-  if (!metadata) return undefined;
+  if (metadata === undefined || metadata === REFUSED_FOR_REALM) return metadata;
 
   if (resolveIssuerIdentifier(metadata.issuer) !== issuer) {
     fastify.log.debug(
@@ -625,7 +652,9 @@ async function resolveIssuerJwks(
     if (cached) return cached;
   }
 
-  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', () =>
+  // A remote document: the allowlist never applies, so the realm changes
+  // nothing and the fetch is shared across realms.
+  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', `jwks ${issuer}`, () =>
     fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks', {
       source: 'remote_document',
       realm,

@@ -298,6 +298,11 @@ services:
       # realm. Mount the file into the container read-only and name its path
       # here; unset, no outbound call reaches a private address.
       EGRESS_ALLOWLIST_PATH:
+      # Removed in 0.2.0 and forwarded only so that a value left in .env
+      # stops the boot with a message naming EGRESS_ALLOWLIST_PATH, instead
+      # of being dropped here unnoticed. Blank is unset.
+      CIMD_ALLOW_PRIVATE_ADDRESSES:
+      ID_JAG_ALLOW_PRIVATE_ADDRESSES:
 
       # Signing algorithm / post-quantum hybrid (ADR-005)
       SIGNING_ALGORITHM_MODE:

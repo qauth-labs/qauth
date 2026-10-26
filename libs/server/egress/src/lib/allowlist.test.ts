@@ -192,6 +192,12 @@ describe('allowlistPermit', () => {
     const acme = allowlistPermit(allowlist, 'acme');
     expect(master?.('idp.corp.example', '10.99.0.1')).toBe(true);
     expect(acme?.('idp.corp.example', '10.99.0.1')).toBe(false);
+    // A host entry opens private networks only; its DNS may be someone else's.
+    expect(master?.('idp.corp.example', '100.64.0.1')).toBe(true);
+    expect(master?.('idp.corp.example', 'fd12::1')).toBe(true);
+    expect(master?.('idp.corp.example', '127.0.0.1')).toBe(false);
+    expect(master?.('idp.corp.example', '169.254.170.2')).toBe(false);
+    expect(master?.('idp.corp.example', '198.18.0.1')).toBe(false);
     expect(acme?.('any.example', '10.20.255.255')).toBe(true);
     expect(master?.('any.example', '10.20.255.255')).toBe(false);
     expect(master?.('any.example', '192.168.1.200')).toBe(true);

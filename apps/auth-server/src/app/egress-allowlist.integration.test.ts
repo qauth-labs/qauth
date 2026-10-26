@@ -220,6 +220,22 @@ describe('the egress allowlist (real containers)', () => {
       expect(issuer.requests).toHaveLength(1);
     });
 
+    it('does not hold the issuer back for the named realm after another realm was refused', async () => {
+      const app = await boot();
+      const { createIdJagIssuerKeyResolver } = await import('./helpers/id-jag-issuer-keys');
+      const request = { issuer: ISSUER, keyId: KEY_ID, algorithm: 'EdDSA' as const };
+
+      await expect(
+        createIdJagIssuerKeyResolver(app, OTHER_REALM)(request)
+      ).resolves.toBeUndefined();
+      expect(issuer.requests).toHaveLength(0);
+      // No cache is emptied in between: the refusal left nothing behind.
+      await expect(
+        createIdJagIssuerKeyResolver(app, E2E_REALM_NAME)(request)
+      ).resolves.toMatchObject({ identifier: ISSUER });
+      expect(issuer.requests).toHaveLength(1);
+    });
+
     it('stays refused for another realm after the file is changed, since it is read at boot only', async () => {
       const app = await boot();
       writeFileSync(

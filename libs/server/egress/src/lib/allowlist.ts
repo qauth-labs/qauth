@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 
-import { inRange, mappedIpv4, parseIpv4, parseIpv6 } from './address';
+import {
+  type AddressKind,
+  addressKind,
+  inRange,
+  mappedIpv4,
+  parseIpv4,
+  parseIpv6,
+} from './address';
 
 /**
  * The deployment-level egress allowlist (ADR-019 Decision 8): the hosts and
@@ -34,8 +41,10 @@ export interface EgressAllowlist {
 export interface EgressAllowlistEntry {
   /**
    * A host name, matched exactly and case-insensitively against the URL's
-   * host. Every address it resolves to may then be dialled, but those no entry
-   * ever opens (unspecified, multicast, the cloud metadata address).
+   * host. The private (RFC 1918), shared (RFC 6598) and unique-local addresses
+   * it resolves to may then be dialled. Its DNS may be someone else's, so a
+   * host entry never opens loopback, link-local or another special range; a
+   * `cidr` entry that names one does.
    */
   readonly host?: string;
   /**
@@ -70,6 +79,16 @@ interface CompiledRange {
   readonly bytes: readonly number[];
   readonly bits: number;
 }
+
+/**
+ * The kinds of address a `host` entry opens: the private networks an operator
+ * reaches an internal service on. Anything else needs a `cidr` entry.
+ */
+const HOST_ENTRY_KINDS: ReadonlySet<AddressKind> = new Set<AddressKind>([
+  'private',
+  'shared',
+  'unique-local',
+]);
 
 /** An entry in the form the client matches with. */
 interface CompiledEntry {
@@ -325,7 +344,9 @@ export function allowlistPermit(
   return (hostname, address) =>
     entries.some(
       (entry) =>
-        (entry.host !== undefined && entry.host === hostname) ||
+        (entry.host !== undefined &&
+          entry.host === hostname &&
+          HOST_ENTRY_KINDS.has(addressKind(address))) ||
         (entry.range !== undefined && rangeHolds(entry.range, address))
     );
 }

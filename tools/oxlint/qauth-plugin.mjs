@@ -108,9 +108,10 @@ function importedName(specifier) {
  * - the global `fetch`, read in any way: `fetch(url)`, `const f = fetch`,
  *   `globalThis.fetch`. A local binding named `fetch` (a parameter) is not
  *   the global one and passes, and so does a property of another object;
- * - `request` and `get` of `node:http` and `node:https`: a named import of
- *   them, or a read through the module object (`https.request`), however it
- *   was imported or required.
+ * - `request` and `get` of `node:http` and `node:https`: a named import or
+ *   re-export of them, a read through the module object (`https.request`),
+ *   however it was imported or required, and a destructuring of it;
+ * - a dynamic `import()` of those modules, and `export *` from them.
  *
  * `.oxlintrc.json` turns it on for server code outside the egress library.
  * A module path assembled at run time still passes: this keeps honest code
@@ -155,11 +156,37 @@ const noDirectNetwork = {
           }
         }
       },
+      ExportNamedDeclaration(node) {
+        if (node.exportKind === 'type' || !HTTP_MODULES.has(node.source?.value)) return;
+        for (const specifier of node.specifiers) {
+          const local =
+            specifier.local.type === 'Identifier' ? specifier.local.name : specifier.local.value;
+          if (specifier.exportKind !== 'type' && HTTP_REQUEST_FUNCTIONS.has(local)) {
+            report(specifier, `${local} from '${node.source.value}'`);
+          }
+        }
+      },
+      ExportAllDeclaration(node) {
+        if (node.exportKind !== 'type' && HTTP_MODULES.has(node.source.value)) {
+          report(node, `export * from '${node.source.value}'`);
+        }
+      },
+      ImportExpression(node) {
+        if (node.source.type === 'Literal' && HTTP_MODULES.has(node.source.value)) {
+          report(node, `A dynamic import of '${node.source.value}'`);
+        }
+      },
       VariableDeclarator(node) {
-        const source = requiredModule(node.init);
-        if (source === undefined || !HTTP_MODULES.has(source)) return;
+        const required = requiredModule(node.init);
+        const source =
+          required !== undefined && HTTP_MODULES.has(required)
+            ? required
+            : node.init?.type === 'Identifier' && modules.has(node.init.name)
+              ? node.init.name
+              : undefined;
+        if (source === undefined) return;
         if (node.id.type === 'Identifier') {
-          modules.add(node.id.name);
+          if (required !== undefined) modules.add(node.id.name);
           return;
         }
         if (node.id.type !== 'ObjectPattern') return;
