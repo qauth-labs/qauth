@@ -34,7 +34,7 @@ const REALM_HOST = 'auth.example.com';
 const PROBE = '/__realm-probe__';
 
 /** A sample of the app's routes on every surface but `none`. */
-const REALM_ROUTES: readonly InjectOptions[] = [
+const REALM_ROUTES: readonly (InjectOptions & { readonly url: string })[] = [
   { method: 'GET', url: '/' },
   { method: 'GET', url: '/.well-known/openid-configuration' },
   { method: 'GET', url: '/.well-known/oauth-authorization-server' },
@@ -49,6 +49,13 @@ const REALM_ROUTES: readonly InjectOptions[] = [
   { method: 'POST', url: '/auth/login', payload: { email: 'a@example.com', password: 'x' } },
   { method: 'GET', url: '/metrics' },
 ];
+
+/** The OAuth protocol endpoints above, which answer the RFC 6749 error body (#513). */
+const OAUTH_ENDPOINTS: ReadonlySet<string> = new Set([
+  '/oauth/authorize',
+  '/oauth/token',
+  '/oauth/userinfo',
+]);
 
 /** The routes that read or set the session cookie, refused on an endpoint host. */
 const BROWSER_ROUTES: readonly InjectOptions[] = [
@@ -154,17 +161,40 @@ describe('realm resolution by host on a real Postgres (#486)', () => {
     return realm.id;
   }
 
-  /** Assert a response is the bare 421: no cookie, no realm in the body. */
-  function expectMisdirected(response: Awaited<ReturnType<FastifyInstance['inject']>>): void {
+  /**
+   * Assert a response is the bare 421: no cookie, no realm in the body.
+   *
+   * The body is the error format of the route `url` names (#513): an OAuth
+   * protocol endpoint answers the RFC 6749 body, every other route a problem
+   * document. A problem document's `instance` echoes the path the caller sent,
+   * which is not realm data, so it is left out of the leak check.
+   */
+  function expectMisdirected(
+    response: Awaited<ReturnType<FastifyInstance['inject']>>,
+    url: string = PROBE
+  ): void {
     expect(response.statusCode).toBe(421);
     expect(response.headers['set-cookie']).toBeUndefined();
-    expect(response.json()).toEqual({
-      error: 'This server does not answer for the requested host',
-      statusCode: 421,
-      code: 'MISDIRECTED_REQUEST',
-    });
+    const path = url.split('?')[0];
+    const body = response.json() as Record<string, unknown>;
+    if (OAUTH_ENDPOINTS.has(path)) {
+      expect(response.headers['content-type']).toMatch(/^application\/json(?:;|$)/);
+      expect(body).toEqual({ error: 'invalid_request', error_description: expect.any(String) });
+    } else {
+      expect(response.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+      expect(body).toEqual({
+        type: expect.any(String),
+        title: expect.any(String),
+        status: 421,
+        detail: expect.any(String),
+        instance: path,
+        code: 'misdirected_request',
+        trace_id: expect.any(String),
+      });
+    }
+    const disclosed = JSON.stringify({ ...body, instance: undefined });
     for (const realmData of ['master', 'example.com', 'issuer', 'jwks']) {
-      expect(response.body).not.toContain(realmData);
+      expect(disclosed).not.toContain(realmData);
     }
   }
 
@@ -207,7 +237,7 @@ describe('realm resolution by host on a real Postgres (#486)', () => {
       for (const host of ['unknown.example', 'localhost', '127.0.0.1:3000', 'example.com']) {
         expectMisdirected(await probe(app, { host }));
         for (const route of REALM_ROUTES) {
-          expectMisdirected(await app.inject({ ...route, headers: { host } }));
+          expectMisdirected(await app.inject({ ...route, headers: { host } }), route.url);
         }
       }
     });
@@ -222,7 +252,8 @@ describe('realm resolution by host on a real Postgres (#486)', () => {
           method: 'GET',
           url: '/.well-known/openid-configuration',
           headers: { host: 'gamma.example.com' },
-        })
+        }),
+        '/.well-known/openid-configuration'
       );
     });
 
@@ -325,7 +356,8 @@ describe('realm resolution by host on a real Postgres (#486)', () => {
             method: 'GET',
             url: '/.well-known/openid-configuration',
             headers: { host },
-          })
+          }),
+          '/.well-known/openid-configuration'
         );
       }
     });

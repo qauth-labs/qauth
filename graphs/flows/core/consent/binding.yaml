@@ -75,6 +75,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -93,6 +94,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -112,6 +114,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -128,6 +131,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -144,6 +148,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -165,6 +170,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -187,6 +193,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -203,6 +210,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -219,6 +227,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -234,6 +243,7 @@ scenarios:
       returnUrl: tooLarge
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -255,6 +265,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -285,6 +296,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -302,12 +314,13 @@ scenarios:
           - "UPDATE users SET enabled = false WHERE id = '{account.sub}'"
 
   unknownClient:
-    # clientUnusable: client_id names no client of the realm
+    # clientUnknown: client_id names no client of the realm
     given:
       gate: open
       returnUrl: fits
-      params: unusableClient
+      params: unknownClient
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -331,6 +344,50 @@ scenarios:
         save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
     request: { query: { client_id: consent-unknown }, form: { client_id: consent-unknown } }
 
+  disabledClient:
+    # clientUnusable: consent-disabled is disabled after the seed
+    given:
+      gate: open
+      returnUrl: fits
+      params: unusableClient
+      agentScope: withinCap
+      audience: listed
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - run: # the manifest seeds every client enabled
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - "UPDATE oauth_clients SET enabled = false WHERE client_id = 'consent-disabled'"
+      - signIn: browser
+      - request: # renders consent-web's page, for the CSRF value the POST carries
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request:
+      query:
+        client_id: consent-disabled
+        redirect_uri: https://consent-disabled.example/callback
+        scope: openid
+      form:
+        client_id: consent-disabled
+        redirect_uri: https://consent-disabled.example/callback
+        scope: openid
+
   unregisteredRedirect:
     # redirectUnregistered: a redirect_uri consent-web did not register
     given:
@@ -338,6 +395,7 @@ scenarios:
       returnUrl: fits
       params: unregisteredRedirect
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -370,6 +428,7 @@ scenarios:
       returnUrl: fits
       params: unpermittedRedirect
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -408,6 +467,7 @@ scenarios:
       returnUrl: fits
       params: malformedDpopJkt
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -439,6 +499,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: overCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -477,6 +538,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: overCapSelfService
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -503,6 +565,61 @@ scenarios:
         redirect_uri: https://consent-self-registered.example/callback
         scope: openid agent:readonly
 
+  unlistedReservedAudience:
+    # audienceUnlisted: consent-web lists no QAuth API audience, and the request names the account API's
+    given:
+      gate: open
+      returnUrl: fits
+      params: valid
+      agentScope: withinCap
+      audience: unlisted
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW]]
+    as: user
+    setup:
+      - signIn: browser
+    request: { query: { resource: 'urn:qauth:aud:account:v1-rc.0' } }
+
+  selfServiceUnlistedReservedAudience:
+    # audienceUnlistedShown: a client that registered itself names the account API's audience, which it never lists
+    given:
+      gate: open
+      returnUrl: fits
+      params: valid
+      agentScope: withinCap
+      audience: unlistedSelfService
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW]]
+    as: user
+    setup:
+      - request:
+          method: POST
+          path: /oauth/register
+          json:
+            client_name: Consent replay self-registered client
+            redirect_uris: ['https://consent-self-registered.example/callback']
+            grant_types: [authorization_code]
+            response_types: [code]
+            token_endpoint_auth_method: none
+        save: { registeredClientId: body.client_id }
+      - signIn: browser
+    request:
+      query:
+        client_id: '{registeredClientId}'
+        redirect_uri: https://consent-self-registered.example/callback
+        scope: openid
+        resource: 'urn:qauth:aud:account:v1-rc.0'
+
   wrongCsrf:
     # csrfWrong: the form carries a value the session never held
     given:
@@ -510,6 +627,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: wrong
       decision: allow
@@ -529,6 +647,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: wrong
       decision: allow
@@ -571,6 +690,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: deny
@@ -590,6 +710,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -610,6 +731,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -644,6 +766,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -663,6 +786,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -683,6 +807,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -703,6 +828,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow
@@ -723,6 +849,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: development
       csrf: matches
       decision: allow
@@ -767,6 +894,7 @@ scenarios:
       returnUrl: fits
       params: valid
       agentScope: withinCap
+      audience: listed
       environment: production
       csrf: matches
       decision: allow

@@ -260,10 +260,50 @@ describe('the API conventions check — fixture document (#506)', () => {
     });
 
     it('MUTATION: a permission that is not a permission id', () => {
-      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = 'admin:read')))).toEqual([
+      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = 'qauth:admin:read')))).toEqual([
         'permission',
       ]);
       expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = [])))).toEqual(['permission']);
+    });
+
+    // #507: an admin operation names permissions of the admin catalog.
+    it('MUTATION: an admin permission the catalog does not have', () => {
+      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = 'realms.delete')))).toEqual([
+        'permission',
+      ]);
+      expect(
+        rulesOf(
+          mutated(
+            (d) =>
+              (PATCH(d)['x-qauth-permission'] = ['realms.policies.write', 'realms.policies.admin'])
+          )
+        )
+      ).toEqual(['permission']);
+    });
+
+    // #507: the class of an admin operation is the strictest class of its permissions.
+    it('MUTATION: an admin class that is not the strictest class of its permissions', () => {
+      // A security operation that names only a write permission.
+      expect(
+        rulesOf(mutated((d) => (PATCH(d)['x-qauth-permission'] = 'realms.policies.write')))
+      ).toEqual(['permission']);
+      // A read operation that names a write permission.
+      expect(
+        rulesOf(
+          mutated((d) => (GET(d)['x-qauth-permission'] = ['realms.read', 'realms.policies.write']))
+        )
+      ).toEqual(['permission']);
+      // A write operation that names a security permission: also missing its
+      // effects and two-admin marker would be reported by their own rules.
+      expect(
+        rulesOf(
+          mutated((d) => {
+            Object.assign(PATCH(d), { 'x-qauth-class': 'write' });
+            delete PATCH(d)['x-qauth-effects'];
+            delete PATCH(d)['x-qauth-two-admin'];
+          })
+        )
+      ).toEqual(['permission']);
     });
 
     it('MUTATION: a security operation without effects, or without the two-admin marker', () => {

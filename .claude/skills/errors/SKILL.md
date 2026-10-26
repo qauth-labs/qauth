@@ -32,11 +32,30 @@ reply.code(404).send({ error: 'Not found' });
 
 ## Error Response Shape
 
-All errors return consistent JSON (handled by the global error handler):
+The global error handler (`apps/auth-server/src/app/plugins/error-handler.ts`)
+answers in one of two formats, chosen by the route's `config.errorFormat`
+(ADR-019 Decision 7, #513):
 
-- **Required**: `error` (string), `statusCode` (number)
-- **Optional**: `code` (e.g. `INVALID_CREDENTIALS`), `feedback` (password rules),
-  `constraint` (DB constraint), `retryAfter` (429), `details` (validation errors)
+- **`problem`** (the default): an RFC 9457 document, `application/problem+json`,
+  with `type`, `title`, `status`, `detail`, `instance`, a stable lower-case `code`
+  and `trace_id` (the request id); `errors[]` (`pointer`, `message`) for a
+  validation failure and for weak-password feedback under `/password`.
+- **`oauth`**, set on the OAuth protocol endpoints only (token, authorize,
+  introspect, revoke, register, userinfo, the wallet-facing OID4VP endpoints):
+  `{ error, error_description? }` and nothing else.
+
+Which `code` and which OAuth `error` a domain error class answers is set once, in
+`apps/auth-server/src/app/api-conventions/error-classes.ts`; a new class in
+`@qauth-labs/shared-errors` needs an entry there (a test fails without one). A
+class a route or a server library defines with a `statusCode` (the SSF
+transmitter's, `SignInRequiredError`) goes in `APP_ERROR_CLASSES` there, with a
+published code for its status; a test fails without one. A route never sends an
+error body of its own: it throws, and the handler answers.
+An OAuth error class carries its token as its `message` and its prose in
+`errorDescription`. A refusal that several routes raise comes from one helper in
+the module that owns it (e.g. `helpers/token-subject.ts`), so it reads one way.
+Tests assert `code` (problem) or `error` (OAuth) and the status, never the
+wording.
 
 ## Security
 
@@ -44,8 +63,8 @@ All errors return consistent JSON (handled by the global error handler):
   paths in error messages.
 - **Generic auth errors**: Use `InvalidCredentialsError` with the same message for
   "user not found" and "wrong password" to prevent user enumeration.
-- **Stack traces**: Only in development (`NODE_ENV !== 'production'`); never in
-  production responses.
+- **Stack traces**: never in a response. A 5xx carries no `detail`; its
+  `trace_id` leads to the log line.
 - **Logging**: Log full error details server-side; sanitize client responses.
 
 See the `security` skill for timing-safe comparison and minimum-response-time

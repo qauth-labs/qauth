@@ -147,6 +147,27 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
 }
 
 /**
+ * How a route's access-token check departs from `requireJwt`'s (#509), for
+ * `verifyRequestAccessToken`. Each member only changes what it names; the
+ * signature, expiry, revocation and DPoP checks always run.
+ */
+export interface AccessTokenCheckPolicy {
+  /**
+   * Decide whether the verified token's `iss` is one the route accepts. It
+   * replaces the comparison with the plugin's `issuer`, and runs after the
+   * signature check, so it never sees an unverified claim. A token with no
+   * `iss` is refused before it is called. Absent: `iss` must equal `issuer`.
+   */
+  acceptIssuer?: (issuer: string, request: FastifyRequest) => boolean | Promise<boolean>;
+  /**
+   * Require the RFC 9068 `typ: at+jwt` protected header whatever
+   * {@link JwtPluginOptions.requireAccessTokenTyp} says. It can only tighten:
+   * `false` or absent leaves the operator's setting in force.
+   */
+  requireTyp?: boolean;
+}
+
+/**
  * JWKS envelope as served by `/.well-known/jwks.json` (RFC 7517 §5).
  */
 export interface Jwks {

@@ -46,6 +46,17 @@
       "redirect_uris": ["https://consent-development.example/callback"],
       "require_pkce": true,
       "token_endpoint_auth_method": "none"
+    },
+    {
+      "client_id": "consent-disabled",
+      "name": "Consent replay disabled client",
+      "description": "The consent graph's disabled client: its scenario sets oauth_clients.enabled to false, which the manifest cannot. Replay fixture: never seed it into a deployment that serves real users.",
+      "grant_types": ["authorization_code"],
+      "response_types": ["code"],
+      "scopes": ["openid"],
+      "redirect_uris": ["https://consent-disabled.example/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "none"
     }
   ]
 }

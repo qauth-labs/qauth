@@ -2,7 +2,12 @@ import { z } from 'zod';
 
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
 import { clientIdParamSchema, exactUrl } from './common';
-import { dpopJktParamSchema, maxAgeParamSchema, resourceParamSchema } from './oauth';
+import {
+  codeChallengeParamSchema,
+  dpopJktParamSchema,
+  maxAgeParamSchema,
+  resourceParamSchema,
+} from './oauth';
 
 /**
  * The Allow / Deny form the consent screen posts to `POST /ui/consent` (issue
@@ -27,7 +32,10 @@ export const consentFormSchema = z.object({
   // (#316) and this form POST reaches the same pending-authorization stash.
   scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  code_challenge: z.string().min(43).max(128),
+  // Same bound as `authorizeQuerySchema.code_challenge`, which is the one
+  // `mintAuthorizationCode` holds the code to: a form the screen did not
+  // render cannot reach the mint with a challenge it refuses.
+  code_challenge: codeChallengeParamSchema,
   code_challenge_method: z.literal('S256'),
   response_type: z.literal('code'),
   // ADR-007 §2 (#185): step-up params carried through so the POST mint path

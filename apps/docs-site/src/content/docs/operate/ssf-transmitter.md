@@ -1,0 +1,258 @@
+---
+title: SSF transmitter
+description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
+sidebar:
+  order: 11
+lastVerified: '2026-10-26'
+---
+
+QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
+(SSF) transmitter. A receiver, such as a resource server, creates a stream at QAuth, and QAuth
+pushes Security Event Tokens (SETs, RFC 8417) to the receiver's endpoint (RFC 8935). The SETs come
+out of QAuth's event store and are sent by the delivery role, with its retries and its delivery
+history.
+
+The transmitter is experimental and off by default. Today it sends the verification event only:
+the mapping of QAuth's security events to CAEP and RISC events comes with #540.
+
+## Turn it on
+
+Two switches, both off by default:
+
+1. The deployment's: `SSF_TRANSMITTER_ENABLED=true`. Off, the server registers no SSF route,
+   serves no `/.well-known/ssf-configuration` and writes no SSF delivery.
+2. Each realm's: `realms.ssf_transmitter_enabled`. A realm whose switch is off answers `404` on the
+   metadata and on every `/ssf/` route, as for a route that does not exist, and its streams receive
+   nothing. No API sets it yet; set it on the realm row:
+
+```sql
+UPDATE realms SET ssf_transmitter_enabled = true WHERE name = 'master';
+```
+
+The auth server reads realm rows through a cache, so a change takes effect within 30 seconds.
+
+A realm needs two keys of its own: an `event_signing` key, which signs its SETs, and a
+`data_at_rest` key, which stores receivers' headers. The default realm gets both at boot. For
+any other realm, create them before turning its switch on (see
+[Keys](/operate/keys/#adding-a-key-auth-serverkeyscreate)):
+
+```bash
+pnpm nx run auth-server:keys:create --realm=<realm> --purpose=event_signing --algorithm=EdDSA
+pnpm nx run auth-server:keys:create --realm=<realm> --purpose=data_at_rest --algorithm=A256GCM
+```
+
+Without them, creating a stream with an `authorization_header` fails, and every delivery fails at
+signing until its attempts run out.
+
+With both on, the realm:
+
+- serves the transmitter metadata at `/.well-known/ssf-configuration`. Every URL in it is built
+  from the realm's issuer, which is also the `iss` of its SETs;
+- serves its SET signing keys (the `event_signing` purpose of ADR-019 Decision 9) at
+  `/ssf/jwks.json`, the `jwks_uri` of the metadata. A receiver verifies each SET with a key from
+  there. It needs no token, and is cached for at most 5 minutes, as the realm JWKS is;
+- keeps the SET keys out of the realm JWKS at `/.well-known/jwks.json`, which holds only the keys
+  of its access and ID tokens. A resource server that skips the `typ` check therefore cannot take
+  a SET for an access token;
+- serves stream management under `/ssf/` (see the
+  [API reference](/integrate/api-reference/#shared-signals-framework-transmitter)).
+
+## Register a receiver
+
+A receiver is an OAuth client of the realm. It authenticates with its own access token from the
+`client_credentials` grant, and the token must:
+
+- carry the `ssf:stream` scope (a token without it gets `403`);
+- name the realm's issuer in `aud`, so a token minted for another resource cannot manage streams;
+- name no other realm's issuer in `aud`. A `client_id` is unique only within a realm, so such a
+  token may come from a client of the same name in that realm. It gets `401`.
+
+Give `ssf:stream` only to clients you trust with the realm's security events: today a receiver may
+add any user or client of the realm as a subject. #540 limits a receiver to the users related to its
+own client (decided on 2026-10-26). Taking the scope away, disabling or suspending the
+client, or deleting it stops its deliveries, and its token stops working on `/ssf/` at once, not
+when it expires; deleting the client deletes its stream.
+
+Create the client with `client_credentials`, the `ssf:stream` scope and the realm's issuer as its
+audience, for example as an entry of the seed manifest's `clients`:
+
+```json
+{
+  "client_id": "risk-engine",
+  "name": "Risk engine (SSF receiver)",
+  "grant_types": ["client_credentials"],
+  "scopes": ["ssf:stream"],
+  "audience": ["https://auth.example.com"]
+}
+```
+
+The receiver then gets a token:
+
+```bash
+curl -s https://auth.example.com/oauth/token \
+  -d grant_type=client_credentials -d scope=ssf:stream \
+  -d client_id=risk-engine -d client_secret="$SECRET"
+```
+
+## Create a stream
+
+A receiver has one stream per realm; a second create answers `409`. Delivery is push only, to an
+`https` URL on a public address:
+
+```bash
+curl -s https://auth.example.com/ssf/stream \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "events_requested": ["https://schemas.openid.net/secevent/caep/event-type/session-revoked"],
+    "delivery": {
+      "method": "urn:ietf:rfc:8935",
+      "endpoint_url": "https://risk.example.com/ssf/events",
+      "authorization_header": "Bearer receiver-shared-secret"
+    },
+    "description": "Risk engine"
+  }'
+```
+
+- QAuth checks `endpoint_url` through its egress client when the stream is created or changed: an
+  address that is private, loopback, link-local or otherwise not public is refused with `400`
+  (`bad_request`, with `endpoint_url is refused` as the `detail`; the reason is in the server's
+  log, not in the answer). It checks again at every delivery, so a name that later resolves to
+  such an address is refused then too.
+- `authorization_header` is sent with every push. QAuth stores it encrypted with the realm's
+  `data_at_rest` key and never returns it. A `PATCH` whose `delivery` leaves it out and keeps the
+  same `endpoint_url` keeps the stored header, so sending back what a read returned changes
+  nothing; a new `endpoint_url` never gets the old header, and a `PUT` replaces it.
+- `events_delivered` in the answer is what QAuth will send: the requested events it supports.
+
+## Add subjects
+
+The transmitter's `default_subjects` is `NONE`: a stream receives events only about the subjects
+its receiver adds. Name a user of the realm as `iss_sub` with the realm's issuer, and a client by
+its `client_id`, as `uri` when that is a URL and `opaque` otherwise:
+
+```bash
+curl -s https://auth.example.com/ssf/subjects/add \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"stream_id": "'"$STREAM"'", "subject": {"format": "iss_sub", "iss": "https://auth.example.com", "sub": "'"$USER_ID"'"}}'
+```
+
+A subject in another format, or with another issuer, is kept and matches no event. A stream holds
+at most 1000 subjects.
+
+## Run the verification event
+
+```bash
+curl -s https://auth.example.com/ssf/verify \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"stream_id": "'"$STREAM"'", "state": "check-1"}'
+```
+
+QAuth answers `204`, records the request as a `ssf.stream.verification_requested` event, and the
+delivery role POSTs a SET to the stream's endpoint with `Content-Type: application/secevent+jwt`:
+
+```json
+{
+  "iss": "https://auth.example.com",
+  "jti": "0199f2b4-2b3c-7d4e-9f5a-6b7c8d9e0f1a",
+  "iat": 1792927942,
+  "aud": "risk-engine",
+  "sub_id": { "format": "opaque", "id": "<stream_id>" },
+  "events": {
+    "https://schemas.openid.net/secevent/ssf/event-type/verification": { "state": "check-1" }
+  }
+}
+```
+
+The header names the signing key (`kid`) and `typ: secevent+jwt`. The `jti` is the event's id,
+and a retry sends the same SET, so the receiver drops a duplicate by its `jti`. A second
+verification request from the same receiver within 10 seconds (`min_verification_interval`)
+answers `429`, even for a stream it deleted and created again.
+
+## Errors
+
+SSF 1.0 gives stream management statuses but no error body, so QAuth answers every refusal on
+`/ssf/` and on the metadata the way it answers on every route that is not an OAuth protocol
+endpoint: an RFC 9457 problem document, `application/problem+json`, with a stable `code` and the
+`trace_id` the server logged the request under ([Problem types](/reference/problem-types/)).
+Branch on the status and `code`, never on `detail`:
+
+| Status | `code`                 | When                                                                                            |
+| ------ | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `400`  | `validation_error`     | The body or the query does not match the schema; `errors` names each field.                     |
+| `400`  | `bad_request`          | The protocol refuses the request: poll delivery, a refused `endpoint_url`, a mismatched member. |
+| `401`  | `unauthorized`         | The request carries no access token.                                                            |
+| `401`  | `invalid_access_token` | The token is not valid, not the receiver's own, or for another audience or realm.               |
+| `401`  | `access_token_expired` | The token has expired.                                                                          |
+| `403`  | `forbidden`            | The token lacks `ssf:stream`.                                                                   |
+| `404`  | `not_found`            | No such stream for this receiver, or a realm that does not run the transmitter.                 |
+| `409`  | `conflict`             | The receiver already has a stream in the realm.                                                 |
+| `429`  | `too_many_requests`    | A verification within `min_verification_interval`; `Retry-After` says when to try again.        |
+
+A `401` for a token that was presented carries
+`WWW-Authenticate: Bearer realm="OAuth", error="invalid_token"`; one for a request with no token
+carries `Bearer realm="OAuth"` alone (RFC 6750 §3.1). A `403` carries
+`error="insufficient_scope", scope="ssf:stream"` (RFC 6750 §3). A realm that does not run the
+transmitter answers exactly what a path no route serves answers.
+
+## Watch deliveries
+
+`GET /ssf/status?stream_id=…` returns the stream's status and, as QAuth's extension,
+`delivery_status`: the deliveries still pending and the latest failed attempt.
+
+```json
+{
+  "stream_id": "…",
+  "status": "enabled",
+  "delivery_status": {
+    "pending": 1,
+    "last_failure": {
+      "event_id": "…",
+      "attempts": 1,
+      "status_code": 503,
+      "error": "http_status",
+      "time": "2026-10-25T10:00:01.000Z",
+      "state": "retrying",
+      "next_attempt_at": "2026-10-25T10:00:31.000Z"
+    }
+  }
+}
+```
+
+A push is delivered when the receiver answers `2xx`. Any other answer, a timeout or a network
+failure is retried on the delivery role's schedule (`EVENT_DELIVERY_*`), except a `400` with an
+RFC 8935 `err` that says the SET itself is wrong (`invalid_request`, `invalid_issuer`,
+`invalid_audience`, `invalid_state`), which ends the delivery. A `400` without a known `err`,
+such as a proxy's error page, is retried. Attempts are counted in
+`qauth_events_delivery_attempts_total{kind="ssf"}` (see [observability](/operate/observability/)).
+
+`error` is the class of the failed attempt. An endpoint QAuth refused to reach (a private
+address) and one it could not reach both read `destination_unreachable`, so the status does not
+tell a receiver which names resolve to private addresses. The delivery history and the server's
+log keep the exact class (`destination_blocked` or `network`).
+
+`POST /ssf/status` sets the status. `paused` holds the stream's events, however long the pause.
+Holding spends no attempt and records no failure: the delivery role looks at a held delivery
+every 30 seconds, and sends it at the first look after the stream is `enabled` again. `disabled`
+holds nothing. Deleting the stream ends its pending deliveries without sending them.
+
+A held delivery is pending, so it holds back [event retention](/operate/observability/) as any
+pending delivery does: no event of the realm from the oldest held one on is deleted. Disable or
+delete a stream rather than leave it paused for good.
+
+## Turning it off
+
+Turning the realm's switch off stops its deliveries: each pending one ends at its next attempt.
+Turning `SSF_TRANSMITTER_ENABLED` off leaves pending SSF deliveries in the queue, unsent. They
+no longer hold back [event retention](/operate/observability/): with the switch off no node
+serves SSF, so retention deletes their events at the realm's retention like any other, and the
+deliveries go with them. A delivery whose event is still there when the switch is on again is
+sent then. Set the switch the same on every node: a node with it off does not count SSF
+deliveries for retention.
+
+## In a distributed deployment
+
+The delivery role reads the streams, the event subject each stream subject stands for, and the
+columns that say whether a stream may receive events: `eventDeliveryGrantStatements()` in
+`@qauth-labs/infra-db` grants them. It cannot read a subject as the receiver sent it, which may be
+an email address or a phone number. It decrypts a receiver's `authorization_header` through the
+signer as the `delivery` caller, which may decrypt but never encrypt; it holds no key.

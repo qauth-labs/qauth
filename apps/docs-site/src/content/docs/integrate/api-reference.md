@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-09-11'
+lastVerified: '2026-10-25'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -28,47 +28,56 @@ login/consent/resume screens an end user sees, see [Hosted UI](/integrate/hosted
 
 ## Error model
 
-Errors share a single envelope:
+QAuth answers an error in one of two formats (ADR-019 Decision 7). Branch on the machine-readable
+member and the HTTP status, never on the wording, which may change.
 
-```json
-{ "error": "human-readable message", "statusCode": 400, "code": "OPTIONAL_CODE" }
-```
-
-Schema-validation failures use:
-
-```json
-{
-  "error": "Validation error",
-  "code": "VALIDATION_ERROR",
-  "statusCode": 400,
-  "details": [{ "path": "/grant_type", "message": "…" }]
-}
-```
-
-`details` carries one entry per rejected field: `path` names it, `message` says
-what is wrong with it. Nothing else — the validator's own issue objects also
-carry the schema path, the rule keyword and a parameter bag, and those describe
-how QAuth is built rather than what it accepts, so they are not returned. At
-most 20 entries are returned. An array longer than its limit is one entry for
-the array as a whole; its elements are not checked.
-
-OAuth endpoints additionally return the standard OAuth error codes documented in
-[OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors) (e.g. `invalid_grant`,
-`invalid_client`, `invalid_scope`, `invalid_target`). On those endpoints `error`
-is the registered RFC 6749 §5.2 token and any human-readable detail is a
-separate `error_description`:
+**Problem documents.** Every route that is not an OAuth protocol endpoint (first-party auth,
+client management, consents, the hosted UI, the well-known documents and any path no route serves)
+answers with an RFC 9457 problem details document, sent as `application/problem+json`:
 
 ```json
 {
-  "error": "invalid_client",
-  "error_description": "CIMD document is not valid JSON",
-  "code": "INVALID_CLIENT",
-  "statusCode": 401
+  "type": "https://docs.qauth.dev/reference/problem-types/#validation-error",
+  "title": "Validation error",
+  "status": 400,
+  "detail": "The request is not valid.",
+  "instance": "/auth/login",
+  "code": "validation_error",
+  "trace_id": "7d1c2e9a-5b8f-4f3e-9c6a-1e2d3f4a5b6c",
+  "errors": [{ "pointer": "/email", "message": "Invalid email address" }]
 }
 ```
 
-`error_description` is omitted where describing the failure would be an
-enumeration oracle — client authentication failures answer with the bare token.
+- `code` is the stable, machine-readable name of the error. The list of codes, with each one's
+  `type`, status and title, is on [Problem types](/reference/problem-types/).
+- `trace_id` is the id the server logged the request under, the `X-Request-Id` the response also
+  carries (the header `REQUEST_ID_HEADER` names), on every answer, the 404 of a path no route
+  serves and a request the server could not read included. Quote it when you report a failure.
+- `errors` names each field a validation failure rejected: `pointer` is an RFC 6901 JSON Pointer
+  into the body or the parameters, and `message` says what is wrong with it. The validator's own
+  issue objects also carry the schema path, the rule keyword and a parameter bag, and those
+  describe how QAuth is built rather than what it accepts, so they are not returned. At most 20
+  entries are returned. An array longer than its limit is one entry for the array as a whole; its
+  elements are not checked. A weak password's feedback arrives as entries whose pointer names the
+  password field.
+- A 5xx carries no `detail`. A 401 or 403 from a route that takes a bearer token also carries a
+  `WWW-Authenticate` challenge (RFC 6750 §3): `error="invalid_token"` for a token that was
+  presented and refused (`invalid_access_token`, `access_token_expired`), and no error code for a
+  request that presented none (`unauthorized`).
+
+**OAuth error bodies.** The OAuth protocol endpoints answer with the body their specification
+defines, `application/json` with only `error` and, where there is something to say,
+`error_description`: the authorization, token, introspection, revocation, dynamic registration and
+userinfo endpoints and the wallet-facing OID4VP endpoints.
+
+```json
+{ "error": "invalid_client", "error_description": "CIMD document is not valid JSON" }
+```
+
+`error` is the registered code (RFC 6749 §5.2, RFC 7591 §3.2.2, RFC 6750 §3.1); the codes are
+listed in [OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors). `error_description` is omitted
+where describing the failure would be an enumeration oracle: client authentication failures answer
+with the bare `invalid_client`. The `Retry-After` and `WWW-Authenticate` headers are sent as before.
 
 | Status | Meaning                                                                                             |
 | ------ | --------------------------------------------------------------------------------------------------- |
@@ -189,6 +198,12 @@ address is at most 254 characters.
   "token_type": "Bearer"
 }
 ```
+
+The access token is issued to the system client, and its `aud` is the system
+client's id. The routes that take this token also accept one whose `aud` is the
+developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, which a later
+release mints (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
 
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
 The `401` is the same for an unknown address, a wrong password, a disabled
@@ -316,7 +331,10 @@ Key contract facts:
 - Tokens carry `iss`, `aud` (RFC 8707 resource binding), `exp`, `iat`, and `scope`.
 - `client_credentials` tokens set `sub = client_id` and issue **no** refresh token.
 - Scopes are **deny-by-default** (client allowlist; DCR clients capped to the
-  realm's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`).
+  realm's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`). The `qauth:` scope namespace
+  is QAuth's own, the admin API's scopes among them: no realm allowlist holds
+  one, so dynamic registration drops one, a CIMD document's is ignored, and
+  discovery does not list them ([admin permissions](/reference/admin-permissions/)).
 - The `urn:ietf:params:oauth:grant-type:token-exchange` grant (RFC 8693, ADR-007 §2)
   lets an **agent** client delegate on behalf of a user: `sub` stays the user and
   an `act` claim names the agent (nested for chained delegation). Agent-only and
@@ -458,6 +476,58 @@ and `Cache-Control: public, max-age=3600`.
 | `GET /.well-known/apple-app-site-association` | `webcredentials.apps` from `WEBAUTHN_APPLE_APP_IDS`                                           |
 | `GET /.well-known/assetlinks.json`            | One `delegate_permission/common.get_login_creds` statement per app in `WEBAUTHN_ANDROID_APPS` |
 
+### Shared Signals Framework transmitter
+
+Experimental, off by default. With `SSF_TRANSMITTER_ENABLED=true`, a realm whose
+`ssf_transmitter_enabled` is on is an
+[OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
+transmitter: receivers create a stream and QAuth pushes Security Event Tokens
+(RFC 8417) to it (RFC 8935). With the switch off none of these routes exists;
+for a realm whose own switch is off they answer the `404` of a route that does
+not exist, before the request is validated.
+[SSF transmitter](/operate/ssf-transmitter/) covers setting one up.
+
+| Endpoint                               | Purpose                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| `GET /.well-known/ssf-configuration`   | Transmitter metadata (SSF 1.0 §7). Unauthenticated.                         |
+| `GET /ssf/jwks.json`                   | The keys that verify the realm's SETs (its `jwks_uri`). Unauthenticated.    |
+| `POST /ssf/stream`                     | Create the receiver's stream: `201`, or `409` when it has one in the realm. |
+| `GET /ssf/stream`                      | Read it with `?stream_id=`, or list the receiver's streams without.         |
+| `PATCH /ssf/stream`, `PUT /ssf/stream` | Update or replace the receiver-supplied members.                            |
+| `DELETE /ssf/stream`                   | Delete it with `?stream_id=`: `204`.                                        |
+| `GET /ssf/status`, `POST /ssf/status`  | Read or set `enabled`, `paused` or `disabled`, with `delivery_status`.      |
+| `POST /ssf/subjects/add`               | Add an RFC 9493 subject: `200`.                                             |
+| `POST /ssf/subjects/remove`            | Remove one: `204`.                                                          |
+| `POST /ssf/verify`                     | Ask for a verification event: `204`; `429` within 10 seconds of the last.   |
+
+The SET keys are published only at `/ssf/jwks.json`, never in the realm JWKS at
+`/.well-known/jwks.json`, so a resource server that skips the `typ` check cannot
+take a SET for an access token. Every stream management route takes the
+receiver's own access token (`client_credentials`) carrying the `ssf:stream`
+scope, with the realm's issuer in `aud` and no other realm's issuer. The client must still hold `ssf:stream`. A receiver reaches only
+its own stream; another `stream_id`, or a stream deleted meanwhile, answers
+`404`. The verification interval is per receiver. A paused stream holds its
+events without spending attempts and sends them within 30 seconds of being
+enabled. In `delivery_status`, an endpoint refused or not reached reads
+`destination_unreachable`. Delivery is push only. `default_subjects` is `NONE`:
+a stream receives events only about the subjects its receiver added, and its
+verification events. Until the event mapping of #540 lands, `events_supported`
+is empty and verification events are the only ones sent.
+
+Errors are problem documents (see [Error model](#error-model)): SSF 1.0 gives
+stream management statuses but defines no error body, so these routes are not
+OAuth protocol endpoints. `400` is `validation_error` for a body or query the
+schema refuses and `bad_request` for a request the protocol refuses, with the
+reason in `detail` (`endpoint_url is refused`, a transmitter-supplied member that
+does not match, poll delivery); `401` is `unauthorized` for a request with no
+token, with a bare `WWW-Authenticate: Bearer` challenge, and `invalid_access_token`
+or `access_token_expired` for a token that was refused, with
+`error="invalid_token"` in the challenge; `403` is
+`forbidden` with `error="insufficient_scope", scope="ssf:stream"` in the
+challenge; `404` is `not_found`, for a stream the receiver does not have and, as
+for any path no route serves, for a realm that does not run the transmitter;
+`409` is `conflict`; and `429` is `too_many_requests` with `Retry-After`.
+
 ---
 
 ## Hosted UI
@@ -522,7 +592,8 @@ per-session CSRF token that **must** be echoed back as `X-CSRF-Token` on
 }
 ```
 
-Errors: `401` (no/invalid session) — returns `{ "consents": [] }` with no `csrfToken`.
+Errors: `401` `unauthorized` (no or invalid session), a problem document like every other error
+here. The credential is a cookie, so the answer carries no `WWW-Authenticate` challenge.
 
 ### `DELETE /consents/{id}`
 
@@ -534,8 +605,8 @@ it. Access tokens already issued stay valid until they expire.
 
 **`204 No Content`**. Errors: `400` (`invalid_csrf_token` — missing or
 mismatched `X-CSRF-Token`; the first outcome you'll hit if the header isn't
-wired up yet), `401` (no/invalid session), `404` (consent does not exist or
-is not owned by the caller).
+wired up yet), `401` (`unauthorized` — no or invalid session), `404`
+(`not_found` — consent does not exist or is not owned by the caller).
 
 ---
 

@@ -203,8 +203,8 @@ export type AdminActorKind = (typeof ADMIN_ACTOR_KINDS)[number];
 
 /**
  * Class of an admin operation, from the permission catalog (ADR-019 Decision
- * 7): each class is reached by its own scope, `admin:read`, `admin:write` or
- * `admin:security`.
+ * 7): each class is reached by its own scope, `qauth:admin:read`,
+ * `qauth:admin:write` or `qauth:admin:security`.
  */
 const ADMIN_OPERATION_CLASSES = ['read', 'write', 'security'] as const;
 

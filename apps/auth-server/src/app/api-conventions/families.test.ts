@@ -1,6 +1,12 @@
+import { isReservedAudience, RESERVED_AUDIENCE_PREFIX } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
-import { API_FAMILY_PREFIXES, apiFamilyOf, isUnversionedFamilyPath } from './families';
+import {
+  API_FAMILY_AUDIENCES,
+  API_FAMILY_PREFIXES,
+  apiFamilyOf,
+  isUnversionedFamilyPath,
+} from './families';
 
 describe('API_FAMILY_PREFIXES', () => {
   it('serves every family under a release candidate until 1.0.0 (ADR-018 §5)', () => {
@@ -46,5 +52,20 @@ describe('isUnversionedFamilyPath', () => {
 
   it.each(['/admin/v1-rc.0/realms', '/admin/v1/realms', '/oauth/token'])('accepts %s', (path) => {
     expect(isUnversionedFamilyPath(path)).toBe(false);
+  });
+});
+
+describe('API_FAMILY_AUDIENCES (#509)', () => {
+  it('gives each family its own audience, versioned like its path (ADR-018 §5)', () => {
+    expect(API_FAMILY_AUDIENCES).toEqual({
+      admin: 'urn:qauth:aud:admin:v1-rc.0',
+      account: 'urn:qauth:aud:account:v1-rc.0',
+      developer: 'urn:qauth:aud:developer:v1-rc.0',
+    });
+    for (const [family, audience] of Object.entries(API_FAMILY_AUDIENCES)) {
+      const prefix = API_FAMILY_PREFIXES[family as keyof typeof API_FAMILY_PREFIXES];
+      expect(audience).toBe(`${RESERVED_AUDIENCE_PREFIX}${prefix.slice(1).replace('/', ':')}`);
+      expect(isReservedAudience(audience)).toBe(true);
+    }
   });
 });

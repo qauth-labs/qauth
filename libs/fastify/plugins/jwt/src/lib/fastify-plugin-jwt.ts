@@ -32,17 +32,27 @@ import {
   verifyAccessToken,
   verifyHybridAccessToken,
 } from '@qauth-labs/server-jwt';
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
+import { JWTInvalidError, MissingAccessTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
 import packageJson from '../../package.json';
-import type { JWTPayload, JwtPluginOptions, JwtUtils } from '../types';
+import type { AccessTokenCheckPolicy, JWTPayload, JwtPluginOptions, JwtUtils } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
     jwtUtils: JwtUtils;
     requireJwt: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /**
+     * Verify the access token of a request's `Authorization` header and return
+     * its claims, as `requireJwt` does, under a route's own
+     * {@link AccessTokenCheckPolicy} (#509). It does not set
+     * `request.jwtPayload`: the caller does, once its own checks pass.
+     */
+    verifyRequestAccessToken: (
+      request: FastifyRequest,
+      policy?: AccessTokenCheckPolicy
+    ) => Promise<JWTPayload>;
   }
 
   interface FastifyRequest {
@@ -373,20 +383,42 @@ export const jwtPlugin = fp<JwtPluginOptions>(
 
     fastify.decorate('jwtUtils', jwtUtils);
 
-    async function requireJwt(request: FastifyRequest): Promise<void> {
+    /**
+     * The checks every bearer-protected route shares: the credential, the
+     * signature and expiry, the issuer, revocation and the DPoP binding.
+     * `policy` changes only what it names; with none, this is `requireJwt`.
+     */
+    async function verifyRequestAccessToken(
+      request: FastifyRequest,
+      policy: AccessTokenCheckPolicy = {}
+    ): Promise<JWTPayload> {
       // `Bearer`, or `DPoP` only when the host app verifies DPoP proofs: without
       // `verifyDpopProof` a `DPoP` header is no credential, as before DPoP.
       const credential = jwtUtils.extractCredentialFromHeader(request.headers.authorization);
       if (!credential) {
-        throw new JWTInvalidError('Missing or malformed Authorization header');
+        // No credential at all, an empty token or a scheme this server does
+        // not take: the request "lacks any authentication information" (RFC
+        // 6750 §3.1), which is not a refused token.
+        throw new MissingAccessTokenError('Missing or malformed Authorization header');
       }
       const { scheme, token } = credential;
+      const { acceptIssuer } = policy;
       // RFC 9700 mix-up defence: every bearer-protected route MUST only accept
       // tokens this server issued. Pin the issuer here so the shared preHandler
       // rejects a foreign-issuer token even if it verifies under the same key.
-      const payload = await jwtUtils.verifyAccessToken(token, {
-        issuer: options.issuer,
+      // A route with its own issuer rule (#509) decides after the signature
+      // check instead, below. `requireTyp` can only tighten the operator's
+      // rollout switch (#283), never loosen it.
+      const payload = await verifyAccessToken(token, publicKey, {
+        ...(acceptIssuer === undefined ? { issuer: options.issuer } : {}),
+        requireTyp: options.requireAccessTokenTyp === true || policy.requireTyp === true,
       });
+      if (acceptIssuer !== undefined) {
+        // A token that names no issuer is refused before the rule sees it.
+        if (payload.iss === undefined || !(await acceptIssuer(payload.iss, request))) {
+          throw new JWTInvalidError('Access token issuer is not accepted here');
+        }
+      }
 
       // RFC 7009 revocation: reject a signature-valid but explicitly revoked
       // token. The denylist check runs only AFTER verification (so an attacker
@@ -408,7 +440,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         refuseBoundTokenAsBearer(payload);
       }
 
-      request.jwtPayload = payload;
+      return payload;
+    }
+
+    fastify.decorate('verifyRequestAccessToken', verifyRequestAccessToken);
+
+    async function requireJwt(request: FastifyRequest): Promise<void> {
+      request.jwtPayload = await verifyRequestAccessToken(request);
     }
 
     fastify.decorate('requireJwt', requireJwt);
