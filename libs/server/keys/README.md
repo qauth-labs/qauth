@@ -359,7 +359,7 @@ const token = await signer.signJws('api', {
 | `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
 | `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
 | `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |
-| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` and `event_signing` keys inside their window, `next` keys included, in a fixed order. |
+| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` keys in their window, `next` keys included, in a fixed order. No `event_signing` key. |
 | `getUpstreamJwks(realmId, providerId)`                                       | The JWKS of one upstream provider's client-assertion keys, by the same window rules as `getJwks`.                                     |
 
 What the signer guarantees:
@@ -387,6 +387,11 @@ What the signer guarantees:
   | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                   |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
+
+- **The two signing purposes publish apart** (d-1026-09). The realm JWKS holds only
+  `token_signing` keys (`REALM_JWKS_PURPOSES`). The SSF transmitter serves the `event_signing`
+  keys at its own `jwks_uri`, from `getVerificationKeys`. A verifier that reads the realm JWKS and
+  skips the `typ` check still cannot take a Security Event Token for an access token.
 
 - **No key leaves it.** No operation returns a private key, a key object or symmetric material,
   except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A webhook secret

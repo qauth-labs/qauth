@@ -135,7 +135,7 @@
           "Discovery",
           "Shared Signals"
         ],
-        "description": "Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the JWKS that verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.",
+        "description": "Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the transmitter’s own JWKS (`/ssf/jwks.json`), which verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.",
         "x-qauth-stability": "experimental",
         "responses": {
           "200": {
@@ -3333,6 +3333,20 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/ssf/jwks.json": {
+      "get": {
+        "tags": [
+          "Shared Signals"
+        ],
+        "description": "The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.",
+        "x-qauth-stability": "experimental",
+        "responses": {
+          "200": {
+            "description": "Default Response"
           }
         }
       }

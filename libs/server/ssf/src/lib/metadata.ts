@@ -44,6 +44,8 @@ export function issuerBase(issuer: string): string {
  *   that carries the `ssf:stream` scope.
  * - `default_subjects` is `NONE`: a stream receives events only about the
  *   subjects its receiver adds.
+ * - `jwks_uri` is the transmitter's own JWKS, which holds only the SET keys,
+ *   not the realm JWKS of the token keys (d-1026-09).
  *
  * @param issuer - The realm's issuer.
  */
@@ -53,7 +55,7 @@ export function buildTransmitterMetadata(issuer: string): TransmitterMetadata {
     spec_version: SSF_SPEC_VERSION,
     // The realm's issuer as stored: the signer writes the same value as `iss`.
     issuer,
-    jwks_uri: `${base}/.well-known/jwks.json`,
+    jwks_uri: `${base}${SSF_PATHS.jwks}`,
     delivery_methods_supported: [SSF_PUSH_METHOD],
     configuration_endpoint: `${base}${SSF_PATHS.stream}`,
     status_endpoint: `${base}${SSF_PATHS.status}`,

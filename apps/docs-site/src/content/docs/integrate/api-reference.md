@@ -472,6 +472,7 @@ not exist, before the request is validated.
 | Endpoint                               | Purpose                                                                     |
 | -------------------------------------- | --------------------------------------------------------------------------- |
 | `GET /.well-known/ssf-configuration`   | Transmitter metadata (SSF 1.0 §7). Unauthenticated.                         |
+| `GET /ssf/jwks.json`                   | The keys that verify the realm's SETs (its `jwks_uri`). Unauthenticated.    |
 | `POST /ssf/stream`                     | Create the receiver's stream: `201`, or `409` when it has one in the realm. |
 | `GET /ssf/stream`                      | Read it with `?stream_id=`, or list the receiver's streams without.         |
 | `PATCH /ssf/stream`, `PUT /ssf/stream` | Update or replace the receiver-supplied members.                            |
@@ -481,9 +482,11 @@ not exist, before the request is validated.
 | `POST /ssf/subjects/remove`            | Remove one: `204`.                                                          |
 | `POST /ssf/verify`                     | Ask for a verification event: `204`; `429` within 10 seconds of the last.   |
 
-Every stream management route takes the receiver's own access token (`client_credentials`)
-carrying the `ssf:stream` scope, with the realm's issuer in `aud` and no other
-realm's issuer. The client must still hold `ssf:stream`. A receiver reaches only
+The SET keys are published only at `/ssf/jwks.json`, never in the realm JWKS at
+`/.well-known/jwks.json`, so a resource server that skips the `typ` check cannot
+take a SET for an access token. Every stream management route takes the
+receiver's own access token (`client_credentials`) carrying the `ssf:stream`
+scope, with the realm's issuer in `aud` and no other realm's issuer. The client must still hold `ssf:stream`. A receiver reaches only
 its own stream; another `stream_id`, or a stream deleted meanwhile, answers
 `404`. The verification interval is per receiver. A paused stream holds its
 events without spending attempts and sends them within 30 seconds of being

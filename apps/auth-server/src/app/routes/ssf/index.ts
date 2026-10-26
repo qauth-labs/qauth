@@ -29,7 +29,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { JWKS_CACHE_CONTROL } from '../../constants';
 import { REDIS_KEYS } from '../../constants/redis-keys';
+import { requestRealm } from '../../helpers/request-realm';
 import {
   createRequireSsfReceiver,
   realmRunsTransmitter,
@@ -53,6 +55,7 @@ import { emitUserEvent } from '../../helpers/user-events';
  *   POST   /ssf/subjects/add      — add a subject (200)
  *   POST   /ssf/subjects/remove   — remove a subject (204)
  *   POST   /ssf/verify            — ask for a verification event (204)
+ *   GET    /ssf/jwks.json         — the keys that verify the realm's SETs (public)
  *
  * Registered only while SSF_TRANSMITTER_ENABLED is on; a realm whose own
  * switch is off answers the 404 of a route that does not exist, before the
@@ -167,6 +170,38 @@ export default async function (fastify: FastifyInstance) {
     preHandler: requireSsfReceiver,
     config: { surface: 'api' as const },
   };
+
+  // The transmitter's own JWKS (d-1026-09): the realm's active and retired
+  // SET verification keys (`event_signing`, ADR-019 Decision 9), never a
+  // compromised one. They are published apart from the realm JWKS, so a
+  // verifier that reads the realm JWKS and skips the `typ` check cannot take
+  // a SET-signed token for an access token. Public, as every JWKS is: no
+  // receiver token. The `onRequest` hook above answers 404 for a realm that
+  // does not run the transmitter. A key store that cannot be read fails the
+  // request; the realm JWKS does not depend on it.
+  routes.get(
+    '/jwks.json',
+    {
+      config: { surface: 'meta' },
+      schema: {
+        description:
+          'The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.',
+        tags: TAGS,
+        'x-qauth-stability': 'experimental',
+      },
+    },
+    async (request, reply) => {
+      const keys = await fastify.signer.getVerificationKeys(
+        'api',
+        requestRealm(request).id,
+        'event_signing'
+      );
+      reply
+        .header('Cache-Control', JWKS_CACHE_CONTROL)
+        .header('Content-Type', 'application/jwk-set+json; charset=utf-8');
+      return reply.send({ keys: keys.map((key) => key.publicJwk) });
+    }
+  );
 
   routes.post(
     '/stream',

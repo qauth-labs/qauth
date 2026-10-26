@@ -1092,16 +1092,16 @@ describe('encrypt and decrypt', () => {
 });
 
 describe('getVerificationKeys and getJwks', () => {
-  it('publish the token and event signing keys, never a symmetric key', async () => {
+  it('publish the token keys in the JWKS and the event keys apart, never a symmetric key', async () => {
     const { signer, keys } = await setup();
 
     const jwks = await signer.getJwks('local', REALM_A);
+    const events = await signer.getVerificationKeys('local', REALM_A, 'event_signing');
 
-    expect(jwks.keys.map((key) => key.kid)).toEqual([
-      activeKid(keys, REALM_A, 'token_signing'),
-      activeKid(keys, REALM_A, 'event_signing'),
-    ]);
-    for (const key of jwks.keys) {
+    // The event keys verify SETs at the SSF transmitter's own JWKS (d-1026-09).
+    expect(jwks.keys.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'token_signing')]);
+    expect(events.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'event_signing')]);
+    for (const key of [...jwks.keys, ...events.map((event) => event.publicJwk)]) {
       expect(key).toMatchObject({ kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig' });
       expect(key).not.toHaveProperty('d');
     }
@@ -1140,6 +1140,7 @@ describe('getVerificationKeys and getJwks', () => {
     store.update(REALM_A, event, { status: 'compromised' });
     advance(REFRESH_MS);
     expect((await signer.getJwks('local', REALM_A)).keys).toEqual([]);
+    expect(await signer.getVerificationKeys('local', REALM_A, 'event_signing')).toEqual([]);
   });
 
   it('return frozen copies', async () => {

@@ -1,8 +1,9 @@
 import { buildTransmitterMetadata } from '@qauth-labs/fastify-plugin-ssf';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
+import { JWKS_CACHE_CONTROL } from '../constants';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
 import { requestRealm } from '../helpers/request-realm';
 import { realmRunsTransmitter, SsfNotFoundError } from '../helpers/ssf-receiver';
@@ -15,17 +16,13 @@ import { realmRunsTransmitter, SsfNotFoundError } from '../helpers/ssf-receiver'
 const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
 
 /**
- * The key set is cached for at most five minutes (ADR-019 Decision 9), so a
- * key that is unpublished leaves relying parties' caches within that window.
- */
-const JWKS_CACHE_CONTROL = 'public, max-age=300';
-
-/**
  * Well-known discovery endpoints:
  *
  * - `GET /.well-known/oauth-authorization-server` — RFC 8414 AS metadata.
  * - `GET /.well-known/openid-configuration`       — OIDC Discovery 1.0.
- * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS.
+ * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS: the token
+ *   keys only. The SSF transmitter's SET keys are published apart, at
+ *   `/ssf/jwks.json` (d-1026-09).
  *
  * - `GET /.well-known/ssf-configuration`          — SSF 1.0 §7 transmitter
  *   metadata, registered only while SSF_TRANSMITTER_ENABLED is on (#410).
@@ -39,33 +36,6 @@ export default async function (fastify: FastifyInstance) {
   // configuration, which does not change while the server runs. Each adds the
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
-
-  /**
-   * The realm's SET verification keys (`event_signing`, ADR-019 Decision 9)
-   * for the JWKS, while the realm runs the SSF transmitter (#410): a receiver
-   * verifies each SET with a key from here. The realm JWKS of the signer will
-   * hold them whatever the switch once tokens move onto it (#491); until
-   * then they join only where SSF is on, so a default deployment's JWKS is
-   * unchanged. When they cannot be read, the JWKS still serves the token
-   * keys: a SET key fault must not stop access tokens from verifying.
-   */
-  async function setVerificationKeys(request: FastifyRequest) {
-    if (!realmRunsTransmitter(request) || !fastify.hasDecorator('signer')) return [];
-    try {
-      const keys = await fastify.signer.getVerificationKeys(
-        'api',
-        requestRealm(request).id,
-        'event_signing'
-      );
-      return keys.map((key) => key.publicJwk);
-    } catch (error) {
-      request.log.error(
-        { err: error },
-        'the SET verification keys could not be read; the JWKS serves the token keys alone'
-      );
-      return [];
-    }
-  }
 
   const buildInput = () => ({
     issuer: fastify.jwtUtils.getIssuer(),
@@ -136,7 +106,7 @@ export default async function (fastify: FastifyInstance) {
       },
       config: { surface: 'meta' },
     },
-    async (request, reply) => {
+    async (_request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.
       // `application/jwk-set+json` is the registered media type.
       //
@@ -149,11 +119,7 @@ export default async function (fastify: FastifyInstance) {
         .header('Cache-Control', JWKS_CACHE_CONTROL)
         .header('Content-Type', 'application/jwk-set+json; charset=utf-8');
       const jwks = await fastify.jwtUtils.getJwks();
-      const published = new Set(jwks.keys.map((key) => key.kid));
-      const eventKeys = (await setVerificationKeys(request)).filter(
-        (key) => !published.has(key.kid)
-      );
-      return reply.send(eventKeys.length === 0 ? jwks : { keys: [...jwks.keys, ...eventKeys] });
+      return reply.send(jwks);
     }
   );
 
@@ -167,7 +133,7 @@ export default async function (fastify: FastifyInstance) {
       {
         schema: {
           description:
-            'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the JWKS that verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
+            'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the transmitter’s own JWKS (`/ssf/jwks.json`), which verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
           tags: ['Discovery', 'Shared Signals'],
           'x-qauth-stability': 'experimental',
         },

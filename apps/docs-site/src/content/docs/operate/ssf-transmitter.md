@@ -20,8 +20,7 @@ the mapping of QAuth's security events to CAEP and RISC events comes with #540.
 Two switches, both off by default:
 
 1. The deployment's: `SSF_TRANSMITTER_ENABLED=true`. Off, the server registers no SSF route,
-   serves no `/.well-known/ssf-configuration`, keeps its JWKS as it was and writes no SSF
-   delivery.
+   serves no `/.well-known/ssf-configuration` and writes no SSF delivery.
 2. Each realm's: `realms.ssf_transmitter_enabled`. A realm whose switch is off answers `404` on the
    metadata and on every `/ssf/` route, as for a route that does not exist, and its streams receive
    nothing. No API sets it yet; set it on the realm row:
@@ -49,8 +48,12 @@ With both on, the realm:
 
 - serves the transmitter metadata at `/.well-known/ssf-configuration`. Every URL in it is built
   from the realm's issuer, which is also the `iss` of its SETs;
-- adds its SET signing keys (the `event_signing` purpose of ADR-019 Decision 9) to
-  `/.well-known/jwks.json`. A receiver verifies each SET with a key from there;
+- serves its SET signing keys (the `event_signing` purpose of ADR-019 Decision 9) at
+  `/ssf/jwks.json`, the `jwks_uri` of the metadata. A receiver verifies each SET with a key from
+  there. It needs no token, and is cached for at most 5 minutes, as the realm JWKS is;
+- keeps the SET keys out of the realm JWKS at `/.well-known/jwks.json`, which holds only the keys
+  of its access and ID tokens. A resource server that skips the `typ` check therefore cannot take
+  a SET for an access token;
 - serves stream management under `/ssf/` (see the
   [API reference](/integrate/api-reference/#shared-signals-framework-transmitter)).
 
@@ -64,8 +67,9 @@ A receiver is an OAuth client of the realm. It authenticates with its own access
 - name no other realm's issuer in `aud`. A `client_id` is unique only within a realm, so such a
   token may come from a client of the same name in that realm. It gets `401`.
 
-Give `ssf:stream` only to clients you trust with the realm's security events: a receiver may add
-any user or client of the realm as a subject. Taking the scope away, disabling or suspending the
+Give `ssf:stream` only to clients you trust with the realm's security events: today a receiver may
+add any user or client of the realm as a subject. #540 limits a receiver to the users related to its
+own client (decided on 2026-10-26). Taking the scope away, disabling or suspending the
 client, or deleting it stops its deliveries, and its token stops working on `/ssf/` at once, not
 when it expires; deleting the client deletes its stream.
 

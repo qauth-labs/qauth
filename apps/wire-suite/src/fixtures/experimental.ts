@@ -17,6 +17,7 @@ export const EXPERIMENTAL_OPERATIONS: readonly string[] = [
   'GET /auth/link/wallet/{handle}',
   'GET /oid4vp/request/{handle}',
   'POST /oid4vp/response',
+  'GET /ssf/jwks.json',
   'GET /ssf/status',
   'POST /ssf/status',
   'GET /ssf/stream',

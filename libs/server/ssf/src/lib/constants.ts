@@ -45,6 +45,13 @@ export const SSF_PATHS = Object.freeze({
   addSubject: '/ssf/subjects/add',
   removeSubject: '/ssf/subjects/remove',
   verify: '/ssf/verify',
+  /**
+   * The transmitter's own JWKS: the realm's SET verification keys
+   * (`event_signing`), published apart from the realm JWKS so that no token
+   * verifier reading the realm JWKS can accept a SET-signed token
+   * (d-1026-09).
+   */
+  jwks: '/ssf/jwks.json',
 });
 
 /** The most subjects one stream may hold. */

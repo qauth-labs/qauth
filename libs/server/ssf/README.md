@@ -7,7 +7,9 @@ share. It holds no key and opens no connection of its own.
 
 - **Metadata** (`buildTransmitterMetadata`): the `/.well-known/ssf-configuration` document of a
   realm. Push delivery only, OAuth 2.0 access tokens with the `ssf:stream` scope,
-  `default_subjects: NONE`. Every URL is built from the realm's issuer.
+  `default_subjects: NONE`. Every URL is built from the realm's issuer. `jwks_uri` names the
+  transmitter's own JWKS (`SSF_PATHS.jwks`, `/ssf/jwks.json`), which holds only the SET keys: they
+  are kept out of the realm JWKS of the token keys (d-1026-09).
 - **Streams** (`streamConfigRequestSchema`, `streamConfiguration`, `checkDelivery`,
   `assertTransmitterMembers`): a receiver's requests and the configuration QAuth returns.
   `events_delivered` is the requested events the transmitter supports; transmitter-supplied members

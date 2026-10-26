@@ -616,15 +616,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose client no longer holds the scope, is refused. Security Event Tokens
   come out of the event store through the delivery role (RFC 8935 push, retried
   on its schedule; a `400` ends a delivery only with a known SET error); the
-  signer signs them with the realm's `event_signing` key, which the JWKS then
-  publishes, and the `jti` is the event id on every retry. A paused stream's
-  events are held without spending attempts and sent within 30 seconds of it
-  being enabled: delivery routes gain a `hold` outcome for that. `endpoint_url`
-  is checked through the egress client at registration and at every delivery;
-  the receiver's `authorization_header` is stored encrypted with the realm's
-  `data_at_rest` key, and the delivery role's signer grant gains `decrypt` for a
-  `delivery:` context only, to send it. The delivery role reads only the event
-  subject of each stream subject, not the subject the receiver sent.
+  signer signs them with the realm's `event_signing` key, and the `jti` is the
+  event id on every retry. The SET keys are published apart, at
+  `/ssf/jwks.json`, the metadata's `jwks_uri`; the realm JWKS at
+  `/.well-known/jwks.json` holds only token keys, and so does the signer's
+  `getJwks` (`REALM_JWKS_PURPOSES` is `token_signing` alone), so a verifier
+  that skips the `typ` check cannot take a SET for an access token. A paused
+  stream's events are held without spending attempts and sent within 30
+  seconds of it being enabled: delivery routes gain a `hold` outcome for that.
+  `endpoint_url` is checked through the egress client at registration and at
+  every delivery; the receiver's `authorization_header` is stored encrypted
+  with the realm's `data_at_rest` key, and the delivery role's signer grant
+  gains `decrypt` for a `delivery:` context only, to send it. The delivery role
+  reads only the event subject of each stream subject, not the subject the
+  receiver sent.
   `GET /ssf/status` adds `delivery_status`, the pending deliveries and the latest
   failed attempt; a refused and an unreachable endpoint both read
   `destination_unreachable` there. With `SSF_TRANSMITTER_ENABLED` off, SSF

@@ -282,27 +282,18 @@ describe('GET /.well-known/jwks.json', () => {
     }
   });
 
-  it('serves the token keys alone, and logs why, when the SET keys cannot be read (#410)', async () => {
-    const lines: Array<{ msg: string }> = [];
-    const app = Fastify({
-      logger: {
-        level: 'error',
-        stream: { write: (line: string) => void lines.push(JSON.parse(line) as { msg: string }) },
-      },
-    });
+  it('holds no SET key, even for a realm that runs the SSF transmitter (d-1026-09)', async () => {
+    const app = Fastify({ logger: false });
     const jwks = { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'x', alg: 'EdDSA', kid: 'token' }] };
+    const eventKey = { kid: 'event', publicJwk: { kty: 'OKP', crv: 'Ed25519', kid: 'event' } };
+    const getVerificationKeys = vi.fn(async () => [eventKey]);
     app.decorate('jwtUtils', {
       getIssuer: () => ISSUER,
       getJwks: async () => jwks,
       getIdTokenSigningAlgValuesSupported: () => ['EdDSA'],
     } as unknown as never);
-    // A realm that runs the SSF transmitter, whose signer cannot read its keys.
     app.decorate('ssf', {} as never);
-    app.decorate('signer', {
-      getVerificationKeys: async () => {
-        throw new Error('the key store is down');
-      },
-    } as unknown as never);
+    app.decorate('signer', { getVerificationKeys } as unknown as never);
     app.decorateRequest('realm', null);
     app.addHook('onRequest', async (request) => {
       request.realm = { id: 'realm-id', issuer: ISSUER, ssfTransmitterEnabled: true } as never;
@@ -312,10 +303,9 @@ describe('GET /.well-known/jwks.json', () => {
     try {
       const res = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
       expect(res.statusCode).toBe(200);
+      // The SET keys are published apart, at the transmitter's own JWKS.
       expect(res.json()).toEqual(jwks);
-      expect(lines.map((line) => line.msg)).toEqual([
-        'the SET verification keys could not be read; the JWKS serves the token keys alone',
-      ]);
+      expect(getVerificationKeys).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

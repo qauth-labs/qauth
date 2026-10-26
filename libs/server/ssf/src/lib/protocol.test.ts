@@ -27,7 +27,8 @@ describe('buildTransmitterMetadata (SSF 1.0 §7.1)', () => {
     expect(buildTransmitterMetadata(`${ISSUER}/`)).toEqual({
       spec_version: '1_0',
       issuer: `${ISSUER}/`,
-      jwks_uri: `${ISSUER}/.well-known/jwks.json`,
+      // The transmitter's own JWKS, not the realm JWKS of the token keys.
+      jwks_uri: `${ISSUER}/ssf/jwks.json`,
       delivery_methods_supported: [SSF_PUSH_METHOD],
       configuration_endpoint: `${ISSUER}/ssf/stream`,
       status_endpoint: `${ISSUER}/ssf/status`,

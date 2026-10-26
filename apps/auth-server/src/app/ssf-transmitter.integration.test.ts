@@ -35,8 +35,9 @@ import {
  *
  * Covers the acceptance criteria of #410: metadata when enabled, none when
  * not; a receiver creates a push stream, adds a subject, asks for
- * verification and receives a SET that verifies with a key from the JWKS;
- * the SET `jti` is the event id on every retry; a receiver answering 5xx is
+ * verification and receives a SET that verifies with a key from the
+ * metadata's `jwks_uri`, the transmitter's own JWKS, which the realm JWKS of
+ * the token keys does not share (d-1026-09); the SET `jti` is the event id on every retry; a receiver answering 5xx is
  * retried and the status shows it; a private endpoint is refused at
  * registration and at delivery; with the switch off there is no route, no
  * metadata and no delivery row; a stream in one realm never gets another
@@ -315,6 +316,7 @@ describe('the SSF transmitter (real containers)', () => {
         ['POST', '/ssf/stream'],
         ['GET', '/ssf/status'],
         ['POST', '/ssf/verify'],
+        ['GET', '/ssf/jwks.json'],
       ] as const) {
         const response = await app.inject({ method, url, payload: {} });
         expect(response.statusCode, url).toBe(404);
@@ -362,7 +364,7 @@ describe('the SSF transmitter (real containers)', () => {
       expect(response.json()).toEqual({
         spec_version: '1_0',
         issuer: ISSUER,
-        jwks_uri: `${ISSUER}/.well-known/jwks.json`,
+        jwks_uri: `${ISSUER}/ssf/jwks.json`,
         delivery_methods_supported: [PUSH],
         configuration_endpoint: `${ISSUER}/ssf/stream`,
         status_endpoint: `${ISSUER}/ssf/status`,
@@ -374,7 +376,7 @@ describe('the SSF transmitter (real containers)', () => {
       });
     });
 
-    it('lets a receiver create a push stream, add a subject, verify it, and receive a SET that verifies with the JWKS', async () => {
+    it('lets a receiver create a push stream, add a subject, verify it, and receive a SET that verifies with the metadata’s jwks_uri', async () => {
       const app = await boot(on);
       const realmId = await setRealmSwitch(app, E2E_REALM_NAME, true);
       const who = await newReceiver(app, realmId);
@@ -427,12 +429,25 @@ describe('the SSF transmitter (real containers)', () => {
 
       const token = push.body.toString('utf8');
       expect(decodeProtectedHeader(token)).toMatchObject({ alg: 'EdDSA', typ: 'secevent+jwt' });
-      const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
-      const { payload } = await jwtVerify(token, createLocalJWKSet(jwks.json<JSONWebKeySet>()), {
+      // A receiver finds the SET keys as SSF 1.0 §7.1 says: the metadata's
+      // jwks_uri, the transmitter's own JWKS.
+      const metadata = await app.inject({ method: 'GET', url: '/.well-known/ssf-configuration' });
+      const jwksUri = new URL(metadata.json<{ jwks_uri: string }>().jwks_uri);
+      expect(jwksUri.origin).toBe(ISSUER);
+      const setKeys = await app.inject({ method: 'GET', url: jwksUri.pathname });
+      expect(setKeys.statusCode, setKeys.body).toBe(200);
+      const { payload } = await jwtVerify(token, createLocalJWKSet(setKeys.json<JSONWebKeySet>()), {
         issuer: ISSUER,
         audience: who.clientId,
         typ: 'secevent+jwt',
       });
+      // The realm JWKS of the token keys holds no SET key, so a SET never
+      // verifies as a token (d-1026-09).
+      const tokenKeys = (
+        await app.inject({ method: 'GET', url: '/.well-known/jwks.json' })
+      ).json<JSONWebKeySet>();
+      expect(tokenKeys.keys.map((key) => key.kid)).not.toContain(decodeProtectedHeader(token).kid);
+      await expect(jwtVerify(token, createLocalJWKSet(tokenKeys))).rejects.toThrow();
       const [eventId] = await verificationEventIds(app, streamId);
       expect(payload).toEqual({
         iss: ISSUER,
@@ -815,6 +830,7 @@ describe('the SSF transmitter (real containers)', () => {
         ['POST', '/ssf/status'],
         ['POST', '/ssf/stream'],
         ['GET', '/ssf/status'],
+        ['GET', '/ssf/jwks.json'],
       ] as const) {
         // An empty body would fail validation: the 404 comes first.
         const response = await app.inject({ method, url, payload: {} });
