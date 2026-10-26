@@ -193,6 +193,11 @@ describe('service roles (#495)', () => {
       payload: 'grant_type=client_credentials',
     });
     expect(token.statusCode).toBe(404);
+
+    // A browser page renders with the plugins and repositories web loads.
+    const login = await app.inject({ method: 'GET', url: '/ui/login' });
+    expect(login.statusCode).toBe(200);
+    expect(login.headers['content-type']).toMatch(/^text\/html/);
   });
 
   it.each(['all', ...SERVICE_ROLE_NAMES])(
