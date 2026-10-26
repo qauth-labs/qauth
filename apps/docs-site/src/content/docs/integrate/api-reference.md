@@ -458,6 +458,14 @@ and `Cache-Control: public, max-age=3600`.
 | `GET /.well-known/apple-app-site-association` | `webcredentials.apps` from `WEBAUTHN_APPLE_APP_IDS`                                           |
 | `GET /.well-known/assetlinks.json`            | One `delegate_permission/common.get_login_creds` statement per app in `WEBAUTHN_ANDROID_APPS` |
 
+### Interaction API contract
+
+`GET /interaction/v1-rc.0/openapi.json` returns the OpenAPI 3.1 document of the Interaction API,
+the API sign-in pages use to reach the engine, with `Cache-Control: public, max-age=3600`. It is
+the same document the docs site publishes; the [Interaction API](/reference/interaction-api/) page
+describes its operations, steps and versioning rules. The operations it describes are not served
+yet: the document is published ahead of them.
+
 ---
 
 ## Hosted UI

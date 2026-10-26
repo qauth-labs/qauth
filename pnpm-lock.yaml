@@ -515,6 +515,9 @@ importers:
       '@qauth-labs/shared-events':
         specifier: workspace:*
         version: link:../../libs/shared/events
+      '@qauth-labs/shared-interaction-contract':
+        specifier: workspace:*
+        version: link:../../libs/shared/interaction-contract
       '@qauth-labs/shared-stability':
         specifier: workspace:*
         version: link:../../libs/shared/stability

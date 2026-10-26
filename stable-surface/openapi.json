@@ -31,6 +31,20 @@
         }
       }
     },
+    "/interaction/v1-rc.0/openapi.json": {
+      "get": {
+        "tags": [
+          "Interaction"
+        ],
+        "description": "The OpenAPI 3.1 document of the Interaction API v1-rc.0, with one JSON Schema per step (ADR-019 Decision 6). The same document the docs site publishes. Unauthenticated, cacheable.",
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [

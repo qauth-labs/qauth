@@ -604,6 +604,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs site's new **Reverse Proxy** page (`operate/reverse-proxy`) lists the
   rules proxy-neutrally, with the file layout. The ceremony app has not shipped
   yet, so the configuration is not yet a working front for browser sign-in.
+- **The Interaction API v1 contract** ([#590], ADR-019 Decision 6, ADR-017
+  Decision 3, ADR-018 §5). The API sign-in pages will use to reach the engine is
+  written down before its handlers: one OpenAPI 3.1 document for
+  `/interaction/v1-rc.0` and one JSON Schema per step, published on the docs
+  site under `/interaction/v1-rc.0/` and served by the auth server at
+  `GET /interaction/v1-rc.0/openapi.json`. It has four operations: read the
+  current step with the interaction id alone (no personal data), read the step's
+  personal data with the flow cookie, answer the step as JSON or as a plain form
+  post with the flow cookie and the step's CSRF value, and cancel. It reserves
+  `/interaction/v1-rc.0/wallet/` for the wallet return leg. Its 17 steps are the
+  nine of ADR-017 and eight only the Interaction API serves, each named
+  `urn:qauth:ia:<name>:v1-rc.0`, with its params, answer fields, closed error
+  set, `amr` and an example. Every step read carries the realm's brand block.
+  Errors are problem documents with a `code` and a `trace_id` and no prose; the
+  problem registry gains `invalid_answer` (400) and `interaction_expired` (410).
+  The versioning rules are in the document and on the new **Interaction API**
+  reference page. A typed client generated from the document lives in
+  `libs/shared/interaction-client`. The operations themselves are not served
+  yet.
 
 ### Changed
 
@@ -973,6 +992,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
+[#590]: https://github.com/qauth-labs/qauth/issues/590
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#827]: https://github.com/qauth-labs/qauth/issues/827

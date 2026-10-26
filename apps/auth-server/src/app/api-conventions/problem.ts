@@ -60,6 +60,11 @@ export const PROBLEM_CODES = {
     description:
       'A one-time token in the request, such as an email verification token, is not valid.',
   },
+  invalid_answer: {
+    status: 400,
+    description:
+      'An Interaction API answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field.',
+  },
   unauthorized: {
     status: 401,
     description: 'The request carries no valid credentials.',
@@ -111,6 +116,11 @@ export const PROBLEM_CODES = {
   token_expired: {
     status: 410,
     description: 'The one-time token has expired.',
+  },
+  interaction_expired: {
+    status: 410,
+    description:
+      'The interaction is unknown, expired or finished, or the flow cookie does not belong to it. The answer does not say which.',
   },
   precondition_failed: {
     status: 412,

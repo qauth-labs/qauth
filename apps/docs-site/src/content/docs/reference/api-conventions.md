@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-22'
+lastVerified: '2026-10-26'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -13,8 +13,10 @@ contract ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)), s
 before the families' first route. A test enforces them over the generated OpenAPI document
 ([Enforcement](#enforcement)).
 
-The Interaction API (`/interaction/v1-rc.0`) reuses these rules. The OAuth protocol endpoints do
-not: they keep the shapes their specifications define ([Errors](#errors)).
+The Interaction API (`/interaction/v1-rc.0`) reuses these rules, with the differences its own
+page lists: its problem documents carry no prose, and its steps keep the names of the step grammar
+([Interaction API](/reference/interaction-api/)). The OAuth protocol endpoints do not: they keep
+the shapes their specifications define ([Errors](#errors)).
 
 ## The three families
 
@@ -169,35 +171,37 @@ Each is sent with one status. An error that has no code of its own is sent with 
 status. Codes are lower-case `snake_case`, like the `error` values of OAuth. The earlier body of the
 routes that #513 converts names the same errors in upper case (`VALIDATION_ERROR`).
 
-| Code                          | Status | Meaning                                                                                                                             |
-| ----------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `bad_request`                 | 400    | The request is malformed and no more specific code applies.                                                                         |
-| `validation_error`            | 400    | The request does not match the schema of the operation. `errors` names each field.                                                  |
-| `invalid_cursor`              | 400    | The `cursor` does not parse, or it belongs to another list.                                                                         |
-| `invalid_token`               | 400    | A one-time token in the request, such as an email verification token, is not valid.                                                 |
-| `unauthorized`                | 401    | The request carries no valid credentials.                                                                                           |
-| `jwt_expired`                 | 401    | The access token has expired.                                                                                                       |
-| `jwt_invalid`                 | 401    | The access token is not valid.                                                                                                      |
-| `invalid_credentials`         | 401    | The identifier or the credential is wrong. The answer does not say which.                                                           |
-| `forbidden`                   | 403    | The caller is authenticated but may not perform the operation.                                                                      |
-| `email_not_verified`          | 403    | The account must verify its email address first.                                                                                    |
-| `not_found`                   | 404    | The resource does not exist, or the caller may not know that it exists.                                                             |
-| `method_not_allowed`          | 405    | The resource does not support the method.                                                                                           |
-| `conflict`                    | 409    | The request conflicts with the current state of the resource.                                                                       |
-| `unique_constraint_violation` | 409    | A resource with the same unique value already exists.                                                                               |
-| `email_already_verified`      | 409    | The email address is already verified.                                                                                              |
-| `token_already_used`          | 409    | The one-time token has already been used.                                                                                           |
-| `token_expired`               | 410    | The one-time token has expired.                                                                                                     |
-| `precondition_failed`         | 412    | The `If-Match` value does not match the current `ETag` of the resource.                                                             |
-| `content_too_large`           | 413    | The request body is larger than the server accepts.                                                                                 |
-| `unsupported_media_type`      | 415    | The media type of the request body is not one the operation accepts.                                                                |
-| `misdirected_request`         | 421    | The server does not answer for the host the request names, or not for this operation on that host.                                  |
-| `unprocessable_content`       | 422    | The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource. |
-| `weak_password`               | 422    | The new password is too weak. `errors` carries the feedback under `/password`.                                                      |
-| `precondition_required`       | 428    | The update needs an `If-Match` header.                                                                                              |
-| `too_many_requests`           | 429    | The caller has sent too many requests. `Retry-After` says when to try again.                                                        |
-| `internal_error`              | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                  |
-| `service_unavailable`         | 503    | The server cannot answer now, for example while a dependency is down.                                                               |
+| Code                          | Status | Meaning                                                                                                                                    |
+| ----------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bad_request`                 | 400    | The request is malformed and no more specific code applies.                                                                                |
+| `validation_error`            | 400    | The request does not match the schema of the operation. `errors` names each field.                                                         |
+| `invalid_cursor`              | 400    | The `cursor` does not parse, or it belongs to another list.                                                                                |
+| `invalid_token`               | 400    | A one-time token in the request, such as an email verification token, is not valid.                                                        |
+| `invalid_answer`              | 400    | An Interaction API answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field. |
+| `unauthorized`                | 401    | The request carries no valid credentials.                                                                                                  |
+| `jwt_expired`                 | 401    | The access token has expired.                                                                                                              |
+| `jwt_invalid`                 | 401    | The access token is not valid.                                                                                                             |
+| `invalid_credentials`         | 401    | The identifier or the credential is wrong. The answer does not say which.                                                                  |
+| `forbidden`                   | 403    | The caller is authenticated but may not perform the operation.                                                                             |
+| `email_not_verified`          | 403    | The account must verify its email address first.                                                                                           |
+| `not_found`                   | 404    | The resource does not exist, or the caller may not know that it exists.                                                                    |
+| `method_not_allowed`          | 405    | The resource does not support the method.                                                                                                  |
+| `conflict`                    | 409    | The request conflicts with the current state of the resource.                                                                              |
+| `unique_constraint_violation` | 409    | A resource with the same unique value already exists.                                                                                      |
+| `email_already_verified`      | 409    | The email address is already verified.                                                                                                     |
+| `token_already_used`          | 409    | The one-time token has already been used.                                                                                                  |
+| `token_expired`               | 410    | The one-time token has expired.                                                                                                            |
+| `interaction_expired`         | 410    | The interaction is unknown, expired or finished, or the flow cookie does not belong to it. The answer does not say which.                  |
+| `precondition_failed`         | 412    | The `If-Match` value does not match the current `ETag` of the resource.                                                                    |
+| `content_too_large`           | 413    | The request body is larger than the server accepts.                                                                                        |
+| `unsupported_media_type`      | 415    | The media type of the request body is not one the operation accepts.                                                                       |
+| `misdirected_request`         | 421    | The server does not answer for the host the request names, or not for this operation on that host.                                         |
+| `unprocessable_content`       | 422    | The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource.        |
+| `weak_password`               | 422    | The new password is too weak. `errors` carries the feedback under `/password`.                                                             |
+| `precondition_required`       | 428    | The update needs an `If-Match` header.                                                                                                     |
+| `too_many_requests`           | 429    | The caller has sent too many requests. `Retry-After` says when to try again.                                                               |
+| `internal_error`              | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                         |
+| `service_unavailable`         | 503    | The server cannot answer now, for example while a dependency is down.                                                                      |
 
 `PROBLEM_CODES` in `apps/auth-server/src/app/api-conventions/problem.ts` is the source of this
 table, and a test fails when the two differ.
