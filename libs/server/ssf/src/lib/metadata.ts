@@ -22,9 +22,18 @@ export interface TransmitterMetadata {
   readonly default_subjects: 'ALL' | 'NONE';
 }
 
-/** The issuer without a trailing `/`, the base of every URL the metadata names. */
+const SLASH = 0x2f;
+
+/**
+ * The issuer without trailing `/`s, the base of every URL the metadata names.
+ *
+ * A scan from the end, not `replace(/\/+$/, '')`: that pattern backtracks
+ * quadratically on a long run of `/` that does not end the string.
+ */
 export function issuerBase(issuer: string): string {
-  return issuer.replace(/\/+$/, '');
+  let end = issuer.length;
+  while (end > 0 && issuer.charCodeAt(end - 1) === SLASH) end -= 1;
+  return issuer.slice(0, end);
 }
 
 /**

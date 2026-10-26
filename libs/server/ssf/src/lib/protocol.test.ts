@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { SSF_PUSH_METHOD, SSF_VERIFICATION_EVENT } from './constants';
 import { eventTypesFor, ssfEventsSupported } from './event-types';
-import { buildTransmitterMetadata } from './metadata';
+import { buildTransmitterMetadata, issuerBase } from './metadata';
 import { setClaims, verificationSetClaims } from './set';
 import {
   assertTransmitterMembers,
@@ -37,6 +37,19 @@ describe('buildTransmitterMetadata (SSF 1.0 §7.1)', () => {
       authorization_schemes: [{ spec_urn: 'urn:ietf:rfc:6749' }],
       default_subjects: 'NONE',
     });
+  });
+
+  it('drops every trailing slash of the issuer and nothing else', () => {
+    expect(issuerBase(ISSUER)).toBe(ISSUER);
+    expect(issuerBase(`${ISSUER}///`)).toBe(ISSUER);
+    expect(issuerBase(`${ISSUER}/realm/`)).toBe(`${ISSUER}/realm`);
+    expect(issuerBase('///')).toBe('');
+  });
+
+  it('stays linear on a long run of slashes that does not end the issuer', () => {
+    // The input that made `/\/+$/` backtrack quadratically (CodeQL js/polynomial-redos).
+    const issuer = `${ISSUER}${'/'.repeat(200_000)}x`;
+    expect(issuerBase(issuer)).toBe(issuer);
   });
 });
 
