@@ -1,6 +1,6 @@
-# The hand-written overlay of AuthorizationCode, the authorization_codes table. The entity and its fields are
-# generated from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal action
-# core.logout invokes. The token flow (#609) adds consume and the examples.
+# The hand-written overlay of AuthorizationCode, the authorization_codes table. The entity and its fields are generated
+# from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal actions core.logout
+# and core.consent invoke. The token flow (#609) adds consume and the examples.
 schema: delurio-graph/0
 kind: domain
 id: qauth
@@ -20,3 +20,52 @@ actions:
         every AuthorizationCode of the user that is not used yet gets used = true and usedAt = now, expired or not,
         so none can be redeemed
       - 'it waits for a redemption in flight, which holds its code row until the refresh token it mints is committed'
+
+  AuthorizationCode.mint:
+    # internal: invoked by core.consent and by the consent skip of /oauth/authorize (not graphed yet), with no route
+    # and no actor policy; mintAuthorizationCode is the one place every code is minted (ADR-017 Decision 10)
+    source: apps/auth-server/src/app/helpers/authorization-code.ts:102
+    body:
+      type: object
+      # every binding is required, null where the request has none, so no mint site can drop one
+      required:
+        - oauthClientId
+        - userId
+        - redirectUri
+        - codeChallenge
+        - codeChallengeMethod
+        - scopes
+        - resource
+        - nonce
+        - state
+        - authTime
+        - assuranceLevel
+        - sessionExpiresAt
+        - dpopJkt
+      properties:
+        oauthClientId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        redirectUri: { type: string } # the redirect_uri of the request, as sent
+        codeChallenge: { type: string, pattern: '^[A-Za-z0-9._~-]{43,128}$' } # RFC 7636 §4.2
+        codeChallengeMethod: { const: S256 }
+        scopes: { type: array, items: { type: string } } # the scopes the consent page showed
+        resource: { type: array, items: { type: string, format: uri } } # the resources it named
+        nonce: { type: [string, 'null'] }
+        state: { type: [string, 'null'] }
+        authTime: { type: [integer, 'null'] } # when the browser session signed in, epoch ms
+        assuranceLevel: { enum: [substantial, high, null] } # null for a password sign-in
+        sessionExpiresAt: { type: [integer, 'null'] } # the session's absolute end, which caps the refresh family
+        dpopJkt: { type: [string, 'null'], pattern: '^[A-Za-z0-9_-]{43}$' }
+    result: { type: string } # the code sent to the client, 32 random bytes in base64url: a credential, in no example
+    sideEffects:
+      - >-
+        a new AuthorizationCode, not used, with expiresAt AUTHORIZATION_CODE_TTL_MS (five minutes) after the mint, which
+        /oauth/token redeems once before expiresAt
+      - >-
+        a code equal to a stored one fails on the unique index of code, and another is drawn, three attempts in all;
+        inside a caller's transaction each attempt runs under a savepoint
+    note: >-
+      It refuses, before it writes anything, a codeChallengeMethod other than S256 or a codeChallenge outside RFC 7636's
+      43 to 128 unreserved characters, whatever the environment policy (PkceChallengeRequiredError, a server error).
+      The request schemas apply the same rule first, so a request reaches that refusal only through a defect in a
+      caller.

@@ -1,0 +1,55 @@
+# The hand-written overlay of Consent, the oauth_consents table. The entity and its fields are generated from the
+# Drizzle schema (#563); an overlay only adds to them (#564). This one adds the examples and the internal action
+# core.consent invokes. Revoking a consent is ACC-11's flow, which adds that action and its policy.
+schema: delurio-graph/0
+kind: domain
+id: qauth
+
+entities:
+  Consent:
+    examples:
+      # saved by POST /ui/consent with "Remember this decision" ticked, for a request that named no resource
+      - id: 0199fa10-5c6d-7e8f-9a0b-1c2d3e4f5a6b
+        userId: 0199f9a0-11aa-7b22-8c33-4d44e55f6601
+        oauthClientId: 0199f9b2-3c4d-7e5f-8a6b-7c8d9e0f1a2b
+        realmId: 0199f99e-4a5b-7c6d-8e7f-8091a2b3c4d5
+        scopes: [email, openid, profile] # sorted
+        resourceScopes: {}
+        grantedAt: 1792918860000
+        revokedAt: null
+      # the same consent after a later approval of openid and write:notes for the resource https://api.notes.example/
+      - id: 0199fa10-5c6d-7e8f-9a0b-1c2d3e4f5a6b
+        userId: 0199f9a0-11aa-7b22-8c33-4d44e55f6601
+        oauthClientId: 0199f9b2-3c4d-7e5f-8a6b-7c8d9e0f1a2b
+        realmId: 0199f99e-4a5b-7c6d-8e7f-8091a2b3c4d5
+        scopes: [email, openid, profile, write:notes] # the union with the earlier grant
+        resourceScopes:
+          'https://api.notes.example/': [openid, write:notes] # per resource, never across resources
+        grantedAt: 1793005260000
+        revokedAt: null
+
+actions:
+  Consent.grant:
+    # internal: invoked by core.consent, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/oauth-consents.repository.ts:102
+    body:
+      type: object
+      required: [userId, oauthClientId, realmId, scopes]
+      properties:
+        userId: { type: string, format: uuid }
+        oauthClientId: { type: string, format: uuid }
+        realmId: { type: string, format: uuid }
+        scopes: { type: array, items: { type: string } } # the scopes the consent page showed
+        resources: { type: array, items: { type: string, format: uri } } # the resources it named; none by default
+    result: { returns: Consent }
+    sideEffects:
+      - >-
+        in one transaction, the user's active Consent for the client (revokedAt = null) is locked and gets the union of
+        its scopes and these, sorted, for each resource the union of the scopes approved there and these, and grantedAt =
+        now
+      - >-
+        without one, a new Consent holds these scopes, sorted, and these scopes for each resource; a resource named in no
+        approval gets no entry, so an approval for one resource server says nothing about another
+    note: >-
+      Two first approvals at once both find no row to lock, and the second insert then fails on the unique index of
+      active consents, which the consent route answers with 500.

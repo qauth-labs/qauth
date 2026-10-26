@@ -4,11 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import {
-  OAUTH_OPAQUE_PARAM_MAX_LENGTH,
-  OAUTH_SCOPE_PARAM_MAX_LENGTH,
-  STEP_UP_FRESH_AUTH_WINDOW_MS,
-} from '../../constants';
+import { STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
@@ -55,14 +51,8 @@ import {
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
-import { clientIdParamSchema, exactUrl } from '../../schemas/common';
-import {
-  authorizeQuerySchema,
-  codeChallengeParamSchema,
-  dpopJktParamSchema,
-  maxAgeParamSchema,
-  resourceParamSchema,
-} from '../../schemas/oauth';
+import { type ConsentForm, consentFormSchema } from '../../schemas/consent';
+import { authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
  * Order-independent equality of two scope sets. Used by the consent POST to
@@ -100,44 +90,6 @@ function resourceSetsEqual(a: readonly string[], b: readonly string[]): boolean 
  *                    §4.1.2.1). CSRF-protected via a form token bound to
  *                    the signed session cookie.
  */
-
-const consentFormSchema = z.object({
-  decision: z.enum(['allow', 'deny']),
-  allow_forever: z.string().optional(),
-  csrf_token: z.string().min(1),
-  // Mirror of the original authorize params so we don't need to stash them
-  // in the session (keeps the session payload small + stateless enough).
-  // Same bound as `authorizeQuerySchema.client_id`.
-  client_id: clientIdParamSchema,
-  // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
-  redirect_uri: exactUrl(),
-  state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  // Mirrors `authorizeQuerySchema`'s bound — the two silently drifted once
-  // (#316) and this form POST reaches the same pending-authorization stash.
-  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
-  nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  // Same bound as `authorizeQuerySchema.code_challenge`, which is the one
-  // `mintAuthorizationCode` holds the code to: a form the screen did not
-  // render cannot reach the mint with a challenge it refuses.
-  code_challenge: codeChallengeParamSchema,
-  code_challenge_method: z.literal('S256'),
-  response_type: z.literal('code'),
-  // ADR-007 §2 (#185): step-up params carried through so the POST mint path
-  // re-evaluates them server-side (the hidden `scope` field is
-  // attacker-controlled, so the dangerous-elevation re-auth gate must run HERE
-  // too, not only pre-consent). Empty string ⇒ treated as absent.
-  prompt: z.enum(['none', 'login', 'consent']).optional(),
-  max_age: maxAgeParamSchema,
-  // RFC 8707: carried through as hidden form field(s). `resourceParamSchema`
-  // populates an array on `body.resource`.
-  resource: resourceParamSchema,
-  // RFC 9449 §10 (#480): the DPoP key the code is bound to, as
-  // `authorizeQuerySchema` takes it. Rendered, and read, only while DPoP is
-  // on.
-  dpop_jkt: dpopJktParamSchema,
-});
-
-type ConsentForm = z.infer<typeof consentFormSchema>;
 
 function buildAuthorizeUrl(query: Record<string, string | string[] | number | undefined>): string {
   const u = new URL('/oauth/authorize', 'http://placeholder');
