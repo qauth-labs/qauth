@@ -211,6 +211,18 @@ describe('one audience per API family and a guard for each (#509, real container
       for (const family of API_FAMILIES) {
         await seedMachineClient(familyClientId(family), [API_FAMILY_AUDIENCES[family]]);
         const response = await machineToken(familyClientId(family), API_FAMILY_AUDIENCES[family]);
+        if (family === 'admin') {
+          // A client_credentials token names no account, and only an account
+          // with an admin grant gets the admin audience (#510): the guard is
+          // tested here with a token signed directly.
+          expect(response.statusCode).toBe(400);
+          tokens[family] = await app().jwtUtils.signAccessToken({
+            sub: familyClientId(family),
+            clientId: familyClientId(family),
+            aud: API_FAMILY_AUDIENCES[family],
+          });
+          continue;
+        }
         expect(response.statusCode).toBe(200);
         const token = response.json<{ access_token: string }>().access_token;
         // The token endpoint maps the RFC 8707 resource value to the audience.
@@ -621,15 +633,15 @@ describe('one audience per API family and a guard for each (#509, real container
 
     it('resolves a client_credentials token as the client of that realm, by the same client_id', async () => {
       const b = await realmB();
-      const admin = API_FAMILY_AUDIENCES.admin;
+      const developer = API_FAMILY_AUDIENCES.developer;
       // `twin` in both realms: enabled in A, disabled in B.
-      await seedMachineClient('twin', [admin]);
-      await seedMachineClient('twin', [admin], { realmId: b, enabled: false });
-      const token = (await machineToken('twin', admin)).json<{ access_token: string }>()
+      await seedMachineClient('twin', [developer]);
+      await seedMachineClient('twin', [developer], { realmId: b, enabled: false });
+      const token = (await machineToken('twin', developer)).json<{ access_token: string }>()
         .access_token;
 
-      expect((await call(probePath('admin'), token)).statusCode).toBe(200);
-      const atB = await call(probePath('admin'), token, HOST_B);
+      expect((await call(probePath('developer'), token)).statusCode).toBe(200);
+      const atB = await call(probePath('developer'), token, HOST_B);
       expect(atB.statusCode).toBe(401);
       expect(atB.json()).toMatchObject({ code: 'invalid_access_token' });
     });
@@ -663,12 +675,14 @@ describe('one audience per API family and a guard for each (#509, real container
     );
 
     it('answers a token without the scope a route needs with 403 forbidden and the insufficient_scope challenge', async () => {
-      await seedMachineClient(familyClientId('admin'), [API_FAMILY_AUDIENCES.admin]);
-      const token = (await machineToken(familyClientId('admin'), API_FAMILY_AUDIENCES.admin)).json<{
+      await seedMachineClient(familyClientId('developer'), [API_FAMILY_AUDIENCES.developer]);
+      const token = (
+        await machineToken(familyClientId('developer'), API_FAMILY_AUDIENCES.developer)
+      ).json<{
         access_token: string;
       }>().access_token;
 
-      const response = await call(probePath('admin', 'scoped'), token);
+      const response = await call(probePath('developer', 'scoped'), token);
       expect(response.statusCode).toBe(403);
       expect(response.json()).toMatchObject({ status: 403, code: 'forbidden' });
       expect(response.headers['www-authenticate']).toBe(
