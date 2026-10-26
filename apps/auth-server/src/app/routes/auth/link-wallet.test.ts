@@ -1,3 +1,4 @@
+import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -274,13 +275,18 @@ describe('wallet linking API — fail-closed registration (#232/#299)', () => {
     await linkWalletRoute(fastify);
     const session = await signIn(sessions, 'user-1');
 
-    const { reply, state } = createReply();
-    await routes.get('POST /link/wallet')!(
-      { headers: { cookie: session.cookie, 'x-csrf-token': session.apiCsrfToken }, ip: '1.2.3.4' },
-      reply
-    );
-
-    expect(state.statusCode).toBe(404);
+    const { reply } = createReply();
+    // Thrown for the error handler, which answers the not_found problem
+    // document (#513).
+    await expect(
+      routes.get('POST /link/wallet')!(
+        {
+          headers: { cookie: session.cookie, 'x-csrf-token': session.apiCsrfToken },
+          ip: '1.2.3.4',
+        },
+        reply
+      )
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 
@@ -289,10 +295,10 @@ describe('wallet linking API — a session is the whole authority (ADR-009 §5)'
     const { fastify, routes } = makeFastify();
     await linkWalletRoute(fastify);
 
-    const { reply, state } = createReply();
-    await routes.get('POST /link/wallet')!({ headers: {}, ip: '1.2.3.4' }, reply);
-
-    expect(state.statusCode).toBe(401);
+    const { reply } = createReply();
+    await expect(
+      routes.get('POST /link/wallet')!({ headers: {}, ip: '1.2.3.4' }, reply)
+    ).rejects.toMatchObject({ statusCode: 401 });
     expect(fastify.repositories.oid4vpRequestStates.create).not.toHaveBeenCalled();
   });
 
@@ -300,13 +306,13 @@ describe('wallet linking API — a session is the whole authority (ADR-009 §5)'
     const { fastify, routes } = makeFastify();
     await linkWalletRoute(fastify);
 
-    const { reply, state } = createReply();
-    await routes.get('GET /link/wallet/:handle')!(
-      { headers: {}, params: { handle: 'x'.repeat(43) }, ip: '1.2.3.4' },
-      reply
-    );
-
-    expect(state.statusCode).toBe(401);
+    const { reply } = createReply();
+    await expect(
+      routes.get('GET /link/wallet/:handle')!(
+        { headers: {}, params: { handle: 'x'.repeat(43) }, ip: '1.2.3.4' },
+        reply
+      )
+    ).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it('refuses a POST with no or wrong X-CSRF-Token', async () => {
@@ -320,7 +326,7 @@ describe('wallet linking API — a session is the whole authority (ADR-009 §5)'
         { headers: { cookie: session.cookie, 'x-csrf-token': 'wrong' }, ip: '1.2.3.4' },
         reply
       )
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(InvalidCsrfTokenError);
 
     expect(fastify.repositories.oid4vpRequestStates.create).not.toHaveBeenCalled();
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(

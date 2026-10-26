@@ -79,7 +79,7 @@ describe('currentUserHandler', () => {
     vi.mocked(readSessionCookie).mockReturnValue(session);
     vi.mocked(authServerClient.userinfo).mockResolvedValue({
       ok: false,
-      error: { code: 'UNKNOWN', message: 'Unauthorized', status: 401 },
+      error: { code: 'UNAUTHENTICATED', message: 'invalid_token', status: 401 },
     });
     mockGetRequestHeader.mockReturnValue('some-cookie-header');
 

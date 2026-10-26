@@ -50,6 +50,21 @@ export const REDIS_KEYS = {
    */
   REVOKED_ACCESS_TOKEN: (jti: string) => `revoked-access-token:${jti}`,
   /**
+   * The access tokens issued by redeeming one authorization code (#627): a
+   * hash of `jti` to `exp`, so a second redemption of the code can put them on
+   * the {@link REDIS_KEYS.REVOKED_ACCESS_TOKEN} denylist (OAuth 2.1 §4.1.3).
+   * Expires with the last token in it. The component is the code row's UUID.
+   */
+  CODE_ACCESS_TOKENS: (authorizationCodeId: string) => `code-access-tokens:${authorizationCodeId}`,
+  /**
+   * The access tokens issued in one refresh-token family, at the redemption
+   * that started it and at every rotation (#627): a hash of `jti` to `exp`, so
+   * a replay of the family's code or of one of its refresh tokens can put the
+   * live ones on the denylist. Expires with the last token in it. The
+   * component is the family's UUID.
+   */
+  REFRESH_FAMILY_ACCESS_TOKENS: (familyId: string) => `refresh-family-access-tokens:${familyId}`,
+  /**
    * Set of the hosted browser session ids (`sid`) of one user, so
    * `/auth/logout` can end every session the user holds, not only one whose
    * cookie happens to accompany the request. Expires with the newest session
@@ -152,4 +167,13 @@ export const REDIS_KEYS = {
    * the cache keeps verifying throughout.
    */
   ID_JAG_FETCH_FAILED: (issuer: string) => `id-jag:fetch-failed:${digest(issuer)}`,
+  /**
+   * A receiver's last verification request (SSF 1.0 §8.1.4.2, #410): set for
+   * the stream's `min_verification_interval`, so a request sooner is answered
+   * 429. Keyed by the receiver's client row, not the stream, so deleting the
+   * stream and creating another does not reset it; a receiver has one stream
+   * per realm. Both components are UUIDs.
+   */
+  SSF_VERIFICATION: (realmId: string, receiverClientId: string) =>
+    `ssf:verification:${realmId}:${receiverClientId}`,
 } as const;

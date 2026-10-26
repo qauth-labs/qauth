@@ -127,13 +127,13 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Client registration
 
-| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                                                                                                                                          |
-| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                                                                                                                            |
-| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                                                                                                                             |
-| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only.                                                                                                            |
-| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes, separated by spaces or commas, copied into a realm's empty dynamic registration allowlist at its first client registration; a later change leaves that realm as it is.                                                                   |
-| `REDIRECT_URI_CUSTOM_SCHEMES`         | realm-seed: `registration.redirectUriCustomSchemes`         | empty                                 | 0.1.3 | Schemes without a period that a redirect URI may use besides `https`, loopback `http` and reverse-domain schemes, separated by spaces or commas, such as `cursor`; boot refuses one a browser or the operating system acts on, such as `javascript`. |
+| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                                                                                                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                                                                                                                                                        |
+| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                                                                                                                                                         |
+| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only.                                                                                                                                        |
+| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes, separated by spaces or commas, copied into a realm's empty dynamic registration allowlist at its first client registration; a later change leaves that realm as it is, and boot refuses a scope in the `qauth:` namespace, which is reserved for QAuth's own scopes. |
+| `REDIRECT_URI_CUSTOM_SCHEMES`         | realm-seed: `registration.redirectUriCustomSchemes`         | empty                                 | 0.1.3 | Schemes without a period that a redirect URI may use besides `https`, loopback `http` and reverse-domain schemes, separated by spaces or commas, such as `cursor`; boot refuses one a browser or the operating system acts on, such as `javascript`.                             |
 
 ### Enterprise-managed authorization (ID-JAG)
 
@@ -184,11 +184,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Events
 
-| Key                                  | Role       | Default | Since | Description                                                                                                                                 |
-| ------------------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVENT_DELIVERY_MAX_ATTEMPTS`        | deployment | `12`    | 0.2.0 | The attempts an event delivery to a webhook or another route gets before it ends `failed`; a failed delivery stays in the delivery history. |
-| `EVENT_DELIVERY_RETRY_INITIAL_DELAY` | deployment | `30`    | 0.2.0 | Seconds an event delivery waits after its first failed attempt; each later wait doubles, less up to 20% at random.                          |
-| `EVENT_DELIVERY_RETRY_MAX_DELAY`     | deployment | `21600` | 0.2.0 | The longest wait between two attempts of an event delivery, in seconds; at least `EVENT_DELIVERY_RETRY_INITIAL_DELAY`.                      |
+| Key                                  | Role       | Default | Since | Description                                                                                                                                                                                                             |
+| ------------------------------------ | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVENT_DELIVERY_MAX_ATTEMPTS`        | deployment | `12`    | 0.2.0 | The attempts an event delivery to a webhook or another route gets before it ends `failed`; a failed delivery stays in the delivery history.                                                                             |
+| `EVENT_DELIVERY_RETRY_INITIAL_DELAY` | deployment | `30`    | 0.2.0 | Seconds an event delivery waits after its first failed attempt; each later wait doubles, less up to 20% at random.                                                                                                      |
+| `EVENT_DELIVERY_RETRY_MAX_DELAY`     | deployment | `21600` | 0.2.0 | The longest wait between two attempts of an event delivery, in seconds; at least `EVENT_DELIVERY_RETRY_INITIAL_DELAY`.                                                                                                  |
+| `SSF_TRANSMITTER_ENABLED`            | deployment | `false` | 0.2.0 | Turn the Shared Signals Framework transmitter on (`/.well-known/ssf-configuration`, stream management under `/ssf/`, push delivery of Security Event Tokens) for each realm whose `ssf_transmitter_enabled` is also on. |
 
 ### Database and Redis
 
@@ -325,44 +326,44 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Rate limits
 
-| Key                                 | Role       | Default | Since | Description                                                                                                  |
-| ----------------------------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------ |
-| `AUTHORIZE_RATE_LIMIT`              | deployment | `60`    | 0.1.0 | The most authorization requests allowed per window for a `production` realm, the strict tier.                |
-| `AUTHORIZE_RATE_LIMIT_LENIENT`      | deployment | `600`   | 0.1.0 | The most authorization requests allowed per window for a `development` or `staging` realm, the lenient tier. |
-| `AUTHORIZE_RATE_WINDOW`             | deployment | `60`    | 0.1.0 | The window, in seconds, of both authorization request limits.                                                |
-| `HEALTH_RATE_LIMIT_MAX`             | deployment | `1000`  | 0.1.0 | The most health endpoint requests allowed per window.                                                        |
-| `HEALTH_RATE_LIMIT_WINDOW`          | deployment | `60`    | 0.1.0 | The window, in seconds, of `HEALTH_RATE_LIMIT_MAX`.                                                          |
-| `INTROSPECT_RATE_LIMIT`             | deployment | `30`    | 0.1.0 | The most introspection requests allowed per window.                                                          |
-| `INTROSPECT_RATE_WINDOW`            | deployment | `60`    | 0.1.0 | The window, in seconds, of `INTROSPECT_RATE_LIMIT`.                                                          |
-| `LOGIN_RATE_LIMIT`                  | deployment | `5`     | 0.1.0 | The most login attempts allowed per window.                                                                  |
-| `LOGIN_RATE_WINDOW`                 | deployment | `900`   | 0.1.0 | The window, in seconds, of `LOGIN_RATE_LIMIT`.                                                               |
-| `LOGOUT_RATE_LIMIT`                 | deployment | `20`    | 0.1.0 | The most logout requests allowed per window.                                                                 |
-| `LOGOUT_RATE_WINDOW`                | deployment | `60`    | 0.1.0 | The window, in seconds, of `LOGOUT_RATE_LIMIT`.                                                              |
-| `OID4VP_REQUEST_OBJECT_RATE_LIMIT`  | deployment | `30`    | 0.1.0 | The most request object fetches from `GET /oid4vp/request/:handle` per client address allowed per window.    |
-| `OID4VP_REQUEST_OBJECT_RATE_WINDOW` | deployment | `60`    | 0.1.0 | The window, in seconds, of `OID4VP_REQUEST_OBJECT_RATE_LIMIT`.                                               |
-| `OID4VP_RESPONSE_RATE_LIMIT`        | deployment | `30`    | 0.1.0 | The most wallet responses to `POST /oid4vp/response` per client address allowed per window.                  |
-| `OID4VP_RESPONSE_RATE_WINDOW`       | deployment | `60`    | 0.1.0 | The window, in seconds, of `OID4VP_RESPONSE_RATE_LIMIT`.                                                     |
-| `RATE_LIMIT_ENABLED`                | deployment | `true`  | 0.1.0 | Apply the rate limits at all; only a development or test stack turns them off.                               |
-| `RATE_LIMIT_MAX`                    | deployment | `100`   | 0.1.0 | The most requests to a route with no limit of its own allowed per window.                                    |
-| `RATE_LIMIT_WINDOW`                 | deployment | `3600`  | 0.1.0 | The window, in seconds, of `RATE_LIMIT_MAX`.                                                                 |
-| `REFRESH_RATE_LIMIT`                | deployment | `10`    | 0.1.0 | The most refresh token requests allowed per window.                                                          |
-| `REFRESH_RATE_WINDOW`               | deployment | `60`    | 0.1.0 | The window, in seconds, of `REFRESH_RATE_LIMIT`.                                                             |
-| `REGISTER_CLIENT_RATE_LIMIT`        | deployment | `30`    | 0.1.0 | The most dynamic client registrations per client address allowed per window.                                 |
-| `REGISTER_CLIENT_RATE_WINDOW`       | deployment | `60`    | 0.1.0 | The window, in seconds, of `REGISTER_CLIENT_RATE_LIMIT`.                                                     |
-| `REGISTRATION_RATE_LIMIT`           | deployment | `3`     | 0.1.0 | The most account registrations allowed per window.                                                           |
-| `REGISTRATION_RATE_WINDOW`          | deployment | `3600`  | 0.1.0 | The window, in seconds, of `REGISTRATION_RATE_LIMIT`.                                                        |
-| `RESEND_VERIFICATION_EMAIL_LIMIT`   | deployment | `3`     | 0.1.0 | The most verification mail resends per email address allowed per window.                                     |
-| `RESEND_VERIFICATION_EMAIL_WINDOW`  | deployment | `3600`  | 0.1.0 | The window, in seconds, of `RESEND_VERIFICATION_EMAIL_LIMIT`.                                                |
-| `RESEND_VERIFICATION_MIN_INTERVAL`  | deployment | `60`    | 0.1.0 | The shortest time, in seconds, between two verification mail resends to one address.                         |
-| `RESEND_VERIFICATION_RATE_LIMIT`    | deployment | `100`   | 0.1.0 | The most verification mail resends per client address allowed per window.                                    |
-| `RESEND_VERIFICATION_RATE_WINDOW`   | deployment | `60`    | 0.1.0 | The window, in seconds, of `RESEND_VERIFICATION_RATE_LIMIT`.                                                 |
-| `TOKEN_RATE_LIMIT`                  | deployment | `30`    | 0.1.0 | The most token requests allowed per window for a `production` realm, the strict tier.                        |
-| `TOKEN_RATE_LIMIT_LENIENT`          | deployment | `300`   | 0.1.0 | The most token requests allowed per window for a `development` or `staging` realm, the lenient tier.         |
-| `TOKEN_RATE_WINDOW`                 | deployment | `60`    | 0.1.0 | The window, in seconds, of both token request limits.                                                        |
-| `USERINFO_RATE_LIMIT`               | deployment | `60`    | 0.1.0 | The most userinfo requests allowed per window.                                                               |
-| `USERINFO_RATE_WINDOW`              | deployment | `60`    | 0.1.0 | The window, in seconds, of `USERINFO_RATE_LIMIT`.                                                            |
-| `VERIFICATION_RATE_LIMIT`           | deployment | `10`    | 0.1.0 | The most email verification attempts allowed per window.                                                     |
-| `VERIFICATION_RATE_WINDOW`          | deployment | `900`   | 0.1.0 | The window, in seconds, of `VERIFICATION_RATE_LIMIT`.                                                        |
+| Key                                 | Role       | Default | Since | Description                                                                                                      |
+| ----------------------------------- | ---------- | ------- | ----- | ---------------------------------------------------------------------------------------------------------------- |
+| `AUTHORIZE_RATE_LIMIT`              | deployment | `60`    | 0.1.0 | The most authorization requests allowed per window for a `production` realm, the strict tier.                    |
+| `AUTHORIZE_RATE_LIMIT_LENIENT`      | deployment | `600`   | 0.1.0 | The most authorization requests allowed per window for a `development` or `staging` realm, the lenient tier.     |
+| `AUTHORIZE_RATE_WINDOW`             | deployment | `60`    | 0.1.0 | The window, in seconds, of both authorization request limits.                                                    |
+| `HEALTH_RATE_LIMIT_MAX`             | deployment | `1000`  | 0.1.0 | The most health endpoint requests allowed per window.                                                            |
+| `HEALTH_RATE_LIMIT_WINDOW`          | deployment | `60`    | 0.1.0 | The window, in seconds, of `HEALTH_RATE_LIMIT_MAX`.                                                              |
+| `INTROSPECT_RATE_LIMIT`             | deployment | `30`    | 0.1.0 | The most introspection requests allowed per window.                                                              |
+| `INTROSPECT_RATE_WINDOW`            | deployment | `60`    | 0.1.0 | The window, in seconds, of `INTROSPECT_RATE_LIMIT`.                                                              |
+| `LOGIN_RATE_LIMIT`                  | deployment | `5`     | 0.1.0 | The most login attempts allowed per window.                                                                      |
+| `LOGIN_RATE_WINDOW`                 | deployment | `900`   | 0.1.0 | The window, in seconds, of `LOGIN_RATE_LIMIT`.                                                                   |
+| `LOGOUT_RATE_LIMIT`                 | deployment | `20`    | 0.1.0 | The most logout requests allowed per window.                                                                     |
+| `LOGOUT_RATE_WINDOW`                | deployment | `60`    | 0.1.0 | The window, in seconds, of `LOGOUT_RATE_LIMIT`.                                                                  |
+| `OID4VP_REQUEST_OBJECT_RATE_LIMIT`  | deployment | `30`    | 0.1.0 | The most request object fetches from `GET /oid4vp/request/:handle` per client address allowed per window.        |
+| `OID4VP_REQUEST_OBJECT_RATE_WINDOW` | deployment | `60`    | 0.1.0 | The window, in seconds, of `OID4VP_REQUEST_OBJECT_RATE_LIMIT`.                                                   |
+| `OID4VP_RESPONSE_RATE_LIMIT`        | deployment | `30`    | 0.1.0 | The most wallet responses to `POST /oid4vp/response` per client address allowed per window.                      |
+| `OID4VP_RESPONSE_RATE_WINDOW`       | deployment | `60`    | 0.1.0 | The window, in seconds, of `OID4VP_RESPONSE_RATE_LIMIT`.                                                         |
+| `RATE_LIMIT_ENABLED`                | deployment | `true`  | 0.1.0 | Apply the rate limits at all; only a development or test stack turns them off.                                   |
+| `RATE_LIMIT_MAX`                    | deployment | `100`   | 0.1.0 | The most requests to a route with no limit of its own, or to one discovery document or JWKS, allowed per window. |
+| `RATE_LIMIT_WINDOW`                 | deployment | `3600`  | 0.1.0 | The window, in seconds, of `RATE_LIMIT_MAX`.                                                                     |
+| `REFRESH_RATE_LIMIT`                | deployment | `10`    | 0.1.0 | The most refresh token requests allowed per window.                                                              |
+| `REFRESH_RATE_WINDOW`               | deployment | `60`    | 0.1.0 | The window, in seconds, of `REFRESH_RATE_LIMIT`.                                                                 |
+| `REGISTER_CLIENT_RATE_LIMIT`        | deployment | `30`    | 0.1.0 | The most dynamic client registrations per client address allowed per window.                                     |
+| `REGISTER_CLIENT_RATE_WINDOW`       | deployment | `60`    | 0.1.0 | The window, in seconds, of `REGISTER_CLIENT_RATE_LIMIT`.                                                         |
+| `REGISTRATION_RATE_LIMIT`           | deployment | `3`     | 0.1.0 | The most account registrations allowed per window.                                                               |
+| `REGISTRATION_RATE_WINDOW`          | deployment | `3600`  | 0.1.0 | The window, in seconds, of `REGISTRATION_RATE_LIMIT`.                                                            |
+| `RESEND_VERIFICATION_EMAIL_LIMIT`   | deployment | `3`     | 0.1.0 | The most verification mail resends per email address allowed per window.                                         |
+| `RESEND_VERIFICATION_EMAIL_WINDOW`  | deployment | `3600`  | 0.1.0 | The window, in seconds, of `RESEND_VERIFICATION_EMAIL_LIMIT`.                                                    |
+| `RESEND_VERIFICATION_MIN_INTERVAL`  | deployment | `60`    | 0.1.0 | The shortest time, in seconds, between two verification mail resends to one address.                             |
+| `RESEND_VERIFICATION_RATE_LIMIT`    | deployment | `100`   | 0.1.0 | The most verification mail resends per client address allowed per window.                                        |
+| `RESEND_VERIFICATION_RATE_WINDOW`   | deployment | `60`    | 0.1.0 | The window, in seconds, of `RESEND_VERIFICATION_RATE_LIMIT`.                                                     |
+| `TOKEN_RATE_LIMIT`                  | deployment | `30`    | 0.1.0 | The most token requests allowed per window for a `production` realm, the strict tier.                            |
+| `TOKEN_RATE_LIMIT_LENIENT`          | deployment | `300`   | 0.1.0 | The most token requests allowed per window for a `development` or `staging` realm, the lenient tier.             |
+| `TOKEN_RATE_WINDOW`                 | deployment | `60`    | 0.1.0 | The window, in seconds, of both token request limits.                                                            |
+| `USERINFO_RATE_LIMIT`               | deployment | `60`    | 0.1.0 | The most userinfo requests allowed per window.                                                                   |
+| `USERINFO_RATE_WINDOW`              | deployment | `60`    | 0.1.0 | The window, in seconds, of `USERINFO_RATE_LIMIT`.                                                                |
+| `VERIFICATION_RATE_LIMIT`           | deployment | `10`    | 0.1.0 | The most email verification attempts allowed per window.                                                         |
+| `VERIFICATION_RATE_WINDOW`          | deployment | `900`   | 0.1.0 | The window, in seconds, of `VERIFICATION_RATE_LIMIT`.                                                            |
 
 ### Developer portal
 

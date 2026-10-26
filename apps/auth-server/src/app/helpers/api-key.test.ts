@@ -1,3 +1,4 @@
+import { ForbiddenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -80,32 +81,26 @@ describe('assertStaticApiKeysAllowed (the environment gate)', () => {
     ).not.toThrow();
   });
 
+  // A ForbiddenError is answered 403 `forbidden` (the error registry, #513).
   it('refuses a production client with 403', () => {
-    expect.assertions(2);
-    try {
+    expect(() =>
       assertStaticApiKeysAllowed(
         { environment: 'production' },
         { maxEnvironmentLaxity: 'development' }
-      );
-    } catch (err) {
-      expect((err as { statusCode: number }).statusCode).toBe(403);
-      expect((err as Error).message).toMatch(/client_credentials/);
-    }
+      )
+    ).toThrow(ForbiddenError);
   });
 
   it('refuses a client with an UNSET environment with 403 (fail-safe to production)', () => {
-    expect.assertions(1);
-    try {
-      assertStaticApiKeysAllowed({}, { maxEnvironmentLaxity: 'development' });
-    } catch (err) {
-      expect((err as { statusCode: number }).statusCode).toBe(403);
-    }
+    expect(() => assertStaticApiKeysAllowed({}, { maxEnvironmentLaxity: 'development' })).toThrow(
+      ForbiddenError
+    );
   });
 
   it('refuses a staging client with 403 (staging keeps production-grade security)', () => {
     expect(() =>
       assertStaticApiKeysAllowed({ environment: 'staging' }, { maxEnvironmentLaxity: 'staging' })
-    ).toThrow();
+    ).toThrow(ForbiddenError);
   });
 
   it('refuses a development client when the REALM ceiling forces production', () => {
@@ -116,7 +111,7 @@ describe('assertStaticApiKeysAllowed (the environment gate)', () => {
         { environment: 'development' },
         { maxEnvironmentLaxity: 'production' }
       )
-    ).toThrow();
+    ).toThrow(ForbiddenError);
   });
 });
 

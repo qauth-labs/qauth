@@ -48,7 +48,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
   ...rateLimit(
     'RATE_LIMIT_MAX',
     'RATE_LIMIT_WINDOW',
-    'requests to a route with no limit of its own',
+    'requests to a route with no limit of its own, or to one discovery document or JWKS,',
     '100',
     '3600'
   ),

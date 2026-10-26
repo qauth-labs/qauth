@@ -26,9 +26,9 @@ mints a **fresh** session id (session-fixation defence — a pre-login session
 id is never reused), sets it as `__Host-qauth_session`, and redirects to
 `return_to`. On failure it re-renders the form, and the two failure modes
 handle the CSRF token differently: a `403` (CSRF pair missing or mismatched,
-`apps/auth-server/src/app/routes/ui/login.ts:302`) mints and sets a **fresh**
+`apps/auth-server/src/app/routes/ui/login.ts:304`) mints and sets a **fresh**
 token so a legitimate retry can succeed; a `401` (bad credentials,
-`apps/auth-server/src/app/routes/ui/login.ts:337`) **reuses** the existing
+`apps/auth-server/src/app/routes/ui/login.ts:339`) **reuses** the existing
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong. An account whose address is not verified yet gets that
 same `401` page while `REQUIRE_VERIFIED_ACCOUNT` is on (the default), so the
@@ -137,7 +137,7 @@ it in the redirect:
 
 Redis was already on that path before #319, and not marginally: the
 Redis-backed `@fastify/rate-limit` plugin is registered app-wide
-(`apps/auth-server/src/app/app.ts:257`) ahead of both route sweeps (lines 294
+(`apps/auth-server/src/app/app.ts:258`) ahead of both route sweeps (lines 294
 and 301), against the same `fastify.redis` client
 (`apps/auth-server/src/app/plugins/rate-limit.ts:28`); `RATE_LIMIT_ENABLED`
 defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);

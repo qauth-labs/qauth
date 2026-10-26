@@ -58,6 +58,9 @@ export const jobsPlugin = fp<JobsPluginOptions>(
           ...(options.deliveryRoutes === undefined
             ? {}
             : { deliveryRoutes: options.deliveryRoutes }),
+          ...(options.unservedDeliveryKinds === undefined
+            ? {}
+            : { unservedDeliveryKinds: options.unservedDeliveryKinds }),
           ...(options.eventRetentionFallback === undefined
             ? {}
             : { eventRetentionFallback: options.eventRetentionFallback }),

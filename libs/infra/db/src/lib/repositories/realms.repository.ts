@@ -10,10 +10,11 @@ import {
   eventRetentionProblems,
   InvalidRealmHostError,
   normaliseRealmHost,
+  reservedQauthScopesIn,
   resolveRpId,
   rpIdCoversHost,
 } from '@qauth-labs/shared-validation';
-import { and, eq, InferInsertModel, InferSelectModel, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, InferInsertModel, InferSelectModel, isNull, ne, sql } from 'drizzle-orm';
 
 import type { DbTransaction } from '../../types';
 import { DbClient } from '../db';
@@ -102,6 +103,17 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * NULL, is the caller's to refuse.
    */
   findByHost(host: string, tx?: DbClient): Promise<RealmWithHost | undefined>;
+
+  /**
+   * Whether one of `values` is the issuer of a realm other than `realmId`:
+   * an access token whose `aud` names one may have been minted in that realm
+   * (#410). Exact match: issuers are stored without a trailing slash.
+   */
+  anotherRealmHasIssuer(
+    realmId: string,
+    values: readonly string[],
+    tx?: DbClient
+  ): Promise<boolean>;
 
   /**
    * Create a realm and its primary host in one transaction.
@@ -316,6 +328,26 @@ function assertSsoLimits(data: {
   }
 }
 
+/**
+ * Refuse a dynamic registration allowlist that holds a scope in the reserved
+ * `qauth:` namespace, in any case (#507, ADR-019 Decision 7): QAuth's own
+ * scopes, the admin API's among them, are never obtained through dynamic
+ * registration. The CHECK `realms_dynamic_registration_scopes_not_qauth`
+ * refuses the same.
+ */
+function assertDynamicRegistrationScopes(data: {
+  dynamicRegistrationAllowedScopes?: readonly string[];
+}): void {
+  const scopes = data.dynamicRegistrationAllowedScopes;
+  if (scopes === undefined) return;
+  const reserved = reservedQauthScopesIn(scopes.filter((scope) => typeof scope === 'string'));
+  if (reserved.length > 0) {
+    throw new BadRequestError(
+      `Realm dynamic_registration_allowed_scopes must not hold a scope in the "qauth:" namespace, which is reserved for QAuth's own scopes: ${reserved.join(', ')}`
+    );
+  }
+}
+
 /** Map a duplicate key to {@link UniqueConstraintError}; rethrow anything else. */
 function rethrowUnique(error: unknown, fallbackConstraint: string): never {
   if (isUniqueConstraintError(error)) {
@@ -329,7 +361,9 @@ function rethrowUnique(error: unknown, fallbackConstraint: string): never {
  *
  * Every realm it creates gets `options.seeds` for the policies its creator
  * leaves out, and every create and update refuses event retention outside
- * its limits and an `sso_max_lifespan` of zero or less ({@link BadRequestError}).
+ * its limits, an `sso_max_lifespan` of zero or less and a dynamic
+ * registration allowlist with a scope in the reserved `qauth:` namespace
+ * ({@link BadRequestError}).
  *
  * @param defaultDb - Database client to use for queries
  * @param options - The realm policy seeds (ADR-019 Decision 10)
@@ -355,6 +389,7 @@ export function createRealmsRepository(
     }
     assertEventRetention(row);
     assertSsoLimits(row);
+    assertDynamicRegistrationScopes(row);
     return row;
   }
 
@@ -436,6 +471,21 @@ export function createRealmsRepository(
         .where(eq(realmHosts.host, normalised))
         .limit(1);
       return row;
+    },
+
+    async anotherRealmHasIssuer(
+      realmId: string,
+      values: readonly string[],
+      tx?: DbClient
+    ): Promise<boolean> {
+      if (values.length === 0) return false;
+      const invoker = tx ?? defaultDb;
+      const [row] = await invoker
+        .select({ id: realms.id })
+        .from(realms)
+        .where(and(inArray(realms.issuer, [...values]), ne(realms.id, realmId)))
+        .limit(1);
+      return row !== undefined;
     },
 
     async createWithPrimaryHost(
@@ -664,6 +714,7 @@ export function createRealmsRepository(
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       assertEventRetention(data);
       assertSsoLimits(data);
+      assertDynamicRegistrationScopes(data);
       const invoker = tx ?? defaultDb;
       const updateData = {
         ...data,

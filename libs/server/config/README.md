@@ -216,12 +216,12 @@ Post-quantum hybrid signing ([ADR-005](../../../docs/adr/005-pqc-hybrid-signing.
 
 ### federationEnvSchema
 
-Wallet federation over OID4VP (T4, [ADR-004](../../../docs/adr/004-wallet-agnostic-federation.md)).
+Wallet federation over OID4VP ([ADR-004](../../../docs/adr/004-wallet-agnostic-federation.md)).
 **Off by default** — with `WALLET_FEDERATION_ENABLED` unset the wallet routes are
 never registered. Covers `OID4VP_VERIFIER_PROFILE`, `OID4VP_REQUESTED_VCT`,
 `OID4VP_SUBJECT_RESOLUTION` and the subject-binding, status-list and
 wallet-invocation settings. See the
-[Docker guide](../../../docs/docker.md#wallet-federation-oid4vp-t4) for the full table.
+[configuration page](https://docs.qauth.dev/operate/configuration/) for the full table.
 
 ### trustRegistryEnvSchema
 
@@ -366,13 +366,13 @@ try {
 ### Running Tests
 
 ```bash
-nx test config
+nx test server-config
 ```
 
 ### Linting
 
 ```bash
-nx lint config
+nx lint server-config
 ```
 
 ## Dependencies

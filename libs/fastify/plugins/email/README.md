@@ -127,9 +127,6 @@ interface EmailPluginOptions {
      * Default sender email address
      */
     defaultFrom?: string;
-    /**
-     * Base URL for verification links
-     */
   };
 }
 ```
@@ -267,7 +264,7 @@ import { env } from '@qauth-labs/server-config';
 await fastify.register(emailPlugin, {
   provider: env.EMAIL_PROVIDER || 'mock',
   serviceConfig: {
-    defaultFrom: env.EMAIL_FROM,
+    defaultFrom: env.EMAIL_FROM_ADDRESS,
   },
 });
 ```

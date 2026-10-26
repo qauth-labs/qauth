@@ -183,24 +183,24 @@ The absence of a "view again" button is a UI convenience, not the guarantee. "Ne
 is enforced two levels below it, and neither is client-side:
 
 - **At the type level**, the portal's own client for `/api/clients` distinguishes the two shapes.
-  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:71`) — what every list
+  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:63`) — what every list
   and get call returns — has no `clientSecret` field at all; the comment above it says why:
   "deliberately absent here — it only exists on {@link ClientWithSecret}"
-  (`apps/developer-portal/src/server/auth-server-client.ts:62`). `ClientWithSecret`
-  (`apps/developer-portal/src/server/auth-server-client.ts:141`) is a distinct type, returned
+  (`apps/developer-portal/src/server/auth-server-client.ts:54`). `ClientWithSecret`
+  (`apps/developer-portal/src/server/auth-server-client.ts:133`) is a distinct type, returned
   **only** by the create and regenerate calls
-  (`apps/developer-portal/src/server/auth-server-client.ts:137`). There is no portal API call
+  (`apps/developer-portal/src/server/auth-server-client.ts:129`). There is no portal API call
   that can ask for a client and get a secret back outside those two responses — the type the
   other calls return cannot carry one.
 - **On the auth-server**, where the actual guarantee is enforced: `POST /api/clients` generates
   the secret, hashes it with Argon2id, and keeps the plaintext only in a local variable
-  (`generateClientSecret`, `apps/auth-server/src/app/routes/clients/index.ts:269`). Only
+  (`generateClientSecret`, `apps/auth-server/src/app/routes/clients/index.ts:307`). Only
   `clientSecretHash` is passed to the repository's `create` call
-  (`apps/auth-server/src/app/routes/clients/index.ts:439`); the plaintext is spread into the
-  HTTP response once (`apps/auth-server/src/app/routes/clients/index.ts:480`) and then goes out
+  (`apps/auth-server/src/app/routes/clients/index.ts:529`); the plaintext is spread into the
+  HTTP response once (`apps/auth-server/src/app/routes/clients/index.ts:580`) and then goes out
   of scope. Regeneration is the same shape: only the new `hash` is persisted
-  (`apps/auth-server/src/app/routes/clients/index.ts:673`), and the plaintext is returned once
-  (`apps/auth-server/src/app/routes/clients/index.ts:694`). No code path — in the portal or the
+  (`apps/auth-server/src/app/routes/clients/index.ts:799`), and the plaintext is returned once
+  (`apps/auth-server/src/app/routes/clients/index.ts:817`). No code path — in the portal or the
   auth-server — reads a plaintext secret back out of storage, because no plaintext secret is
   ever stored.
 
@@ -277,7 +277,7 @@ none: a Bearer token has to be put on the request by code that already holds it.
 > it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:153`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`
-> (`apps/auth-server/src/app/app.ts:289-290`). The shipped topology is cross-origin to begin with —
+> (`apps/auth-server/src/app/app.ts:290-290`). The shipped topology is cross-origin to begin with —
 > [Docker](/operate/docker/#developer-portal) runs `auth-server` and `developer-portal` as separate
 > Compose services on different ports. A fourth blocker was waiting behind those: the page never
 > read the CSRF token out of the list response, so its `DELETE` would have been refused even had

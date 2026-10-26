@@ -34,6 +34,7 @@ export default async function (fastify: FastifyInstance) {
           'Authenticate with email and password. Returns access token, refresh token, and expiration. Requires valid credentials.',
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401],
         body: loginSchema,
         response: {
           200: loginResponseSchema,

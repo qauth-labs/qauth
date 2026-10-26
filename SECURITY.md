@@ -3,14 +3,10 @@
 ## Status first
 
 QAuth is pre-1.0. Its releases are 0.x, and none has had an external
-security audit yet.
+security audit yet. That audit comes before 1.0
+([ADR-018 §8](docs/adr/018-1-0-scope-and-stability.md)).
 
-The project is developed with extensive AI assistance. Every change is
-reviewed by a human before it merges. Even so, we cannot yet promise a high
-level of security assurance. Run your own evaluation before you trust QAuth in
-a sensitive or production deployment.
-
-None of that makes reports unwelcome. A flaw found before 1.0 is far cheaper to
+Reports are welcome at every stage. A flaw found before 1.0 is far cheaper to
 fix than the same flaw found after it.
 
 ## Reporting a vulnerability
@@ -77,5 +73,5 @@ support policy.
 
 We fix first, then publish a security advisory in this repository. The
 advisory names the affected versions, the fix and the reporter, unless the
-reporter prefers not to be named. Thirteen advisories have been published this
-way so far.
+reporter prefers not to be named. The published advisories are listed at
+<https://github.com/qauth-labs/qauth/security/advisories>.

@@ -64,6 +64,8 @@ interface FanOutEventRow extends Record<string, unknown> {
   time: string;
   type: string;
   category: EventCategory;
+  subject_type: string | null;
+  subject_id: string | null;
 }
 
 /** A claimed row, with its event's columns. */
@@ -136,6 +138,10 @@ function checkTime(value: number, what: string): number {
 }
 
 function checkOutcome(outcome: EventDeliveryAttemptRecord): void {
+  if (outcome.result === 'hold') {
+    checkTime(outcome.nextAttemptAt, 'nextAttemptAt');
+    return;
+  }
   const code = outcome.statusCode;
   if (code !== undefined && (!Number.isInteger(code) || code < 100 || code > 599)) {
     throw new TypeError('eventDeliveries.record: a status code must be an integer from 100 to 599');
@@ -148,15 +154,36 @@ function checkOutcome(outcome: EventDeliveryAttemptRecord): void {
   if (outcome.result === 'retry') checkTime(outcome.nextAttemptAt, 'nextAttemptAt');
 }
 
-/** Whether a destination's filters take an event of this type and category. */
-function matches(
-  destination: EventDeliveryDestination,
-  type: string,
-  category: EventCategory
-): boolean {
+/** A subject as one string, for a set lookup: its type and id joined by a NUL. */
+const subjectKey = (type: string, id: string) => `${type}\u0000${id}`;
+
+/** A destination with its subject filter as a set, built once per fan-out page. */
+interface FanOutFilter {
+  readonly destination: EventDeliveryDestination;
+  /** The subjects, by {@link subjectKey}; `undefined` when the destination takes any. */
+  readonly subjects: ReadonlySet<string> | undefined;
+}
+
+function fanOutFilter(destination: EventDeliveryDestination): FanOutFilter {
+  return {
+    destination,
+    subjects:
+      destination.subjects === undefined
+        ? undefined
+        : new Set(destination.subjects.map((subject) => subjectKey(subject.type, subject.id))),
+  };
+}
+
+/** Whether a destination's filters take an event of this type, category and subject. */
+function matches(filter: FanOutFilter, event: FanOutEventRow): boolean {
+  const { destination, subjects } = filter;
   return (
-    (destination.types === undefined || destination.types.includes(type)) &&
-    (destination.categories === undefined || destination.categories.includes(category))
+    (destination.types === undefined || destination.types.includes(event.type)) &&
+    (destination.categories === undefined || destination.categories.includes(event.category)) &&
+    (subjects === undefined ||
+      (event.subject_type !== null &&
+        event.subject_id !== null &&
+        subjects.has(subjectKey(event.subject_type, event.subject_id))))
   );
 }
 
@@ -316,7 +343,8 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
           from (select pg_snapshot_xmin(pg_current_snapshot()) as "xmin") as "horizon"
           left join lateral (
             select ${events.id} as "id", ${events.xid}::text as "xid", ${events.seq}::text as "seq",
-              ${events.time}::text as "time", ${events.type} as "type", ${events.category} as "category"
+              ${events.time}::text as "time", ${events.type} as "type", ${events.category} as "category",
+              ${events.subjectType} as "subject_type", ${events.subjectId} as "subject_id"
             from ${events}
             where ${events.realmId} = ${realmId}
               and (${events.xid}, ${events.seq}) > (${position.xid}::xid8, ${position.seq}::bigint)
@@ -333,9 +361,11 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         const xids: string[] = [];
         const seqs: string[] = [];
         const times: string[] = [];
+        const filters = destinations.map(fanOutFilter);
         for (const event of read) {
-          for (const destination of destinations) {
-            if (!matches(destination, event.type, event.category)) continue;
+          for (const filter of filters) {
+            if (!matches(filter, event)) continue;
+            const { destination } = filter;
             kinds.push(destination.kind);
             ids.push(destination.id);
             eventIds.push(event.id);
@@ -595,6 +625,20 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
     async record(claim, outcome, now): Promise<boolean> {
       checkTime(now, 'now');
       checkOutcome(outcome);
+      if (outcome.result === 'hold') {
+        // No attempt was made: give back the one the claim counted, and keep
+        // the last failure as it was.
+        const held = await db
+          .update(eventDeliveries)
+          .set({
+            attemptCount: sql`${eventDeliveries.attemptCount} - 1`,
+            lockedUntil: null,
+            nextAttemptAt: outcome.nextAttemptAt,
+            updatedAt: now,
+          })
+          .where(claimed(claim));
+        return (held.rowCount ?? 0) > 0;
+      }
       const done = outcome.result !== 'retry';
       const result = await db
         .update(eventDeliveries)

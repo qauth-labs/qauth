@@ -46,8 +46,9 @@
  * boot the app twice under different flags.
  *
  * Each surface sets every switch that decides whether a route registers
- * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, and the passkey app lists
- * `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
+ * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, `SSF_TRANSMITTER_ENABLED`, and
+ * the passkey app lists `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`)
+ * explicitly, so a value in
  * the caller's shell cannot change which operations an export contains.
  * The maximal surface also turns on every built experimental item of the
  * registry (`@qauth-labs/shared-stability`), and the default surface none, or
@@ -216,6 +217,8 @@ function setEphemeralEnv(surface: FlagSurface): void {
       // No app identifiers, so neither association file is registered (#467).
       WEBAUTHN_APPLE_APP_IDS: '',
       WEBAUTHN_ANDROID_APPS: '',
+      // No SSF transmitter, so none of its routes is registered (#410).
+      SSF_TRANSMITTER_ENABLED: 'false',
     });
     return;
   }
@@ -251,6 +254,9 @@ function setEphemeralEnv(surface: FlagSurface): void {
         'FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C',
       ],
     }),
+    // The Shared Signals Framework transmitter (#410): its metadata and its
+    // stream management routes are registered only when it is on.
+    SSF_TRANSMITTER_ENABLED: 'true',
   });
 }
 

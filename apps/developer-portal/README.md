@@ -27,7 +27,7 @@ variables point at auth-server, never at the portal.
 Under Docker Compose these are set indirectly — `PORTAL_AUTH_SERVER_URL` maps to
 `AUTH_SERVER_URL` (defaulting to `http://auth-server:3000` on the Compose
 network) and `PORTAL_PUBLIC_AUTH_SERVER_URL` maps to `VITE_AUTH_SERVER_URL`. See
-the [Docker guide](../../docs/docker.md#environment-variables).
+the [Docker guide](https://docs.qauth.dev/operate/docker/#environment-variables).
 
 See `.env.example` at the repo root for sample values.
 

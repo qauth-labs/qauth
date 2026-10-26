@@ -5,8 +5,9 @@ Federation layer for the QAuth OAuth 2.1 authorization server.
 ## Overview
 
 QAuth is a **federated identity platform**: upstream identity sources
-(email/password, OIDC providers, and — later — Verifiable Credential wallets)
-plug in through the `CredentialProvider` interface, while downstream apps receive
+(email/password, Verifiable Credential wallets behind the default-off
+`WALLET_FEDERATION_ENABLED`, and external OIDC providers, which are not built
+yet) plug in through the `CredentialProvider` interface, while downstream apps receive
 only standard OAuth 2.1 access tokens and OIDC ID tokens.
 
 This library defines that abstraction (see

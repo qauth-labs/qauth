@@ -127,17 +127,40 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
+### The developer portal's token: the new audience is accepted first
+
+The developer portal's token moves to the developer API's audience,
+`urn:qauth:aud:developer:v1-rc.0`, in two releases, expand then contract
+(ADR-018 §5; [#509](https://github.com/qauth-labs/qauth/issues/509),
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)):
+
+- **v0.2 accepts it.** `/api/clients`, `/api/consents`, `/auth/logout`, the
+  Bearer path of `/oauth/authorize` and userinfo accept a system-client token
+  whose `aud` is the developer audience, beside today's token, whose `aud` is
+  the system client's id. Nothing mints the new token yet: `POST /auth/login`
+  still mints today's, and the system client's row is not changed.
+- **A later release mints it** ([#524](https://github.com/qauth-labs/qauth/issues/524)).
+  Every v0.2 node accepts the tokens such a node mints.
+
+The upgrade to v0.2 is safe to roll: a node of the previous release accepts
+every portal token a v0.2 node mints, because it is the same token. There is no
+migration and nothing to run. Upgrade every node to v0.2 before the release
+that mints the new token, so no node that refuses it is left.
+
 ### Refresh tokens pause while migration 0038 runs
 
 Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records
 when each refresh-token family started. It fills the new column for every row
-of `refresh_tokens` in one statement, inside the runner's transaction. The
-`ALTER TABLE` on `refresh_tokens` that runs first takes a lock on the table and
-holds it until that transaction commits. While
-the runner works, every token request that reads or writes a refresh token
-waits: a code exchange, a refresh, `POST /auth/login` and the purge job. Nothing
-fails; those requests finish once the runner does, unless your proxy or client
-gives up first.
+of `refresh_tokens` in one statement, inside the runner's transaction. Before
+anything else it locks `authorization_codes` and then `refresh_tokens`, the
+order a code redemption takes them in, and holds both until that transaction
+commits. While the runner works, every request that reads or writes a refresh
+token or an authorization code waits: a code exchange, a refresh,
+`POST /auth/login`, minting a code at `/oauth/authorize` or on the consent
+screen, and the purge job. Nothing fails; those requests finish once the runner
+does, unless your proxy or client gives up first. A database that ran 0038 from
+`main` before its locks moved to the start is unaffected: the change only
+reorders its locks, and the runner never runs a migration twice.
 
 The pause grows with the number of rows in `refresh_tokens`, rotated and
 revoked tokens included. Measured on a 12-vCPU AMD EPYC virtual machine with
@@ -150,7 +173,9 @@ family:
 | 100,000                  | 58 MB      | 5.7 s           | 4.7 s                 |
 | 1,000,000                | 588 MB     | 100 s           | 99.8 s                |
 
-Almost all of it is the `UPDATE` (5.5 s and 98.4 s). These were default
+Almost all of it is the `UPDATE` (5.5 s and 98.4 s). Taking the locks first
+adds no work, so these figures, measured before the locks moved, still hold;
+minting a code now waits as long as a token insert. These were default
 settings; more `shared_buffers` and a larger `max_wal_size` may shorten the
 pause, which we have not measured. To estimate your own, count first:
 
@@ -160,6 +185,32 @@ SELECT count(*) FROM refresh_tokens;
 
 With many rows, run the migration at a quiet hour, and keep the proxy's and
 the clients' timeouts above the expected pause.
+
+Migrations 0038 and 0041 both take their locks in a redemption's order: a
+redemption spends its code in `authorization_codes`, then stores the refresh
+token it buys. So a redemption in flight during the upgrade, on a node of either
+version, waits for the runner instead of deadlocking with it.
+
+### Migration 0041 reads `refresh_tokens` once more
+
+Migration 0041 ([#627](https://github.com/qauth-labs/qauth/issues/627)) links
+each refresh-token family to the authorization code that started it. It adds a
+column that starts empty, so it rewrites no row, but its foreign key and index
+each read the whole table while the runner holds the lock 0038 described. It
+first locks `authorization_codes` against writes, then `refresh_tokens`, in the
+order a redemption takes them, so it cannot deadlock with one. So minting a
+code at `/oauth/authorize` or on the consent screen, redeeming one at
+`/oauth/token` and a logout wait until the runner commits, on nodes of either
+version. On the same virtual machine, against a `postgres:18-alpine` container
+with 1,000,000 rows in `refresh_tokens` (531 MB), it took 1.3 s, and a token
+insert waited for it. Upgrading from a release before 0038 runs 0038 and 0041
+in the one transaction, so the two pauses add up.
+
+The same release records each access token it issues from a code or a refresh
+family in Redis, so that a replay can deny-list them. It sets those records'
+lifetimes with `EXPIRE` and its `NX` and `GT` options, which need **Redis 7.0
+or later**. The bundled Compose file runs Redis 7; check the version of a Redis
+you run yourself.
 
 ## Upgrading within 1.x
 

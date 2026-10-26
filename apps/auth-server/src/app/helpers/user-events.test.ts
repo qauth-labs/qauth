@@ -2,7 +2,9 @@ import {
   BadRequestError,
   ForbiddenError,
   InvalidClientError,
+  InvalidClientMetadataError,
   InvalidGrantError,
+  InvalidRedirectUriError,
   InvalidScopeError,
   JWTExpiredError,
   JWTInvalidError,
@@ -10,6 +12,7 @@ import {
   TemporarilyUnavailableError,
   TooManyRequestsError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import { parseEvent } from '@qauth-labs/shared-events';
 import type { FastifyRequest } from 'fastify';
@@ -271,6 +274,12 @@ describe('oauthErrorCode', () => {
     [new InvalidClientError(), 'invalid_client'],
     [new InvalidScopeError(), 'invalid_scope'],
     [new UnauthorizedClientError(), 'unauthorized_client'],
+    [new UnsupportedGrantTypeError(), 'unsupported_grant_type'],
+    [new InvalidClientMetadataError('scope is not a string'), 'invalid_client_metadata'],
+    [
+      new InvalidRedirectUriError('redirect_uri must not include a fragment'),
+      'invalid_redirect_uri',
+    ],
     [new BadRequestError('unsupported_grant_type'), 'unsupported_grant_type'],
     [new BadRequestError('Missing redirect_uri'), 'invalid_request'],
     [new JWTInvalidError('bad signature'), 'invalid_token'],

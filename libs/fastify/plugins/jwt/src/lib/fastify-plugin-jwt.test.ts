@@ -10,8 +10,12 @@ import {
   selectJwksKey,
   signAccessToken,
 } from '@qauth-labs/server-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
-import type { FastifyInstance } from 'fastify';
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  MissingAccessTokenError,
+} from '@qauth-labs/shared-errors';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { exportPKCS8, exportSPKI, importJWK, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
@@ -51,17 +55,14 @@ async function signExpiredToken(
  */
 async function registerTestErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof JWTExpiredError) {
+    if (
+      error instanceof JWTExpiredError ||
+      error instanceof JWTInvalidError ||
+      error instanceof MissingAccessTokenError
+    ) {
       return reply.code(401).send({
         error: error.message,
-        code: 'JWT_EXPIRED',
-        statusCode: 401,
-      });
-    }
-    if (error instanceof JWTInvalidError) {
-      return reply.code(401).send({
-        error: error.message,
-        code: 'JWT_INVALID',
+        code: error.code,
         statusCode: 401,
       });
     }
@@ -151,7 +152,7 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_EXPIRED',
+        code: 'ACCESS_TOKEN_EXPIRED',
         error: expect.any(String),
       });
     } finally {
@@ -187,7 +188,7 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_INVALID',
+        code: 'INVALID_ACCESS_TOKEN',
         error: expect.any(String),
       });
     } finally {
@@ -207,7 +208,8 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_INVALID',
+        // No credential is not a refused token (RFC 6750 §3.1).
+        code: 'UNAUTHORIZED',
         error: 'Missing or malformed Authorization header',
       });
     } finally {
@@ -323,7 +325,8 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_INVALID',
+        // No credential is not a refused token (RFC 6750 §3.1).
+        code: 'UNAUTHORIZED',
         error: 'Missing or malformed Authorization header',
       });
     } finally {
@@ -397,7 +400,10 @@ describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
         headers: { authorization: `DPoP ${await sign(true)}` },
       });
       expect(response.statusCode).toBe(401);
-      expect(response.json().error).toBe('Missing or malformed Authorization header');
+      expect(response.json()).toMatchObject({
+        code: 'UNAUTHORIZED',
+        error: 'Missing or malformed Authorization header',
+      });
       expect(app.jwtUtils.extractCredentialFromHeader('DPoP abc')).toBeNull();
     } finally {
       await app.close();
@@ -909,6 +915,163 @@ describe('RFC 9068 typ rollout switch (#283)', () => {
           sub: 'user-1',
         }
       );
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+/**
+ * `verifyRequestAccessToken` under a route's own policy (#509): the API family
+ * guards require `typ` whatever the rollout switch says, and take the issuer
+ * rule as a hook. Neither may skip a check `requireJwt` makes.
+ */
+describe('verifyRequestAccessToken policy (#509)', () => {
+  const ISSUER = 'https://auth.test.example.com';
+  const OTHER_ISSUER = 'https://other.test.example.com';
+
+  async function appWith(options: { revoked?: string } = {}) {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    const privateKeyPem = await exportPKCS8(privateKey);
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      privateKey: privateKeyPem,
+      publicKey: await exportSPKI(publicKey),
+      issuer: ISSUER,
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 86400,
+      isTokenRevoked: (jti) => jti !== undefined && jti === options.revoked,
+    });
+    return { app, signingKey: await importPrivateKey(privateKeyPem) };
+  }
+
+  /** A request carrying `token` as a Bearer credential. */
+  function requestWith(token: string): FastifyRequest {
+    return { headers: { authorization: `Bearer ${token}` } } as FastifyRequest;
+  }
+
+  /** A token signed by the server's own key, `typ` and `iss` as given. */
+  async function signToken(
+    signingKey: Awaited<ReturnType<typeof importPrivateKey>>,
+    claims: { typ?: string; iss?: string; jti?: string }
+  ): Promise<string> {
+    const jwt = new SignJWT({ sub: 'user-1', client_id: 'client-1', jti: claims.jti ?? 'jti-1' })
+      .setProtectedHeader({
+        alg: 'EdDSA',
+        ...(claims.typ === undefined ? {} : { typ: claims.typ }),
+      })
+      .setIssuedAt()
+      .setExpirationTime('900s');
+    if (claims.iss !== undefined) jwt.setIssuer(claims.iss);
+    return jwt.sign(signingKey);
+  }
+
+  it('requires typ: at+jwt when the policy asks, though the rollout switch is off', async () => {
+    const { app, signingKey } = await appWith();
+    try {
+      const typless = await signToken(signingKey, { iss: ISSUER });
+      await expect(app.verifyRequestAccessToken(requestWith(typless))).resolves.toMatchObject({
+        sub: 'user-1',
+      });
+      await expect(
+        app.verifyRequestAccessToken(requestWith(typless), { requireTyp: true })
+      ).rejects.toThrow(JWTInvalidError);
+
+      const typed = await signToken(signingKey, { iss: ISSUER, typ: 'at+jwt' });
+      await expect(
+        app.verifyRequestAccessToken(requestWith(typed), { requireTyp: true })
+      ).resolves.toMatchObject({ sub: 'user-1' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('pins the plugin issuer when the policy names no issuer rule', async () => {
+    const { app, signingKey } = await appWith();
+    try {
+      const foreign = await signToken(signingKey, { iss: OTHER_ISSUER, typ: 'at+jwt' });
+      await expect(app.verifyRequestAccessToken(requestWith(foreign))).rejects.toThrow(
+        JWTInvalidError
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('lets the issuer rule decide, with the verified iss and the request', async () => {
+    const { app, signingKey } = await appWith();
+    try {
+      const seen: [string, FastifyRequest][] = [];
+      const acceptOther = (issuer: string, request: FastifyRequest) => {
+        seen.push([issuer, request]);
+        return issuer === OTHER_ISSUER;
+      };
+      const request = requestWith(await signToken(signingKey, { iss: OTHER_ISSUER }));
+      await expect(
+        app.verifyRequestAccessToken(request, { acceptIssuer: acceptOther })
+      ).resolves.toMatchObject({ iss: OTHER_ISSUER });
+      expect(seen).toEqual([[OTHER_ISSUER, request]]);
+
+      const own = await signToken(signingKey, { iss: ISSUER });
+      await expect(
+        app.verifyRequestAccessToken(requestWith(own), { acceptIssuer: acceptOther })
+      ).rejects.toThrow('Access token issuer is not accepted here');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a token with no iss, or a bad signature, before the issuer rule runs', async () => {
+    const { app, signingKey } = await appWith();
+    const { privateKey: otherKey } = await generateEdDSAKeyPair(true);
+    try {
+      let calls = 0;
+      const acceptAny = async () => {
+        calls += 1;
+        return true;
+      };
+      const noIssuer = await signToken(signingKey, {});
+      await expect(
+        app.verifyRequestAccessToken(requestWith(noIssuer), { acceptIssuer: acceptAny })
+      ).rejects.toThrow(JWTInvalidError);
+
+      const forged = await signToken(otherKey, { iss: ISSUER });
+      await expect(
+        app.verifyRequestAccessToken(requestWith(forged), { acceptIssuer: acceptAny })
+      ).rejects.toThrow(JWTInvalidError);
+      expect(calls).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('still refuses a revoked token and a missing credential under a policy', async () => {
+    const { app, signingKey } = await appWith({ revoked: 'jti-revoked' });
+    const policy = { acceptIssuer: () => true, requireTyp: true };
+    try {
+      const revoked = await signToken(signingKey, {
+        iss: ISSUER,
+        typ: 'at+jwt',
+        jti: 'jti-revoked',
+      });
+      await expect(app.verifyRequestAccessToken(requestWith(revoked), policy)).rejects.toThrow(
+        'Token has been revoked'
+      );
+      // No credential is not a refused token (RFC 6750 §3.1), under a policy too.
+      await expect(
+        app.verifyRequestAccessToken({ headers: {} } as FastifyRequest, policy)
+      ).rejects.toBeInstanceOf(MissingAccessTokenError);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('leaves request.jwtPayload to the caller', async () => {
+    const { app, signingKey } = await appWith();
+    try {
+      const request = requestWith(await signToken(signingKey, { iss: ISSUER, typ: 'at+jwt' }));
+      await app.verifyRequestAccessToken(request);
+      expect(request.jwtPayload).toBeUndefined();
     } finally {
       await app.close();
     }

@@ -65,8 +65,8 @@ others mean the same for every type. A member that does not apply is absent, nev
 | `actor.id`              | string                                                              | no       | The actor's identifier: a user id, a client's `client_id`, or the operating-system user for `operator_cli`. Absent for `system`.                                                                                                                                      |
 | `actor.delegationChain` | array of string                                                     | no       | The RFC 8693 `act` chain of a delegated request, as `client_id` values: the acting agent first, then each earlier actor. Absent when nothing was delegated.                                                                                                           |
 | `subject`               | object                                                              | no       | What the event is about.                                                                                                                                                                                                                                              |
-| `subject.type`          | one of `user`, `client`, `api_key`, or a later value                | yes      | What kind of thing the subject is.                                                                                                                                                                                                                                    |
-| `subject.id`            | string                                                              | yes      | The subject's identifier: a user id, a client's `client_id` or an API key id. It stays valid after the subject is deleted.                                                                                                                                            |
+| `subject.type`          | one of `user`, `client`, `api_key`, `ssf_stream`, or a later value  | yes      | What kind of thing the subject is.                                                                                                                                                                                                                                    |
+| `subject.id`            | string                                                              | yes      | The subject's identifier: a user id, a client's `client_id`, an API key id or a Shared Signals Framework `stream_id`. It stays valid after the subject is deleted.                                                                                                    |
 | `client`                | object                                                              | no       | The OAuth client the request came through.                                                                                                                                                                                                                            |
 | `client.id`             | string                                                              | yes      | The client's `client_id`.                                                                                                                                                                                                                                             |
 | `request`               | object                                                              | no       | The HTTP request that caused the event.                                                                                                                                                                                                                               |
@@ -207,42 +207,43 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 
 ## Event types
 
-| Type                                                                                          | Category | Severity | Since  |
-| --------------------------------------------------------------------------------------------- | -------- | -------- | ------ |
-| [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                   | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)         | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                 | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                         | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                 | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                 | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                               | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                     | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.introspection_failed:v1-rc.0`](#tokenintrospection_failed-v1-rc0)     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:userinfo.served:v1-rc.0`](#userinfoserved-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:userinfo.request_failed:v1-rc.0`](#userinforequest_failed-v1-rc0)           | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:client.created:v1-rc.0`](#clientcreated-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.updated:v1-rc.0`](#clientupdated-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.deleted:v1-rc.0`](#clientdeleted-v1-rc0)                             | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)               | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                         | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)         | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                           | user     | info     | v0.2.0 |
-| [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                               | user     | info     | v0.2.0 |
-| [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                     | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0) | user     | info     | v0.2.0 |
-| [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)               | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                 | admin    | info     | v0.2.0 |
+| Type                                                                                                   | Category | Severity | Since  |
+| ------------------------------------------------------------------------------------------------------ | -------- | -------- | ------ |
+| [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                      | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                            | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                  | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                          | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                  | user     | info     | v0.2.0 |
+| [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                                  | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                                      | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                          | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                                        | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)                    | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                              | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.introspection_failed:v1-rc.0`](#tokenintrospection_failed-v1-rc0)              | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:userinfo.served:v1-rc.0`](#userinfoserved-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:userinfo.request_failed:v1-rc.0`](#userinforequest_failed-v1-rc0)                    | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:client.created:v1-rc.0`](#clientcreated-v1-rc0)                                      | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.updated:v1-rc.0`](#clientupdated-v1-rc0)                                      | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.deleted:v1-rc.0`](#clientdeleted-v1-rc0)                                      | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)                        | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                  | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                  | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                        | user     | info     | v0.2.0 |
+| [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                              | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)          | user     | info     | v0.2.0 |
+| [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                        | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0) | user     | info     | v0.2.0 |
+| [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                          | admin    | info     | v0.2.0 |
 
 ### user.signed_in v1-rc.0
 
@@ -459,11 +460,13 @@ The token endpoint refused a request: failed client authentication, an invalid o
 - Subject: `user`, when known
 - Schema: [token.request_failed.v1-rc.0.json](/schemas/events/token.request_failed.v1-rc.0.json)
 
-| Member      | Type   | Required | Meaning                                                                                         |
-| ----------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `grantType` | string | no       | The `grant_type` of the token request, such as `authorization_code`.                            |
-| `error`     | string | yes      | The OAuth or OpenID Connect `error` code the request was refused with, such as `invalid_grant`. |
-| `reason`    | string | no       | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release. |
+| Member                | Type    | Required | Meaning                                                                                                                                                   |
+| --------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grantType`           | string  | no       | The `grant_type` of the token request, such as `authorization_code`.                                                                                      |
+| `error`               | string  | yes      | The OAuth or OpenID Connect `error` code the request was refused with, such as `invalid_grant`.                                                           |
+| `reason`              | string  | no       | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                                           |
+| `refreshFamilyId`     | UUID    | no       | The refresh family a replayed grant (reason `code_replay` or `refresh_replay`) had issued, which the refusal revoked. Absent when the grant issued none.  |
+| `revokedRefreshCount` | integer | no       | How many refresh tokens of that family the refusal revoked; 0 when they were revoked already. Present for the reasons `code_replay` and `refresh_replay`. |
 
 ### token.revoked v1-rc.0
 
@@ -697,6 +700,19 @@ A form post was refused because its CSRF check failed: the token was missing or 
 | Member | Type                                                                                                 | Required | Meaning                                                        |
 | ------ | ---------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
 | `form` | one of `sign_in`, `wallet_sign_in`, `wallet_link`, `consent`, `consent_revocation`, or a later value | yes      | The form that was posted. The set may grow in a minor release. |
+
+### ssf.stream.verification_requested v1-rc.0
+
+A receiver asked for a verification event on one of its Shared Signals Framework streams (SSF 1.0 §8.1.4). QAuth sends the verification Security Event Token to that stream only.
+
+- Identifier: `urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `ssf_stream`, when known
+- Schema: [ssf.stream.verification_requested.v1-rc.0.json](/schemas/events/ssf.stream.verification_requested.v1-rc.0.json)
+
+| Member  | Type   | Required | Meaning                                                                                                 |
+| ------- | ------ | -------- | ------------------------------------------------------------------------------------------------------- |
+| `state` | string | no       | The opaque value the receiver sent, returned to it in the verification event. Absent when it sent none. |
 
 ### admin.change_applied v1-rc.0
 

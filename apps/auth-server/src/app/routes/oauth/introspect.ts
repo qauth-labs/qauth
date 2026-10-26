@@ -4,6 +4,7 @@ import {
   JWTInvalidError,
   TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
+import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -41,6 +42,8 @@ import {
  *      introspection is allowed. This is what lets a single resource server
  *      validate tokens minted by many distinct callers, without giving the
  *      resource server the ability to mint tokens for those audiences itself.
+ *      A QAuth API audience (`urn:qauth:aud:`, #509) never makes a client
+ *      authoritative: QAuth itself is the only resource server for those.
  *   Any other cross-client introspection returns `active: false`.
  */
 
@@ -57,21 +60,26 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * audience: every token-aud value appears in the client's configured audience
  * list. Undefined/null/empty on either side returns false. Accepts both string
  * and string[] shapes for `payload.aud` per RFC 7519.
+ *
+ * A QAuth API audience (`urn:qauth:aud:`) in the client's list is ignored
+ * (#509): a client an operator gave a family audience may hold a token for
+ * that family, but it is not a resource server for it, and introspecting
+ * another client's family token would read that token's claims.
  */
 function isClientAuthoritativeForAudience(
   payloadAud: string | string[] | undefined,
   clientAudience: string[] | null
 ): boolean {
+  const authoritative = (clientAudience ?? []).filter((audience) => !isReservedAudience(audience));
   if (
     !payloadAud ||
     (Array.isArray(payloadAud) && payloadAud.length === 0) ||
-    !clientAudience ||
-    clientAudience.length === 0
+    authoritative.length === 0
   ) {
     return false;
   }
   const tokenAuds = Array.isArray(payloadAud) ? payloadAud : [payloadAud];
-  return tokenAuds.every((a) => clientAudience.includes(a));
+  return tokenAuds.every((a) => authoritative.includes(a));
 }
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
@@ -82,6 +90,7 @@ export default async function (fastify: FastifyInstance) {
           'RFC 7662 token introspection. Send access token and client credentials in application/x-www-form-urlencoded body. Returns active and claims when token is valid for the client.',
         tags: ['OAuth', 'Introspection'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 503],
         body: introspectRequestSchema,
         response: {
           200: introspectResponseSchema,
@@ -89,6 +98,9 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body
+        // (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit: {
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,

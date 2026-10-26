@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-25'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -221,7 +221,21 @@ Notes:
   `-d client_secret=…` (`client_secret_post`). Public clients send neither.
 - The authorization code is single-use and short-lived; the same
   `redirect_uri` (exactly as sent to `/oauth/authorize`, loopback port
-  included) and a PKCE-matching `code_verifier` are mandatory.
+  included) and a PKCE-matching `code_verifier` are mandatory. A missing
+  `redirect_uri` is `invalid_grant`, like a different one, with the
+  `error_description` `redirect_uri is required for this code`: QAuth keeps
+  RFC 6749's rule for codes from a browser redirect, although OAuth 2.1 drops
+  the parameter. The code is not spent, so send the request again with it.
+- **Redeem a code once.** A second redemption is refused with `invalid_grant`
+  and, when it is otherwise a valid request (your client, the same
+  `redirect_uri`, the right `code_verifier`, DPoP key and `resource`), revokes
+  every token the first one led to (OAuth 2.1 §4.1.3): the refresh tokens of
+  its family, and every access token issued from the code or in that family,
+  which userinfo, introspection and token exchange then refuse. QAuth cannot
+  tell a retry from an attacker who copied the code. So do not retry a token
+  request that may have reached the server; send the user through
+  `/oauth/authorize` again instead. A code is recognised as spent until the
+  hourly purge deletes it, some time after its five-minute lifetime.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`refresh_token` is present only when the user has a stored consent** for
@@ -280,7 +294,8 @@ verifies the signature against the JWKS and checks `iss`, `exp`, `aud`, and scop
 
 Renew an access token without re-prompting the user. QAuth **rotates** the
 refresh token on every use and detects replay (RFC 9700 §2.2.2): reusing a
-already-rotated token revokes the entire token family. That holds for as long
+already-rotated token revokes the entire token family, and the access tokens
+issued in it. That holds for as long
 as the family has a live token: the hourly `purge-expired` job deletes a family
 only once its newest token has expired, rotated tokens included.
 
@@ -337,6 +352,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
   machine token is rejected per RFC 9700).
 - `resource` must fall within the client's configured `audience` (or defaults to
   the `client_id`); it sets the token `aud`.
+- An audience in the reserved `urn:qauth:aud:` namespace, such as the developer
+  API's `urn:qauth:aud:developer:v1-rc.0`, is issued only to a client whose
+  `audience` lists it, on every grant; any other client gets `invalid_target`.
+  See [API conventions](/reference/api-conventions/#issuing-a-family-audience).
 - Provision such clients with the seed script (it lets you set `scopes` and
   `audience` explicitly) — see the
   [MCP Quickstart, Option B](/integrate/mcp-quickstart/#option-b--verify-the-handshake-with-curl-no-browser).
@@ -617,17 +636,24 @@ Every way of ending a grant stops new tokens being minted from it:
 
 | Revocation                                                    | Ends                                                                                                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `/oauth/revoke` with a refresh token, or a replayed one       | That token's whole rotation family                                                                                                    |
+| `/oauth/revoke` with a refresh token                          | That token's whole rotation family                                                                                                    |
+| A replayed refresh token, or a replayed authorization code    | The whole rotation family, and every access token issued in it or from the code (denylisted by `jti` until it would have expired)     |
 | `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                                                   |
 | Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                                          |
 | `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
 
-**Access tokens already issued under the grant are not reached.** They are
-stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`, 900 s by
-default) wherever they are accepted: at resource servers that verify them
-locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
+**Otherwise, access tokens already issued under the grant are not reached.**
+They are stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`,
+900 s by default) wherever they are accepted: at resource servers that verify
+them locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
 `subject_token`. Only an access token revoked by value, at `/oauth/revoke` or
-as the token presented to `/auth/logout`, is refused before then. A short
+as the token presented to `/auth/logout`, or by a replay of the grant it came
+from, is refused before then, and only where the denylist is consulted:
+introspection, userinfo, token exchange and QAuth's own bearer-protected
+routes, not a resource server that verifies the JWT locally. A replay revokes
+the access tokens QAuth recorded when it issued them, in Redis; one issued
+while Redis could not record it, or a replay while Redis is unavailable, leaves
+the token valid until it expires, and the server logs it. A short
 access-token lifetime is what bounds this window. A delegated token from token
 exchange, and an ID-JAG minted from one, never outlive the subject token they
 were derived from.
@@ -720,7 +746,7 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 | `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
-| `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+| `scope`                      | Space-separated; **capped to the realm allowlist**. No `qauth:` scope. |
 
 Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
 `[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
@@ -740,6 +766,26 @@ boundary an operator owns. Zod strips these keys, so a registration request
 carrying them is silently ignored rather than honoured; do not rely on that
 silence as the enforcement mechanism.
 
+A scope the realm allowlist does not list is dropped, and the client is
+registered with the rest (RFC 7591 §2 lets the server narrow the request). The
+`qauth:` scope namespace, in any case, is QAuth's own: the admin API's scopes
+(`qauth:admin:read`, `qauth:admin:write`, `qauth:admin:security`) live in it,
+and only an operator provisions their clients. A realm's allowlist cannot hold
+such a scope, so registration always drops one; a client that echoes a
+resource's `scopes_supported` still registers. A CIMD document's `scope` is
+never stored, so one there is ignored. Other servers' scopes that look
+administrative, such as `admin:org`, are ordinary scopes. The three admin
+scopes and what they allow are on the
+[admin permissions](/reference/admin-permissions/) page.
+
+QAuth's API audiences, the `urn:qauth:aud:` namespace in any case, follow the
+same rule: self-registration never obtains one. Registration ignores one in an
+`audience` or `resource` member and registers the client with the rest, as it
+ignores every other value there, and a CIMD document that names one resolves
+with that value ignored. Only a client an operator set up receives such an
+audience (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
+
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).
 
@@ -751,20 +797,21 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 
 > **Where they arrive.** In a JSON error body these codes come from
 > `apps/auth-server/src/app/plugins/error-handler.ts`, which is registered ahead
-> of both route sweeps so that every route resolves it. `error` carries the bare
-> RFC 6749 §5.2 token and `error_description` carries the human-readable detail,
-> where there is any to give.
+> of both route sweeps so that every route resolves it. On the OAuth protocol
+> endpoints the body holds only `error`, the bare registered code, and
+> `error_description`, the human-readable detail, where there is any to give.
+> Every other route answers an RFC 9457 problem document instead; see the
+> [error model](/integrate/api-reference/#error-model).
 >
 > `/oauth/authorize` is different by design. Once `client_id` and `redirect_uri`
 > validate it returns `invalid_scope`, `access_denied`, `login_required` and
 > `consent_required` as redirect query parameters built in the route itself.
-> The errors RFC 6749 §4.1.2.1 forbids redirecting — an unknown client and a
-> `redirect_uri` that is not registered or not permitted for the environment —
-> are thrown as `BadRequestError` and reach the caller in the JSON body
-> instead. So is `unauthorized_client` (a disabled client, or one not registered
-> for the `authorization_code` grant or the `code` response type): it is
-> checked before any user interaction, and is never redirected. See the
-> [error model](/integrate/api-reference/#error-model).
+> The errors RFC 6749 §4.1.2.1 forbids redirecting — a `client_id` that names
+> no client, and a `redirect_uri` that is not registered or not permitted for
+> the environment — reach the caller in the JSON body instead, as
+> `invalid_request`. So is `unauthorized_client` (a disabled client, or one not
+> registered for the `authorization_code` grant or the `code` response type):
+> it is checked before any user interaction, and is never redirected.
 >
 > **Clients no operator provisioned.** RFC 9700 §4.11.2 lets an
 > authorization server redirect automatically only to a redirect URI it trusts.
@@ -780,16 +827,22 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > of a 302. An owner who changes the redirect URIs of an operator-provisioned
 > client through `PATCH /api/clients/{id}` removes that trust.
 
-| Code                      | Meaning                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `invalid_request`         | Missing/malformed parameter.                                                                                 |
-| `invalid_client`          | Client authentication failed or client unknown.                                                              |
-| `invalid_grant`           | Bad/expired code, bad PKCE verifier, or invalid/replayed refresh token.                                      |
-| `unauthorized_client`     | Client not allowed to use this grant.                                                                        |
-| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                   |
-| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                      |
-| `unsupported_grant_type`  | Unknown `grant_type`.                                                                                        |
-| `temporarily_unavailable` | HTTP `503` with `Retry-After`: the server is too busy to check the client secret now; retry after the delay. |
+| Code                      | Meaning                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `invalid_request`         | Missing/malformed parameter.                                                                                                                                                                                             |
+| `invalid_client`          | Client authentication failed or client unknown.                                                                                                                                                                          |
+| `invalid_grant`           | Bad, expired or already-redeemed code, wrong or missing `redirect_uri`, bad PKCE verifier, or invalid/replayed refresh token.                                                                                            |
+| `unauthorized_client`     | Client not allowed to use this grant.                                                                                                                                                                                    |
+| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                                                                                                               |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience, or a QAuth API audience (`urn:qauth:aud:`) the client's `audience` does not list.                                                                                |
+| `unsupported_grant_type`  | A `grant_type` the token endpoint does not serve; a missing one is `invalid_request`.                                                                                                                                    |
+| `invalid_client_metadata` | Dynamic registration: a metadata value is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                    |
+| `invalid_redirect_uri`    | Dynamic registration: a redirect URI is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                      |
+| `access_denied`           | Dynamic registration with a developer token: the developer already has as many clients as the realm allows (HTTP `403`). RFC 7591 defines no error for this refusal; QAuth answers RFC 6749's `access_denied`.           |
+| `invalid_token`           | Userinfo, and dynamic registration with a developer token that is not valid: the access token is missing, not valid, or names no active user (RFC 6750 §3.1). A request without one gets a challenge with no error code. |
+| `invalid_dpop_proof`      | With DPoP on, the DPoP proof is missing or not valid (RFC 9449).                                                                                                                                                         |
+| `temporarily_unavailable` | HTTP `503` with `Retry-After` when the server is too busy to check the client secret now, or `429` when the rate limit refuses the request; retry after the delay.                                                       |
+| `server_error`            | HTTP `5xx`: the server failed. The answer says nothing more; its `X-Request-Id` finds the log line.                                                                                                                      |
 
 ---
 

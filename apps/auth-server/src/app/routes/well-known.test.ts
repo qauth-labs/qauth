@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance, type RouteOptions } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -14,9 +14,11 @@ vi.mock('../../config/env', () => ({
   env: mockEnv,
 }));
 
+import rateLimitPlugin from '@fastify/rate-limit';
 import { EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
 
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
+import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 import { ID_JAG_GRANT_PROFILE, JWT_BEARER_GRANT_TYPE } from '../schemas/oauth';
 import wellKnownRoutes from './well-known';
 
@@ -309,6 +311,35 @@ describe('GET /.well-known/jwks.json', () => {
       await app.close();
     }
   });
+
+  it('holds no SET key, even for a realm that runs the SSF transmitter (d-1026-09)', async () => {
+    const app = Fastify({ logger: false });
+    const jwks = { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'x', alg: 'EdDSA', kid: 'token' }] };
+    const eventKey = { kid: 'event', publicJwk: { kty: 'OKP', crv: 'Ed25519', kid: 'event' } };
+    const getVerificationKeys = vi.fn(async () => [eventKey]);
+    app.decorate('jwtUtils', {
+      getIssuer: () => ISSUER,
+      getJwks: async () => jwks,
+      getIdTokenSigningAlgValuesSupported: () => ['EdDSA'],
+    } as unknown as never);
+    app.decorate('ssf', {} as never);
+    app.decorate('signer', { getVerificationKeys } as unknown as never);
+    app.decorateRequest('realm', null);
+    app.addHook('onRequest', async (request) => {
+      request.realm = { id: 'realm-id', issuer: ISSUER, ssfTransmitterEnabled: true } as never;
+    });
+    await app.register(wellKnownRoutes);
+    await app.ready();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
+      expect(res.statusCode).toBe(200);
+      // The SET keys are published apart, at the transmitter's own JWKS.
+      expect(res.json()).toEqual(jwks);
+      expect(getVerificationKeys).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 /**
@@ -359,6 +390,91 @@ describe('experimental items in the served discovery documents', () => {
       );
       expect(rest).toEqual(defaults[url]);
       for (const member of members) expect(served[url]).toHaveProperty(member);
+    }
+  });
+});
+
+/**
+ * Every discovery route states the global ceiling as its own limit (CodeQL
+ * `js/missing-rate-limiting` on `/.well-known/oauth-authorization-server`):
+ * `RATE_LIMIT_MAX` requests per `RATE_LIMIT_WINDOW` seconds, keyed by the
+ * request's realm and client address like every other limit of the app.
+ */
+describe('rate limits of the discovery routes', () => {
+  const ROUTES = [
+    '/.well-known/jwks.json',
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/openid-configuration',
+    '/.well-known/ssf-configuration',
+  ];
+
+  /** The discovery routes with the SSF transmitter on, so all four register. */
+  async function buildDiscoveryApp(register: (app: FastifyInstance) => Promise<void>) {
+    const app = Fastify({ logger: false });
+    app.decorate('jwtUtils', {
+      getIssuer: () => ISSUER,
+      getJwks: async () => ({ keys: [] }),
+      getIdTokenSigningAlgValuesSupported: () => ['EdDSA'],
+    } as unknown as never);
+    app.decorate('ssf', {} as never);
+    supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: ISSUER }));
+    await register(app);
+    await app.register(wellKnownRoutes);
+    await app.ready();
+    return app;
+  }
+
+  it('states the global ceiling on every discovery route, keyed by realm and address', async () => {
+    mockEnv['RATE_LIMIT_MAX'] = 100;
+    mockEnv['RATE_LIMIT_WINDOW'] = 3600;
+    const limits = new Map<string, unknown>();
+    const app = await buildDiscoveryApp(async (instance) => {
+      instance.addHook('onRoute', (route: RouteOptions) => {
+        if (route.method === 'GET') limits.set(route.url, route.config?.rateLimit);
+      });
+    });
+    try {
+      expect([...limits.keys()].sort()).toEqual(ROUTES);
+      for (const url of ROUTES) {
+        expect(limits.get(url), url).toEqual({
+          max: 100,
+          timeWindow: 3_600_000,
+          keyGenerator: realmRateLimitKey,
+        });
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('answers 429 once an address passes the ceiling, each route on its own budget', async () => {
+    mockEnv['RATE_LIMIT_MAX'] = 2;
+    mockEnv['RATE_LIMIT_WINDOW'] = 60;
+    // As `plugins/rate-limit.ts` registers it, with a global ceiling the
+    // route's own limit must replace.
+    const app = await buildDiscoveryApp(async (instance) => {
+      await instance.register(rateLimitPlugin, {
+        max: 1000,
+        timeWindow: 60_000,
+        keyGenerator: realmRateLimitKey,
+      });
+    });
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const res = await app.inject({
+          method: 'GET',
+          url: '/.well-known/oauth-authorization-server',
+        });
+        statuses.push(res.statusCode);
+      }
+      expect(statuses).toEqual([200, 200, 429]);
+
+      const other = await app.inject({ method: 'GET', url: '/.well-known/openid-configuration' });
+      expect(other.statusCode).toBe(200);
+      expect(other.headers['x-ratelimit-limit']).toBe('2');
+    } finally {
+      await app.close();
     }
   });
 });

@@ -1,10 +1,15 @@
+import { buildTransmitterMetadata } from '@qauth-labs/fastify-plugin-ssf';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
+import { JWKS_CACHE_CONTROL } from '../constants';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
+import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 import { realmIssuer } from '../helpers/realm-url';
 import { requestRealm } from '../helpers/request-realm';
+import { SsfNotFoundError } from '../helpers/ssf-errors';
+import { realmRunsTransmitter } from '../helpers/ssf-receiver';
 
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
@@ -14,27 +19,42 @@ import { requestRealm } from '../helpers/request-realm';
 const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
 
 /**
- * The key set is cached for at most five minutes (ADR-019 Decision 9), so a
- * key that is unpublished leaves relying parties' caches within that window.
- */
-const JWKS_CACHE_CONTROL = 'public, max-age=300';
-
-/**
  * Well-known discovery endpoints:
  *
  * - `GET /.well-known/oauth-authorization-server` — RFC 8414 AS metadata.
  * - `GET /.well-known/openid-configuration`       — OIDC Discovery 1.0.
- * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS.
+ * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS: the token
+ *   keys only. The SSF transmitter's SET keys are published apart, at
+ *   `/ssf/jwks.json` (d-1026-09).
  *
- * All three are unauthenticated and aggressively cacheable. They MUST NOT
+ * - `GET /.well-known/ssf-configuration`          — SSF 1.0 §7 transmitter
+ *   metadata, registered only while SSF_TRANSMITTER_ENABLED is on (#410).
+ *
+ * All are unauthenticated and aggressively cacheable. They MUST NOT
  * be rate-limited as aggressively as auth endpoints: clients hit them
- * during bootstrap and cache responses locally.
+ * during bootstrap and cache responses locally. Each takes the global
+ * ceiling, `RATE_LIMIT_MAX` requests per `RATE_LIMIT_WINDOW` seconds, stated
+ * on the route (see `rateLimit` below).
  */
 export default async function (fastify: FastifyInstance) {
   // ADR-018 §5 (#477): the experimental items that are on, read once from the
   // configuration, which does not change while the server runs. Each adds the
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
+
+  // The global ceiling (`plugins/rate-limit.ts`), stated on each route of this
+  // file rather than inherited: the same numbers and the same key, the
+  // request's realm and client address, as every other limit of the app. A
+  // route with a `config.rateLimit` of its own is counted in a bucket of its
+  // own, so these documents and the routes on the global ceiling do not use
+  // up each other's budget. Stated here, the limit is also visible where the
+  // route is, to a reader and to CodeQL's `js/missing-rate-limiting`, which
+  // cannot follow the global registration into this plugin.
+  const rateLimit = {
+    max: env.RATE_LIMIT_MAX,
+    timeWindow: env.RATE_LIMIT_WINDOW * 1000,
+    keyGenerator: realmRateLimitKey,
+  };
 
   const buildInput = (request: FastifyRequest) => ({
     // ADR-019 Decision 1 (#490): the issuer of the realm the request's host
@@ -67,7 +87,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
-      config: { surface: 'meta' },
+      config: { surface: 'meta', rateLimit },
     },
     async (request, reply) => {
       reply
@@ -86,7 +106,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
-      config: { surface: 'meta' },
+      config: { surface: 'meta', rateLimit },
     },
     async (request, reply) => {
       reply
@@ -105,7 +125,7 @@ export default async function (fastify: FastifyInstance) {
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
-      config: { surface: 'meta' },
+      config: { surface: 'meta', rateLimit },
     },
     async (_request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.
@@ -123,4 +143,35 @@ export default async function (fastify: FastifyInstance) {
       return reply.send(jwks);
     }
   );
+
+  // Shared Signals Framework transmitter metadata (SSF 1.0 §7, #410). No
+  // route at all while SSF_TRANSMITTER_ENABLED is off; 404 for a realm whose
+  // own switch is off. Every URL comes from the realm's issuer, which is the
+  // `iss` of the SETs the realm's signer issues (§7.1).
+  if (fastify.ssf) {
+    fastify.get(
+      '/.well-known/ssf-configuration',
+      {
+        schema: {
+          description:
+            'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the transmitter’s own JWKS (`/ssf/jwks.json`), which verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
+          tags: ['Discovery', 'Shared Signals'],
+          'x-qauth-stability': 'experimental',
+          // SSF 1.0 §7 defines no error body: the 404 is the `not_found`
+          // problem document (#513).
+          'x-qauth-errors': [404],
+        },
+        config: { surface: 'meta', rateLimit },
+      },
+      async (request, reply) => {
+        if (!realmRunsTransmitter(request)) throw new SsfNotFoundError();
+        reply
+          .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
+          .header('Content-Type', 'application/json; charset=utf-8');
+        // The realm's issuer from its row (ADR-019 Decision 1, #490), as the
+        // other discovery documents build their URLs.
+        return reply.send(buildTransmitterMetadata(realmIssuer(requestRealm(request))));
+      }
+    );
+  }
 }

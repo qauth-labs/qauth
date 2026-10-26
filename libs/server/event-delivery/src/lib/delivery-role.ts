@@ -19,6 +19,7 @@ import type {
   DeliveryRoute,
   DeliverySigner,
   DeliveryStore,
+  EventSubjectRef,
 } from './types';
 
 /**
@@ -45,6 +46,9 @@ import type {
  * 3. hands each claimed event to its route, with a time limit
  *    (`attemptTimeoutMs`), and records the outcome: delivered, retried
  *    later on the backoff schedule, or failed for good after `maxAttempts`.
+ *    A delivery the route holds, such as one to a paused SSF stream, is no
+ *    attempt: it is not counted and comes due again after
+ *    {@link DELIVERY_HOLD_INTERVAL_MS}, however long the hold lasts.
  *
  * A finished attempt claims the next delivery at once; the cycle only paces
  * the fan-out and picks up retries that came due.
@@ -104,6 +108,13 @@ export interface DeliverySettings {
   /** How long {@link DeliveryRole.stop} waits for attempts in flight, in milliseconds. */
   readonly shutdownTimeoutMs: number;
 }
+
+/**
+ * How long a delivery the route holds waits before the role asks again, in
+ * milliseconds: a destination that stops holding, such as an SSF stream that
+ * is enabled again, gets its events within this time.
+ */
+export const DELIVERY_HOLD_INTERVAL_MS = 30_000;
 
 /** The settings a role runs with when it is given none. */
 export const DEFAULT_DELIVERY_SETTINGS: DeliverySettings = Object.freeze({
@@ -406,9 +417,18 @@ class Runner implements DeliveryRole {
   /** A route's destination with its kind, or `undefined` (logged once) when it is malformed. */
   private checkDestination(kind: string, value: unknown): DeliveryDestination | undefined {
     const candidate = (value ?? {}) as Partial<DeliveryDestination>;
-    const { id, realmId, types, categories } = candidate;
+    const { id, realmId, types, categories, subjects } = candidate;
     const listOf = (list: unknown): boolean =>
       Array.isArray(list) && list.every((item) => typeof item === 'string');
+    const subjectsOf = (list: unknown): boolean =>
+      Array.isArray(list) &&
+      list.every(
+        (item: unknown) =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as EventSubjectRef).type === 'string' &&
+          typeof (item as EventSubjectRef).id === 'string'
+      );
     if (
       typeof id !== 'string' ||
       id.length === 0 ||
@@ -416,7 +436,8 @@ class Runner implements DeliveryRole {
       typeof realmId !== 'string' ||
       !UUID_PATTERN.test(realmId) ||
       (types !== undefined && !listOf(types)) ||
-      (categories !== undefined && !listOf(categories))
+      (categories !== undefined && !listOf(categories)) ||
+      (subjects !== undefined && !subjectsOf(subjects))
     ) {
       const key = destinationKey(kind, String(id));
       if (!this.reported.has(key)) {
@@ -434,6 +455,9 @@ class Runner implements DeliveryRole {
       realmId,
       ...(types === undefined ? {} : { types: [...types] }),
       ...(categories === undefined ? {} : { categories: [...categories] }),
+      ...(subjects === undefined
+        ? {}
+        : { subjects: subjects.map((subject) => ({ type: subject.type, id: subject.id })) }),
     };
   }
 
@@ -601,8 +625,10 @@ class Runner implements DeliveryRole {
       errorClass: unknown;
       statusCode: unknown;
       retry: unknown;
+      hold: unknown;
     }> | null;
     if (value?.ok === true) return { ok: true, ...statusCodeOf(value.statusCode) };
+    if (value?.ok === false && value.hold === true) return { ok: false, hold: true };
     if (value?.ok === false) {
       const known =
         typeof value.errorClass === 'string' && ERROR_CLASS_PATTERN.test(value.errorClass);
@@ -623,10 +649,13 @@ class Runner implements DeliveryRole {
   private async record(claim: ClaimedDelivery, outcome: DeliveryOutcome): Promise<void> {
     const now = this.clock.now();
     let record: DeliveryAttemptRecord;
-    let result: DeliveryAttemptResult;
+    // A held delivery made no attempt, so none is counted.
+    let result: DeliveryAttemptResult | undefined;
     if (outcome.ok) {
       record = { result: 'delivered', ...statusCodeOf(outcome.statusCode) };
       result = 'delivered';
+    } else if ('hold' in outcome) {
+      record = { result: 'hold', nextAttemptAt: now + DELIVERY_HOLD_INTERVAL_MS };
     } else if (outcome.retry !== false && claim.attempt < this.settings.maxAttempts) {
       record = {
         result: 'retry',
@@ -653,7 +682,7 @@ class Runner implements DeliveryRole {
         'event delivery failed for good'
       );
     }
-    this.metrics?.attempt(claim.destinationKind, result);
+    if (result !== undefined) this.metrics?.attempt(claim.destinationKind, result);
     try {
       const held = await this.store.record(claim, record, now);
       if (!held) {
