@@ -1,10 +1,10 @@
-import { normalizeEmail, passwordSchema } from '@qauth-labs/shared-validation';
+import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
+import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { createBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
@@ -27,6 +27,7 @@ import {
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
 import { resolveWalletLoginCapability } from '../../helpers/wallet-login-request';
+import { type LoginForm, loginFormSchema } from '../../schemas/auth';
 
 /**
  * Server-rendered login page (issue #150).
@@ -194,19 +195,6 @@ function loginPage(opts: {
       </html>`
   );
 }
-
-const loginFormSchema = z.object({
-  // Bounded like the JSON login's (RFC 5321 caps an address at 254): the
-  // refusal page renders it back into the form.
-  email: z.string().min(1).max(EMAIL_MAX_LENGTH),
-  password: passwordSchema.min(1),
-  return_to: z.string().optional(),
-  // Signed double-submit CSRF token (login CSRF defence). Compared against the
-  // value carried in the __Host- login-CSRF cookie.
-  csrf_token: z.string().min(1),
-});
-
-type LoginForm = z.infer<typeof loginFormSchema>;
 
 /**
  * The one refusal text for a sign-in that did not succeed: unknown address,

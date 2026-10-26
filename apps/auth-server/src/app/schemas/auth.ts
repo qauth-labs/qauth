@@ -1,6 +1,7 @@
 import { passwordSchema } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
+import { EMAIL_MAX_LENGTH } from '../constants';
 import { boundedEmail } from './common';
 
 /**
@@ -107,6 +108,30 @@ export const loginSchema = z.object({
  * Login request type
  */
 export type LoginRequest = z.infer<typeof loginSchema>;
+
+/**
+ * The sign-in form the login page posts to `POST /ui/login` (issue #150): the
+ * address, the password, where to go after the sign-in, and the signed
+ * double-submit CSRF token.
+ *
+ * Exported here, beside the other request schemas, so the domain graph's
+ * extractor (#563) reads it with them.
+ */
+export const loginFormSchema = z.object({
+  // Bounded like the JSON login's (RFC 5321 caps an address at 254): the
+  // refusal page renders it back into the form.
+  email: z.string().min(1).max(EMAIL_MAX_LENGTH),
+  password: passwordSchema.min(1),
+  return_to: z.string().optional(),
+  // Signed double-submit CSRF token (login CSRF defence). Compared against the
+  // value carried in the __Host- login-CSRF cookie.
+  csrf_token: z.string().min(1),
+});
+
+/**
+ * The sign-in form as the route handler reads it.
+ */
+export type LoginForm = z.infer<typeof loginFormSchema>;
 
 /**
  * Login response schema
