@@ -979,12 +979,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing slash, so a deployment that set `EMAIL_BASE_URL` to another base sees
   its links move, and the boot logs a warning saying so. With the shipped
   defaults the two are equal and the link is unchanged.
-  - Opening the link does not verify an address yet: the auth server serves
-    `/auth/verify` only as `POST`, so the `GET` a mail client sends gets `404`,
-    as it did before with the shipped defaults. Only an operator's own page or
-    proxy that answered `GET /auth/verify` on the `EMAIL_BASE_URL` host made
-    the old link work, and such a deployment loses it. The `GET` landing page
-    on the auth server comes in a separate change.
+  - The link now lands on the auth server's own `GET /auth/verify` page (see
+    Fixed below). Only an operator's own page or proxy that answered
+    `GET /auth/verify` on the `EMAIL_BASE_URL` host made the old link work, and
+    such a deployment now gets QAuth's page instead.
   - `EMAIL_BASE_URL` is optional and no longer read. It is still accepted, and
     the boot warns when it is set to another base than `JWT_ISSUER`.
   - The verification token of such a link is censored in every log line, the
@@ -1343,6 +1341,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#827]: https://github.com/qauth-labs/qauth/issues/827
+
+### Fixed
+
+- **The verification email's link works again.** Since 42c4d1e4 (2026-09-25)
+  the auth server verified an account only on `POST /auth/verify`, with the
+  token and the account's password in a JSON body, but the mail still links to
+  `/auth/verify?token=…`, which a mail client opens with GET.
+  That GET was a `404`, and with `REQUIRE_VERIFIED_ACCOUNT` on by default a new
+  password account could not verify from the mail and so could not sign in.
+  `GET /auth/verify` is now a server-rendered page: it holds the token in a
+  hidden field and asks for the password, and its form posts to the new
+  `POST /ui/verify`, which verifies through the same code as
+  `POST /auth/verify` and answers each outcome with the same status. Opening
+  the link changes nothing and reads nothing from the database, so a link
+  scanner or a prefetch still cannot verify an account. The page sends
+  `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the form has
+  the login pages' CSRF check and the JSON route's rate limit.
+  `POST /auth/verify` is unchanged. This page is interim: the email-code step
+  ([#638]) and the hosted account verification UI ([#644]) replace link
+  verification.
+
+[#638]: https://github.com/qauth-labs/qauth/issues/638
+[#644]: https://github.com/qauth-labs/qauth/issues/644
 
 ## [0.1.3] - 2026-10-21
 
