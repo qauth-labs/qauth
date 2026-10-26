@@ -120,7 +120,7 @@ export default async function (fastify: FastifyInstance) {
       // `POST /api/clients`, so it counts against the same ceiling, checked
       // before the argon2id hash. An anonymous one belongs to no developer.
       if (developerId) {
-        await assertDeveloperClientLimit(fastify, developerId);
+        await assertDeveloperClientLimit(fastify, realm.id, developerId);
       }
 
       // Generate client_id (UUIDv4 — opaque, guessable-resistant, URL-safe

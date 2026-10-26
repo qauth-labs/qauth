@@ -35,14 +35,18 @@ export interface ConsentView {
 }
 
 /**
- * The active consents belonging to `userId`, in the response shape both
- * surfaces publish.
+ * The active consents belonging to `userId` in the request's realm, in the
+ * response shape both surfaces publish.
  */
 export async function listConsentsForUser(
   fastify: FastifyInstance,
+  realmId: string,
   userId: string
 ): Promise<ConsentView[]> {
-  const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(userId);
+  const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(
+    realmId,
+    userId
+  );
   return rows.map((row) => ({
     id: row.id,
     clientId: row.clientClientId,
@@ -58,10 +62,11 @@ export async function listConsentsForUser(
  * refresh token the user holds for that client is revoked in the same
  * transaction, and the `consent.revoked` event commits with them.
  *
- * Throws `NotFoundError` when the row does not exist OR belongs to another
- * user — deliberately the same outcome, so the API never reveals that someone
- * else's consent id exists. Mirrors how `/api/clients` reports a client owned
- * by another developer as 404 rather than 403.
+ * Throws `NotFoundError` when the row does not exist, belongs to another
+ * user OR to another realm (#489) — deliberately the same outcome, so the API
+ * never reveals that someone else's consent id exists. Mirrors how
+ * `/api/clients` reports a client owned by another developer as 404 rather
+ * than 403.
  *
  * A row that vanishes between the ownership check and the delete (a second tab
  * revoking the same grant) is treated as idempotent success: the caller's
@@ -70,12 +75,16 @@ export async function listConsentsForUser(
 export async function revokeConsentForUser(
   fastify: FastifyInstance,
   request: FastifyRequest,
+  realmId: string,
   userId: string,
   consentId: string
 ): Promise<void> {
   // Joined to the client in the same query: the event names the client by its
   // public `client_id`.
-  const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(userId);
+  const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(
+    realmId,
+    userId
+  );
   const owned = rows.find((row) => row.id === consentId);
   if (!owned) {
     throw new NotFoundError('OAuthConsent', consentId);
@@ -87,7 +96,7 @@ export async function revokeConsentForUser(
   // consent gone (so a retry 404s) with its refresh tokens still live.
   await fastify.db.transaction(async (tx) => {
     try {
-      await fastify.repositories.oauthConsents.revoke(consentId, tx);
+      await fastify.repositories.oauthConsents.revoke(realmId, consentId, tx);
     } catch (err) {
       if (err instanceof NotFoundError) {
         // Raced with another tab — idempotent success. The refresh tokens are

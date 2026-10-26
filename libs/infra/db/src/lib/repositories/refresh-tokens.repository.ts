@@ -1,9 +1,10 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, gt, gte, lt, notExists, type SQL, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, gte, lt, notExists, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import type { NewRefreshToken, RefreshToken, RefreshTokensRepository } from '../../types';
 import { DbClient } from '../db';
+import { oauthClients } from '../schema/core';
 import { refreshTokens } from '../schema/tokens';
 
 /**
@@ -42,6 +43,20 @@ async function lockUserTokens(
 }
 
 /**
+ * Read refresh-token rows of one realm's clients (#489). `refresh_tokens` has
+ * no realm column: the client the token was issued to pins the realm, so the
+ * read joins it and filters on its realm. A token of another realm is then no
+ * row at all, from the same single query an unknown hash gets.
+ */
+function selectRealmTokens(invoker: DbClient, realmId: string, where: SQL | undefined) {
+  return invoker
+    .select(getTableColumns(refreshTokens))
+    .from(refreshTokens)
+    .innerJoin(oauthClients, eq(refreshTokens.oauthClientId, oauthClients.id))
+    .where(and(eq(oauthClients.realmId, realmId), where));
+}
+
+/**
  * Factory function that creates a refresh tokens repository
  *
  * @param defaultDb - Database client to use for queries
@@ -66,25 +81,29 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      * Find a token by its token hash
      * Only returns tokens that are not revoked and not expired
      *
+     * @param realmId - Realm the request was resolved to; a token issued to a
+     * client of another realm is not found
      * @param tokenHash - SHA-256 hash of the token
      * @param tx - Optional transaction client
      * @returns Token if found and valid, undefined otherwise
      */
-    async findByTokenHash(tokenHash: string, tx?: DbClient): Promise<RefreshToken | undefined> {
+    async findByTokenHash(
+      realmId: string,
+      tokenHash: string,
+      tx?: DbClient
+    ): Promise<RefreshToken | undefined> {
       const invoker = tx ?? defaultDb;
       const now = Date.now();
 
-      const [result] = await invoker
-        .select()
-        .from(refreshTokens)
-        .where(
-          and(
-            eq(refreshTokens.tokenHash, tokenHash),
-            eq(refreshTokens.revoked, false),
-            gt(refreshTokens.expiresAt, now)
-          )
+      const [result] = await selectRealmTokens(
+        invoker,
+        realmId,
+        and(
+          eq(refreshTokens.tokenHash, tokenHash),
+          eq(refreshTokens.revoked, false),
+          gt(refreshTokens.expiresAt, now)
         )
-        .limit(1);
+      ).limit(1);
 
       return result;
     },
@@ -94,18 +113,21 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      *
      * Used to detect replay of a revoked refresh token (OAuth 2.1 §4.3.1).
      * Callers MUST verify liveness/expiry before trusting the returned row.
+     * Realm-scoped as {@link findByTokenHash} is, so a token of another realm
+     * never reaches the replay logic that revokes its family.
      */
     async findByTokenHashIncludingRevoked(
+      realmId: string,
       tokenHash: string,
       tx?: DbClient
     ): Promise<RefreshToken | undefined> {
       const invoker = tx ?? defaultDb;
 
-      const [result] = await invoker
-        .select()
-        .from(refreshTokens)
-        .where(eq(refreshTokens.tokenHash, tokenHash))
-        .limit(1);
+      const [result] = await selectRealmTokens(
+        invoker,
+        realmId,
+        eq(refreshTokens.tokenHash, tokenHash)
+      ).limit(1);
 
       return result;
     },

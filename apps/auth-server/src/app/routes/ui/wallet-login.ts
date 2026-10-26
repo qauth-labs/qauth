@@ -665,7 +665,8 @@ async function advanceWalletLoginFlow(
   // The `enabled` gate, exactly as the password login applies it: a valid
   // credential for a disabled account is still a refused sign-in, and it must
   // look like every other refusal.
-  const user = await fastify.repositories.users.findById(resolution.userId);
+  // In the flow's realm, where the presentation was resolved to the account.
+  const user = await fastify.repositories.users.findById(flow.realmId, resolution.userId);
   if (!user || !user.enabled) {
     fastify.log.warn(
       { userId: resolution.userId },
@@ -698,7 +699,7 @@ async function advanceWalletLoginFlow(
         : null,
   });
 
-  await fastify.repositories.users.updateLastLogin(user.id);
+  await fastify.repositories.users.updateLastLogin(flow.realmId, user.id);
   await emitUserEvent(
     request,
     'urn:qauth:event:user.signed_in:v1-rc.0',

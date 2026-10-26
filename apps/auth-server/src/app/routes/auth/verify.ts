@@ -17,6 +17,7 @@ import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
@@ -91,9 +92,16 @@ export default async function (fastify: FastifyInstance) {
       // 1. Hash token before database lookup
       const tokenHash = fastify.emailVerificationTokenUtils.hashToken(token);
 
+      // The realm of the host the request named (#487). The token, its
+      // credential and its user are looked up in it only (#489): a token
+      // mailed for another realm's account is an unknown token here.
+      const realm = requestRealm(request);
+
       // 2. Find token in database (returns undefined if not found, expired, or used)
-      const verificationToken =
-        await fastify.repositories.emailVerificationTokens.findByTokenHash(tokenHash);
+      const verificationToken = await fastify.repositories.emailVerificationTokens.findByTokenHash(
+        realm.id,
+        tokenHash
+      );
 
       if (!verificationToken) {
         // Generic error to prevent token enumeration (security: don't reveal why it failed)
@@ -105,6 +113,7 @@ export default async function (fastify: FastifyInstance) {
       // unconditional; a genuinely missing credential fails closed with the
       // generic token error (no enumeration signal).
       const credential = await fastify.repositories.userCredentials.findById(
+        realm.id,
         verificationToken.credentialId
       );
       if (!credential) {
@@ -114,7 +123,7 @@ export default async function (fastify: FastifyInstance) {
       // 3b. A disabled account must not change its verified state or have its
       // password checked: same generic token error, and the token is left
       // unconsumed so it still works if the operator enables the account again.
-      const user = await fastify.repositories.users.findById(credential.userId);
+      const user = await fastify.repositories.users.findById(realm.id, credential.userId);
       if (!user || !user.enabled) {
         throw new InvalidTokenError('Invalid or expired token');
       }
@@ -146,7 +155,7 @@ export default async function (fastify: FastifyInstance) {
       // the realm the login routes count it in. The attempt is counted before
       // the password is compared; a wrong one stays counted.
       const emailIdentifier = `email:${hashEmail(credential.externalSub)}`;
-      const lockout = await registerLoginAttempt(fastify.redis, credential.realmId, [
+      const lockout = await registerLoginAttempt(fastify.redis, realm.id, [
         emailIdentifier,
         `ip:${clientAddressKey(request)}`,
       ]);
@@ -165,7 +174,7 @@ export default async function (fastify: FastifyInstance) {
         throw new InvalidCredentialsError('Incorrect password for this account');
       }
       // The password is proved: settle the attempt as a successful login does.
-      await recordSuccessfulLogin(fastify.redis, credential.realmId, lockout, [emailIdentifier]);
+      await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
 
       // 5.-6. Completion write set (one transaction): consume the token and
       // flip credential_data.email_verified + the attribute's verified flag —

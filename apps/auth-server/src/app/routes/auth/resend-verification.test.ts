@@ -380,7 +380,7 @@ describe('POST /auth/resend-verification', () => {
 
     expect(set).toHaveBeenCalledTimes(2);
     expect(set).toHaveBeenCalledWith(
-      REDIS_KEYS.LAST_EMAIL_SENT('user@example.com'),
+      REDIS_KEYS.LAST_EMAIL_SENT(REALM.id, 'user@example.com'),
       expect.any(String),
       'EX',
       60,

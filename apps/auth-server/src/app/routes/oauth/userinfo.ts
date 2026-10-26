@@ -8,6 +8,8 @@ import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmTokenIssuer } from '../../helpers/realm-url';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
@@ -69,6 +71,12 @@ function hasUserSubject(payload: { sub: string; clientId?: string }): boolean {
 }
 
 /**
+ * What a caller is told about a token whose `iss` is not the request realm's:
+ * the message the JWT verifier gives a token of an unexpected issuer.
+ */
+const FOREIGN_ISSUER_DESCRIPTION = 'Invalid JWT token: unexpected "iss" claim value';
+
+/**
  * Shared userinfo handler for GET and POST (OIDC Core §5.3.1: the userinfo
  * endpoint MUST support both). By the time this runs, the access token has
  * already been verified by a preHandler and its claims are on
@@ -90,6 +98,19 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       throw withEventReason(new JWTInvalidError('Missing JWT payload'), 'missing_token');
     }
 
+    const realm = requestRealm(request);
+
+    // The issuer first: `requireJwt` pins the deployment's issuer, and a
+    // token is valid only at the realm whose issuer it names (#489). A token
+    // of another realm is refused before any user lookup, in the words the
+    // verifier uses for any other issuer, so introspection, revocation, logout
+    // and this endpoint answer it alike (401, RFC 6750 §3.1 `invalid_token`).
+    // The `iss` is readable in the token itself, so naming the mismatch tells
+    // its holder nothing new.
+    if (payload.iss !== realmTokenIssuer(fastify, realm)) {
+      throw withEventReason(new JWTInvalidError(FOREIGN_ISSUER_DESCRIPTION), 'issuer_mismatch');
+    }
+
     // Audience before anything else: a token for another resource server is
     // refused (401, RFC 6750 §3.1 `invalid_token`) without a user lookup, so
     // its holder learns nothing about the subject.
@@ -107,11 +128,12 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
     }
 
-    const user = await fastify.repositories.users.findById(payload.sub);
+    const user = await fastify.repositories.users.findById(realm.id, payload.sub);
 
-    // A subject that names no user — deleted since the token was minted — is
-    // the same refusal: the token is not valid for this endpoint any more.
-    // RFC 6750 §3.1 defines no "not found" for a protected resource.
+    // A subject that names no user — deleted since the token was minted, or a
+    // user of another realm than the request's (#489) — is the same refusal:
+    // the token is not valid for this endpoint. RFC 6750 §3.1 defines no "not
+    // found" for a protected resource.
     if (!user) {
       throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
     }
@@ -148,7 +170,7 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // §5.3.2 permits omission of unavailable claims. The resolver query
     // is skipped entirely when the scope was not granted; the same helper
     // applies the same rule at every token mint site.
-    Object.assign(responseBody, await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes));
+    Object.assign(responseBody, await resolveEmailClaimsForScopes(fastify, user, grantedScopes));
 
     // OIDC Core §5.1 `name` — the end-user display name, derived from the
     // stored first/last name parts. Released only under the `profile` scope;

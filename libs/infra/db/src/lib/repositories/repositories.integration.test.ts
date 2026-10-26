@@ -138,7 +138,7 @@ describe('repository integration (real Postgres)', () => {
       await expect(codes.markUsed(code.id)).rejects.toThrow();
 
       // And findByCode (used=false filter) no longer returns it.
-      const after = await codes.findByCode('auth-code-123');
+      const after = await codes.findByCode(realm.id, 'auth-code-123');
       expect(after).toBeUndefined();
     });
 
@@ -184,7 +184,7 @@ describe('repository integration (real Postgres)', () => {
         expiresAt: Date.now() - 1_000,
       });
 
-      expect(await codes.findByCode('expired-code')).toBeUndefined();
+      expect(await codes.findByCode(realm.id, 'expired-code')).toBeUndefined();
     });
 
     it('invalidateForUser also ends a code that has just expired', async () => {
@@ -235,9 +235,9 @@ describe('repository integration (real Postgres)', () => {
 
       expect(await codes.invalidateForUserAndClient(user.id, clientA.id)).toBe(1);
 
-      expect(await codes.findByCode('pair-code')).toBeUndefined();
-      expect(await codes.findByCode('other-client-code')).toBeDefined();
-      expect(await codes.findByCode('other-user-code')).toBeDefined();
+      expect(await codes.findByCode(realm.id, 'pair-code')).toBeUndefined();
+      expect(await codes.findByCode(realm.id, 'other-client-code')).toBeDefined();
+      expect(await codes.findByCode(realm.id, 'other-user-code')).toBeDefined();
     });
 
     it.each(['logout', 'consent revocation'] as const)(
@@ -356,7 +356,7 @@ describe('repository integration (real Postgres)', () => {
 
       // And a full round-trip through a fresh SELECT — byte for byte, so the
       // client's `state` comes back exactly as it was sent (RFC 6749 §4.1.2).
-      const found = await codes.findByCode('long-state-code');
+      const found = await codes.findByCode(realm.id, 'long-state-code');
       expect(found?.state).toBe(LONG_STATE);
       expect(found?.nonce).toBe(LONG_NONCE);
     });
@@ -502,7 +502,9 @@ describe('repository integration (real Postgres)', () => {
       expect(await left(live)).toEqual(['c'.repeat(64), 'd'.repeat(64)]);
       expect(await left(revoked)).toEqual(['e'.repeat(64), 'f'.repeat(64)]);
       // The kept ancestor is what replay detection reads.
-      expect((await tokens.findByTokenHashIncludingRevoked('c'.repeat(64)))?.revoked).toBe(true);
+      expect(
+        (await tokens.findByTokenHashIncludingRevoked(realm.id, 'c'.repeat(64)))?.revoked
+      ).toBe(true);
     });
 
     it('revokeFamily preserves the earliest revokedReason (only touches active rows)', async () => {
@@ -546,9 +548,9 @@ describe('repository integration (real Postgres)', () => {
       await tokens.revoke(token.id, 'rotated');
 
       // Liveness-filtered lookup hides it (replay must not pass the happy path)...
-      expect(await tokens.findByTokenHash('c'.repeat(64))).toBeUndefined();
+      expect(await tokens.findByTokenHash(realm.id, 'c'.repeat(64))).toBeUndefined();
       // ...but the replay-detection lookup still finds the revoked row.
-      const replayRow = await tokens.findByTokenHashIncludingRevoked('c'.repeat(64));
+      const replayRow = await tokens.findByTokenHashIncludingRevoked(realm.id, 'c'.repeat(64));
       expect(replayRow?.id).toBe(token.id);
       expect(replayRow?.revoked).toBe(true);
     });
@@ -747,11 +749,11 @@ describe('repository integration (real Postgres)', () => {
       const consents = createOAuthConsentsRepository(db().database.db);
 
       const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
-      const revoked = await consents.revoke(grant.id);
+      const revoked = await consents.revoke(realm.id, grant.id);
       expect(revoked.revokedAt).toBeTypeOf('number');
 
       // No longer "active"...
-      expect(await consents.findActive(user.id, client.id)).toBeUndefined();
+      expect(await consents.findActive(realm.id, user.id, client.id)).toBeUndefined();
       // ...but the audit row physically remains in the table.
       const all = await db()
         .database.db.select()
@@ -774,7 +776,7 @@ describe('repository integration (real Postgres)', () => {
       expect(merged.scopes).toEqual(['read:foo', 'write:foo']);
 
       // Still a single active row (upsert, not insert).
-      const active = await consents.listActiveForUser(user.id);
+      const active = await consents.listActiveForUser(realm.id, user.id);
       expect(active).toHaveLength(1);
     });
 
@@ -815,7 +817,7 @@ describe('repository integration (real Postgres)', () => {
       const consents = createOAuthConsentsRepository(db().database.db);
 
       const first = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
-      await consents.revoke(first.id);
+      await consents.revoke(realm.id, first.id);
 
       // The partial unique index is `WHERE revoked_at IS NULL`, so granting
       // again does not collide with the revoked row.
@@ -829,7 +831,7 @@ describe('repository integration (real Postgres)', () => {
         .from(oauthConsents)
         .where(eq(oauthConsents.userId, user.id));
       expect(allRows).toHaveLength(2);
-      expect(await consents.listActiveForUser(user.id)).toHaveLength(1);
+      expect(await consents.listActiveForUser(realm.id, user.id)).toHaveLength(1);
     });
 
     // /oauth/authorize re-reads the consent with `findActiveForShare` in the
@@ -844,11 +846,11 @@ describe('repository integration (real Postgres)', () => {
 
       let locked: Promise<unknown> | undefined;
       await db().database.db.transaction(async (tx) => {
-        await consents.revoke(grant.id, tx);
+        await consents.revoke(realm.id, grant.id, tx);
         // The plain read does not wait, and still sees the consent.
-        expect(await consents.findActive(user.id, client.id)).toBeDefined();
+        expect(await consents.findActive(realm.id, user.id, client.id)).toBeDefined();
         locked = db().database.db.transaction((readTx) =>
-          consents.findActiveForShare(user.id, client.id, readTx)
+          consents.findActiveForShare(realm.id, user.id, client.id, readTx)
         );
         await new Promise((resolve) => setTimeout(resolve, 200));
       });
@@ -867,8 +869,8 @@ describe('repository integration (real Postgres)', () => {
       let revoked = false;
       let revocation: Promise<unknown> | undefined;
       await db().database.db.transaction(async (tx) => {
-        expect(await consents.findActiveForShare(user.id, client.id, tx)).toBeDefined();
-        revocation = consents.revoke(grant.id).then(() => {
+        expect(await consents.findActiveForShare(realm.id, user.id, client.id, tx)).toBeDefined();
+        revocation = consents.revoke(realm.id, grant.id).then(() => {
           revoked = true;
         });
         await new Promise((resolve) => setTimeout(resolve, 200));
@@ -893,7 +895,7 @@ describe('repository integration (real Postgres)', () => {
       // The code committed first; a sweep in the revocation's transaction
       // (consent revocation invalidating unredeemed codes) would see it.
       expect(revoked).toBe(true);
-      expect(await consents.findActive(user.id, client.id)).toBeUndefined();
+      expect(await consents.findActive(realm.id, user.id, client.id)).toBeUndefined();
     });
   });
 
@@ -1000,12 +1002,14 @@ describe('repository integration (real Postgres)', () => {
       await owned('other-1', other.id);
       await owned('anonymous-1', null);
 
-      expect(await clients.countByDeveloper(owner.id)).toBe(2);
-      expect(await clients.countByDeveloper(owner.id)).toBe(
-        (await clients.listByDeveloper(owner.id)).length
+      expect(await clients.countByDeveloper(realm.id, owner.id)).toBe(2);
+      expect(await clients.countByDeveloper(realm.id, owner.id)).toBe(
+        (await clients.listByDeveloper(realm.id, owner.id)).length
       );
-      expect(await clients.countByDeveloper(other.id)).toBe(1);
-      expect(await clients.countByDeveloper('0190a000-0000-7000-8000-0000000000ff')).toBe(0);
+      expect(await clients.countByDeveloper(realm.id, other.id)).toBe(1);
+      expect(await clients.countByDeveloper(realm.id, '0190a000-0000-7000-8000-0000000000ff')).toBe(
+        0
+      );
     });
   });
 
@@ -1137,7 +1141,7 @@ describe('repository integration (real Postgres)', () => {
       const created = await clients.upsertCimdClient(cimdInsert(realm.id, 'Before', true));
       expect(created.enabled).toBe(true);
 
-      await clients.update(created.id, { enabled: false });
+      await clients.update(realm.id, created.id, { enabled: false });
       const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', true));
 
       expect(refreshed.name).toBe('After');
@@ -1166,7 +1170,7 @@ describe('repository integration (real Postgres)', () => {
       });
       expect(created.provisionedByOperator).toBe(false);
 
-      await clients.update(created.id, { provisionedByOperator: true });
+      await clients.update(realm.id, created.id, { provisionedByOperator: true });
       const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', true));
       expect(refreshed.provisionedByOperator).toBe(false);
     });
@@ -1403,7 +1407,7 @@ describe('repository integration (real Postgres)', () => {
 
       // Lookup by the public prefix resolves the row; the stored value is the
       // hash, never any plaintext.
-      const found = await apiKeys.findByPrefix('qauth_0123456789abcdef');
+      const found = await apiKeys.findByPrefix(realm.id, 'qauth_0123456789abcdef');
       expect(found?.id).toBe(created.id);
       expect(found?.keyHash).toBe('argon2id$opaque-hash');
 
@@ -1421,14 +1425,14 @@ describe('repository integration (real Postgres)', () => {
       ).rejects.toBeInstanceOf(UniqueConstraintError);
 
       // listByClient returns the live key.
-      const listed = await apiKeys.listByClient(client.id);
+      const listed = await apiKeys.listByClient(realm.id, client.id);
       expect(listed.map((k) => k.id)).toContain(created.id);
 
       // Revoke stamps revokedAt; a second revoke is idempotent (revokedAt unchanged).
-      const revoked = await apiKeys.revoke(created.id);
+      const revoked = await apiKeys.revoke(realm.id, created.id);
       expect(revoked?.revokedAt).toBeTypeOf('number');
       const firstRevokedAt = revoked?.revokedAt;
-      const again = await apiKeys.revoke(created.id);
+      const again = await apiKeys.revoke(realm.id, created.id);
       expect(again?.revokedAt).toBe(firstRevokedAt);
     });
 
@@ -1451,14 +1455,14 @@ describe('repository integration (real Postgres)', () => {
       });
 
       // Deleting the developer nulls developerId but keeps the key row.
-      await users.delete(user.id);
-      const afterUserDelete = await apiKeys.findByPrefix('qauth_aaaaaaaaaaaaaaaa');
+      await users.delete(realm.id, user.id);
+      const afterUserDelete = await apiKeys.findByPrefix(realm.id, 'qauth_aaaaaaaaaaaaaaaa');
       expect(afterUserDelete).toBeDefined();
       expect(afterUserDelete?.developerId).toBeNull();
 
       // Deleting the client cascades the key away.
-      await clients.delete(client.id);
-      const afterClientDelete = await apiKeys.findByPrefix('qauth_aaaaaaaaaaaaaaaa');
+      await clients.delete(realm.id, client.id);
+      const afterClientDelete = await apiKeys.findByPrefix(realm.id, 'qauth_aaaaaaaaaaaaaaaa');
       expect(afterClientDelete).toBeUndefined();
     });
   });

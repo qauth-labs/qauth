@@ -43,12 +43,17 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
       }
     },
 
-    async findById(id: string, tx?: DbClient): Promise<UserCredential | undefined> {
+    /** A credential of the realm by id; one of another realm is not found (#489). */
+    async findById(
+      realmId: string,
+      id: string,
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
       const invoker = tx ?? defaultDb;
       const [credential] = await invoker
         .select()
         .from(userCredentials)
-        .where(eq(userCredentials.id, id))
+        .where(and(eq(userCredentials.realmId, realmId), eq(userCredentials.id, id)))
         .limit(1);
       return credential;
     },

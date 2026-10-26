@@ -44,11 +44,12 @@ const uuidSubjectSchema = z.uuid();
  *   `client_id`, audience and issuer read the same in every realm (the system
  *   client is named by `SYSTEM_CLIENT_ID` in each), so the realm is its
  *   subject's: `sub` must name a user of this realm. A management token from
- *   realm A is refused at realm B.
+ *   realm A is refused at realm B, as a token naming no user is (#489).
  *
- * `requireActiveUser: false` skips the enabled check, for a caller that only
- * ends access (`/auth/logout`): a disabled user may still sign out, in their
- * own realm only. A subject that names no user is then left to the caller.
+ * `requireActiveUser: false` skips the user lookup, for a caller that only
+ * ends access (`/auth/logout`): a disabled user may still sign out. The caller
+ * then looks the subject up in its realm itself, and a subject that names no
+ * user of that realm, an unknown one or another realm's, is its refusal.
  *
  * Throws `JWTInvalidError` (401) on any mismatch, as RFC 6750 §3.1 prescribes
  * for a token that is not valid for the resource.
@@ -80,26 +81,17 @@ export async function assertManagementToken(
   }
 
   if (options.requireActiveUser === false) {
-    if (claims.sub && uuidSubjectSchema.safeParse(claims.sub).success) {
-      const user = await fastify.repositories.users.findById(claims.sub);
-      if (user) assertUserOfRealm(user, realm);
-    }
     return;
   }
   if (!claims.sub || !uuidSubjectSchema.safeParse(claims.sub).success) {
     throw inactiveSubjectError();
   }
-  const user = await fastify.repositories.users.findById(claims.sub);
+  // Looked up in the request's realm (#489): a user of another realm is no
+  // user here, refused exactly as an unknown or disabled subject is, so the
+  // answer does not tell that the subject exists in another realm.
+  const user = await fastify.repositories.users.findById(realm.id, claims.sub);
   if (!user || !user.enabled) {
     throw inactiveSubjectError();
-  }
-  assertUserOfRealm(user, realm);
-}
-
-/** Refuse a token whose subject is a user of another realm than the request's. */
-function assertUserOfRealm(user: { realmId: string }, realm: Pick<RealmRow, 'id'>): void {
-  if (user.realmId !== realm.id) {
-    throw new JWTInvalidError('Access token was not issued in this realm');
   }
 }
 

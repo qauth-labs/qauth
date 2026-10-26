@@ -395,40 +395,29 @@ export async function resolveRealmTrustRegistry(
  * operator removing its issuer from `OID4VP_TRUSTED_ISSUERS`, and outlived
  * wallet federation being switched off altogether.
  *
- * Local only: the user row, the realm row and the configured allowlist. No
+ * Local only: the account's realm row and the configured allowlist. No
  * status-list fetch happens here. Revocation is re-checked at the account's
  * next wallet sign-in instead (`helpers/wallet-account.ts`).
  *
  * Fail-closed and never throws: wallet federation off, a row with no readable
- * provenance (written before it was recorded), an unreadable account and an
+ * provenance (written before it was recorded), an unreadable realm and an
  * issuer the realm no longer trusts all answer `false`.
  *
  * @param fastify - server instance, for its repositories and logger.
- * @param userId - the account the attribute belongs to.
+ * @param account - the account the attribute belongs to, as the caller read it
+ *   in the request's realm (#489): its realm decides the trust registry.
  * @param provenance - the row's raw `provenance` value.
  */
 export async function isWalletAttributeIssuerStillTrusted(
   fastify: FastifyInstance,
-  userId: string,
+  account: { readonly realmId: string },
   provenance: unknown
 ): Promise<boolean> {
   if (!env.WALLET_FEDERATION_ENABLED) return false;
   if (readWalletAttributeProvenance(provenance) === undefined) return false;
 
-  let realmId: string | undefined;
-  try {
-    realmId = (await fastify.repositories.users.findById(userId))?.realmId;
-  } catch (error) {
-    fastify.log.error(
-      { err: error, userId },
-      'failed to read the account behind a wallet attribute; withholding it'
-    );
-    return false;
-  }
-  if (realmId === undefined) return false;
-
   return isWalletAttributeIssuerTrusted(
     provenance,
-    await resolveRealmTrustRegistry(fastify, realmId)
+    await resolveRealmTrustRegistry(fastify, account.realmId)
   );
 }

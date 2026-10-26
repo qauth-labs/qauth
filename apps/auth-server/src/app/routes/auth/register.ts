@@ -50,10 +50,17 @@ class AddressAlreadyRegistered extends Error {
  * registration would answer 429 for a registered address and 200 for a free
  * one.
  *
+ * Counted per realm (#489): the same address in another realm is another
+ * account, with its own allowance.
+ *
  * @returns whether a mail may go to the address now
  */
-async function claimAddressMailSlot(fastify: FastifyInstance, address: string): Promise<boolean> {
-  const countKey = REDIS_KEYS.RESEND_RATE_LIMIT(address);
+async function claimAddressMailSlot(
+  fastify: FastifyInstance,
+  realmId: string,
+  address: string
+): Promise<boolean> {
+  const countKey = REDIS_KEYS.RESEND_RATE_LIMIT(realmId, address);
   const count = await fastify.redis.incr(countKey);
   if (count === 1) {
     await fastify.redis.expire(countKey, env.RESEND_VERIFICATION_EMAIL_WINDOW);
@@ -62,7 +69,7 @@ async function claimAddressMailSlot(fastify: FastifyInstance, address: string): 
     return false;
   }
   const claimed = await fastify.redis.set(
-    REDIS_KEYS.LAST_EMAIL_SENT(address),
+    REDIS_KEYS.LAST_EMAIL_SENT(realmId, address),
     Date.now().toString(),
     'EX',
     env.RESEND_VERIFICATION_MIN_INTERVAL,
@@ -110,7 +117,7 @@ async function mailExistingAccount(
     );
     return;
   }
-  const user = await fastify.repositories.users.findById(credential.userId);
+  const user = await fastify.repositories.users.findById(params.realmId, credential.userId);
   if (!user?.enabled) {
     return;
   }
@@ -235,7 +242,7 @@ export default async function (fastify: FastifyInstance) {
       // Calculate expiration time
       const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;
 
-      const mayMailExistingAccount = await claimAddressMailSlot(fastify, normalizedEmail);
+      const mayMailExistingAccount = await claimAddressMailSlot(fastify, realm.id, normalizedEmail);
 
       // One transaction for the whole identity write set (#228, ADR-002): a
       // users row without its credential row would be unloginable AND block
