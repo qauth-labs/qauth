@@ -218,7 +218,7 @@ From this release the token endpoint issues a `qauth:admin:*` scope only to an
 account that holds an admin grant reaching that scope's class, through a client
 that lists the admin API's audience, and the admin audience only to an account
 that holds an admin grant ([#510](https://github.com/qauth-labs/qauth/issues/510)).
-A `client_credentials` token gets neither. Migration 0042 only adds the empty
+A `client_credentials` token gets neither, and neither do the ID-JAG grants. Migration 0042 only adds the empty
 `admin_grants` and `admin_roles` tables. No admin route ships in this release,
 so nothing that works today stops working; before you use the admin API, give
 each account that will use it a grant. During a rolling upgrade a node of the

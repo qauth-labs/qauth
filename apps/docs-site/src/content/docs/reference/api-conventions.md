@@ -113,8 +113,8 @@ Admin grants and custom admin roles live in `admin_grants` and `admin_roles`. A 
 built-in role or a custom role, and one realm or every realm. Only an account of the operator realm
 holds a grant on every realm or on another realm than its own; the repository and the database
 trigger `admin_grants_realm_rule` both refuse anything else. A custom role is defined in one realm
-and granted only to that realm's accounts or for that realm. A grant is revoked, never changed, and
-a role is disabled, never deleted while a grant names it.
+and granted only to that realm's accounts or for that realm. A grant is revoked, never changed (the
+trigger `admin_grants_revoke_only`), and a role is disabled, never deleted while a grant names it.
 
 Until each realm has its own issuer, the realm `JWT_ISSUER` names is the only realm whose tokens an
 admin route accepts: `RealmIssuerDirectory` maps an issuer to its realm, and `IssuerKeyResolver`
@@ -133,16 +133,20 @@ signing key.
   `resource` names it, in the request or bound to the code, so the consent the user gave covers
   it: a client's default audience leaves it out. A `client_credentials` token keeps the client's
   default.
-- The admin audience is also issued only to an account that holds a live admin grant, on every
-  grant; otherwise the request is refused with `invalid_target`. A `client_credentials` token
-  names no account, so it never gets it. In a token exchange the agent's own client must list the
-  audience, whatever the subject token carried.
+- The admin audience is also issued only to an account whose live admin grants give a
+  permission; otherwise the request is refused with `invalid_target`. In a token exchange the
+  agent's own client must list the audience, whatever the subject token carried.
 - An admin scope (`qauth:admin:read`, `qauth:admin:write`, `qauth:admin:security`) is issued only
   when the client lists the admin audience and the account holds a live admin grant whose role has
   a permission of that scope's class. Otherwise the token is issued without it, and the response's
-  `scope` says so (RFC 6749 §3.3). No other scope of the reserved `qauth:` namespace is ever
-  issued. Grants are read at every issuance, so the next refresh after a revocation no longer
-  carries what the grant gave.
+  `scope` says so (RFC 6749 §3.3); when nothing is left of the scopes asked for, the request is
+  refused with `invalid_scope`. No other scope of the reserved `qauth:` namespace is ever issued.
+  Grants are read at every issuance, so the next refresh after a revocation no longer carries what
+  the grant gave.
+- Neither the admin audience nor an admin scope ever reaches a `client_credentials` token, which
+  names no account, an ID-JAG that QAuth mints for another authorization server, or a token of the
+  jwt-bearer grant, whose authority comes from another identity provider. The token `/auth/login`
+  mints leaves the admin audience out, whatever the system client lists.
 - The legacy Bearer path of `/oauth/authorize` never issues one: a request on it that names a
   family audience, or a client whose default audience holds one, is refused with `access_denied`.
 - A family audience never makes a client authoritative at introspection: QAuth is the only

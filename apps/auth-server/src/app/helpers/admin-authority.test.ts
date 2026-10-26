@@ -302,6 +302,14 @@ describe('resolveAdminAuthority', () => {
       }
     });
 
+    it('reads a realm id in either case', async () => {
+      const fastify = server([grant(OPERATOR_ADMIN, REALM_A, 'viewer')]);
+      await expect(ask(fastify, { targetRealmId: REALM_A.toUpperCase() })).resolves.toMatchObject({
+        allowed: true,
+        targetRealm: { id: REALM_A },
+      });
+    });
+
     it('collects the permissions of every matching grant', async () => {
       const fastify = server([
         grant(OPERATOR_ADMIN, null, 'viewer'),

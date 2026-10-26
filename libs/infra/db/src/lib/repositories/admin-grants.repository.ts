@@ -235,9 +235,11 @@ export function createAdminGrantsRepository(
 
     async revoke(grantId, tx) {
       if (!isAdminRecordId(grantId)) return undefined;
-      // `greatest` keeps both times at or after the creation time, which the
-      // epoch-ms default rounds to the second.
-      const now = sql`greatest(${EPOCH_MS_NOW}, ${adminGrants.createdAt})`;
+      // `greatest` keeps both times at or after the last change, which is at
+      // or after the creation time; the epoch-ms default rounds to the second,
+      // and the trigger `admin_grants_revoke_only` refuses a time that moves
+      // back.
+      const now = sql`greatest(${EPOCH_MS_NOW}, ${adminGrants.lastSecurityChangeAt})`;
       const [row] = await (tx ?? defaultDb)
         .update(adminGrants)
         .set({ revokedAt: now, lastSecurityChangeAt: now })

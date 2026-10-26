@@ -271,10 +271,11 @@ export async function resolveAdminAuthority(
     return { allowed: false, refusal: 'account_inactive' };
   }
 
-  const target = request.targetRealmId;
-  if (!uuidSchema.safeParse(target).success) {
+  if (!uuidSchema.safeParse(request.targetRealmId).success) {
     return { allowed: false, refusal: 'realm_not_found' };
   }
+  // Ids are compared as strings below; Postgres prints a uuid in lower case.
+  const target = request.targetRealmId.toLowerCase();
   const operator = issuerRealm.isOperator;
   // Rule 4: a realm-local admin acts on its own realm, never on another.
   if (!operator && target !== issuerRealm.id) {

@@ -5025,9 +5025,9 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     expect(result).not.toHaveProperty('issued_token_type');
   });
 
-  // #510: an enterprise's assertion does not give an admin scope the user
-  // holds no live grant for, nor the admin audience.
-  it('withholds the admin scopes the user has no grant for (#510)', async () => {
+  // #510: an admin token comes only from a sign-in at QAuth itself, never
+  // from another identity provider's assertion, whatever grants the user holds.
+  it('never issues an admin scope, whatever the grants (#510)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
     const { fastify, ctx } = setupConsumeStub({
@@ -5045,13 +5045,14 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
         await signIdJag(idpKey, { scope: 'chat.read qauth:admin:read qauth:admin:write' })
       )
     )) as Record<string, unknown>;
-    expect(result['scope']).toBe('chat.read qauth:admin:read');
+    expect(result['scope']).toBe('chat.read');
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'chat.read qauth:admin:read', aud: MCP_SERVER })
+      expect.objectContaining({ scope: 'chat.read', aud: MCP_SERVER })
     );
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
   });
 
-  it('refuses the admin audience to a user with no live grant (#510)', async () => {
+  it('refuses the admin audience, whatever the grants (#510)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
     const { fastify, ctx } = setupConsumeStub({
@@ -5678,30 +5679,37 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
-  // #510: an assertion carries an admin scope only as a delegated token
-  // would: the agent lists the admin audience and the user holds a live grant
-  // of the scope's class.
-  it.each([
-    ['no grant', [], ['chat.read']],
-    ['a viewer grant', ['viewer'], ['chat.read', 'qauth:admin:read']],
-  ] as const)(
-    'withholds the admin scopes the user has no grant for (#510): %s',
-    async (_label, roles, issued) => {
-      mockEnv['ID_JAG_ENABLED'] = true;
-      const { fastify, ctx } = setupMintStub({
-        subjectScope: 'chat.read qauth:admin:read qauth:admin:security',
-        scopes: ['chat.read', 'qauth:admin:read', 'qauth:admin:security'],
-        audience: [ADMIN_API_AUDIENCE],
-      });
-      (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue(
-        roles.map(liveBuiltInGrant)
-      );
+  // #510: QAuth's own `qauth:` scopes never go to another authorization
+  // server, whatever grants the user holds.
+  it('never puts a qauth: scope in an assertion, whatever the grants (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'chat.read qauth:admin:read qauth:admin:security',
+      scopes: ['chat.read', 'qauth:admin:read', 'qauth:admin:security'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
+      liveBuiltInGrant('security-admin'),
+    ]);
 
-      const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
-      expect(result['scope']).toBe(issued.join(' '));
-      expect(decodeJwt(result['access_token'] as string)['scope']).toBe(issued.join(' '));
-    }
-  );
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+    expect(result['scope']).toBe('chat.read');
+    expect(decodeJwt(result['access_token'] as string)['scope']).toBe('chat.read');
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assertion that would carry only qauth: scopes (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'qauth:admin:read',
+      scopes: ['qauth:admin:read'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_scope', reason: 'admin_scope_without_grant' }),
+    ]);
+  });
 
   it('refuses an assertion for the admin audience to a user with no live grant (#510)', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;

@@ -262,7 +262,7 @@ export function createAdminRolesRepository(
         await inner
           .update(adminGrants)
           .set({
-            lastSecurityChangeAt: sql`greatest(${EPOCH_MS_NOW}, ${adminGrants.createdAt})`,
+            lastSecurityChangeAt: sql`greatest(${EPOCH_MS_NOW}, ${adminGrants.lastSecurityChangeAt})`,
           })
           .where(and(eq(adminGrants.roleId, roleId), isNull(adminGrants.revokedAt)));
         return row;

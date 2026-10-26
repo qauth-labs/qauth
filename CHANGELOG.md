@@ -712,8 +712,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grant on every realm or on another realm than its own, and a custom role is
   granted only within its realm: the repositories refuse anything else, and so
   does the trigger `admin_grants_realm_rule` for every writer. A grant is
-  revoked, never changed; a role is disabled, never deleted while a grant names
-  it. `resolveAdminAuthority({ iss, sub, scopes, targetRealmId })` decides what
+  revoked, never changed (the trigger `admin_grants_revoke_only`); a role is
+  disabled, never deleted while a grant names it. `resolveAdminAuthority({ iss, sub, scopes, targetRealmId })` decides what
   an admin token may do to a realm, reading the grants on every request, never
   from the token: an operator-realm admin needs a grant on the realm or on every
   realm, a realm-local admin acts only on its own realm and never on the
@@ -732,13 +732,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API's audience and the account holds a live admin grant whose role has a
   permission of that scope's class, and the admin audience only to an account
   that holds a live admin grant ([#510]), on every grant: authorization code,
-  refresh token, client credentials, token exchange (both outcomes) and the
-  jwt-bearer grant. A scope that fails is left out of the token and the
-  response's `scope` says so; the audience is refused with `invalid_target`.
-  Grants are read at every issuance, so the refresh after a revocation no
-  longer carries what the grant gave. A `client_credentials` token names no
-  account, so it gets neither until service accounts exist ([#522]). No other
-  scope of the reserved `qauth:` namespace is ever issued. The admin family's
+  refresh token and token exchange. A scope that fails is left out of the token
+  and the response's `scope` says so; when nothing is left of the scopes asked
+  for, the request is refused with `invalid_scope`. The audience is refused with
+  `invalid_target`. Grants are read at every issuance, so the refresh after a
+  revocation no longer carries what the grant gave. Neither ever reaches a
+  `client_credentials` token, which names no account (until service accounts
+  exist, [#522]), an ID-JAG minted for another authorization server, or a token
+  of the jwt-bearer grant, whose authority comes from another identity
+  provider. `/auth/login` leaves the admin audience out of its token, whatever
+  the system client lists. No other scope of the reserved `qauth:` namespace is
+  ever issued. The admin family's
   token guard also refuses a delegated token (an RFC 8693 `act` claim), as the
   developer family's does; the account family accepts one, and its routes
   decide per operation. **Action for operators**: no route needs these tokens

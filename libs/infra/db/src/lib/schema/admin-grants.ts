@@ -109,7 +109,10 @@ export const adminRoles = pgTable(
  * nothing.
  *
  * A grant is never changed, only revoked. Its account, role and target are
- * fixed; a different grant is a new row. Revocation takes effect on the next
+ * fixed; a different grant is a new row. The trigger `admin_grants_revoke_only`
+ * holds that for every writer: an UPDATE may only revoke a live grant, move
+ * `last_security_change_at` forward, or clear `created_by` when that account is
+ * deleted. Revocation takes effect on the next
  * request, because the admin API reads grants on every request and never from
  * a token.
  *

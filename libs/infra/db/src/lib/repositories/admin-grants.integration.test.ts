@@ -385,6 +385,44 @@ describe('admin roles and grants (real Postgres)', () => {
     });
   });
 
+  describe('a grant is revoked, never changed', () => {
+    it('refuses every other change by hand, and lets a revocation and a deleted creator through', async () => {
+      const d = await deployment();
+      const created = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: d.a,
+        createdBy: d.operatorAdmin,
+      });
+      const refused = [
+        `UPDATE admin_grants SET built_in_role = 'security-admin' WHERE id = $1`,
+        `UPDATE admin_grants SET target_realm_id = NULL WHERE id = $1`,
+        `UPDATE admin_grants SET created_at = created_at - 1 WHERE id = $1`,
+        `UPDATE admin_grants SET created_by = '${d.adminOfA}' WHERE id = $1`,
+        `UPDATE admin_grants SET last_security_change_at = last_security_change_at - 1 WHERE id = $1`,
+      ];
+      for (const statement of refused) {
+        await expect(pgError(pool().query(statement, [created.id]))).resolves.toEqual({
+          code: '23514',
+          constraint: 'admin_grants_revoke_only',
+        });
+      }
+
+      const revoked = await grants.revoke(created.id);
+      for (const statement of [
+        `UPDATE admin_grants SET revoked_at = NULL WHERE id = $1`,
+        `UPDATE admin_grants SET revoked_at = revoked_at + 1 WHERE id = $1`,
+      ]) {
+        await expect(pgError(pool().query(statement, [created.id]))).resolves.toEqual({
+          code: '23514',
+          constraint: 'admin_grants_revoke_only',
+        });
+      }
+      await pool().query(`UPDATE admin_grants SET created_by = NULL WHERE id = $1`, [created.id]);
+      expect(await grants.findById(created.id)).toEqual({ ...revoked, createdBy: null });
+    });
+  });
+
   describe('deleting', () => {
     it('removes a realm with its roles and every grant that names them or targets it', async () => {
       const d = await deployment();
@@ -582,11 +620,16 @@ describe('admin roles and grants (real Postgres)', () => {
         createdBy: null,
       });
       await grants.revoke(revoked.id);
+      // Moving the times back is what `admin_grants_revoke_only` refuses, so
+      // the fixture steps past it, as only the table owner can.
       const setOld = () =>
         pool().query(
-          `UPDATE admin_grants SET created_at = 1000, last_security_change_at = 1000
-           WHERE role_id = $1 AND revoked_at IS NULL`,
-          [role.id]
+          `BEGIN;
+           ALTER TABLE admin_grants DISABLE TRIGGER admin_grants_revoke_only;
+           UPDATE admin_grants SET created_at = 1000, last_security_change_at = 1000
+           WHERE role_id = '${role.id}' AND revoked_at IS NULL;
+           ALTER TABLE admin_grants ENABLE TRIGGER admin_grants_revoke_only;
+           COMMIT;`
         );
       const changedAt = async (grantId: string) =>
         (await grants.findById(grantId))?.lastSecurityChangeAt;

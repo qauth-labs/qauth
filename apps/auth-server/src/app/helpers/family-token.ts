@@ -88,10 +88,10 @@ function audiencesOf(claims: JWTPayload): string[] {
  *   - developer: a token acting for an agent never manages the developer's
  *     clients, the rule the developer routes' guard (`assertManagementToken`)
  *     keeps today;
- *   - admin: an admin signs in with a passkey and approves each security
- *     operation with a fresh one (ADR-019 Decision 7), which a token an agent
- *     obtained by exchange never stands for. Automation reaches the admin API
- *     as a service account, with a token of its own.
+ *   - admin: an admin acts as itself. ADR-019 Decision 7 has an admin sign
+ *     in with a passkey and approve each security operation with a fresh one,
+ *     and a token an agent obtained by exchange is neither. Automation
+ *     reaches the admin API as a service account, with a token of its own.
  *
  *   The account family accepts one: ADR-019 Decision 7 has the account API
  *   refuse an act-chain token per operation, on the routes that change a

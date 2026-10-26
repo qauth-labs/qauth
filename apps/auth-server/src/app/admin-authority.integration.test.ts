@@ -171,6 +171,17 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
     });
   }
 
+  /** `resolveAdminAuthority` called directly, for a token of JWT_ISSUER, on the real rows. */
+  async function authorityFor(userId: string, targetRealmId: string) {
+    const { resolveAdminAuthority } = await import('./helpers/admin-authority');
+    return resolveAdminAuthority(app(), {
+      iss: app().jwtUtils.getIssuer(),
+      sub: userId,
+      scopes: ALL_ADMIN_SCOPES,
+      targetRealmId,
+    });
+  }
+
   function grant(
     userId: string,
     targetRealmId: string | null,
@@ -359,7 +370,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       expect((await probe(a, token)).json()).toMatchObject({ permissions: ['realms.read'] });
     });
 
-    it('a disabled account is refused', async () => {
+    it('a disabled account is refused, by the guard and by resolveAdminAuthority itself', async () => {
       const operator = await defaultRealmId();
       const admin = await account(operator);
       await grant(admin, null);
@@ -370,11 +381,16 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const refused = await probe(operator, token);
       expect(refused.statusCode).toBe(401);
       expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
+      // The guard refused first; the authority's own check, on the same rows.
+      await expect(authorityFor(admin, operator)).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
+      });
     });
   });
 
   describe('a token the admin API does not accept', () => {
-    it('is refused when another realm issued it, or an agent holds it', async () => {
+    it("is refused for another realm's account under JWT_ISSUER, and when an agent holds it", async () => {
       const operator = await defaultRealmId();
       const a = await tenant('alpha');
       const admin = await account(operator);
@@ -385,6 +401,12 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const ofA = await account(a);
       await grant(ofA, a);
       expect((await probe(a, await adminToken(ofA))).statusCode).toBe(401);
+      // The guard refused it for the request's realm; the authority refuses it
+      // too, since the realm JWT_ISSUER names is not the account's.
+      await expect(authorityFor(ofA, a)).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
+      });
 
       const delegated = await app().jwtUtils.signAccessToken({
         sub: admin,
@@ -539,6 +561,18 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
         aud: 'admin-console',
         scope: 'openid',
       });
+
+      // A code that asked only for admin scopes is refused, never answered
+      // with no scope, and is not spent: once a grant exists it redeems.
+      const onlyAdmin = await codeFor(cookie, ALL_ADMIN_SCOPES, undefined);
+      const nothingLeft = await redeem(onlyAdmin);
+      expect(nothingLeft.statusCode).toBe(400);
+      expect(nothingLeft.json()).toMatchObject({ error: 'invalid_scope' });
+      expect((await failureReasons()).at(-1)).toBe('admin_scope_without_grant');
+      await grant(userId, null, 'viewer');
+      const redeemed = await redeem(onlyAdmin);
+      expect(redeemed.statusCode).toBe(200);
+      expect(redeemed.json()).toMatchObject({ scope: 'qauth:admin:read' });
     });
 
     it('gives a client_credentials token neither the admin audience nor an admin scope', async () => {
@@ -579,7 +613,10 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       });
       expect(onlyAdmin.statusCode).toBe(400);
       expect(onlyAdmin.json()).toMatchObject({ error: 'invalid_scope' });
-      expect(await failureReasons()).toEqual(['admin_audience_without_grant', 'scope_required']);
+      expect(await failureReasons()).toEqual([
+        'admin_audience_without_grant',
+        'admin_scope_without_grant',
+      ]);
     });
   });
 });

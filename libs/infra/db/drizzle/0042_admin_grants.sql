@@ -103,3 +103,36 @@ CREATE TRIGGER "admin_grants_realm_rule"
   BEFORE INSERT OR UPDATE OF "user_id", "role_id", "target_realm_id" ON "admin_grants"
   FOR EACH ROW
   EXECUTE FUNCTION "admin_grants_realm_rule"();
+--> statement-breakpoint
+-- #510: a grant is created and revoked, never changed. Its account, role,
+-- target and creation time stay as written; its creator may only become NULL
+-- (the account was deleted, ON DELETE SET NULL); a revoked grant stays revoked
+-- at the time it was revoked; and last_security_change_at, which the two-admin
+-- rule reads, never moves back. A different grant is a new row.
+CREATE FUNCTION "admin_grants_revoke_only"() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+  IF NEW."id" IS DISTINCT FROM OLD."id"
+     OR NEW."user_id" IS DISTINCT FROM OLD."user_id"
+     OR NEW."built_in_role" IS DISTINCT FROM OLD."built_in_role"
+     OR NEW."role_id" IS DISTINCT FROM OLD."role_id"
+     OR NEW."target_realm_id" IS DISTINCT FROM OLD."target_realm_id"
+     OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
+     OR (NEW."created_by" IS DISTINCT FROM OLD."created_by" AND NEW."created_by" IS NOT NULL)
+     OR (OLD."revoked_at" IS NOT NULL AND NEW."revoked_at" IS DISTINCT FROM OLD."revoked_at")
+     OR NEW."last_security_change_at" < OLD."last_security_change_at" THEN
+    RAISE EXCEPTION 'an admin grant is revoked, never changed'
+      USING ERRCODE = 'check_violation',
+            CONSTRAINT = 'admin_grants_revoke_only',
+            TABLE = 'admin_grants';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+--> statement-breakpoint
+CREATE TRIGGER "admin_grants_revoke_only"
+  BEFORE UPDATE ON "admin_grants"
+  FOR EACH ROW
+  EXECUTE FUNCTION "admin_grants_revoke_only"();

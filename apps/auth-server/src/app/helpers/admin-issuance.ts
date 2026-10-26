@@ -9,14 +9,18 @@
  *   live admin grant whose role has a permission of that scope's class. Any
  *   other scope of the reserved `qauth:` namespace is never issued. A scope
  *   that fails is WITHHELD: the token is issued without it, and the response's
- *   `scope` says so (RFC 6749 §3.3).
- * - The admin audience is issued only to an account that holds a live admin
- *   grant. Otherwise the request is refused, `invalid_target` (RFC 8707 §2),
- *   as for an audience the client does not list.
+ *   `scope` says so (RFC 6749 §3.3). When nothing else is left to issue, the
+ *   token route refuses the request, `invalid_scope`, rather than answer with
+ *   no `scope`, which would read as the scope asked for.
+ * - The admin audience is issued only to an account whose live admin grants
+ *   give a permission. Otherwise the request is refused, `invalid_target`
+ *   (RFC 8707 §2), as for an audience the client does not list.
  *
  * Grants are read when the token is issued, so a refresh after a revocation
- * no longer carries what the grant gave. A token that names no account, a
- * `client_credentials` token, never gets either: grants belong to accounts.
+ * no longer carries what the grant gave. A request decided for no account
+ * (`userId: null`) never gets either: a `client_credentials` token, which
+ * names none, and the two ID-JAG grants, whose authority comes from another
+ * identity provider or goes to another authorization server.
  *
  * Nothing is read from the database unless the request asks for a `qauth:`
  * scope or the admin audience.
@@ -53,16 +57,17 @@ export interface AdminIssuance {
 }
 
 /**
- * The permission classes, and whether any live grant at all, an account holds
- * for issuance: every live grant that fits the realm rule, whatever its
- * target, since the token is not yet bound to a realm to act on.
+ * The permission classes an account's live grants give, for issuance: every
+ * live grant that fits the realm rule, whatever its target, since the token is
+ * not yet bound to a realm to act on. A grant whose role gives no grantable
+ * permission adds nothing.
  */
-async function heldAdminGrants(
+async function heldPermissionClasses(
   fastify: FastifyInstance,
   userId: string | null,
   registry: PermissionRegistry
-): Promise<{ any: boolean; classes: ReadonlySet<PermissionClass> }> {
-  const none = { any: false, classes: new Set<PermissionClass>() };
+): Promise<ReadonlySet<PermissionClass>> {
+  const none = new Set<PermissionClass>();
   if (userId === null) return none;
   const user = await fastify.repositories.users.findById(userId);
   if (!user || !user.enabled) return none;
@@ -78,7 +83,7 @@ async function heldAdminGrants(
       if (permission !== undefined) classes.add(permission.class);
     }
   }
-  return { any: fitting.length > 0, classes };
+  return classes;
 }
 
 /**
@@ -96,17 +101,32 @@ export async function adminIssuance(
     return { scopes: [...request.scopes], withheld: [], audienceRefused: false };
   }
 
-  const held = await heldAdminGrants(fastify, request.userId, registry);
+  const held = await heldPermissionClasses(fastify, request.userId, registry);
   const clientListsAdmin =
     unlistedReservedAudiences(request.client, API_FAMILY_AUDIENCES.admin).length === 0;
   const issuable = (scope: string): boolean => {
     if (!isReservedQauthScope(scope)) return true;
     const permissionClass = permissionClassOfScope(scope);
-    return clientListsAdmin && permissionClass !== undefined && held.classes.has(permissionClass);
+    return clientListsAdmin && permissionClass !== undefined && held.has(permissionClass);
   };
   return {
     scopes: request.scopes.filter(issuable),
     withheld: request.scopes.filter((scope) => !issuable(scope)),
-    audienceRefused: namesAdminAudience && !held.any,
+    audienceRefused: namesAdminAudience && held.size === 0,
   };
+}
+
+/**
+ * `aud` without the admin API's audience, for a token minted where no admin
+ * grant is checked: `/auth/login`, from the system client's stored audience
+ * (#510). The client id when nothing else is left, as for a client with no
+ * audience.
+ */
+export function withoutAdminAudience(
+  aud: string | readonly string[],
+  clientId: string
+): string | string[] {
+  const rest = [aud].flat().filter((value) => value !== API_FAMILY_AUDIENCES.admin);
+  if (rest.length === 0) return clientId;
+  return rest.length === 1 ? rest[0] : rest;
 }

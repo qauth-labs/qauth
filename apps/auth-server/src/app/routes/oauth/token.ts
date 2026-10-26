@@ -741,6 +741,9 @@ async function assertReservedAudiencesListed(
  * - A `qauth:` scope is withheld unless it is an admin scope, the client lists
  *   the admin API's audience, and the account holds a live admin grant with a
  *   permission of its class. The token is issued without it (RFC 6749 §3.3).
+ *   When that leaves no scope of the ones asked for, the request is refused,
+ *   `invalid_scope`: a response with no `scope` would read as the scope asked
+ *   for.
  * - The admin audience is refused, RFC 8707 §2 `invalid_target`, for a token
  *   whose account holds no live admin grant, or that names no account.
  *
@@ -751,14 +754,20 @@ async function assertReservedAudiencesListed(
  */
 async function issuableScopes(
   ctx: HandlerContext<{ grant_type: string }>,
-  issuance: { userId: string | null; scopes: readonly string[]; aud: string | readonly string[] }
+  issuance: { userId: string | null; scopes: readonly string[]; aud: string | readonly string[] },
+  /** The user a refusal's event names; the grant's user even when it is decided for none. */
+  eventUserId: string | null = issuance.userId
 ): Promise<string[]> {
   const decision = await adminIssuance(ctx.fastify, { client: ctx.client, ...issuance });
   if (decision.audienceRefused) {
-    await emitRequestFailed(ctx, 'invalid_target', 'admin_audience_without_grant', issuance.userId);
+    await emitRequestFailed(ctx, 'invalid_target', 'admin_audience_without_grant', eventUserId);
     throw new InvalidTargetError(
       'the admin API audience is issued only to an account that holds an admin grant'
     );
+  }
+  if (decision.scopes.length === 0 && decision.withheld.length > 0) {
+    await emitRequestFailed(ctx, 'invalid_scope', 'admin_scope_without_grant', eventUserId);
+    throw new InvalidScopeError(`${decision.withheld.join(' ')} not issued to this account`);
   }
   return decision.scopes;
 }
@@ -1192,10 +1201,6 @@ async function handleClientCredentials(
   // The token names no account, and admin grants belong to accounts (#510):
   // no admin scope, and no admin audience.
   const issuedScopes = await issuableScopes(ctx, { userId: null, scopes: grantedScopes, aud });
-  if (issuedScopes.length === 0) {
-    await emitRequestFailed(ctx, 'invalid_scope', 'scope_required');
-    throw new InvalidScopeError('client_credentials grant requires at least one scope');
-  }
   const scopeString = issuedScopes.join(' ');
   const accessToken = await issueAccessToken(fastify, {
     sub: client.clientId,
@@ -2179,12 +2184,12 @@ async function mintIdJagForExchange(args: {
     throw new InvalidRequestError('subject_token has expired');
   }
 
-  // The admin scopes follow the user's live admin grants and the agent's own
-  // `audience` here too (#510): the assertion is QAuth's word that its policy
-  // was evaluated.
+  // QAuth's own `qauth:` scopes, the admin API's among them, never go to
+  // another authorization server, and the admin API's audience is never the
+  // target of an assertion (#510): decided as for no account.
   const issuance = await adminIssuance(fastify, {
     client,
-    userId: user.id,
+    userId: null,
     scopes: grantedScopes,
     aud: targetAuthorizationServer,
   });
@@ -2193,6 +2198,10 @@ async function mintIdJagForExchange(args: {
     throw new InvalidTargetError(
       'the admin API audience is issued only to an account that holds an admin grant'
     );
+  }
+  if (issuance.scopes.length === 0 && issuance.withheld.length > 0) {
+    await emitFailure('invalid_scope', 'admin_scope_without_grant');
+    throw new InvalidScopeError(`${issuance.withheld.join(' ')} not issued in an assertion`);
   }
   const issuedScopes = issuance.scopes;
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
@@ -2439,9 +2448,14 @@ async function handleJwtBearer(
   const aud = resolveAudience(client, [assertion.resource]);
   // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
   await assertReservedAudiencesListed(ctx, aud, user.id);
-  // An enterprise's assertion does not give an admin scope the user holds no
-  // live grant for (#510).
-  const issuedScopes = await issuableScopes(ctx, { userId: user.id, scopes: grantedScopes, aud });
+  // An admin token comes only from a sign-in at QAuth itself (ADR-019
+  // Decision 7), never from another identity provider's assertion: no admin
+  // scope and no admin audience here, whatever grants the user holds (#510).
+  const issuedScopes = await issuableScopes(
+    ctx,
+    { userId: null, scopes: grantedScopes, aud },
+    user.id
+  );
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
   // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other

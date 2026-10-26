@@ -7,7 +7,7 @@ vi.mock('../../config/env', () => ({ env: {} }));
 
 import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import type { LiveAdminGrant } from './admin-authority';
-import { adminIssuance } from './admin-issuance';
+import { adminIssuance, withoutAdminAudience } from './admin-issuance';
 
 const ADMIN = API_FAMILY_AUDIENCES.admin;
 const OPERATOR = '01900000-0000-7000-8000-00000000000a';
@@ -137,6 +137,16 @@ describe('adminIssuance', () => {
     });
   });
 
+  it('refuses the admin audience for grants whose roles give no permission', async () => {
+    const fastify = server([
+      grant(null, { realmId: OPERATOR, permissionIds: [] }),
+      grant(REALM_A, 'retired-built-in'),
+    ]);
+    await expect(
+      adminIssuance(fastify, { client: ADMIN_CLIENT, userId: USER, scopes: ['openid'], aud: ADMIN })
+    ).resolves.toMatchObject({ scopes: ['openid'], audienceRefused: true });
+  });
+
   it('gives nothing to a token that names no account', async () => {
     const fastify = server([grant(null, 'security-admin')]);
     await expect(
@@ -210,5 +220,15 @@ describe('adminIssuance', () => {
         aud: ADMIN,
       })
     ).resolves.toMatchObject({ scopes: [], audienceRefused: true });
+  });
+});
+
+describe('withoutAdminAudience', () => {
+  it("drops the admin API's audience, and falls back to the client id", () => {
+    expect(withoutAdminAudience([ADMIN, 'https://api.example.com'], 'system')).toBe(
+      'https://api.example.com'
+    );
+    expect(withoutAdminAudience(ADMIN, 'system')).toBe('system');
+    expect(withoutAdminAudience(['a', 'b'], 'system')).toEqual(['a', 'b']);
   });
 });
