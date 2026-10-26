@@ -9,6 +9,7 @@ import {
   bootAuthServer,
   type BootedAuthServer,
   type CookieJar,
+  decodeJwtClaims,
   E2E_PASSWORD,
   E2E_REALM_NAME,
   type E2eInfrastructure,
@@ -32,10 +33,21 @@ import type { RealmRow } from './helpers/request-realm';
  * then the realm's doing, not the client's.
  *
  * Every row of the matrix presents a value of realm A at realm B, and the same
- * request with a random value of that kind, and expects the two answers to be
- * the same: status, body (less its `trace_id`) and, within a tolerance, time.
- * Where it matters, the value is then shown still good in realm A, so the
- * refusal at B changed nothing there.
+ * request with a random value of that kind, and expects the two to get the
+ * same answer (status, body less its `trace_id`), to leave the same events and,
+ * within a tolerance, to take the same time. Where it matters, the value is
+ * then shown still good in realm A, so the refusal at B changed nothing there.
+ *
+ * The last rows go the other way, a realm-B user's token to the default realm.
+ * Until tokens are signed per realm (#491) every token carries `JWT_ISSUER`,
+ * which is the default realm's issuer, so that token verifies there and only
+ * the realm-scoped user lookup refuses it; it is compared with the token of a
+ * deleted user of the default realm, the answer an unknown subject gets.
+ *
+ * Where an earlier check (client ownership, the user a consent belongs to)
+ * would refuse a realm-A value at B by itself, the row seeds a realm-A row that
+ * names realm B's user, which the schema allows, so that only the realm filter
+ * stands between the request and the row.
  *
  * Failed logins for one address are counted per realm in
  * `realm-routing.integration.test.ts` ("keeps the login lockout of an address
@@ -55,8 +67,9 @@ const REDIRECT_URI = 'https://client.example.com/callback';
 const SCOPES = ['openid', 'email'];
 const ALICE = 'alice@example.com';
 const BOB = 'bob@example.com';
-/** How many times each side of a comparison is sent; the medians are compared. */
-const TIMING_SAMPLES = 3;
+const ERIN = 'erin@example.com';
+/** How many times each side of a comparison is timed, after one warm-up pair; medians are compared. */
+const TIMING_SAMPLES = 5;
 
 interface World {
   readonly app: FastifyInstance;
@@ -70,8 +83,15 @@ interface World {
   readonly consentA: string;
   /** Alice's browser at realm A. */
   readonly jarA: CookieJar;
+  /** Bob's `users.id`, a user of realm B. */
+  readonly bobId: string;
   /** Bob's management token at realm B (`/auth/login`). */
   readonly bobTokenB: string;
+  /**
+   * The management token of erin, a user of realm A deleted after signing in:
+   * a token that verifies at realm A and names no user there.
+   */
+  readonly deletedUserTokenA: string;
 }
 
 /**
@@ -105,23 +125,37 @@ interface EventSeen {
 }
 
 /**
- * Send one request and read the events it stored. Requests are sent one at a
- * time, so the events after the highest `seq` seen before are this request's.
+ * Send one request, time it, and read the events it stored. Requests are sent
+ * one at a time, so the events after the highest `seq` seen before are this
+ * request's. Only the request itself is timed, not the event reads.
  */
 async function sendAndReadEvents(
   app: FastifyInstance,
   send: () => Promise<LightMyRequestResponse>
-): Promise<{ response: LightMyRequestResponse; events: EventSeen[] }> {
+): Promise<{ response: LightMyRequestResponse; events: EventSeen[]; ms: number }> {
   const before = await app.dbPool.query<{ seq: string }>(
     'SELECT coalesce(max(seq), 0)::text AS seq FROM events'
   );
+  const start = performance.now();
   const response = await send();
+  const ms = performance.now() - start;
   const { rows } = await app.dbPool.query<EventSeen>(
     `SELECT realm_id, type, subject_id, data FROM events
      WHERE seq > $1::bigint ORDER BY seq`,
     [before.rows[0]?.seq ?? '0']
   );
-  return { response, events: rows };
+  return { response, events: rows, ms };
+}
+
+let addresses = 0;
+
+/**
+ * A client address of its own for one request, so the per-address rate limits
+ * of the routes compared here never answer one side of a pair with a 429.
+ */
+function nextAddress(): string {
+  addresses += 1;
+  return `10.89.${Math.floor(addresses / 250)}.${(addresses % 250) + 1}`;
 }
 
 function median(values: readonly number[]): number {
@@ -130,45 +164,43 @@ function median(values: readonly number[]): number {
 }
 
 /**
- * Send `realmAValue` and `randomValue` alternately and expect the same answer,
- * and the same events stored: an event that recorded realm A's user as the
- * subject at realm B, or a reason only a found row can have, tells the value
- * apart as surely as the response would.
+ * Send `foreignValue` (another realm's) and `unknownValue` alternately and
+ * expect, for every pair, the same answer and the same events stored: an event
+ * that recorded another realm's user as its subject, or a reason only a found
+ * row can have, tells the value apart as surely as the response would.
  *
  * The time check compares medians with a tolerance (50 ms or half the slower
- * median): both sides run the same single statement, and the token, introspection
- * and userinfo answers are also padded to a floor, so a lookup that told the
- * two apart by doing more work for one of them shows up here, while scheduler
- * noise on a loaded runner does not.
+ * median), after one untimed warm-up pair: both sides run the same single
+ * statement, and the token, introspection and userinfo answers are also padded
+ * to a floor, so a lookup that told the two apart by doing more work for one of
+ * them shows up here, while scheduler noise on a loaded runner does not.
  *
- * @returns the realm-A value's answer, for assertions of its own.
+ * @returns the foreign value's answer, for assertions of its own.
  */
-async function expectSameAnswerAsRandom(
+async function expectSameAnswerAsUnknown(
   app: FastifyInstance,
   send: (value: string) => Promise<LightMyRequestResponse>,
-  realmAValue: string,
-  randomValue: string
+  foreignValue: string,
+  unknownValue: string
 ): Promise<{ status: number; body: unknown }> {
-  const times = { realmA: [] as number[], random: [] as number[] };
-  let realmAAnswer: { status: number; body: unknown } | undefined;
-  let randomAnswer: { status: number; body: unknown } | undefined;
-  for (let sample = 0; sample < TIMING_SAMPLES; sample += 1) {
-    let start = performance.now();
-    const realmA = await sendAndReadEvents(app, async () => send(realmAValue));
-    times.realmA.push(performance.now() - start);
-    start = performance.now();
-    const random = await sendAndReadEvents(app, async () => send(randomValue));
-    times.random.push(performance.now() - start);
-    realmAAnswer = answerOf(realmA.response, realmAValue);
-    randomAnswer = answerOf(random.response, randomValue);
-    expect(realmA.events).toEqual(random.events);
+  const times = { foreign: [] as number[], unknown: [] as number[] };
+  let foreignAnswer: { status: number; body: unknown } | undefined;
+  for (let sample = 0; sample <= TIMING_SAMPLES; sample += 1) {
+    const foreign = await sendAndReadEvents(app, async () => send(foreignValue));
+    const unknown = await sendAndReadEvents(app, async () => send(unknownValue));
+    foreignAnswer = answerOf(foreign.response, foreignValue);
+    const unknownAnswer = answerOf(unknown.response, unknownValue);
+    expect(foreignAnswer, JSON.stringify({ foreignAnswer, unknownAnswer })).toEqual(unknownAnswer);
+    expect(foreign.events).toEqual(unknown.events);
+    if (sample === 0) continue; // the warm-up pair is not timed
+    times.foreign.push(foreign.ms);
+    times.unknown.push(unknown.ms);
   }
-  expect(realmAAnswer, JSON.stringify({ realmAAnswer, randomAnswer })).toEqual(randomAnswer);
-  const [a, r] = [median(times.realmA), median(times.random)];
-  expect(Math.abs(a - r), `medians ${a.toFixed(1)} ms vs ${r.toFixed(1)} ms`).toBeLessThanOrEqual(
-    Math.max(50, Math.max(a, r) / 2)
+  const [f, u] = [median(times.foreign), median(times.unknown)];
+  expect(Math.abs(f - u), `medians ${f.toFixed(1)} ms vs ${u.toFixed(1)} ms`).toBeLessThanOrEqual(
+    Math.max(50, Math.max(f, u) / 2)
   );
-  return realmAAnswer as { status: number; body: unknown };
+  return foreignAnswer as { status: number; body: unknown };
 }
 
 describe('an id from another realm is an unknown id (#489)', () => {
@@ -240,14 +272,12 @@ describe('an id from another realm is an unknown id (#489)', () => {
     );
     const jarA = await signInWithPassword(app, ALICE);
 
-    await registerPasswordAccount(app, BOB, E2E_PASSWORD, { host: HOST_B });
-    const login = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      headers: { host: HOST_B },
-      payload: { email: BOB, password: E2E_PASSWORD },
-    });
-    expect(login.statusCode, login.body).toBe(200);
+    const bob = await registerPasswordAccount(app, BOB, E2E_PASSWORD, { host: HOST_B });
+    const bobTokenB = await managementToken(app, HOST_B, BOB);
+
+    const erin = await registerPasswordAccount(app, ERIN);
+    const deletedUserTokenA = await managementToken(app, HOST_A, ERIN);
+    expect(await app.repositories.users.delete(realmA.id, erin)).toBe(true);
 
     world = {
       app,
@@ -257,9 +287,23 @@ describe('an id from another realm is an unknown id (#489)', () => {
       aliceId: alice,
       consentA: consent.id,
       jarA,
-      bobTokenB: login.json<{ access_token: string }>().access_token,
+      bobId: bob,
+      bobTokenB,
+      deletedUserTokenA,
     };
     return world;
+  }
+
+  /** The developer-portal token `/auth/login` gives `email` at `host`. */
+  async function managementToken(app: FastifyInstance, host: string, email: string) {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      headers: { host },
+      payload: { email, password: E2E_PASSWORD },
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    return login.json<{ access_token: string }>().access_token;
   }
 
   /** An authorization code of realm A, minted by alice's browser at realm A. */
@@ -292,6 +336,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     verifier: string
   ) {
     return app.inject({
+      remoteAddress: nextAddress(),
       method: 'POST',
       url: '/oauth/token',
       headers: { ...FORM, host },
@@ -308,6 +353,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
 
   async function refresh(app: FastifyInstance, host: string, secret: string, token: string) {
     return app.inject({
+      remoteAddress: nextAddress(),
       method: 'POST',
       url: '/oauth/token',
       headers: { ...FORM, host },
@@ -332,7 +378,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const w = await setUp();
     const { code, verifier } = await codeOfRealmA(w);
 
-    const answer = await expectSameAnswerAsRandom(
+    const answer = await expectSameAnswerAsUnknown(
       w.app,
       async (value) => redeemCode(w.app, HOST_B, SECRET_B, value, verifier),
       code,
@@ -349,7 +395,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const w = await setUp();
     const { refresh_token: refreshToken } = await tokensOfRealmA(w);
 
-    const answer = await expectSameAnswerAsRandom(
+    const answer = await expectSameAnswerAsUnknown(
       w.app,
       async (value) => refresh(w.app, HOST_B, SECRET_B, value),
       refreshToken,
@@ -366,10 +412,11 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const w = await setUp();
     const { refresh_token: refreshToken } = await tokensOfRealmA(w);
 
-    const answer = await expectSameAnswerAsRandom(
+    const answer = await expectSameAnswerAsUnknown(
       w.app,
       async (value) =>
         w.app.inject({
+          remoteAddress: nextAddress(),
           method: 'POST',
           url: '/oauth/revoke',
           headers: { ...FORM, host: HOST_B },
@@ -393,6 +440,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const { access_token: accessToken } = await tokensOfRealmA(w);
     const introspect = (host: string, secret: string, token: string) =>
       w.app.inject({
+        remoteAddress: nextAddress(),
         method: 'POST',
         url: '/oauth/introspect',
         headers: { ...FORM, host },
@@ -403,7 +451,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
         }).toString(),
       });
 
-    const answer = await expectSameAnswerAsRandom(
+    const answer = await expectSameAnswerAsUnknown(
       w.app,
       async (value) => introspect(HOST_B, SECRET_B, value),
       accessToken,
@@ -421,6 +469,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const { access_token: accessToken } = await tokensOfRealmA(w);
     const userinfo = (host: string, token: string) =>
       w.app.inject({
+        remoteAddress: nextAddress(),
         method: 'GET',
         url: '/oauth/userinfo',
         headers: { host, authorization: `Bearer ${token}` },
@@ -438,43 +487,139 @@ describe('an id from another realm is an unknown id (#489)', () => {
 
   it('a consent id of realm A is 404 at realm B, as a random id is, and the consent stays', async () => {
     const w = await setUp();
-
-    const answer = await expectSameAnswerAsRandom(
-      w.app,
-      async (value) =>
-        w.app.inject({
-          method: 'DELETE',
-          url: `/api/consents/${value}`,
-          headers: { host: HOST_B, authorization: `Bearer ${w.bobTokenB}` },
-        }),
-      w.consentA,
-      randomUUID()
-    );
-    expect(answer.status).toBe(404);
-
-    const consent = await w.app.repositories.oauthConsents.findActive(
+    // A realm-A consent that names bob, realm B's user: the user filter alone
+    // would let bob revoke it at B, so only the realm filter refuses it.
+    const crossed = await w.app.repositories.oauthConsents.upsertGrant(
       w.realmA.id,
-      w.aliceId,
-      w.clientA
+      w.bobId,
+      w.clientA,
+      SCOPES
     );
-    expect(consent?.id).toBe(w.consentA);
+
+    for (const consentId of [w.consentA, crossed.id]) {
+      const answer = await expectSameAnswerAsUnknown(
+        w.app,
+        async (value) =>
+          w.app.inject({
+            remoteAddress: nextAddress(),
+            method: 'DELETE',
+            url: `/api/consents/${value}`,
+            headers: { host: HOST_B, authorization: `Bearer ${w.bobTokenB}` },
+          }),
+        consentId,
+        randomUUID()
+      );
+      expect(answer.status).toBe(404);
+    }
+
+    expect(
+      (await w.app.repositories.oauthConsents.findActive(w.realmA.id, w.aliceId, w.clientA))?.id
+    ).toBe(w.consentA);
+    expect(
+      (await w.app.repositories.oauthConsents.findActive(w.realmA.id, w.bobId, w.clientA))?.id
+    ).toBe(crossed.id);
   });
 
   it('a client id of realm A is 404 at realm B, as a random id is', async () => {
     const w = await setUp();
+    // A realm-A client whose developer is bob, realm B's user: ownership alone
+    // would hand it to him at B, so only the realm filter refuses it.
+    const crossed = await w.app.repositories.oauthClients.create({
+      realmId: w.realmA.id,
+      clientId: 'owned-across-realms',
+      clientSecretHash: 'unused',
+      tokenEndpointAuthMethod: 'none',
+      name: 'E2E owned across realms',
+      developerId: w.bobId,
+      redirectUris: [REDIRECT_URI],
+      scopes: SCOPES,
+      grantTypes: ['authorization_code'],
+      enabled: true,
+      requirePkce: true,
+    });
 
-    const answer = await expectSameAnswerAsRandom(
+    for (const clientRowId of [w.clientA, crossed.id]) {
+      const answer = await expectSameAnswerAsUnknown(
+        w.app,
+        async (value) =>
+          w.app.inject({
+            remoteAddress: nextAddress(),
+            method: 'GET',
+            url: `/api/clients/${value}`,
+            headers: { host: HOST_B, authorization: `Bearer ${w.bobTokenB}` },
+          }),
+        clientRowId,
+        randomUUID()
+      );
+      expect(answer.status).toBe(404);
+    }
+
+    // Bob's own listing at B does not show it either.
+    const listed = await w.app.inject({
+      method: 'GET',
+      url: '/api/clients',
+      headers: { host: HOST_B, authorization: `Bearer ${w.bobTokenB}` },
+    });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.body).not.toContain(crossed.id);
+  });
+
+  it("a realm-B user's token at the default realm's userinfo is answered as a deleted user's", async () => {
+    const w = await setUp();
+
+    const answer = await expectSameAnswerAsUnknown(
       w.app,
-      async (value) =>
+      async (token) =>
         w.app.inject({
+          remoteAddress: nextAddress(),
           method: 'GET',
-          url: `/api/clients/${value}`,
-          headers: { host: HOST_B, authorization: `Bearer ${w.bobTokenB}` },
+          url: '/oauth/userinfo',
+          headers: { host: HOST_A, authorization: `Bearer ${token}` },
         }),
-      w.clientA,
-      randomUUID()
+      w.bobTokenB,
+      w.deletedUserTokenA
     );
-    expect(answer.status).toBe(404);
+    expect(answer).toMatchObject({ status: 401, body: { error: 'invalid_token' } });
+  });
+
+  it("a realm-B user's token at the default realm's introspection is inactive, as a deleted user's is", async () => {
+    const w = await setUp();
+    // A resource server of the default realm that is authoritative for the
+    // portal token's audience, so the token reaches the subject lookup.
+    const audience = decodeJwtClaims(w.bobTokenB)['aud'];
+    const secret = 'secret-of-the-introspecting-client-0123';
+    await w.app.repositories.oauthClients.create({
+      realmId: w.realmA.id,
+      clientId: 'introspector',
+      clientSecretHash: await w.app.passwordHasher.hashPassword(secret),
+      tokenEndpointAuthMethod: 'client_secret_post',
+      name: 'E2E introspector',
+      redirectUris: [],
+      scopes: [],
+      grantTypes: ['client_credentials'],
+      audience: [audience].flat() as string[],
+      enabled: true,
+      requirePkce: false,
+    });
+
+    const answer = await expectSameAnswerAsUnknown(
+      w.app,
+      async (token) =>
+        w.app.inject({
+          remoteAddress: nextAddress(),
+          method: 'POST',
+          url: '/oauth/introspect',
+          headers: { ...FORM, host: HOST_A },
+          payload: new URLSearchParams({
+            token,
+            client_id: 'introspector',
+            client_secret: secret,
+          }).toString(),
+        }),
+      w.bobTokenB,
+      w.deletedUserTokenA
+    );
+    expect(answer).toEqual({ status: 200, body: { active: false } });
   });
 
   it('a user id of realm A names no user at realm B', async () => {
@@ -515,13 +660,14 @@ describe('an id from another realm is an unknown id (#489)', () => {
     if (token === undefined) throw new Error('registration sent no verification mail');
     const verify = (host: string, value: string) =>
       w.app.inject({
+        remoteAddress: nextAddress(),
         method: 'POST',
         url: '/auth/verify',
         headers: { host },
         payload: { token: value, password: E2E_PASSWORD },
       });
 
-    const answer = await expectSameAnswerAsRandom(
+    const answer = await expectSameAnswerAsUnknown(
       w.app,
       async (value) => verify(HOST_B, value),
       token,
@@ -537,6 +683,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const w = await setUp();
     const resend = (host: string) =>
       w.app.inject({
+        remoteAddress: nextAddress(),
         method: 'POST',
         url: '/auth/resend-verification',
         headers: { host },
