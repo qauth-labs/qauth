@@ -218,6 +218,12 @@ export const tokenRequestFailed = defineEventType({
   data: z.strictObject({
     grantType: grantType().optional(),
     ...failure(),
+    refreshFamilyId: recordId(
+      'The refresh family a replayed grant (reason `code_replay` or `refresh_replay`) had issued, which the refusal revoked. Absent when the grant issued none.'
+    ).optional(),
+    revokedRefreshCount: count(
+      'How many refresh tokens of that family the refusal revoked; 0 when they were revoked already. Present for the reasons `code_replay` and `refresh_replay`.'
+    ).optional(),
   }),
 });
 

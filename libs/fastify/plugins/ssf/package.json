@@ -1,0 +1,19 @@
+{
+  "name": "@qauth-labs/fastify-plugin-ssf",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/fastify-plugin-db": "workspace:*",
+    "@qauth-labs/server-egress": "workspace:*",
+    "@qauth-labs/server-event-delivery": "workspace:*",
+    "@qauth-labs/server-ssf": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -103,4 +103,13 @@ With `verifyDpopProof` set, `requireJwt` also accepts `Authorization: DPoP <toke
 
 ### `fastify.requireJwt`
 
-PreHandler that extracts and verifies the access token from the `Authorization` header. It requires the configured `issuer`, then runs `isTokenRevoked` when set. A `DPoP` credential goes to `verifyDpopProof`; a Bearer token with `cnf` is refused. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `JWTInvalidError` (401) on a missing or malformed header, a revoked token, or a binding failure. It lets `JWTExpiredError` (401) and errors from `verifyDpopProof` propagate.
+PreHandler that extracts and verifies the access token from the `Authorization` header. It requires the configured `issuer`, then runs `isTokenRevoked` when set. A `DPoP` credential goes to `verifyDpopProof`; a Bearer token with `cnf` is refused. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `MissingAccessTokenError` (401) when the request carries no credential (no `Authorization` header, no token in it, or a scheme the plugin does not take), and `JWTInvalidError` (401) for a token that does not verify, is revoked, or fails its binding. It lets `JWTExpiredError` (401) and errors from `verifyDpopProof` propagate. `verifyRequestAccessToken` throws the same.
+
+### `fastify.verifyRequestAccessToken(request, policy?)`
+
+The checks `requireJwt` makes, returning the verified `JWTPayload` instead of setting `request.jwtPayload`. A route that needs a stricter check passes an `AccessTokenCheckPolicy`:
+
+- `acceptIssuer(issuer, request)` replaces the comparison with the configured `issuer`. It runs after the signature check, and a token with no `iss` is refused before it is called.
+- `requireTyp: true` requires the RFC 9068 `typ: at+jwt` header whatever `requireAccessTokenTyp` says. It can only tighten that setting.
+
+The signature, expiry, revocation and DPoP checks always run. The auth server's API family guards (`requireFamilyToken`) are built on it.

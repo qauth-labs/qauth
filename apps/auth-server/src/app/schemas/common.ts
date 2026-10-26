@@ -6,19 +6,6 @@ import {
   OAUTH_URI_PARAM_MAX_LENGTH,
 } from '../constants/security';
 
-/**
- * Error response schema (matches error handler output)
- */
-export const errorResponseSchema = z.object({
-  error: z.string(),
-  statusCode: z.number(),
-});
-
-/**
- * Error response type
- */
-export type ErrorResponse = z.infer<typeof errorResponseSchema>;
-
 /** An ASCII tab, line feed or carriage return. */
 const TAB_OR_NEWLINE = /[\t\n\r]/;
 

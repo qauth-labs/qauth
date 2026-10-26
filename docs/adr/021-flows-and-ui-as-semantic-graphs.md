@@ -106,7 +106,7 @@ requires the format to express.
   write and do. The actors are the three API families of
   [ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 7: admin, account and
   developer. An admin policy also names the scope it needs. A write that ADR-019 Decision 7 counts
-  as a security operation names `admin:security`.
+  as a security operation names `qauth:admin:security`.
 - **Invariants.** Named rules over fields and edges.
 
 The part that code already declares is generated, never copied by hand:
@@ -130,12 +130,12 @@ fields:
   clientSecretHash: { sensitivity: secret } # never projected
 policies:
   - actor: admin
-    scope: admin:write
+    scope: qauth:admin:write
     read: [clientId, name, environment, redirectUris, enabled]
     write: [name, enabled]
     do: [tightenEnvironment] # tightening is free, ADR-019 Decision 10
   - actor: admin
-    scope: admin:security # security operations, ADR-019 Decision 7
+    scope: qauth:admin:security # security operations, ADR-019 Decision 7
     write: [environment, redirectUris]
   - actor: developer
     where: Client.developer = caller

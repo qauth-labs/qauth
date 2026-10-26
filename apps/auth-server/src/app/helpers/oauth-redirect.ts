@@ -1,4 +1,5 @@
 import { REFUSED_CUSTOM_REDIRECT_URI_SCHEMES } from '@qauth-labs/server-config';
+import { InvalidRequestError } from '@qauth-labs/shared-errors';
 
 import type { EnvironmentPolicy } from './environment-policy';
 
@@ -261,8 +262,8 @@ export type AuthorizationResponseParams = (
   /**
    * The AS issuer identifier, VERBATIM as advertised in the `issuer` member of
    * the discovery metadata. Callers MUST source it from
-   * `resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())` so the two can
-   * never drift.
+   * `realmIssuer(requestRealm(request))` (`helpers/realm-url.ts`), the value
+   * the realm's discovery documents publish, so the two can never drift.
    */
   iss: string;
 };
@@ -295,4 +296,22 @@ export function buildRedirectUrl(redirectUri: string, params: AuthorizationRespo
   }
   u.searchParams.set('iss', iss);
   return u.toString();
+}
+
+/**
+ * The refusal of a `redirect_uri` {@link redirectUriMatchesRegistered} does
+ * not match, at the authorization and consent endpoints (#513). RFC 6749
+ * §4.1.2.1 forbids redirecting to it, so it is answered in place.
+ */
+export function unregisteredRedirectUriError(): InvalidRequestError {
+  return new InvalidRequestError('redirect_uri not registered');
+}
+
+/**
+ * The refusal of a registered `redirect_uri` that
+ * {@link isRedirectUriAllowedForPolicy} does not permit, at the authorization
+ * and consent endpoints (#513). Which rule refused it goes to the event.
+ */
+export function redirectUriNotPermittedError(): InvalidRequestError {
+  return new InvalidRequestError('redirect_uri not permitted for this environment');
 }

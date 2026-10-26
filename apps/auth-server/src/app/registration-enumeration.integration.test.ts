@@ -11,6 +11,7 @@ import {
   extractCsrfToken,
   generateJwtPem,
   type PemKeyPair,
+  REQUIRED_TEST_ENVIRONMENT,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
@@ -36,6 +37,8 @@ import {
  */
 
 const REALM = 'master';
+/** Where the mailed links point: the default realm's issuer (#490). */
+const MAIL_LINK = { baseUrl: REQUIRED_TEST_ENVIRONMENT['JWT_ISSUER'] };
 const VICTIM = 'victim@example.test';
 const VICTIM_PASSWORD = 'Victims-Own-Long-Passphrase-77!';
 const FREE = 'nobody-here@example.test';
@@ -64,6 +67,16 @@ function stableHeaders(response: LightMyRequestResponse): Record<string, unknown
           : [name, value]
       )
   );
+}
+
+/**
+ * A problem document without its `trace_id`, which is the request id and so
+ * differs between any two requests (#513). Every other member must match.
+ */
+function stableProblem(response: LightMyRequestResponse): Record<string, unknown> {
+  const { trace_id: traceId, ...rest } = response.json() as Record<string, unknown>;
+  expect(traceId).toEqual(expect.any(String));
+  return rest;
 }
 
 describe('registration does not reveal whether an address is registered (real containers)', () => {
@@ -143,7 +156,9 @@ describe('registration does not reveal whether an address is registered (real co
     const sent = vi.spyOn(app.emailService, 'sendVerificationEmail');
     try {
       expect((await register(app, VICTIM, VICTIM_PASSWORD)).statusCode).toBe(202);
-      await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(VICTIM, expect.any(String)));
+      await vi.waitFor(() =>
+        expect(sent).toHaveBeenCalledWith(VICTIM, expect.any(String), MAIL_LINK)
+      );
       const token = sent.mock.calls.at(-1)?.[1];
       const verified = await app.inject({
         method: 'POST',
@@ -182,8 +197,9 @@ describe('registration does not reveal whether an address is registered (real co
       const loginFree = await login(app, FREE, ATTACKER_PASSWORD);
 
       expect(loginTaken.statusCode).toBe(401);
+      expect(loginTaken.json()).toMatchObject({ status: 401, code: 'invalid_credentials' });
       expect(loginFree.statusCode).toBe(loginTaken.statusCode);
-      expect(loginFree.body).toBe(loginTaken.body);
+      expect(stableProblem(loginFree)).toEqual(stableProblem(loginTaken));
       expect(stableHeaders(loginFree)).toEqual(stableHeaders(loginTaken));
 
       // The same through the hosted login page. The page echoes the typed
@@ -220,7 +236,9 @@ describe('registration does not reveal whether an address is registered (real co
       const again = await register(app, FREE, 'Another-Long-Passphrase-31!');
 
       expect(again.statusCode).toBe(202);
-      await vi.waitFor(() => expect(links).toHaveBeenCalledWith(FREE, expect.any(String)));
+      await vi.waitFor(() =>
+        expect(links).toHaveBeenCalledWith(FREE, expect.any(String), MAIL_LINK)
+      );
       const realm = await app.repositories.realms.findByName(REALM);
       if (!realm) throw new Error('no realm');
       const credential = await app.repositories.userCredentials.findByRealmProviderSub(

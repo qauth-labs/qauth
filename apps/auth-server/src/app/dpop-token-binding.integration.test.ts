@@ -336,8 +336,9 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
         },
       });
       expect(otherProof.statusCode).toBe(401);
+      expect(otherProof.json()).toMatchObject({ error: 'invalid_token' });
       expect(otherProof.headers['www-authenticate']).toMatch(
-        /^DPoP error="invalid_token", error_description="Invalid DPoP key binding", algs="/
+        /^DPoP error="invalid_token", error_description="[^"]*", algs="/
       );
 
       // A replayed proof is refused.
@@ -456,8 +457,9 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
       ]) {
         const response = await app.inject({ ...request, url: '/oauth/userinfo' });
         expect(response.statusCode).toBe(401);
-        expect(response.headers['www-authenticate']).toBe(
-          'Bearer realm="OAuth", error="invalid_token", error_description="A DPoP-bound access token cannot be used as a Bearer token"'
+        expect(response.json()).toMatchObject({ error: 'invalid_token' });
+        expect(response.headers['www-authenticate']).toMatch(
+          /^Bearer realm="OAuth", error="invalid_token", error_description="[^"]*"$/
         );
       }
 

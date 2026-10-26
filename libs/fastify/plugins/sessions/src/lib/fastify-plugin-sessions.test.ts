@@ -35,7 +35,10 @@ function repositories(
     create: vi.fn(async () => ROW),
     findById: vi.fn(async () => ROW),
     updateLastSeen: vi.fn(async () => true),
-    revoke: vi.fn(async () => ROW),
+    revoke: vi.fn(async () => ({
+      session: ROW,
+      clients: [{ sessionId: SID, oauthClientId: 'client-row', firstSeenAt: 1 }],
+    })),
   };
   const realms = { findById: vi.fn(async () => realm) };
   return { sessions, realms, repos: { sessions, realms } as unknown as Repositories };
@@ -90,8 +93,10 @@ describe('repositorySessionStore', () => {
     expect(await store.touchLastSeen(REALM, SID, 60_000)).toBe(true);
     expect(sessions.updateLastSeen).toHaveBeenCalledWith(REALM, SID, { minIntervalMs: 60_000 });
 
-    await store.revoke(REALM, SID, 'sign_out');
+    expect(await store.revoke(REALM, SID, 'sign_out')).toEqual(ROW);
     expect(sessions.revoke).toHaveBeenCalledWith(REALM, SID, 'sign_out');
+    sessions.revoke.mockResolvedValueOnce(undefined as never);
+    expect(await store.revoke(REALM, SID, 'sign_out')).toBeUndefined();
   });
 });
 

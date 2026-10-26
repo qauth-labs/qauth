@@ -31,8 +31,10 @@ import {
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
+  resolveUserGrantAudience,
   SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS,
   toAgentScopeContext,
+  unlistedReservedAudiences,
   validateScopes,
 } from './client-auth';
 
@@ -415,6 +417,9 @@ describe('classifyClientAuthentication (RFC 6749 §2.3 — one mechanism only)',
 });
 
 describe('authenticateClientRequest', () => {
+  /** The realm the token request was resolved to (#490). */
+  const REQUEST_REALM = { id: 'realm', issuer: 'https://auth.example.com' };
+
   function stub(client: OAuthClientLike | null, passwordValid = true) {
     return {
       repositories: {
@@ -422,7 +427,6 @@ describe('authenticateClientRequest', () => {
       },
       passwordHasher: { verifyPassword: vi.fn().mockResolvedValue(passwordValid) },
       redis: { get: vi.fn(), set: vi.fn() },
-      jwtUtils: { getIssuer: () => 'https://auth.example.com' },
     } as unknown as FastifyInstance;
   }
 
@@ -442,7 +446,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid', client_secret: 'secret' },
         { allowPublic: false }
@@ -459,7 +463,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         stub(publicClient),
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid' },
         { allowPublic: true }
@@ -468,7 +472,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         stub({ ...publicClient, suspended: true }),
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid' },
         { allowPublic: true }
@@ -481,7 +485,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid' },
         { allowPublic: false }
@@ -495,7 +499,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         {
           client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
@@ -513,7 +517,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         {
           client_id: 'cid',
@@ -559,9 +563,15 @@ describe('validateScopes', () => {
   });
 
   it('names each scope it refuses once', () => {
-    expect(() => validateScopes('read admin admin', ['read'])).toThrow(
-      expect.objectContaining({ errorDescription: 'admin not permitted for this client' })
-    );
+    let refusal: unknown;
+    try {
+      validateScopes('read admin admin', ['read']);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(InvalidScopeError);
+    // Which scope, and how often: not the words around it.
+    expect((refusal as InvalidScopeError).errorDescription?.match(/\badmin\b/g)).toHaveLength(1);
   });
 
   // ADR-007 §2 (#184): the optional agent context enforces the scope-mode cap
@@ -699,5 +709,81 @@ describe('resolveAudience', () => {
   it('falls back to clientId when an audience entry is oversized', () => {
     const oversized = ['a'.repeat(257)];
     expect(resolveAudience({ ...base, audience: oversized })).toBe('cid');
+  });
+});
+
+describe('resolveUserGrantAudience (#509)', () => {
+  const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+  const base = {
+    id: 'c',
+    clientId: 'app',
+    clientSecretHash: '',
+    enabled: true,
+    grantTypes: ['authorization_code'],
+    scopes: [],
+  };
+
+  it('issues a family audience only when a resource names it', () => {
+    const client = { ...base, audience: [ACCOUNT, 'https://api.example.com'] };
+    expect(resolveUserGrantAudience(client, [ACCOUNT])).toBe(ACCOUNT);
+    expect(resolveUserGrantAudience(client, [])).toBe('https://api.example.com');
+    expect(resolveUserGrantAudience(client)).toBe('https://api.example.com');
+    expect(resolveUserGrantAudience({ ...base, audience: [ACCOUNT] })).toBe('app');
+  });
+
+  it("keeps the system client's default, which /auth/login mints from", () => {
+    const system = { ...base, clientId: 'system', audience: [ACCOUNT] };
+    expect(resolveUserGrantAudience(system)).toBe(ACCOUNT);
+  });
+
+  it('falls back as resolveAudience does for a malformed stored audience', () => {
+    expect(resolveUserGrantAudience({ ...base, audience: 'x' as unknown as string[] })).toBe('app');
+  });
+});
+
+describe('unlistedReservedAudiences (#509)', () => {
+  const ADMIN = 'urn:qauth:aud:admin:v1-rc.0';
+  const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+
+  it('returns the reserved audiences the client does not list', () => {
+    expect(unlistedReservedAudiences({ audience: null }, ADMIN)).toEqual([ADMIN]);
+    expect(unlistedReservedAudiences({ audience: [ADMIN] }, [ADMIN, ACCOUNT])).toEqual([ACCOUNT]);
+    expect(
+      unlistedReservedAudiences({ audience: [ADMIN] }, ['URN:QAUTH:AUD:admin:v1-rc.0'])
+    ).toEqual(['URN:QAUTH:AUD:admin:v1-rc.0']);
+  });
+
+  it('returns nothing for listed or ordinary audiences', () => {
+    expect(unlistedReservedAudiences({ audience: [ADMIN, ACCOUNT] }, [ADMIN, ACCOUNT])).toEqual([]);
+    expect(
+      unlistedReservedAudiences({ audience: null }, ['https://api.example.com', 'client-1'])
+    ).toEqual([]);
+  });
+
+  it('lists nothing from a malformed stored audience', () => {
+    expect(unlistedReservedAudiences({ audience: ADMIN as unknown as string[] }, [ADMIN])).toEqual([
+      ADMIN,
+    ]);
+  });
+
+  // Neither self-registration stores an `audience`: a row that holds a
+  // reserved one was written another way, and fails closed.
+  it.each([
+    ['a CIMD client', { metadata: { registrationType: 'cimd' } }],
+    ['a dynamically registered client', { metadata: { registrationType: 'dynamic' } }],
+    ['a client with a dynamic registration time', { dynamicRegisteredAt: 1_700_000_000_000 }],
+  ])('treats %s as listing no reserved audience', (_label, origin) => {
+    expect(
+      unlistedReservedAudiences({ audience: [ADMIN, 'https://api.example.com'], ...origin }, [
+        ADMIN,
+        'https://api.example.com',
+      ])
+    ).toEqual([ADMIN]);
+  });
+
+  it('reads the listing of an operator-set client, metadata or not', () => {
+    for (const origin of [{}, { metadata: null, dynamicRegisteredAt: null }, { metadata: {} }]) {
+      expect(unlistedReservedAudiences({ audience: [ADMIN], ...origin }, ADMIN)).toEqual([]);
+    }
   });
 });

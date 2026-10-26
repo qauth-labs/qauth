@@ -6,6 +6,22 @@
 -- migration runs on a table that already has rows. A family started with its
 -- earliest token, and the purge job deletes a family only whole, so that token
 -- is still here while any token of the family is.
+--
+-- Locks first, in the order every writer of both tables takes them. A
+-- redemption, on either release, spends its code in `authorization_codes` and
+-- then inserts into `refresh_tokens`; a consent revocation and a logout do the
+-- same. Taking `refresh_tokens` first and `authorization_codes` only for its
+-- ADD COLUMN below would let a redemption that spent its code while the
+-- runner held `refresh_tokens` wait on the runner while the runner waited on
+-- it, and PostgreSQL would abort one of them as a deadlock, the migration
+-- included. ADD COLUMN needs ACCESS EXCLUSIVE on `authorization_codes`, so
+-- that is the lock taken first: codes are neither read nor written until the
+-- runner commits, as refresh tokens are not. The backfill below stays one
+-- statement; operate/upgrades measures the pause it causes.
+LOCK TABLE "authorization_codes" IN ACCESS EXCLUSIVE MODE;
+--> statement-breakpoint
+LOCK TABLE "refresh_tokens" IN ACCESS EXCLUSIVE MODE;
+--> statement-breakpoint
 ALTER TABLE "refresh_tokens" ADD COLUMN "family_created_at" bigint;
 --> statement-breakpoint
 UPDATE "refresh_tokens" t

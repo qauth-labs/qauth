@@ -545,7 +545,7 @@ try {
     // Token expired
     console.error(error.message); // "JWT token has expired"
     console.error(error.statusCode); // 401
-    console.error(error.code); // "JWT_EXPIRED"
+    console.error(error.code); // "ACCESS_TOKEN_EXPIRED"
   }
 }
 ```
@@ -564,7 +564,7 @@ try {
     // Token invalid
     console.error(error.message); // "Invalid JWT token: ..."
     console.error(error.statusCode); // 401
-    console.error(error.code); // "JWT_INVALID"
+    console.error(error.code); // "INVALID_ACCESS_TOKEN"
   }
 }
 ```

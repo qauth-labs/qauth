@@ -87,13 +87,19 @@ import { randomBytes } from 'node:crypto';
 
 // A decoy Argon2id hash of a random secret nobody holds, made by the
 // configured hasher so it costs what a stored hash costs (as QAuth's
-// apps/auth-server/src/app/helpers/decoy-hash.ts does).
+// apps/auth-server/src/app/helpers/decoy-hash.ts does). Made before the server
+// takes requests, so the first miss only verifies, as every hit does.
 let decoyHash: Promise<string> | undefined;
+const makeDecoyHash = () => fastify.passwordHasher.hashPassword(randomBytes(32).toString('hex'));
+fastify.addHook('onReady', async () => {
+  decoyHash = makeDecoyHash();
+  await decoyHash;
+});
 
 /** Spend one Argon2id verification on a login that found no hash to check. Never throws. */
 async function verifyAgainstDecoyHash(password: string): Promise<void> {
   try {
-    decoyHash ??= fastify.passwordHasher.hashPassword(randomBytes(32).toString('hex'));
+    decoyHash ??= makeDecoyHash(); // only after a failed decoy
     await fastify.passwordHasher.verifyPassword(await decoyHash, password);
   } catch (err) {
     decoyHash = undefined; // a failed decoy must not turn a miss into a 500
@@ -459,13 +465,19 @@ function sanitizeUser<T extends Record<string, unknown>>(user: T): T {
 
 // A decoy Argon2id hash of a random secret nobody holds, made by the
 // configured hasher so it costs what a stored hash costs (as QAuth's
-// apps/auth-server/src/app/helpers/decoy-hash.ts does).
+// apps/auth-server/src/app/helpers/decoy-hash.ts does). Made before the server
+// takes requests, so the first miss only verifies, as every hit does.
 let decoyHash: Promise<string> | undefined;
+const makeDecoyHash = () => fastify.passwordHasher.hashPassword(randomBytes(32).toString('hex'));
+fastify.addHook('onReady', async () => {
+  decoyHash = makeDecoyHash();
+  await decoyHash;
+});
 
 /** Spend one Argon2id verification on a login that found no hash to check. Never throws. */
 async function verifyAgainstDecoyHash(password: string): Promise<void> {
   try {
-    decoyHash ??= fastify.passwordHasher.hashPassword(randomBytes(32).toString('hex'));
+    decoyHash ??= makeDecoyHash(); // only after a failed decoy
     await fastify.passwordHasher.verifyPassword(await decoyHash, password);
   } catch (err) {
     decoyHash = undefined; // a failed decoy must not turn a miss into a 500

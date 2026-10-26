@@ -527,6 +527,50 @@ describe('job runner on a real Postgres', () => {
       );
     });
 
+    it('lets the position and pending deliveries of a kind no node serves hold nothing back', async () => {
+      const app = await retentionNode();
+      const realm = await seed(app, 0, 0);
+      // An SSF stream fed while the transmitter was on: its position, and a
+      // delivery still pending for the realm's event.
+      const left = {
+        kinds: ['ssf'],
+        destinations: [{ kind: 'ssf', id: 'stream', realmId: realm }],
+      };
+      await app.repositories.eventDeliveries.fanOut({ ...left, now: Date.now() });
+      const userId = randomUUID();
+      const eventId = await app.repositories.events.emitInOwnTransaction({
+        type: 'urn:qauth:event:user.signed_in:v1-rc.0',
+        realm,
+        actor: { type: 'user', id: userId },
+        subject: { type: 'user', id: userId },
+        data: { method: 'password' },
+      });
+      await app.repositories.eventDeliveries.fanOut({ ...left, now: Date.now() });
+      expect(await app.repositories.eventDeliveries.listForEvent(eventId)).toHaveLength(1);
+      const later = Date.now() + 91 * DAY;
+      const job = (unservedKinds: string[]) =>
+        createEventRetentionJob({
+          retention: app.repositories.eventRetention,
+          routes: [],
+          unservedKinds,
+          fallback: FALLBACK,
+        }).run({
+          signal: new AbortController().signal,
+          now: () => later,
+          log: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          } as unknown as FastifyInstance['log'],
+        });
+
+      // Counted in full, the stream would hold the realm's events for ever.
+      await job([]);
+      expect(await counts(realm)).toEqual({ user: 1 });
+      await job(['ssf']);
+      expect(await counts(realm)).toEqual({});
+    });
+
     it('two job instances at once delete each row once and raise no error', async () => {
       const nodesAtOnce = [await retentionNode(), await retentionNode()];
       const realms: string[] = [];

@@ -3,20 +3,24 @@ import {
   BadRequestError,
   ForbiddenError,
   InvalidClientError,
+  InvalidClientMetadataError,
   InvalidCredentialsError,
   InvalidDpopProofError,
   InvalidGrantError,
+  InvalidRedirectUriError,
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
   InvalidTokenError,
   JWTExpiredError,
   JWTInvalidError,
+  MissingAccessTokenError,
   NotFoundError,
   TemporarilyUnavailableError,
   TokenExpiredError,
   TooManyRequestsError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import {
   type EventDataOf,
@@ -187,12 +191,15 @@ export async function emitUserEvent<Type extends RegisteredEventType>(
 /** The OAuth error classes whose `message` is the registered `error` code. */
 const OAUTH_CODE_ERRORS = [
   InvalidClientError,
+  InvalidClientMetadataError,
   InvalidDpopProofError,
   InvalidGrantError,
+  InvalidRedirectUriError,
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 ] as const;
 
 /** A `snake_case` code, the form an event's `error` and `reason` take. */
@@ -216,6 +223,7 @@ export function oauthErrorCode(error: unknown): string {
   if (
     error instanceof JWTInvalidError ||
     error instanceof JWTExpiredError ||
+    error instanceof MissingAccessTokenError ||
     error instanceof InvalidTokenError ||
     error instanceof TokenExpiredError
   ) {

@@ -71,12 +71,13 @@ function createProvider(
  *   provider: 'mock',
  *   serviceConfig: {
  *     defaultFrom: 'noreply@example.com',
- *     baseUrl: 'https://example.com',
  *   },
  * });
  *
- * // Use in routes
- * await fastify.emailService.sendVerificationEmail('user@example.com', token);
+ * // Use in routes; the link starts at the issuer of the account's realm
+ * await fastify.emailService.sendVerificationEmail('user@example.com', token, {
+ *   baseUrl: 'https://auth.example.com',
+ * });
  * ```
  */
 export const emailPlugin = fp<EmailPluginOptions>(

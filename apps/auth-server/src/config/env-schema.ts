@@ -17,6 +17,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
+  ssfEnvSchema,
   trustRegistryEnvSchema,
   webauthnEnvSchema,
 } from '@qauth-labs/server-config';
@@ -130,6 +131,9 @@ export const envSchema = z
     // DPoP (RFC 9449; ADR-014 §3, ADR-017 Decision 14, #479, #480):
     // DPOP_ENABLED, the one switch for DPoP-bound tokens.
     ...dpopEnvSchema.shape,
+    // The Shared Signals Framework transmitter (ADR-018 §3, #410):
+    // SSF_TRANSMITTER_ENABLED, off by default; each realm has its own switch too.
+    ...ssfEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production

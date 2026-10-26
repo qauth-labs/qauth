@@ -78,14 +78,15 @@
           "x-extensible-enum": [
             "user",
             "client",
-            "api_key"
+            "api_key",
+            "ssf_stream"
           ]
         },
         "id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 255,
-          "description": "The subject's identifier: a user id, a client's `client_id` or an API key id. It stays valid after the subject is deleted."
+          "description": "The subject's identifier: a user id, a client's `client_id`, an API key id or a Shared Signals Framework `stream_id`. It stays valid after the subject is deleted."
         }
       },
       "required": [

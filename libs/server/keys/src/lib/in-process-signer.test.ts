@@ -932,6 +932,40 @@ describe('encrypt and decrypt', () => {
     );
   });
 
+  it('lets the delivery role decrypt only a delivery destination secret, without echoing the context', async () => {
+    const { signer } = await setup();
+    const destination = 'delivery:ssf_streams.authorization_header:s1';
+    const stored = await signer.encrypt('api', {
+      realmId: REALM_A,
+      plaintext,
+      context: destination,
+    });
+    expect(
+      await signer.decrypt('delivery', {
+        realmId: REALM_A,
+        ciphertext: stored,
+        context: destination,
+      })
+    ).toEqual(plaintext);
+
+    const other = await signer.encrypt('api', {
+      realmId: REALM_A,
+      plaintext,
+      context: 'secret-row',
+    });
+    const error = await signer
+      .decrypt('delivery', { realmId: REALM_A, ciphertext: other, context: 'secret-row' })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SignerAccessDeniedError);
+    expect((error as Error).message).not.toContain('secret-row');
+    await expect(
+      signer.decrypt('delivery', { realmId: REALM_A, ciphertext: other })
+    ).rejects.toBeInstanceOf(SignerAccessDeniedError);
+    await expect(
+      signer.encrypt('delivery', { realmId: REALM_A, plaintext, context: destination })
+    ).rejects.toBeInstanceOf(SignerAccessDeniedError);
+  });
+
   it("refuses another realm's ciphertext", async () => {
     const { signer } = await setup();
     const ciphertext = await signer.encrypt('local', { realmId: REALM_A, plaintext });
@@ -1058,16 +1092,16 @@ describe('encrypt and decrypt', () => {
 });
 
 describe('getVerificationKeys and getJwks', () => {
-  it('publish the token and event signing keys, never a symmetric key', async () => {
+  it('publish the token keys in the JWKS and the event keys apart, never a symmetric key', async () => {
     const { signer, keys } = await setup();
 
     const jwks = await signer.getJwks('local', REALM_A);
+    const events = await signer.getVerificationKeys('local', REALM_A, 'event_signing');
 
-    expect(jwks.keys.map((key) => key.kid)).toEqual([
-      activeKid(keys, REALM_A, 'token_signing'),
-      activeKid(keys, REALM_A, 'event_signing'),
-    ]);
-    for (const key of jwks.keys) {
+    // The event keys verify SETs at the SSF transmitter's own JWKS (d-1026-09).
+    expect(jwks.keys.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'token_signing')]);
+    expect(events.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'event_signing')]);
+    for (const key of [...jwks.keys, ...events.map((event) => event.publicJwk)]) {
       expect(key).toMatchObject({ kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig' });
       expect(key).not.toHaveProperty('d');
     }
@@ -1106,6 +1140,7 @@ describe('getVerificationKeys and getJwks', () => {
     store.update(REALM_A, event, { status: 'compromised' });
     advance(REFRESH_MS);
     expect((await signer.getJwks('local', REALM_A)).keys).toEqual([]);
+    expect(await signer.getVerificationKeys('local', REALM_A, 'event_signing')).toEqual([]);
   });
 
   it('return frozen copies', async () => {
@@ -1573,8 +1608,15 @@ describe('caller policy', () => {
   it.each(cases)('%s calling %s follows SIGNER_POLICY', async (caller, operation) => {
     const { signer } = await setup({ hybrid: true, scoped: true });
     const grant = SIGNER_POLICY[caller];
+    // The table's decrypt uses a context outside every prefix list, so a role
+    // whose decrypt grant is a list (delivery) is refused it; the delivery test
+    // above covers a context inside its list.
     const allowed =
-      operation === 'signJws' ? grant.signJws.includes('token_signing') : grant[operation];
+      operation === 'signJws'
+        ? grant.signJws.includes('token_signing')
+        : operation === 'decrypt'
+          ? grant.decrypt === true
+          : grant[operation];
 
     const result = CALLS[operation](signer, caller);
 

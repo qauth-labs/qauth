@@ -144,6 +144,11 @@ export const eventDeliveries = pgTable(
     index('idx_event_deliveries_pending_time')
       .on(t.eventTime)
       .where(sql`${t.status} = 'pending'`),
+    // A destination's latest failed attempt, for a status a receiver reads
+    // (the SSF stream status of #410): only rows whose last attempt failed.
+    index('idx_event_deliveries_last_error')
+      .on(t.destinationKind, t.destinationId, t.updatedAt)
+      .where(sql`${t.lastErrorClass} is not null`),
   ]
 );
 

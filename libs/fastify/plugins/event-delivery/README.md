@@ -19,7 +19,8 @@ await fastify.register(eventDeliveryPlugin, {
 - **Queue.** The plugin builds the delivery queue (`createEventDeliveriesRepository` of
   `@qauth-labs/infra-db`) on `db`.
 - **Signer handle.** `deliverySignerHandle(signer)` calls the signer as the `delivery` caller:
-  webhook signatures and `event_signing` tokens, nothing else (`SIGNER_POLICY`).
+  webhook signatures, `event_signing` tokens and decrypting a destination's stored secret, nothing
+  else (`SIGNER_POLICY`).
 - **Lifecycle.** The role starts in an `onReady` hook and stops in an `onClose` hook:
   `fastify.close()` waits for the attempts in flight up to the role's shutdown limit, then releases
   the rest. Register the plugin after the database plugin.
