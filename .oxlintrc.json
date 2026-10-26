@@ -376,7 +376,8 @@
       "excludeFiles": [
         "libs/server/keys/**",
         "libs/fastify/plugins/signer/**",
-        "libs/keys/aws-kms/**"
+        "libs/keys/aws-kms/**",
+        "libs/keys/vault/**"
       ],
       "rules": {
         // Import and export declarations, `import x = require()` and a dynamic
