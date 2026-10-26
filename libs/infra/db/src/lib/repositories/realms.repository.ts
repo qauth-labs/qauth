@@ -362,7 +362,8 @@ function rethrowUnique(error: unknown, fallbackConstraint: string): never {
  * Every realm it creates gets `options.seeds` for the policies its creator
  * leaves out, and every create and update refuses event retention outside
  * its limits, an `sso_max_lifespan` of zero or less and a dynamic
- * registration allowlist with an `admin:` scope ({@link BadRequestError}).
+ * registration allowlist with a scope in the reserved `qauth:` namespace
+ * ({@link BadRequestError}).
  *
  * @param defaultDb - Database client to use for queries
  * @param options - The realm policy seeds (ADR-019 Decision 10)
