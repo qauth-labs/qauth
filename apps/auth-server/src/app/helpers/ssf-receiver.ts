@@ -4,20 +4,6 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { type RealmRow, requestRealm } from './request-realm';
 
-/**
- * A 404 of the SSF surface: a realm that does not run the transmitter, or a
- * stream the receiver does not have. It names nothing the caller did not
- * send, so it tells no receiver whether another receiver's stream exists.
- */
-export class SsfNotFoundError extends Error {
-  readonly statusCode = 404;
-
-  constructor(message = 'Not found') {
-    super(message);
-    this.name = 'SsfNotFoundError';
-  }
-}
-
 /** A receiver's OAuth client row, as the repository returns it. */
 type ReceiverClientRow = NonNullable<
   Awaited<ReturnType<FastifyInstance['repositories']['oauthClients']['findByClientId']>>
@@ -73,7 +59,10 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
  *
  * Every refusal but the scope's 403 is a 401 with an `invalid_token`
  * challenge, as RFC 6750 §3.1 prescribes for a token not valid for the
- * resource.
+ * resource. Both are problem documents (`jwt_invalid`, `forbidden`): SSF 1.0
+ * gives stream management statuses but no error body, so these are not OAuth
+ * protocol endpoints (ADR-019 Decision 7, #513). The 403's challenge says
+ * `insufficient_scope` with `scope="ssf:stream"`.
  */
 export function createRequireSsfReceiver(
   fastify: FastifyInstance
@@ -87,8 +76,11 @@ export function createRequireSsfReceiver(
     }
     const scopes = (claims.scope ?? '').split(' ');
     if (!scopes.includes(SSF_STREAM_SCOPE)) {
-      // RFC 6750 §3.1: a valid token without the scope is a 403.
-      throw new ForbiddenError(`Access token lacks the ${SSF_STREAM_SCOPE} scope`);
+      // RFC 6750 §3.1: a valid token without the scope is a 403, and the
+      // challenge names the scope that would let it through.
+      throw new ForbiddenError(`Access token lacks the ${SSF_STREAM_SCOPE} scope`, {
+        requiredScope: SSF_STREAM_SCOPE,
+      });
     }
     const realm = requestRealm(request);
     const audiences = claims.aud === undefined ? [] : [claims.aud].flat();

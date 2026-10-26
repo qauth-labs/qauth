@@ -17,7 +17,7 @@ import { expectOAuthError, expectProblem } from '../../helpers/error-shape';
  * writes.
  */
 
-const { baseUrl } = wireConfig();
+const { baseUrl, ssfTransmitter } = wireConfig();
 
 function post(path: string, contentType: string, body: string): Promise<Response> {
   return fetch(serverPath(baseUrl, path), {
@@ -81,21 +81,37 @@ describe('RFC 9457 §3 — every route but the protocol endpoints answers a prob
   });
 });
 
-// GET /consents is the portal's cookie-authenticated list: without a browser
-// session it answers 401 with an empty list, not an error document. Whatever
-// it answers, it is not the old envelope.
+// GET /consents is the cookie-authenticated consent list. Without a browser
+// session it answers the 401 problem every route answers a request without
+// valid credentials with; the credential is a cookie, so there is no challenge.
 describe('the consent list without a browser session', () => {
-  it('answers 401 without a member of the old envelope', async () => {
+  it('answers a 401 unauthorized problem with no WWW-Authenticate challenge (§3.1)', async () => {
     const response = await get('/consents');
-    const text = await response.text();
+    expect(response.headers.get('www-authenticate')).toBeNull();
 
-    expect(response.status, text).toBe(401);
-    const body = JSON.parse(text) as Record<string, unknown>;
-    expect(body, text).not.toHaveProperty('statusCode');
-    expect(body, text).not.toHaveProperty('error');
-    expect(body, text).not.toHaveProperty('code');
-    expect(body, text).not.toHaveProperty('stack');
+    const problem = await expectProblem(response, { status: 401, code: 'unauthorized' });
+
+    expect(problem).not.toHaveProperty('consents');
+    expect(problem).not.toHaveProperty('statusCode');
   });
+});
+
+// SSF 1.0 §8.1 gives stream management statuses but no error body, so the
+// transmitter's routes answer problem documents, with the RFC 6750 §3
+// challenge of a bearer-protected resource. Only on a target whose realm runs
+// the transmitter (`QAUTH_WIRE_SSF_TRANSMITTER=1`).
+describe('SSF stream management without a receiver token', () => {
+  it.runIf(ssfTransmitter)(
+    'answers a 401 jwt_invalid problem and a Bearer challenge (RFC 6750 §3.1)',
+    async () => {
+      const response = await get('/ssf/stream');
+      expect(response.headers.get('www-authenticate') ?? '').toMatch(/^Bearer\b/);
+
+      const problem = await expectProblem(response, { status: 401, code: 'jwt_invalid' });
+
+      expect(problem).not.toHaveProperty('statusCode');
+    }
+  );
 });
 
 describe('RFC 6749 §5.2 — the token endpoint answers the error response body', () => {

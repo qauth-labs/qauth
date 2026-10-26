@@ -27,7 +27,11 @@ finds the failure in the server log.
 The list is generated from `PROBLEM_CODES` in
 `apps/auth-server/src/app/api-conventions/problem.ts`, and a test fails when the two differ. Which
 type each domain error class answers is set once, in
-`apps/auth-server/src/app/api-conventions/error-classes.ts`.
+`apps/auth-server/src/app/api-conventions/error-classes.ts`: the classes of
+`@qauth-labs/shared-errors`, and those a route or a server library defines itself. The Shared
+Signals Framework transmitter's routes answer `bad-request`, `validation-error`, `jwt-invalid`,
+`forbidden`, `not-found`, `conflict` and `too-many-requests`; a cookie-authenticated route reached
+without a browser session answers `unauthorized`.
 
 ## `bad-request`
 

@@ -502,6 +502,18 @@ a stream receives events only about the subjects its receiver added, and its
 verification events. Until the event mapping of #540 lands, `events_supported`
 is empty and verification events are the only ones sent.
 
+Errors are problem documents (see [Error model](#error-model)): SSF 1.0 gives
+stream management statuses but defines no error body, so these routes are not
+OAuth protocol endpoints. `400` is `validation_error` for a body or query the
+schema refuses and `bad_request` for a request the protocol refuses, with the
+reason in `detail` (`endpoint_url is refused`, a transmitter-supplied member that
+does not match, poll delivery); `401` is `jwt_invalid` with a
+`WWW-Authenticate: Bearer` challenge carrying `error="invalid_token"`; `403` is
+`forbidden` with `error="insufficient_scope", scope="ssf:stream"` in the
+challenge; `404` is `not_found`, for a stream the receiver does not have and, as
+for any path no route serves, for a realm that does not run the transmitter;
+`409` is `conflict`; and `429` is `too_many_requests` with `Retry-After`.
+
 ---
 
 ## Hosted UI
@@ -566,7 +578,8 @@ per-session CSRF token that **must** be echoed back as `X-CSRF-Token` on
 }
 ```
 
-Errors: `401` (no/invalid session) — returns `{ "consents": [] }` with no `csrfToken`.
+Errors: `401` `unauthorized` (no or invalid session), a problem document like every other error
+here. The credential is a cookie, so the answer carries no `WWW-Authenticate` challenge.
 
 ### `DELETE /consents/{id}`
 
@@ -578,8 +591,8 @@ it. Access tokens already issued stay valid until they expire.
 
 **`204 No Content`**. Errors: `400` (`invalid_csrf_token` — missing or
 mismatched `X-CSRF-Token`; the first outcome you'll hit if the header isn't
-wired up yet), `401` (no/invalid session), `404` (consent does not exist or
-is not owned by the caller).
+wired up yet), `401` (`unauthorized` — no or invalid session), `404`
+(`not_found` — consent does not exist or is not owned by the caller).
 
 ---
 

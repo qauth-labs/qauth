@@ -1,3 +1,4 @@
+import { SsfRequestError } from '@qauth-labs/fastify-plugin-ssf';
 import {
   BadRequestError,
   EmailAlreadyVerifiedError,
@@ -31,6 +32,8 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
+import { SignInRequiredError } from '../helpers/sign-in-required';
+import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import type { OAuthErrorCode } from './oauth-error';
 import { PROBLEM_CODES, type ProblemCode, problemTypeUri } from './problem';
 
@@ -45,7 +48,8 @@ import { PROBLEM_CODES, type ProblemCode, problemTypeUri } from './problem';
  *
  * One table keeps the codes stable: they are part of the 1.0 promise (ADR-018
  * §5), so a class is mapped here once, never at a throw site. A test fails
- * when a class of the package has no entry.
+ * when a class of the package has no entry. The classes a route or a server
+ * library defines itself are mapped the same way, in {@link APP_ERROR_CLASSES}.
  *
  * A class's own `code` member, in upper case, is the code of the body the
  * routes answered before #513, and is lower-cased here where it is published.
@@ -163,6 +167,31 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
   { errorClass: WeakPasswordError, code: 'weak_password', oauthError: 'invalid_request' },
 ];
 
+/**
+ * The error classes defined outside `@qauth-labs/shared-errors` that reach the
+ * error handler, each with the code it answers (#513): the refusal of a
+ * cookie-authenticated route without a browser session, and the Shared Signals
+ * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
+ * routes answer problem documents). Each code is one the problem types page
+ * publishes, for the status the class carries.
+ *
+ * A test fails when an error class of the app that declares a `statusCode` has
+ * no entry here. The one exception answers the code of whichever status it is
+ * thrown with: the wallet-link API's `WalletLinkRefusal` (`unauthorized`,
+ * `not_found` or `internal_error`).
+ */
+export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
+  { errorClass: SignInRequiredError, code: 'unauthorized', oauthError: 'invalid_request' },
+  // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
+  // protocol refuses. Its message, which echoes no value, is the `detail`.
+  { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },
+  { errorClass: SsfNotFoundError, code: 'not_found', oauthError: 'invalid_request' },
+  { errorClass: SsfStreamExistsError, code: 'conflict', oauthError: 'invalid_request' },
+];
+
+/** Every entry the error handler reads: the package's classes, then the app's own. */
+const ALL_ERROR_CLASSES: readonly ErrorClassEntry[] = [...ERROR_CLASSES, ...APP_ERROR_CLASSES];
+
 /** What a problem document says about one error class. */
 export interface ProblemDescription {
   readonly code: ProblemCode;
@@ -176,8 +205,8 @@ export function errorClassEntryOf(error: unknown): ErrorClassEntry | undefined {
   if (!(error instanceof Error)) return undefined;
   // Exact class first, so a subclass registered after its parent still wins.
   return (
-    ERROR_CLASSES.find((entry) => error.constructor === entry.errorClass) ??
-    ERROR_CLASSES.find((entry) => error instanceof entry.errorClass)
+    ALL_ERROR_CLASSES.find((entry) => error.constructor === entry.errorClass) ??
+    ALL_ERROR_CLASSES.find((entry) => error instanceof entry.errorClass)
   );
 }
 

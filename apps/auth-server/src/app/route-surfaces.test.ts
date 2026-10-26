@@ -42,6 +42,9 @@ function maximalEnvironment(): Record<string, string> {
     REDIS_URL: 'redis://127.0.0.1:1',
     RATE_LIMIT_ENABLED: 'false',
     METRICS_ENABLED: 'true',
+    // The SSF transmitter's routes (#410): problem routes, though they speak an
+    // OpenID protocol, because SSF 1.0 §8.1 defines no error body (#513).
+    SSF_TRANSMITTER_ENABLED: 'true',
     // The switches `openapi-export.ts --surface maximal` sets, for the same routes.
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
@@ -138,6 +141,9 @@ describe('route surface classes of the assembled app (#486)', () => {
       '/ui/wallet-login',
       '/auth/link/wallet',
       '/.well-known/assetlinks.json',
+      '/.well-known/ssf-configuration',
+      '/ssf/stream',
+      '/ssf/jwks.json',
       '/metrics',
       '*',
     ]) {

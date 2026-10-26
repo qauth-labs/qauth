@@ -46,7 +46,11 @@ answers in one of two formats, chosen by the route's `config.errorFormat`
 
 Which `code` and which OAuth `error` a domain error class answers is set once, in
 `apps/auth-server/src/app/api-conventions/error-classes.ts`; a new class in
-`@qauth-labs/shared-errors` needs an entry there (a test fails without one).
+`@qauth-labs/shared-errors` needs an entry there (a test fails without one). A
+class a route or a server library defines with a `statusCode` (the SSF
+transmitter's, `SignInRequiredError`) goes in `APP_ERROR_CLASSES` there, with a
+published code for its status; a test fails without one. A route never sends an
+error body of its own: it throws, and the handler answers.
 An OAuth error class carries its token as its `message` and its prose in
 `errorDescription`. A refusal that several routes raise comes from one helper in
 the module that owns it (e.g. `helpers/token-subject.ts`), so it reads one way.

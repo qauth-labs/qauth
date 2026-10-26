@@ -229,6 +229,23 @@ describe('OAuth protocol endpoints keep their RFC error shape (real containers, 
     expect(body['instance']).toBe('/api/clients/7f0d6a4e-2c1b-4e8f-9a3d-5b6c7d8e9f01');
   });
 
+  it('answers the consent routes without a browser session with the unauthorized problem and no challenge (RFC 9457 §3)', async () => {
+    // Before, the list answered `{ "consents": [] }` and the revocation an
+    // empty body: a second format on a route that is not an OAuth endpoint.
+    for (const request of [
+      { method: 'GET', url: '/consents' },
+      { method: 'DELETE', url: '/consents/7f0d6a4e-2c1b-4e8f-9a3d-5b6c7d8e9f01' },
+    ] as const) {
+      const response = await app().inject(request);
+
+      const body = expectProblem(response, 401, 'unauthorized');
+      expect(body['instance'], request.url).toBe(request.url);
+      expect(body, request.url).not.toHaveProperty('consents');
+      // The credential is a cookie: no authentication scheme to challenge in.
+      expect(response.headers['www-authenticate'], request.url).toBeUndefined();
+    }
+  });
+
   it('answers a validation failure with errors[] that point at each field and carry no schema internals (RFC 9457 §3)', async () => {
     const response = await app().inject({
       method: 'POST',

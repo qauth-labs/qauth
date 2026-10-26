@@ -42,6 +42,7 @@ import { ERROR_CLASSES } from '../api-conventions/error-classes';
 import { OAUTH_ERROR_CODES, oauthErrorResponses } from '../api-conventions/oauth-error';
 import { pageQuerySchema, pageSchema } from '../api-conventions/paging';
 import { PROBLEM_CODES, PROBLEM_TYPE_BASE, problemResponses } from '../api-conventions/problem';
+import { SignInRequiredError } from '../helpers/sign-in-required';
 import errorHandler from './error-handler';
 
 /**
@@ -152,7 +153,7 @@ async function buildApp(): Promise<FastifyInstance> {
     throw Object.assign(new Error('Unauthorized'), { statusCode: 401 });
   });
   app.get('/consents/cookie-only', async () => {
-    throw Object.assign(new Error('Unauthorized'), { statusCode: 401 });
+    throw new SignInRequiredError('Sign in to manage your consents.');
   });
 
   // OAuth protocol endpoints.
@@ -541,6 +542,16 @@ describe('error-handler plugin (#513)', () => {
 
         expect(response.statusCode).toBe(401);
         expect(response.headers['www-authenticate']).toBeUndefined();
+        // A missing browser session is the `unauthorized` problem, not a body
+        // of the route's own (#513).
+        expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+        expect(response.json()).toMatchObject({
+          status: 401,
+          code: 'unauthorized',
+          type: `${PROBLEM_TYPE_BASE}unauthorized`,
+          detail: 'Sign in to manage your consents.',
+          instance: '/consents/cookie-only',
+        });
 
         await app.close();
       });

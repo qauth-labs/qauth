@@ -394,7 +394,9 @@ The handler answers in the route's error format (#513):
 
 Each class is mapped to its problem code and its OAuth `error` once, in
 `apps/auth-server/src/app/api-conventions/error-classes.ts`. A new class in this
-package needs an entry there: a test fails when one is missing. The codes are
+package needs an entry there: a test fails when one is missing. The error classes
+a route or a server library defines itself (the SSF transmitter's, the
+auth server's `SignInRequiredError`) are mapped in the same file. The codes are
 published on the docs site's [Problem types](https://docs.qauth.dev/reference/problem-types/)
 page and are part of the 1.0 promise. The handler never sends a
 `UniqueConstraintError`'s constraint name or a 5xx's message to the caller.

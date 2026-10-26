@@ -58,6 +58,21 @@ export async function answerUnknownRouteBeforeBody(
   reply: FastifyReply
 ): Promise<FastifyReply | undefined> {
   if (!request.is404) return undefined;
+  // Returning the reply is how an async hook tells Fastify it has answered.
+  return answerRouteNotFound(request, reply);
+}
+
+/**
+ * Answer as if no route served the request: the log line and the `not_found`
+ * problem document of {@link answerUnknownRouteBeforeBody}.
+ *
+ * A route that must look absent sends this from its own `onRequest` hook,
+ * before the body is read, as the SSF routes do for a realm that does not run
+ * the transmitter. `reply.callNotFound()` would not do: it reaches Fastify's
+ * default 404 handler, which answers its own `{ message, error, statusCode }`
+ * envelope rather than the document an unknown path gets (#513).
+ */
+export function answerRouteNotFound(request: FastifyRequest, reply: FastifyReply): FastifyReply {
   const { method, url = '/' } = request.raw;
   request.log.info(`Route ${method}:${url} not found`);
   const queryAt = url.indexOf('?');
@@ -72,7 +87,6 @@ export async function answerUnknownRouteBeforeBody(
     code,
     trace_id: request.id,
   };
-  // Returning the reply is how an async hook tells Fastify it has answered.
   return reply.code(404).type(PROBLEM_MEDIA_TYPE).send(document);
 }
 

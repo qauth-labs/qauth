@@ -19,6 +19,7 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
 import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { REDIS_KEYS } from '../../constants/redis-keys';
+import { SignInRequiredError } from '../../helpers/sign-in-required';
 import { emitUserEvent } from '../../helpers/user-events';
 import consentsRoute from './index';
 
@@ -150,13 +151,34 @@ describe('/consents JSON API', () => {
     expect(ctx.urls.some((r) => r.url.includes('consents'))).toBe(false);
   });
 
-  it('GET /consents returns 401 when no session', async () => {
+  // Without a session both routes throw the sign-in refusal, which the error
+  // handler answers as the 401 `unauthorized` problem document (#513), not a
+  // body of their own.
+  it('GET /consents refuses a request without a session with the 401 sign-in refusal', async () => {
     const { fastify, ctx } = makeFastify();
     await consentsRoute(fastify);
 
     const { reply, state } = createReply();
-    await ctx.get!({ headers: {} }, reply);
-    expect(state.statusCode).toBe(401);
+    const refused = await ctx.get?.({ headers: {} }, reply).catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(SignInRequiredError);
+    expect(refused).toMatchObject({ statusCode: 401 });
+    expect(state.body).toBeUndefined();
+    expect(fastify.repositories.oauthConsents.listActiveForUserWithClient).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /consents/:id refuses a request without a session with the 401 sign-in refusal', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentsRoute(fastify);
+
+    const { reply, state } = createReply();
+    const refused = await ctx
+      .delete?.({ headers: { 'x-csrf-token': 'any' }, params: { id: CONSENT_ID } }, reply)
+      .catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(SignInRequiredError);
+    expect(state.body).toBeUndefined();
+    expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
   });
 
   it('GET /consents lists active consents and returns a CSRF token', async () => {

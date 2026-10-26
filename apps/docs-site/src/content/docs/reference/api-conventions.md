@@ -179,9 +179,10 @@ of OAuth.
 
 Which code each domain error class of `@qauth-labs/shared-errors` answers, and which OAuth `error`
 it answers on a protocol endpoint, is set once, in
-`apps/auth-server/src/app/api-conventions/error-classes.ts`. A test fails when a class has no
-entry, and a test keeps the problem types page equal to `PROBLEM_CODES` in
-`apps/auth-server/src/app/api-conventions/problem.ts`.
+`apps/auth-server/src/app/api-conventions/error-classes.ts`, as is the code of each error class a
+route or a server library defines itself, such as the Shared Signals Framework transmitter's. A
+test fails when a class has no entry, and a test keeps the problem types page equal to
+`PROBLEM_CODES` in `apps/auth-server/src/app/api-conventions/problem.ts`.
 
 ## OpenAPI
 

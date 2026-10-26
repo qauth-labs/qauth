@@ -658,9 +658,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `request_timeout`, 431 `request_header_fields_too_large`). Each code has its own
   problem type, listed on the docs site's new **Problem types** page
   (`reference/problem-types`), and one registry maps every class of
-  `@qauth-labs/shared-errors` to its code. A 401 or 403 on a bearer-protected
-  route also carries a `WWW-Authenticate` challenge; a 403 says
-  `insufficient_scope` only when a wider token would be let through.
+  `@qauth-labs/shared-errors`, and every error class a route defines, to its
+  code. A 401 or 403 on a bearer-protected route also carries a
+  `WWW-Authenticate` challenge; a 403 says `insufficient_scope` only when a
+  wider token would be let through. `GET /consents` and `DELETE
+  /consents/{id}` answer a request without a browser session with the 401
+  `unauthorized` problem document too, with no challenge (they answered
+  `{ "consents": [] }` and an empty body). The SSF transmitter's routes
+  ([#410]) answer problem documents as well, SSF 1.0 defining no error body:
+  a realm that does not run the transmitter gets the `not_found` document of a
+  path no route serves, and a token without `ssf:stream` a 403 whose challenge
+  names that scope.
 - **BREAKING (OAuth clients that read QAuth's own members)**: the OAuth protocol
   endpoints (token, authorize, introspect, revoke, register, userinfo and the
   wallet-facing OID4VP endpoints) answer only the members their specification

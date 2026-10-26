@@ -2690,51 +2690,11 @@
             }
           },
           "401": {
-            "description": "Default Response",
+            "description": "Unauthorized",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "consents": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "clientId": {
-                            "type": "string"
-                          },
-                          "clientName": {
-                            "type": "string"
-                          },
-                          "scopes": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "grantedAt": {
-                            "type": "number"
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "clientId",
-                          "clientName",
-                          "scopes",
-                          "grantedAt"
-                        ],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": [
-                    "consents"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -2806,7 +2766,14 @@
             }
           },
           "401": {
-            "description": "Default Response"
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "404": {
             "description": "Not Found",

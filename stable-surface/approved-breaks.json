@@ -43,6 +43,17 @@
       },
       "ref": "#513",
       "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "response-required-property-removed",
+        "operation": "GET /consents/",
+        "fingerprint": "12e0f644cb42",
+        "text": "removed the required property `consents` from the response with the `401` status"
+      },
+      "ref": "#513",
+      "release": "v0.2.0"
     }
   ]
 }

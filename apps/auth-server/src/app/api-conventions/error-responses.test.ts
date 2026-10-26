@@ -36,13 +36,6 @@ const OAUTH_PROTOCOL_ENDPOINTS = new Set([
   'POST /oid4vp/response',
 ]);
 
-/**
- * The error answers a route sends itself, with a body of its own, rather than
- * through the error handler: the cookie-authenticated consent list answers a
- * missing session with an empty list, and its revocation with an empty body.
- */
-const OWN_ERROR_BODIES = new Set(['GET /consents/ 401', 'DELETE /consents/{id} 401']);
-
 interface Operation {
   responses?: Record<string, { content?: Record<string, { schema?: unknown }> }>;
 }
@@ -74,7 +67,7 @@ describe.each(Object.entries(DOCUMENTS))(
           ? { [OAUTH_ERROR_MEDIA_TYPE]: { schema: { $ref: OAUTH_ERROR_SCHEMA_REF } } }
           : { [PROBLEM_MEDIA_TYPE]: { schema: { $ref: PROBLEM_SCHEMA_REF } } };
         for (const [status, response] of Object.entries(responses)) {
-          if (Number(status) < 400 || OWN_ERROR_BODIES.has(`${operation} ${status}`)) continue;
+          if (Number(status) < 400) continue;
           if (JSON.stringify(response.content) !== JSON.stringify(expected)) {
             wrong.push(`${operation} ${status}`);
           }
@@ -92,3 +85,35 @@ describe.each(Object.entries(DOCUMENTS))(
     });
   }
 );
+
+/**
+ * The routes #866 met after it branched list the statuses they answer by
+ * design (`x-qauth-errors`), each a problem document: the SSF transmitter's
+ * (SSF 1.0 §8.1 defines no error body) and the cookie-authenticated consent
+ * routes, whose 401 is the `unauthorized` problem like any other route's.
+ */
+describe('by-design error statuses in the maximal OpenAPI document (#513)', () => {
+  const operations = new Map(operationsOf(DOCUMENTS.maximal));
+
+  it.each([
+    ['GET /.well-known/ssf-configuration', ['404']],
+    ['GET /ssf/jwks.json', ['404']],
+    ['POST /ssf/stream', ['400', '401', '403', '404', '409']],
+    ['GET /ssf/stream', ['400', '401', '403', '404']],
+    ['PATCH /ssf/stream', ['400', '401', '403', '404']],
+    ['PUT /ssf/stream', ['400', '401', '403', '404']],
+    ['DELETE /ssf/stream', ['400', '401', '403', '404']],
+    ['GET /ssf/status', ['400', '401', '403', '404']],
+    ['POST /ssf/status', ['400', '401', '403', '404']],
+    ['POST /ssf/subjects/add', ['400', '401', '403', '404']],
+    ['POST /ssf/subjects/remove', ['400', '401', '403', '404']],
+    ['POST /ssf/verify', ['400', '401', '403', '404', '429']],
+    ['GET /consents/', ['401']],
+    ['DELETE /consents/{id}', ['400', '401', '404']],
+  ])('lists what %s answers by design', (operation, statuses) => {
+    const responses = operations.get(operation)?.responses;
+
+    expect(responses, operation).toBeDefined();
+    expect(Object.keys(responses ?? {})).toEqual(expect.arrayContaining(statuses));
+  });
+});

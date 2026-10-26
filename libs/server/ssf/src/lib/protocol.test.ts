@@ -200,6 +200,15 @@ describe('stream configuration (SSF 1.0 §8.1.1)', () => {
     }
   });
 
+  it('refuses with a 400 wherever the refusal is thrown', () => {
+    // The auth server answers it as the `bad_request` problem document (#513)
+    // without catching it first.
+    const refusal = new SsfRequestError('push delivery needs an endpoint_url');
+    expect(refusal.statusCode).toBe(400);
+    expect(refusal.name).toBe('SsfRequestError');
+    expect(refusal).toBeInstanceOf(Error);
+  });
+
   it('cuts a description to 1024 characters without splitting a pair', () => {
     expect(keptDescription(undefined)).toBeNull();
     expect(keptDescription('x'.repeat(2000))).toHaveLength(1024);
