@@ -2,35 +2,6 @@ import type { RepositoryName } from '@qauth-labs/fastify-plugin-db';
 import { SERVICE_ROLE_NAMES, type ServiceRole } from '@qauth-labs/server-config';
 import type { FastifyPluginAsync } from 'fastify';
 
-import appAssociationRoutes from './routes/app-association';
-import linkWalletRoutes from './routes/auth/link-wallet';
-import loginRoutes from './routes/auth/login';
-import logoutRoutes from './routes/auth/logout';
-import registerRoutes from './routes/auth/register';
-import resendVerificationRoutes from './routes/auth/resend-verification';
-import verifyRoutes from './routes/auth/verify';
-import clientsRoutes, { autoPrefix as clientsPrefix } from './routes/clients';
-import consentsRoutes from './routes/consents';
-import consentsApiRoutes, { autoPrefix as consentsApiPrefix } from './routes/consents-api';
-import healthRoutes from './routes/health';
-import metricsRoutes from './routes/metrics';
-import authorizeRoutes from './routes/oauth/authorize';
-import introspectRoutes from './routes/oauth/introspect';
-import clientRegistrationRoutes from './routes/oauth/register';
-import revokeRoutes from './routes/oauth/revoke';
-import tokenRoutes from './routes/oauth/token';
-import userinfoRoutes from './routes/oauth/userinfo';
-import requestObjectRoutes from './routes/oid4vp/request-object';
-import walletResponseRoutes from './routes/oid4vp/response';
-import rootRoutes from './routes/root';
-import ssfRoutes, { autoPrefix as ssfPrefix } from './routes/ssf';
-import uiConsentRoutes from './routes/ui/consent';
-import uiLoginRoutes from './routes/ui/login';
-import uiResumeRoutes from './routes/ui/resume';
-import uiWalletLinkRoutes from './routes/ui/wallet-link';
-import uiWalletLoginRoutes from './routes/ui/wallet-login';
-import wellKnownRoutes from './routes/well-known';
-
 /**
  * THE ROUTE MANIFEST (ADR-019 Decision 8, issue #495).
  *
@@ -53,9 +24,10 @@ import wellKnownRoutes from './routes/well-known';
  *   (#496); delivery serves no inbound request.
  *
  * `route-manifest.test.ts` checks each entry against its module: the plugins
- * and repositories its code reaches, and the roles its routes' surfaces call
- * for. The process builds its repository list and its plugin set from the
- * entries of its roles (`service-roles.ts`).
+ * and repositories its code reaches, its prefix (the directory's name, or the
+ * module's `autoPrefix`, as the autoload gave it), and that every module under
+ * `routes/` is listed. The process builds its repository list and its plugin
+ * set from the entries of its roles (`service-roles.ts`).
  */
 
 /**
@@ -101,7 +73,11 @@ export interface RouteModule {
   readonly plugins: readonly RolePlugin[];
   /** The repositories its routes read or write. */
   readonly repositories: readonly RepositoryName[];
-  readonly plugin: FastifyPluginAsync;
+  /**
+   * Import the module. Only a process that registers it imports it, so a role
+   * never loads the code of another role's routes.
+   */
+  readonly load: () => Promise<{ readonly default: FastifyPluginAsync }>;
 }
 
 /** `/health` and `/metrics`: every process answers for itself. */
@@ -119,22 +95,40 @@ const WALLET_FLOW_REPOSITORIES: readonly RepositoryName[] = [
 
 /** Every route module of the auth server. */
 export const ROUTE_MANIFEST: readonly RouteModule[] = [
-  { module: 'health', roles: EVERY_ROLE, plugins: [], repositories: [], plugin: healthRoutes },
-  { module: 'metrics', roles: EVERY_ROLE, plugins: [], repositories: [], plugin: metricsRoutes },
-  { module: 'root', roles: ['api'], plugins: [], repositories: [], plugin: rootRoutes },
+  {
+    module: 'health',
+    roles: EVERY_ROLE,
+    plugins: [],
+    repositories: [],
+    load: () => import('./routes/health'),
+  },
+  {
+    module: 'metrics',
+    roles: EVERY_ROLE,
+    plugins: [],
+    repositories: [],
+    load: () => import('./routes/metrics'),
+  },
+  {
+    module: 'root',
+    roles: ['api'],
+    plugins: [],
+    repositories: [],
+    load: () => import('./routes/root'),
+  },
   {
     module: 'app-association',
     roles: ['api'],
     plugins: [],
     repositories: [],
-    plugin: appAssociationRoutes,
+    load: () => import('./routes/app-association'),
   },
   {
     module: 'well-known',
     roles: ['api'],
     plugins: ['dpop', 'jwt', 'ssf'],
     repositories: ['oauthClients', 'realms'],
-    plugin: wellKnownRoutes,
+    load: () => import('./routes/well-known'),
   },
   {
     module: 'oauth/authorize',
@@ -142,7 +136,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['dpop', 'jwt', 'password', 'sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthClients', 'oauthConsents', 'users'],
-    plugin: authorizeRoutes,
+    load: () => import('./routes/oauth/authorize'),
   },
   {
     module: 'oauth/token',
@@ -160,7 +154,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'userCredentials',
       'users',
     ],
-    plugin: tokenRoutes,
+    load: () => import('./routes/oauth/token'),
   },
   {
     module: 'oauth/introspect',
@@ -168,7 +162,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt', 'password'],
     repositories: ['events', 'oauthClients', 'users'],
-    plugin: introspectRoutes,
+    load: () => import('./routes/oauth/introspect'),
   },
   {
     module: 'oauth/revoke',
@@ -176,7 +170,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt', 'password'],
     repositories: ['events', 'oauthClients', 'refreshTokens'],
-    plugin: revokeRoutes,
+    load: () => import('./routes/oauth/revoke'),
   },
   {
     module: 'oauth/userinfo',
@@ -184,7 +178,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt'],
     repositories: ['events', 'realms', 'userAttributes', 'users'],
-    plugin: userinfoRoutes,
+    load: () => import('./routes/oauth/userinfo'),
   },
   {
     module: 'oauth/register',
@@ -192,7 +186,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt', 'password'],
     repositories: ['events', 'oauthClients', 'realms', 'users'],
-    plugin: clientRegistrationRoutes,
+    load: () => import('./routes/oauth/register'),
   },
   {
     module: 'oid4vp/request-object',
@@ -200,7 +194,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: [],
     repositories: [],
-    plugin: requestObjectRoutes,
+    load: () => import('./routes/oid4vp/request-object'),
   },
   {
     module: 'oid4vp/response',
@@ -208,7 +202,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: [],
     repositories: ['events', 'oid4vpRequestStates'],
-    plugin: walletResponseRoutes,
+    load: () => import('./routes/oid4vp/response'),
   },
   {
     module: 'ui/login',
@@ -216,7 +210,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['federation', 'password', 'sessions'],
     repositories: ['events', 'userCredentials', 'users'],
-    plugin: uiLoginRoutes,
+    load: () => import('./routes/ui/login'),
   },
   {
     module: 'ui/consent',
@@ -224,7 +218,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['dpop', 'jwt', 'password', 'sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthClients', 'oauthConsents', 'users'],
-    plugin: uiConsentRoutes,
+    load: () => import('./routes/ui/consent'),
   },
   {
     module: 'ui/resume',
@@ -232,7 +226,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: [],
     repositories: [],
-    plugin: uiResumeRoutes,
+    load: () => import('./routes/ui/resume'),
   },
   {
     module: 'ui/wallet-login',
@@ -240,7 +234,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['sessions'],
     repositories: WALLET_FLOW_REPOSITORIES,
-    plugin: uiWalletLoginRoutes,
+    load: () => import('./routes/ui/wallet-login'),
   },
   {
     module: 'ui/wallet-link',
@@ -248,7 +242,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['sessions'],
     repositories: WALLET_FLOW_REPOSITORIES,
-    plugin: uiWalletLinkRoutes,
+    load: () => import('./routes/ui/wallet-link'),
   },
   {
     module: 'consents',
@@ -256,7 +250,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthConsents', 'refreshTokens', 'users'],
-    plugin: consentsRoutes,
+    load: () => import('./routes/consents'),
   },
   {
     module: 'auth/link-wallet',
@@ -264,7 +258,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['web'],
     plugins: ['sessions'],
     repositories: WALLET_FLOW_REPOSITORIES,
-    plugin: linkWalletRoutes,
+    load: () => import('./routes/auth/link-wallet'),
   },
   {
     module: 'auth/login',
@@ -272,7 +266,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['federation', 'jwt', 'password'],
     repositories: ['events', 'oauthClients', 'refreshTokens', 'userCredentials', 'users'],
-    plugin: loginRoutes,
+    load: () => import('./routes/auth/login'),
   },
   {
     module: 'auth/logout',
@@ -280,7 +274,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['jwt', 'password', 'sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthClients', 'refreshTokens', 'users'],
-    plugin: logoutRoutes,
+    load: () => import('./routes/auth/logout'),
   },
   {
     module: 'auth/register',
@@ -294,7 +288,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'userCredentials',
       'users',
     ],
-    plugin: registerRoutes,
+    load: () => import('./routes/auth/register'),
   },
   {
     module: 'auth/verify',
@@ -302,7 +296,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['email', 'password'],
     repositories: ['emailVerificationTokens', 'userAttributes', 'userCredentials', 'users'],
-    plugin: verifyRoutes,
+    load: () => import('./routes/auth/verify'),
   },
   {
     module: 'auth/resend-verification',
@@ -310,19 +304,19 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['email'],
     repositories: ['emailVerificationTokens', 'userCredentials', 'users'],
-    plugin: resendVerificationRoutes,
+    load: () => import('./routes/auth/resend-verification'),
   },
   {
     module: 'clients',
-    prefix: clientsPrefix,
+    prefix: '/api/clients',
     roles: ['api'],
     plugins: ['jwt', 'password'],
     repositories: ['apiKeys', 'events', 'oauthClients', 'realms', 'users'],
-    plugin: clientsRoutes,
+    load: () => import('./routes/clients'),
   },
   {
     module: 'consents-api',
-    prefix: consentsApiPrefix,
+    prefix: '/api/consents',
     roles: ['api'],
     plugins: ['jwt', 'password'],
     repositories: [
@@ -333,15 +327,15 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'refreshTokens',
       'users',
     ],
-    plugin: consentsApiRoutes,
+    load: () => import('./routes/consents-api'),
   },
   {
     module: 'ssf',
-    prefix: ssfPrefix,
+    prefix: '/ssf',
     roles: ['api'],
     plugins: ['jwt', 'ssf'],
     repositories: ['events', 'oauthClients', 'realms', 'ssfStreams'],
-    plugin: ssfRoutes,
+    load: () => import('./routes/ssf'),
   },
 ];
 

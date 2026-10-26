@@ -9,7 +9,7 @@ import {
   startRedisContainer,
   truncateDomainTablesStatement,
 } from '@qauth-labs/shared-testing';
-import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify';
+import Fastify, { type FastifyInstance, type InjectOptions, type RouteOptions } from 'fastify';
 import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
@@ -201,6 +201,11 @@ export interface BootAuthServerOptions {
   readonly eventTelemetryLimits?: Partial<EventLogQueueLimits>;
   /** Event delivery routes for the delivery role (#460), for a suite that watches it. */
   readonly eventDeliveryRoutes?: readonly DeliveryRoute[];
+  /**
+   * Called with each route as the app registers it, for a suite that lists
+   * the routes a set of service roles registers (#495).
+   */
+  readonly onRoute?: (route: RouteOptions) => void;
 }
 
 /**
@@ -301,6 +306,7 @@ export async function bootAuthServer(
   // `resetE2eState` truncate the database the server is actually looking at.
   // Nothing under test observes the difference.
   const defaultRealmBoot = options.defaultRealmBoot ?? true;
+  if (options.onRoute !== undefined) server.addHook('onRoute', options.onRoute);
   await server.register(fp(app), {
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined

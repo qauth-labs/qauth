@@ -100,10 +100,11 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   },
   delivery: {
     // The reader and the SSF delivery route; the event store's lag and age
-    // gauges on /metrics read `events` and `eventRetention`.
+    // gauges on /metrics read `events` and `eventRetention`, and the
+    // delivery history reads the role's own queue through `eventDeliveries`.
     summary: 'the event delivery reader and event retention',
     plugins: ['eventDelivery', 'ssf'],
-    repositories: ['events', 'eventRetention'],
+    repositories: ['events', 'eventDeliveries', 'eventRetention'],
   },
 };
 

@@ -827,10 +827,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       scope.addHook('onRoute', (route) => {
         route.config = { ...route.config, serviceRoles: entry.roles };
       });
-      await scope.register(
-        entry.plugin,
-        entry.prefix === undefined ? {} : { prefix: entry.prefix }
-      );
+      const { default: plugin } = await entry.load();
+      await scope.register(plugin, entry.prefix === undefined ? {} : { prefix: entry.prefix });
     });
   }
 
