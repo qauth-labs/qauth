@@ -292,3 +292,4 @@ Verified against `libs/server/config/src/lib/schemas/jwt.ts` and
 - [Docker](/operate/docker/) — where these keys get mounted into the stack.
 - [Upgrades](/operate/upgrades/) — key material is unaffected by the ADR-002 migration, but back up before any destructive migration regardless.
 - [PQC Verifier Guide](/operate/pqc-verifier-guide/) — the ML-DSA key from a verifier's perspective.
+- [Service roles](/operate/service-roles/) — which processes may hold these keys once the roles run apart.

@@ -666,6 +666,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catalog cannot grant, or whose `x-qauth-class` is not the strictest class
   among them. No admin API route reads the catalog yet.
 
+- **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
+  `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
+  unchanged single process, or as a comma-separated list of `web`, `api`,
+  `admin`, `signer` and `delivery`. A route manifest
+  (`apps/auth-server/src/app/route-manifest.ts`) replaces the folder autoload:
+  it names every route module with its roles, and a process registers only
+  the routes, plugins, repositories and jobs of its roles. `web` serves the
+  browser-session endpoints; `api` token, introspection, revocation,
+  userinfo, registration, discovery, JWKS, the account and developer APIs,
+  SSF and the legacy `/auth` routes, and runs `purge-expired`; `delivery`
+  runs the event delivery reader and event retention; every role answers
+  `/health` and `/metrics`. A read of a repository its roles leave unbuilt
+  throws, naming it, and the boot is refused for a route without a role.
+  Only a process with the `signer` role holds the KEK and the private keys:
+  any other refuses to boot when `KEK`, `KEK_PATH`, a KEK provider adapter, a
+  `JWT_*_PRIVATE_KEY*` or an `OID4VP_VERIFIER_SIGNING_KEY*` variable is set,
+  naming it, and needs `SIGNER_URL` and `INTERNAL_TLS_CERT_PATH`,
+  `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH` (advanced). Until the
+  signer service ships, such a process answers every signature with `503`
+  `temporarily_unavailable`, and verifies tokens with `JWT_PUBLIC_KEY`, which
+  it needs where tokens are verified. `@fastify/autoload` is no longer a
+  dependency. The docs site's new **Service roles** page
+  (`operate/service-roles`) describes the split that works today.
+
 ### Changed
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
@@ -1228,6 +1252,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#495]: https://github.com/qauth-labs/qauth/issues/495
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#513]: https://github.com/qauth-labs/qauth/issues/513
 [#536]: https://github.com/qauth-labs/qauth/issues/536
