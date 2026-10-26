@@ -207,6 +207,33 @@ describe('defineOperation: the static rule (#508)', () => {
     );
   });
 
+  // What is checked is what is stored: a getter could answer the checks one
+  // way and the stored copy another.
+  it('refuses an accessor member, and stores the values it checked', () => {
+    let reads = 0;
+    const shifty = Object.defineProperty(
+      {
+        ...readOperation({
+          id: 'realms.delete',
+          effects: ['realm-lifecycle'],
+          permissions: ['realms.policies.security'],
+        }),
+      },
+      'class',
+      { get: () => (++reads > 5 ? 'write' : 'security'), enumerable: true }
+    ) as AdminOperationDefinition;
+    expect(() => defineOperation(shifty)).toThrow(/class is a value, not an accessor/);
+    expect(() => createOperationRegistry([shifty])).toThrow(/class is a value, not an accessor/);
+  });
+
+  it('refuses a permission list with a hole', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    const permissions = ['realms.read', , 'realms.export'] as string[];
+    expect(() => defineOperation(readOperation({ permissions }))).toThrow(
+      /non-empty list of permission ids/
+    );
+  });
+
   it('freezes the operation and its lists', () => {
     const operation = defineOperation(readOperation());
     expect(Object.isFrozen(operation)).toBe(true);
@@ -330,6 +357,47 @@ describe('createOperationRegistry (#508)', () => {
       ).toThrow(/it is registered as read with no effect/);
     });
 
+    // A classify could otherwise answer `write` for every request of an
+    // operation reserved as a security operation.
+    it('refuses classify on a reserved id unless its entry says the request decides', () => {
+      const lowering = rotate({
+        permissions: ['realms.policies.write', 'realms.policies.security'],
+        classify: () => WRITE,
+      });
+      expect(() => registry([lowering], reserved)).toThrow(
+        /reserved as a security operation on every request \(a test\); it may not classify/
+      );
+      expect(
+        registry([lowering], [{ ...reserved[0], requestDependent: true }]).get('widgets.rotate')
+      ).toBeDefined();
+    });
+
+    // Ids that differ only in case are one id everywhere else in the registry.
+    it('refuses a case variant of a reserved id', () => {
+      expect(() =>
+        registry(
+          [
+            readOperation({
+              id: 'widgets.rotatE',
+              class: 'write',
+              permissions: ['realms.policies.write'],
+            }),
+          ],
+          reserved
+        )
+      ).toThrow(/differs only in case from the reserved id "widgets.rotate"/);
+      // A realistic slip against the server table.
+      expect(() =>
+        createOperationRegistry([
+          readOperation({
+            id: 'upstreamproviders.create',
+            class: 'write',
+            permissions: ['realms.policies.write'],
+          }),
+        ])
+      ).toThrow(/differs only in case from the reserved id "upstreamProviders.create"/);
+    });
+
     it('applies the server table by default', () => {
       expect(() =>
         createOperationRegistry([
@@ -359,6 +427,8 @@ describe('createOperationRegistry (#508)', () => {
         [{ ...entry, effects: ['rotation' as SecurityEffect] }],
         [{ ...entry, effects: ['import', 'import'] as SecurityEffect[] }],
         [{ ...entry, source: '' }],
+        [{ ...entry, requestDepedent: true } as ReservedOperation],
+        [{ ...entry, requestDependent: false } as unknown as ReservedOperation],
       ]) {
         expect(() => registry([], table)).toThrow(OperationDefinitionError);
       }
@@ -371,6 +441,33 @@ describe('the server registry and reserved table (#508)', () => {
     expect(OPERATION_REGISTRY.all).toEqual(ADMIN_OPERATIONS);
     expect(OPERATION_REGISTRY.permissions).toBe(PERMISSION_REGISTRY);
     expect(OPERATION_REGISTRY.reserved).toEqual(RESERVED_OPERATIONS);
+  });
+
+  it('lets only request-dependent reserved operations classify', () => {
+    expect(
+      RESERVED_OPERATIONS.filter((entry) => entry.requestDependent).map((entry) => entry.id)
+    ).toEqual(['realms.policies.update', 'clients.update', 'realms.imports.apply']);
+    const policies = defineOperation({
+      id: 'realms.policies.update',
+      class: 'security',
+      effects: ['credential-path', 'token-content', 'posture-loosening', 'administration'],
+      permissions: ['realms.policies.write', 'realms.policies.security'],
+      description: "Change a realm's policies.",
+      classify: () => WRITE,
+    });
+    expect(createOperationRegistry([policies]).get('realms.policies.update')).toBeDefined();
+    expect(() =>
+      createOperationRegistry([
+        defineOperation({
+          id: 'keys.rotate',
+          class: 'security',
+          effects: ['key-custody'],
+          permissions: ['realms.policies.write', 'realms.policies.security'],
+          description: 'Rotate a key.',
+          classify: () => WRITE,
+        }),
+      ])
+    ).toThrow(/keys.rotate" is reserved as a security operation on every request/);
   });
 
   it('reserves at least one operation id for every effect', () => {
@@ -540,6 +637,20 @@ describe('classifyRequest (#508)', () => {
         })
     );
     expect(classifyRequest(registry([proxy]), proxy, input()).failedClosed).toBe('malformed');
+  });
+
+  it('fails closed, without throwing, when classify throws a value whose members throw', () => {
+    const operation = patchOperation(() => {
+      throw new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error('trap');
+          },
+        }
+      );
+    });
+    expect(classifyRequest(registry([operation]), operation, input()).failedClosed).toBe('threw');
   });
 
   it('fails closed on a classify that returns a promise, without an unhandled rejection', async () => {

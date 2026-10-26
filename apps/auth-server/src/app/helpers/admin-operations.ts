@@ -43,7 +43,10 @@
  * RESERVED IDS. `admin-operations-reserved.ts` lists, for each effect, the
  * operation ids other areas register later. Registering one of them as
  * anything but a security operation that carries at least its reserved
- * effects fails.
+ * effects fails, and so does an id that differs from one only in case. A
+ * reserved operation may `classify` only where its entry says the request
+ * decides (`requestDependent`); every other one needs its declaration on
+ * every request.
  *
  * The docs page `reference/security-operations.md` is generated from this
  * registry (`admin-operations-page.ts`), and the API conventions check
@@ -164,20 +167,51 @@ function strictestClass(classes: Iterable<OperationClass>): OperationClass | und
 const isOneLine = (text: unknown): text is string =>
   typeof text === 'string' && text.length > 0 && text.trim() === text && !/[\r\n]/.test(text);
 
-/** Throws {@link OperationDefinitionError} when `operation` breaks a rule it can be checked against alone. */
-function assertOperation(operation: AdminOperationDefinition): void {
-  const where = `operation ${JSON.stringify(operation?.id)}`;
+/**
+ * A plain copy of a definition: each member read once, from an own data
+ * property, and each list copied. What is checked is then what is stored: a
+ * getter could otherwise answer the checks one way and the copy another.
+ *
+ * @throws {OperationDefinitionError} when the definition is not an object, or
+ *   has an unknown member or an accessor
+ */
+function snapshotOperation(operation: AdminOperationDefinition): AdminOperationDefinition {
   if (typeof operation !== 'object' || operation === null) {
     throw new OperationDefinitionError('an operation definition is an object');
   }
-  const unknown = Reflect.ownKeys(operation).filter(
-    (key) => typeof key !== 'string' || !DEFINITION_KEYS.has(key)
-  );
+  const descriptors = Object.getOwnPropertyDescriptors(operation) as Record<
+    PropertyKey,
+    PropertyDescriptor
+  >;
+  const keys = Reflect.ownKeys(descriptors);
+  const id: unknown = 'value' in (descriptors['id'] ?? {}) ? descriptors['id'].value : undefined;
+  const where = `operation ${JSON.stringify(id)}`;
+  const unknown = keys.filter((key) => typeof key !== 'string' || !DEFINITION_KEYS.has(key));
   if (unknown.length > 0) {
     throw new OperationDefinitionError(
       `${where}: unknown member ${unknown.map((key) => String(key)).join(', ')}; a definition has ${[...DEFINITION_KEYS].join(', ')}`
     );
   }
+  const snapshot: Record<string, unknown> = {};
+  for (const key of keys as string[]) {
+    const descriptor = descriptors[key];
+    if (!('value' in descriptor)) {
+      throw new OperationDefinitionError(`${where}: ${key} is a value, not an accessor`);
+    }
+    snapshot[key] =
+      (key === 'effects' || key === 'permissions') && Array.isArray(descriptor.value)
+        ? Array.from(descriptor.value as unknown[])
+        : descriptor.value;
+  }
+  return snapshot as unknown as AdminOperationDefinition;
+}
+
+/**
+ * Throws {@link OperationDefinitionError} when `operation`, a snapshot from
+ * {@link snapshotOperation}, breaks a rule it can be checked against alone.
+ */
+function assertOperation(operation: AdminOperationDefinition): void {
+  const where = `operation ${JSON.stringify(operation.id)}`;
   const { id, effects, permissions, description, classify, loadState } = operation;
   if (typeof id !== 'string' || !OPERATION_ID_PATTERN.test(id)) {
     throw new OperationDefinitionError(
@@ -262,11 +296,17 @@ function assertOperation(operation: AdminOperationDefinition): void {
 export function defineOperation<State>(
   operation: AdminOperationDefinition<State>
 ): AdminOperation<State> {
-  assertOperation(operation as AdminOperationDefinition);
+  const snapshot = snapshotOperation(operation as AdminOperationDefinition);
+  assertOperation(snapshot);
+  return frozenOperation(snapshot) as AdminOperation<State>;
+}
+
+/** `snapshot` frozen, with its lists. */
+function frozenOperation(snapshot: AdminOperationDefinition): AdminOperation {
   return Object.freeze({
-    ...operation,
-    effects: Object.freeze([...operation.effects]),
-    permissions: Object.freeze([...operation.permissions]),
+    ...snapshot,
+    effects: Object.freeze([...snapshot.effects]),
+    permissions: Object.freeze([...snapshot.permissions]),
   });
 }
 
@@ -288,11 +328,31 @@ export interface OperationRegistryOptions {
   reserved?: readonly ReservedOperation[];
 }
 
+/** The members a reserved entry may have. */
+const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  'id',
+  'effects',
+  'requestDependent',
+  'source',
+  'description',
+]);
+
 /** Throws {@link OperationDefinitionError} when the reserved table is malformed. */
 function assertReservedTable(reserved: readonly ReservedOperation[]): void {
   const ids = new Set<string>();
   for (const entry of reserved) {
     const where = `reserved operation ${JSON.stringify(entry.id)}`;
+    const unknown = Reflect.ownKeys(entry).filter(
+      (key) => typeof key !== 'string' || !RESERVED_KEYS.has(key)
+    );
+    if (unknown.length > 0) {
+      throw new OperationDefinitionError(
+        `${where}: unknown member ${unknown.map((key) => String(key)).join(', ')}`
+      );
+    }
+    if (entry.requestDependent !== undefined && entry.requestDependent !== true) {
+      throw new OperationDefinitionError(`${where}: requestDependent is true or absent`);
+    }
     if (typeof entry.id !== 'string' || !OPERATION_ID_PATTERN.test(entry.id)) {
       throw new OperationDefinitionError(`${where}: a reserved id is <resource>.<verb>`);
     }
@@ -323,8 +383,10 @@ function assertReservedTable(reserved: readonly ReservedOperation[]): void {
  *   {@link defineOperation}); when two operations have the same id, or ids
  *   that differ only in case; when an operation names a permission the
  *   catalog cannot grant, or a class that is not the strictest class among
- *   its permissions; or when it takes a reserved id with a weaker
- *   classification than the reserved table declares
+ *   its permissions; when it takes a reserved id with a weaker
+ *   classification than the reserved table declares, takes a case variant of
+ *   a reserved id, or classifies a reserved operation whose entry does not
+ *   say the request decides
  */
 export function createOperationRegistry(
   operations: readonly AdminOperation[],
@@ -333,11 +395,12 @@ export function createOperationRegistry(
   const permissions = options.permissions ?? PERMISSION_REGISTRY;
   const reserved = Object.freeze([...(options.reserved ?? RESERVED_OPERATIONS)]);
   assertReservedTable(reserved);
-  const reservedById = new Map(reserved.map((entry) => [entry.id, entry]));
+  const reservedByFoldedId = new Map(reserved.map((entry) => [entry.id.toLowerCase(), entry]));
 
   const byId = new Map<string, AdminOperation>();
   const byFoldedId = new Map<string, string>();
-  for (const operation of operations) {
+  for (const definition of operations) {
+    const operation = snapshotOperation(definition);
     assertOperation(operation);
     const where = `operation ${JSON.stringify(operation.id)}`;
 
@@ -372,24 +435,31 @@ export function createOperationRegistry(
       );
     }
 
-    const reservation = reservedById.get(operation.id);
+    const reservation = reservedByFoldedId.get(folded);
     if (reservation !== undefined) {
+      // A case variant would escape the reservation it was meant to take.
+      if (reservation.id !== operation.id) {
+        throw new OperationDefinitionError(
+          `${where} differs only in case from the reserved id ${JSON.stringify(reservation.id)}`
+        );
+      }
       const missing = reservation.effects.filter((effect) => !operation.effects.includes(effect));
       if (operation.class !== 'security' || missing.length > 0) {
         throw new OperationDefinitionError(
           `${where} is reserved as a security operation with the effects ${reservation.effects.join(', ')} (${reservation.source}); it is registered as ${operation.class}${operation.effects.length > 0 ? ` with ${operation.effects.join(', ')}` : ' with no effect'}`
         );
       }
+      // Its declaration is what every request needs, unless the table says
+      // the request decides: a `classify` could otherwise answer `write` for
+      // every request of an operation reserved as a security operation.
+      if (operation.classify !== undefined && reservation.requestDependent !== true) {
+        throw new OperationDefinitionError(
+          `${where} is reserved as a security operation on every request (${reservation.source}); it may not classify, unless its entry says the request decides (requestDependent)`
+        );
+      }
     }
 
-    byId.set(
-      operation.id,
-      Object.freeze({
-        ...operation,
-        effects: Object.freeze([...operation.effects]),
-        permissions: Object.freeze([...operation.permissions]),
-      })
-    );
+    byId.set(operation.id, frozenOperation(operation));
   }
 
   return Object.freeze({
@@ -454,13 +524,24 @@ export class UnknownFieldError extends Error {
   }
 }
 
-const isUnknownFieldError = (error: unknown): boolean =>
-  typeof error === 'object' &&
-  error !== null &&
-  (error as Record<symbol, unknown>)[UNKNOWN_FIELD_BRAND] === true;
+/** Whether `error` is an {@link UnknownFieldError}; `false` for a value whose brand cannot be read. */
+function isUnknownFieldError(error: unknown): boolean {
+  try {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      (error as Record<symbol, unknown>)[UNKNOWN_FIELD_BRAND] === true
+    );
+  } catch {
+    return false;
+  }
+}
 
-/** Freeze a structured clone in place: every plain object and array. */
-function deepFreeze<T>(value: T): T {
+/**
+ * Freeze `value` in place, and every object and array it holds. A typed array
+ * (a binary body) is left as it is: one with elements cannot be frozen.
+ */
+export function deepFreeze<T>(value: T): T {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value;
   // A typed array with elements cannot be frozen, and a clone's typed array
   // is classify's own copy anyway.

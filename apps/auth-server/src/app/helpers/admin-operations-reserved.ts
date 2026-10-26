@@ -9,9 +9,12 @@ import type { SecurityEffect } from '@qauth-labs/shared-validation';
  * (`createOperationRegistry` in `admin-operations.ts`), the registry refuses
  * it unless it is a security operation whose effects include every effect
  * listed here, so no later change files one of them under
- * `qauth:admin:write`. An operation may carry more effects than its entry;
- * an operation whose request decides what it needs (a policy patch, a client
- * update) declares them all and lets `classify` pick.
+ * `qauth:admin:write`, and an id that differs from one only in case is
+ * refused. An operation may carry more effects than its entry. Only an entry
+ * marked `requestDependent` (a policy patch, a client update, an import) may
+ * `classify`: such an operation declares every effect and lets `classify`
+ * pick per request. Every other reserved operation needs its declaration on
+ * every request.
  *
  * An entry names what the operation does and where the requirement comes
  * from. The ids follow the API conventions (`<resource>.<verb>`). The issue
@@ -31,6 +34,12 @@ export interface ReservedOperation {
   readonly id: string;
   /** The effects it must carry, at least. */
   readonly effects: readonly SecurityEffect[];
+  /**
+   * `true` when the request decides what the operation needs, so it may
+   * `classify` (a policy patch that only changes a token lifespan is a
+   * write). Absent: every request needs the declaration.
+   */
+  readonly requestDependent?: true;
   /** Where the requirement comes from: a record's section or an issue. */
   readonly source: string;
   /** What the operation does, in one sentence. */
@@ -44,6 +53,15 @@ const reserve = (
   description: string
 ): ReservedOperation =>
   Object.freeze({ id, effects: Object.freeze([...effects]), source, description });
+
+/** An entry whose request decides what the operation needs: it may `classify`. */
+const reserveRequestDependent = (
+  id: string,
+  effects: readonly SecurityEffect[],
+  source: string,
+  description: string
+): ReservedOperation =>
+  Object.freeze({ ...reserve(id, effects, source, description), requestDependent: true as const });
 
 const ADR_019 = 'ADR-019 Decision 7';
 const ADR_020 = 'ADR-020 §3';
@@ -166,7 +184,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     `${ADR_019}, #600`,
     "Change an AuthMethod plugin's configuration in a realm."
   ),
-  reserve(
+  reserveRequestDependent(
     'realms.policies.update',
     ['credential-path', 'token-content', 'posture-loosening', 'administration'],
     `${ADR_019}, #514, #517`,
@@ -180,7 +198,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     `${ADR_019}, #518, #632`,
     'Register a client, with its redirect URIs, authentication method and trust.'
   ),
-  reserve(
+  reserveRequestDependent(
     'clients.update',
     ['token-content', 'posture-loosening'],
     `${ADR_019}, #518, #632`,
@@ -329,7 +347,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
   ),
 
   // import: a realm file, or a sandbox promotion, whose diff holds any other effect.
-  reserve(
+  reserveRequestDependent(
     'realms.imports.apply',
     ['import'],
     'ADR-019 Decisions 7 and 11, #531, #555',
