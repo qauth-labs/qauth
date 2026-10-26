@@ -1,5 +1,6 @@
 /**
- * EVERY ROUTE OF THE ASSEMBLED APP HAS A SURFACE CLASS (#486).
+ * EVERY ROUTE OF THE ASSEMBLED APP HAS A SURFACE CLASS (#486) AND THE ERROR
+ * FORMAT OF ITS KIND (#513).
  *
  * The realm resolver (`plugins/realm-resolver.ts`) refuses to boot when a route
  * has no `config.surface`, so the boot in `beforeAll` is the first half of
@@ -41,6 +42,9 @@ function maximalEnvironment(): Record<string, string> {
     REDIS_URL: 'redis://127.0.0.1:1',
     RATE_LIMIT_ENABLED: 'false',
     METRICS_ENABLED: 'true',
+    // The SSF transmitter's routes (#410): problem routes, though they speak an
+    // OpenID protocol, because SSF 1.0 §8.1 defines no error body (#513).
+    SSF_TRANSMITTER_ENABLED: 'true',
     // The switches `openapi-export.ts --surface maximal` sets, for the same routes.
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
@@ -56,8 +60,17 @@ function maximalEnvironment(): Record<string, string> {
   };
 }
 
-/** The routes that read or set the browser session cookie. */
-function isBrowserSessionRoute(url: string): boolean {
+/**
+ * The routes that read or set a browser cookie: the session cookie, or the
+ * login-CSRF cookie of a form that posts to a `/ui/*` route. The page the
+ * verification mail links to, `GET /auth/verify`, is one; `POST /auth/verify`
+ * beside it is the JSON API.
+ */
+function isBrowserSessionRoute(route: RouteOptions): boolean {
+  const { url } = route;
+  if (url === '/auth/verify') {
+    return [route.method].flat().every((method) => method === 'GET' || method === 'HEAD');
+  }
   return (
     url.startsWith('/ui/') ||
     url === '/oauth/authorize' ||
@@ -67,6 +80,27 @@ function isBrowserSessionRoute(url: string): boolean {
     url.startsWith('/auth/link/wallet/')
   );
 }
+
+/**
+ * The OAuth protocol endpoints (ADR-019 Decision 7, #513): the routes whose
+ * error response an OAuth, OpenID Connect or OpenID for Verifiable
+ * Presentations specification defines. They, and only they, answer the
+ * `oauth` error format; every other route answers problem documents. The
+ * device authorization and FiPA authorization challenge endpoints join this
+ * list when they are built.
+ */
+const OAUTH_PROTOCOL_ENDPOINTS = new Set([
+  'GET /oauth/authorize',
+  'POST /oauth/authorize',
+  'POST /oauth/token',
+  'POST /oauth/introspect',
+  'POST /oauth/revoke',
+  'POST /oauth/register',
+  'GET /oauth/userinfo',
+  'POST /oauth/userinfo',
+  'GET /oid4vp/request/:handle',
+  'POST /oid4vp/response',
+]);
 
 let server: FastifyInstance | undefined;
 /** Every route as it registered; read after the boot, once every `onRoute` hook ran. */
@@ -116,6 +150,9 @@ describe('route surface classes of the assembled app (#486)', () => {
       '/ui/wallet-login',
       '/auth/link/wallet',
       '/.well-known/assetlinks.json',
+      '/.well-known/ssf-configuration',
+      '/ssf/stream',
+      '/ssf/jwks.json',
       '/metrics',
       '*',
     ]) {
@@ -132,7 +169,7 @@ describe('route surface classes of the assembled app (#486)', () => {
     for (const route of routes) {
       const surface = route.config?.surface;
       const label = `${String(route.method)} ${route.url}`;
-      if (isBrowserSessionRoute(route.url)) {
+      if (isBrowserSessionRoute(route)) {
         expect(surface, label).toBe('browser');
       } else {
         expect(surface, label).not.toBe('browser');
@@ -143,5 +180,31 @@ describe('route surface classes of the assembled app (#486)', () => {
   it('classes /health, and nothing else, as none', () => {
     const none = routes.filter((route) => route.config?.surface === 'none');
     expect(new Set(none.map((route) => route.url))).toEqual(new Set(['/health']));
+  });
+});
+
+describe('error formats of the assembled app (#513)', () => {
+  /** `METHOD /url` for each method a route serves; HEAD routes are Fastify's own. */
+  function operations(route: RouteOptions): string[] {
+    return [route.method]
+      .flat()
+      .filter((method) => method !== 'HEAD')
+      .map((method) => `${method} ${route.url}`);
+  }
+
+  it('sets the oauth format on every OAuth protocol endpoint', () => {
+    const oauth = routes
+      .filter((route) => route.config?.errorFormat === 'oauth')
+      .flatMap(operations);
+    expect(new Set(oauth)).toEqual(OAUTH_PROTOCOL_ENDPOINTS);
+  });
+
+  it('leaves every other route on the problem default, never naming it', () => {
+    for (const route of routes) {
+      for (const operation of operations(route)) {
+        if (OAUTH_PROTOCOL_ENDPOINTS.has(operation)) continue;
+        expect(route.config?.errorFormat, operation).toBeUndefined();
+      }
+    }
   });
 });

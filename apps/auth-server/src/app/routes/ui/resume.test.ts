@@ -1,3 +1,4 @@
+import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -207,13 +208,15 @@ describe('pending-authorization stash', () => {
     const { fastify } = makeFastify();
     const oversized = `/oauth/authorize?state=${'x'.repeat(PENDING_AUTHORIZATION_MAX_URL_BYTES)}`;
 
-    await expect(stashPendingAuthorization(fastify, oversized)).rejects.toThrow(/too large/);
+    await expect(stashPendingAuthorization(fastify, oversized)).rejects.toBeInstanceOf(
+      InvalidRequestError
+    );
     expect(fastify.sessionUtils.setSession as unknown as Mock).not.toHaveBeenCalled();
 
     const { reply, state } = createReply();
     await expect(
       redirectToLoginWithPendingAuthorization(fastify, reply, oversized)
-    ).rejects.toThrow(/too large/);
+    ).rejects.toBeInstanceOf(InvalidRequestError);
     expect(state.redirected).toBeUndefined();
   });
 

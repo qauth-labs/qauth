@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type { Pool } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { NewSession, SessionsRepository } from '../../types';
+import type { Database, NewSession, SessionsRepository } from '../../types';
 import type { DbClient } from '../db';
 import { createSessionsRepository } from './sessions.repository';
 
@@ -29,10 +29,10 @@ const NOW = 1_800_000_000_000;
 
 /**
  * A `pg` client that records queries instead of running them. Every query
- * answers no rows, unless `respond` gives rows (in drizzle's array row mode)
- * for its text.
+ * answers no rows, unless `respond` gives rows (in drizzle's array row mode,
+ * or as objects for a raw `execute`) for its text.
  */
-function createRecordingDb(respond: (text: string) => unknown[][] | undefined = () => undefined): {
+function createRecordingDb(respond: (text: string) => unknown[] | undefined = () => undefined): {
   db: DbClient;
   queries: CapturedQuery[];
 } {
@@ -98,15 +98,16 @@ const CALLS: Record<keyof SessionsRepository, (repo: SessionsRepository) => Prom
   updateLastSeen: (repo) => repo.updateLastSeen(REALM_ID, SESSION_ID, { minIntervalMs: 60_000 }),
   revoke: (repo) => repo.revoke(REALM_ID, SESSION_ID, 'sign_out'),
   listActiveForUser: (repo) => repo.listActiveForUser(REALM_ID, USER_ID),
-  // The recording client stands in for the transaction it requires.
-  recordClient: (repo) => repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID, recordingTx),
+  // In a transaction of the recording client, as it requires.
+  recordClient: (repo) =>
+    recordingDb.transaction((tx) => repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID, tx)),
   listClientsForSession: (repo) => repo.listClientsForSession(REALM_ID, SESSION_ID),
   listClientsForUser: (repo) => repo.listClientsForUser(REALM_ID, USER_ID),
   listSessionsForClient: (repo) => repo.listSessionsForClient(REALM_ID, CLIENT_ID),
 };
 
 /** Set by {@link run} to the recording client of the call it makes. */
-let recordingTx: DbClient;
+let recordingDb: DbClient;
 
 /**
  * Make one call against a recording client that answers no rows, and return
@@ -114,7 +115,7 @@ let recordingTx: DbClient;
  */
 async function run(method: keyof SessionsRepository): Promise<CapturedQuery> {
   const { db, queries } = createRecordingDb();
-  recordingTx = db;
+  recordingDb = db;
   await CALLS[method](createSessionsRepository(db));
   const statements = statementsOf(queries);
   expect(statements).toHaveLength(1);
@@ -144,11 +145,21 @@ export function bareIdsDoNotCompile(repo: SessionsRepository): void {
 
 /**
  * Never called: `recordClient` takes the transaction that mints the code, and
- * one without it does not compile.
+ * one without it, or with the root client in its place, does not compile.
  */
-export function recordClientNeedsATransaction(repo: SessionsRepository): void {
+export function recordClientNeedsATransaction(repo: SessionsRepository, root: Database): void {
   // @ts-expect-error the share lock must last until the code's transaction ends
   void repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID);
+  // @ts-expect-error on the root client the share lock ends with the statement
+  void repo.recordClient(REALM_ID, SESSION_ID, CLIENT_ID, root);
+}
+
+/** The isolation level a caller's transaction reports, as `current_setting` answers it. */
+function isolationLevel(level: string): (text: string) => unknown[] | undefined {
+  return (text) =>
+    text.toLowerCase().includes("current_setting('transaction_isolation')")
+      ? [{ level }]
+      : undefined;
 }
 
 describe('createSessionsRepository', () => {
@@ -249,6 +260,7 @@ describe('createSessionsRepository', () => {
       'begin isolation level',
       'update "sessions" set',
       'delete from "session_clients"',
+      'update "authorization_codes" set',
       'commit',
     ]);
     // READ COMMITTED whatever the server's default: the DELETE needs a
@@ -260,14 +272,31 @@ describe('createSessionsRepository', () => {
     expect(remove.values).toEqual([SESSION_ID]);
   });
 
-  it('revoke deletes nothing when it ended no session', async () => {
+  it('revoke spends the ended session’s unredeemed codes in the same transaction', async () => {
+    const { db, queries } = createRecordingDb((text) =>
+      text.toLowerCase().startsWith('update "sessions"') ? [SESSION_ROW] : undefined
+    );
+
+    await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
+
+    const spend = queries.find((query) =>
+      query.text.toLowerCase().startsWith('update "authorization_codes"')
+    );
+    expect(spend?.text.toLowerCase()).toContain('set "used" = $1, "used_at" = $2');
+    expect(spend?.text.toLowerCase()).toContain(
+      'where ("authorization_codes"."session_id" = $3 and "authorization_codes"."used" = $4)'
+    );
+    expect(spend?.values).toEqual([true, NOW, SESSION_ID, false]);
+  });
+
+  it('revoke deletes nothing and spends no code when it ended no session', async () => {
     const { db, queries } = createRecordingDb();
 
     await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
 
-    expect(queries.some((query) => query.text.toLowerCase().includes('session_clients'))).toBe(
-      false
-    );
+    expect(
+      queries.some((query) => /session_clients|authorization_codes/.test(query.text.toLowerCase()))
+    ).toBe(false);
   });
 
   it('revoke returns the registry rows it deleted', async () => {
@@ -287,9 +316,10 @@ describe('createSessionsRepository', () => {
     ]);
   });
 
-  it('revoke inside a caller’s transaction runs as a savepoint of it', async () => {
+  it('revoke inside a caller’s transaction checks it is READ COMMITTED, then runs as a savepoint of it', async () => {
+    const level = isolationLevel('read committed');
     const { db, queries } = createRecordingDb((text) =>
-      text.toLowerCase().startsWith('update "sessions"') ? [SESSION_ROW] : undefined
+      text.toLowerCase().startsWith('update "sessions"') ? [SESSION_ROW] : level(text)
     );
 
     await db.transaction((tx) =>
@@ -298,29 +328,46 @@ describe('createSessionsRepository', () => {
 
     expect(queries.map((query) => query.text.toLowerCase().split(' ')[0])).toEqual([
       'begin',
+      'select',
       'savepoint',
       'update',
       'delete',
+      'update',
       'release',
       'commit',
     ]);
   });
+
+  it.each(['repeatable read', 'serializable'])(
+    'revoke refuses a caller’s transaction at %s and writes nothing',
+    async (level) => {
+      const { db, queries } = createRecordingDb(isolationLevel(level));
+
+      await expect(
+        db.transaction((tx) =>
+          createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', tx)
+        )
+      ).rejects.toThrow(`sessions.revoke needs a READ COMMITTED transaction`);
+      expect(queries.some((query) => /^(update|delete)\b/i.test(query.text.trim()))).toBe(false);
+    }
+  );
 
   it('recordClient locks the live session for share, then adds the row once', async () => {
     const { db, queries } = createRecordingDb((text) =>
       text.toLowerCase().startsWith('select') ? [[SESSION_ID]] : undefined
     );
 
-    const recorded = await createSessionsRepository(db).recordClient(
-      REALM_ID,
-      SESSION_ID,
-      CLIENT_ID,
-      db
+    const recorded = await db.transaction((tx) =>
+      createSessionsRepository(db).recordClient(REALM_ID, SESSION_ID, CLIENT_ID, tx)
     );
 
     expect(recorded).toBe(true);
-    expect(queries).toHaveLength(2);
-    const [lock, insert] = queries.map((query) => ({ ...query, text: query.text.toLowerCase() }));
+    const statements = statementsOf(queries);
+    expect(statements).toHaveLength(2);
+    const [lock, insert] = statements.map((query) => ({
+      ...query,
+      text: query.text.toLowerCase(),
+    }));
     // The client must be one of the session's realm (ADR-019 Decision 1).
     expect(lock.text).toContain(
       'inner join "oauth_clients" on ("oauth_clients"."id" = $1 and "oauth_clients"."realm_id" = "sessions"."realm_id")'
@@ -340,9 +387,11 @@ describe('createSessionsRepository', () => {
     const { db, queries } = createRecordingDb();
 
     expect(
-      await createSessionsRepository(db).recordClient(REALM_ID, SESSION_ID, CLIENT_ID, db)
+      await db.transaction((tx) =>
+        createSessionsRepository(db).recordClient(REALM_ID, SESSION_ID, CLIENT_ID, tx)
+      )
     ).toBe(false);
-    expect(queries).toHaveLength(1);
+    expect(statementsOf(queries)).toHaveLength(1);
   });
 
   it.each([

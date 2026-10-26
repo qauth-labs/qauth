@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, gt, isNull, lte, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lte, type SQL, sql } from 'drizzle-orm';
 
 import type {
+  DbTransaction,
   NewSession,
   RevokedSession,
   Session,
@@ -11,6 +12,7 @@ import type {
 import { DbClient } from '../db';
 import { oauthClients } from '../schema/core';
 import { sessionClients, type SessionRevokedReason, sessions } from '../schema/sessions';
+import { authorizationCodes } from '../schema/tokens';
 
 /**
  * Factory for the browser sessions repository (ADR-019 Decision 3, issue
@@ -128,14 +130,35 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
           .delete(sessionClients)
           .where(eq(sessionClients.sessionId, session.id))
           .returning();
+        // The codes minted under the session and not yet redeemed are spent,
+        // as a logout spends a user's codes: an ID token redeemed from one
+        // would name a session that has ended. The same fresh snapshot sees
+        // every code a `recordClient` committed with its registry row.
+        await t
+          .update(authorizationCodes)
+          .set({ used: true, usedAt: Date.now() })
+          .where(
+            and(eq(authorizationCodes.sessionId, session.id), eq(authorizationCodes.used, false))
+          );
         return { session, clients };
       };
       // READ COMMITTED whatever the server's default: only that level gives
       // the DELETE a snapshot taken after the UPDATE. A caller's transaction
-      // must be READ COMMITTED too; it runs as a savepoint inside it.
-      return tx === undefined
-        ? defaultDb.transaction(end, { isolationLevel: 'read committed' })
-        : tx.transaction(end);
+      // must be READ COMMITTED too, which is checked rather than assumed; the
+      // revocation runs as a savepoint inside it.
+      if (tx === undefined) {
+        return defaultDb.transaction(end, { isolationLevel: 'read committed' });
+      }
+      const { rows } = await tx.execute<{ level: string }>(
+        sql`select current_setting('transaction_isolation') as level`
+      );
+      const level = rows[0]?.level;
+      if (level !== 'read committed') {
+        throw new Error(
+          `sessions.revoke needs a READ COMMITTED transaction, and the caller's runs ${String(level)}`
+        );
+      }
+      return tx.transaction(end);
     },
 
     async listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]> {
@@ -158,7 +181,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       realmId: string,
       sessionId: string,
       oauthClientId: string,
-      tx: DbClient
+      tx: DbTransaction
     ): Promise<boolean> {
       // `FOR SHARE` holds off a concurrent `revoke` (an UPDATE of this row)
       // until `tx` ends, and that revocation then deletes the row written

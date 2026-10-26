@@ -304,6 +304,14 @@ export interface EmailVerificationTokensRepository {
   deleteExpired(tx?: DbClient): Promise<EmailVerificationToken[]>;
 }
 
+/** What revoking the refresh family an authorization code started found and did. */
+export interface RefreshFamilyRevocation {
+  /** The family the code's redemption started; `null` when it started none. */
+  readonly familyId: string | null;
+  /** How many of the family's tokens this call revoked. */
+  readonly revokedCount: number;
+}
+
 /**
  * Refresh tokens repository interface
  */
@@ -362,6 +370,21 @@ export interface RefreshTokensRepository {
    * @returns Count of rows whose state was changed by this call.
    */
   revokeFamily(familyId: string, reason?: string, tx?: DbClient): Promise<number>;
+  /**
+   * Revoke the family an authorization code's redemption started, found
+   * through the first token's `authorizationCodeId`.
+   *
+   * Triggered when a spent code is redeemed again (OAuth 2.1 §4.1.3).
+   * Already-revoked rows keep their original `revokedReason`.
+   *
+   * @returns The family the code started (`null` when none) and the count of
+   *   rows whose state was changed by this call.
+   */
+  revokeFamilyByAuthorizationCode(
+    authorizationCodeId: string,
+    reason: string,
+    tx?: DbClient
+  ): Promise<RefreshFamilyRevocation>;
   /**
    * Revoke all active tokens for a user
    * Useful for "logout all sessions" functionality
@@ -478,6 +501,15 @@ export interface AuthorizationCodesRepository {
    * Only returns codes that are not used and not expired
    */
   findByCode(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
+  /**
+   * Find an authorization code by its code value regardless of `used` and
+   * `expiresAt`.
+   *
+   * The token endpoint uses this to recognise a second redemption of a spent
+   * code (OAuth 2.1 §4.1.3). Callers MUST apply their own single-use and
+   * expiry checks.
+   */
+  findByCodeIncludingUsed(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
   /**
    * Mark a code as used
    * Sets used=true and usedAt=now
@@ -935,10 +967,13 @@ export interface SessionsRepository {
    * one complete list of the clients it served, which back-channel logout
    * reads. A list read before the call could miss a code being minted
    * meanwhile, whose row {@link recordClient} commits before this `UPDATE`
-   * proceeds; the `DELETE` that follows sees it.
+   * proceeds; the `DELETE` that follows sees it. It also spends the
+   * session's unredeemed authorization codes, so none is redeemed into an ID
+   * token whose `sid` names the ended session.
    *
    * Runs READ COMMITTED; a `tx` passed in must be READ COMMITTED too, or the
-   * `DELETE` reads the snapshot from before the `UPDATE` waited.
+   * `DELETE` reads the snapshot from before the `UPDATE` waited. A `tx` at
+   * another level is refused with an error before anything is written.
    *
    * @returns the ended row and the clients it served, or `undefined` when the
    * realm holds no such session or it was already revoked. A second call
@@ -964,8 +999,8 @@ export interface SessionsRepository {
    * The session row is locked `FOR SHARE` until `tx` ends, so a concurrent
    * {@link revoke} either waits and then deletes (and returns) the row
    * written here, or committed first and this call finds no live session.
-   * Hence `tx` is required, and READ COMMITTED: outside a transaction the
-   * lock would end with the statement.
+   * Hence `tx` is required, a transaction (not the root client), and READ
+   * COMMITTED: outside a transaction the lock would end with the statement.
    *
    * @returns `true` when the realm holds the session live (not revoked, before
    * `expires_at`), the client is one of the same realm, and the row is stored;
@@ -977,7 +1012,7 @@ export interface SessionsRepository {
     realmId: string,
     sessionId: string,
     oauthClientId: string,
-    tx: DbClient
+    tx: DbTransaction
   ): Promise<boolean>;
   /**
    * The clients one live session of the realm served, oldest first. Empty for

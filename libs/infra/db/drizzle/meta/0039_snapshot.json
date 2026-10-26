@@ -1,5 +1,5 @@
 {
-  "id": "8b01b6a6-4617-4b39-8b1e-0825829a6bce",
+  "id": "208854b1-e04b-4969-9970-b8081e6512cb",
   "prevId": "27db716f-96cc-4502-af90-3f3e402a4d50",
   "version": "7",
   "dialect": "postgresql",
@@ -1480,6 +1480,13 @@
           "notNull": true,
           "default": 365
         },
+        "ssf_transmitter_enabled": {
+          "name": "ssf_transmitter_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
@@ -1890,6 +1897,34 @@
           ],
           "isUnique": false,
           "where": "\"event_deliveries\".\"status\" = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_event_deliveries_last_error": {
+          "name": "idx_event_deliveries_last_error",
+          "columns": [
+            {
+              "expression": "destination_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "destination_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"event_deliveries\".\"last_error_class\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3723,6 +3758,229 @@
       },
       "isRLSEnabled": false
     },
+    "public.ssf_stream_subjects": {
+      "name": "ssf_stream_subjects",
+      "schema": "",
+      "columns": {
+        "stream_id": {
+          "name": "stream_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_key": {
+          "name": "subject_key",
+          "type": "varchar(2048)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject": {
+          "name": "subject",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_subject_type": {
+          "name": "event_subject_type",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_subject_id": {
+          "name": "event_subject_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified": {
+          "name": "verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ssf_stream_subjects_stream_id_ssf_streams_id_fk": {
+          "name": "ssf_stream_subjects_stream_id_ssf_streams_id_fk",
+          "tableFrom": "ssf_stream_subjects",
+          "tableTo": "ssf_streams",
+          "columnsFrom": ["stream_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "ssf_stream_subjects_pk": {
+          "name": "ssf_stream_subjects_pk",
+          "columns": ["stream_id", "subject_key"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ssf_stream_subjects_event_subject_complete": {
+          "name": "ssf_stream_subjects_event_subject_complete",
+          "value": "(\"ssf_stream_subjects\".\"event_subject_type\" is null) = (\"ssf_stream_subjects\".\"event_subject_id\" is null)"
+        },
+        "ssf_stream_subjects_subject_is_object": {
+          "name": "ssf_stream_subjects_subject_is_object",
+          "value": "jsonb_typeof(\"ssf_stream_subjects\".\"subject\") = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ssf_streams": {
+      "name": "ssf_streams",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "realm_id": {
+          "name": "realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receiver_client_id": {
+          "name": "receiver_client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "audience": {
+          "name": "audience",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "events_requested": {
+          "name": "events_requested",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "delivery_method": {
+          "name": "delivery_method",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endpoint_url": {
+          "name": "endpoint_url",
+          "type": "varchar(2048)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "authorization_header": {
+          "name": "authorization_header",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "varchar(1024)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'enabled'"
+        },
+        "status_reason": {
+          "name": "status_reason",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ssf_streams_realm_id_realms_id_fk": {
+          "name": "ssf_streams_realm_id_realms_id_fk",
+          "tableFrom": "ssf_streams",
+          "tableTo": "realms",
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ssf_streams_receiver_client_id_oauth_clients_id_fk": {
+          "name": "ssf_streams_receiver_client_id_oauth_clients_id_fk",
+          "tableFrom": "ssf_streams",
+          "tableTo": "oauth_clients",
+          "columnsFrom": ["receiver_client_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ssf_streams_receiver_unique": {
+          "name": "ssf_streams_receiver_unique",
+          "nullsNotDistinct": false,
+          "columns": ["realm_id", "receiver_client_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ssf_streams_status_known": {
+          "name": "ssf_streams_status_known",
+          "value": "\"ssf_streams\".\"status\" in ('enabled', 'paused', 'disabled')"
+        },
+        "ssf_streams_delivery_method_known": {
+          "name": "ssf_streams_delivery_method_known",
+          "value": "\"ssf_streams\".\"delivery_method\" in ('urn:ietf:rfc:8935')"
+        },
+        "ssf_streams_audience_not_empty": {
+          "name": "ssf_streams_audience_not_empty",
+          "value": "\"ssf_streams\".\"audience\" <> ''"
+        },
+        "ssf_streams_endpoint_url_not_empty": {
+          "name": "ssf_streams_endpoint_url_not_empty",
+          "value": "\"ssf_streams\".\"endpoint_url\" <> ''"
+        },
+        "ssf_streams_events_requested_is_array": {
+          "name": "ssf_streams_events_requested_is_array",
+          "value": "jsonb_typeof(\"ssf_streams\".\"events_requested\") = 'array'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.authorization_codes": {
       "name": "authorization_codes",
       "schema": "",
@@ -3793,12 +4051,6 @@
         "session_expires_at": {
           "name": "session_expires_at",
           "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -3922,21 +4174,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "idx_authorization_codes_session_id": {
-          "name": "idx_authorization_codes_session_id",
-          "columns": [
-            {
-              "expression": "session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -3956,15 +4193,6 @@
           "columnsFrom": ["user_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "authorization_codes_session_id_sessions_id_fk": {
-          "name": "authorization_codes_session_id_sessions_id_fk",
-          "tableFrom": "authorization_codes",
-          "tableTo": "sessions",
-          "columnsFrom": ["session_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

@@ -4,14 +4,27 @@ import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
 
+/** The `client_id` of the system client, the same in every realm. */
+export function systemClientId(): string {
+  return env.SYSTEM_CLIENT_ID || 'system';
+}
+
 /**
  * Get or create system OAuth client
  * Helper function to get the system OAuth client for direct login operations
+ *
+ * The row is read as it is and created with no `audience`, so the token
+ * `/auth/login` mints carries the system client's `client_id` as its `aud`,
+ * as before #509. This release only ACCEPTS the developer API's audience on a
+ * system-client token (`assertManagementToken`, userinfo); a later release
+ * mints it (#524). Expand, then contract (ADR-018 §5): a node of the previous
+ * release keeps accepting every portal token a node of this one mints, so the
+ * upgrade can roll.
  */
 export async function getOrCreateSystemClient(realmId: string, fastify: FastifyInstance) {
-  const systemClientId = env.SYSTEM_CLIENT_ID || 'system';
+  const clientId = systemClientId();
 
-  let client = await fastify.repositories.oauthClients.findByClientId(realmId, systemClientId);
+  let client = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
 
   if (!client) {
     // Generate random client secret (32 bytes = 64 hex characters)
@@ -23,7 +36,7 @@ export async function getOrCreateSystemClient(realmId: string, fastify: FastifyI
     // Create system client with required configuration
     client = await fastify.repositories.oauthClients.create({
       realmId,
-      clientId: systemClientId,
+      clientId,
       clientSecretHash,
       name: 'System Client',
       redirectUris: [],

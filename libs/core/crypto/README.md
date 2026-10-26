@@ -8,13 +8,18 @@ signing/verification from any specific cryptographic backend, per
 ## Why
 
 QAuth signs OAuth 2.1 access tokens and OIDC ID tokens as a core function. To
-keep crypto-agility (Phase 1 Ed25519 today; hybrid ML-DSA + Ed25519 later)
+keep crypto-agility (Ed25519 by default; hybrid ML-DSA-65 + Ed25519 as an option)
 without rewriting service code on every backend change, all signing,
 verification, and key generation go through this small interface. Service layers
 (`@qauth-labs/server-jwt` and friends) depend on this abstraction, never on
-`jose` (or a future native/WASM backend) directly.
+`jose` (or any other backend) directly.
 
-Phase 1 is a pure `jose`/EdDSA backend behind the seam — no PQC yet.
+Behind the seam, `jose` signs the classical JWS. ML-DSA-65 runs on
+`@noble/post-quantum`. Hybrid ML-DSA-65 + Ed25519 signing (`signHybrid` /
+`verifyHybrid`) has shipped, off by default behind `HYBRID_SIGNING_ENABLED`.
+The native binding in
+[`@qauth-labs/crypto-native`](../crypto-native/README.md) implements the same
+backend. The auth server does not register it.
 
 ## API
 
@@ -145,9 +150,9 @@ deployment that must carry one across HTTP requests generates it with
 rest**, scoped to its one request. Age them with
 `isEphemeralEncryptionKeyPairExpired`.
 
-## Extending (future PQC work)
+## Extending
 
-Adding a backend/algorithm (e.g. ML-DSA-65, hybrid composites) means widening
+Adding a backend/algorithm (e.g. a composite signature) means widening
 `SignatureAlgorithm` and branching inside `sign` / `verify` / the key functions.
 Because every call site consumes only this interface, no service-layer code
 changes when a backend is added — that is the entire point of the seam.

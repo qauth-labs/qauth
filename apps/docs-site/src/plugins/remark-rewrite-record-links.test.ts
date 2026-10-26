@@ -86,15 +86,15 @@ describe('rewriteRecordLink — the six buckets', () => {
   });
 
   it('rewrites a link to a real repo file the records collection does NOT render to a GitHub blob URL — the brief’s own example', () => {
-    // `../../MVP-PRD.md` is the Task 10 brief's own illustrative case: a
-    // real file (verified below) that stays a repo file, never a rendered
-    // record. It does not occur literally in the current ADR corpus (see
-    // the exhaustive real-tree test), so this is a synthetic but faithful
-    // stand-in — same shape, same resolution, same decision.
-    expect(existsSync(join(REPO_ROOT, 'MVP-PRD.md'))).toBe(true);
-    const node = link('../../MVP-PRD.md');
+    // The Task 10 brief's own illustrative case was `../../MVP-PRD.md`,
+    // since archived; `../../CHANGELOG.md` has the same shape: a real file
+    // (verified below) that stays a repo file, never a rendered record. It
+    // is a synthetic but faithful stand-in — same shape, same resolution,
+    // same decision.
+    expect(existsSync(join(REPO_ROOT, 'CHANGELOG.md'))).toBe(true);
+    const node = link('../../CHANGELOG.md');
     rewriteRecordLink(node, sourcePath('adr', '007-mcp-first-positioning.md'), OPTIONS);
-    expect(node.url).toBe(`${GITHUB_BLOB_BASE_URL}/MVP-PRD.md`);
+    expect(node.url).toBe(`${GITHUB_BLOB_BASE_URL}/CHANGELOG.md`);
   });
 
   it('rewrites a link to the EUDI regulatory drift log (a real, un-rendered docs/ root file) to a GitHub blob URL, anchor included', () => {

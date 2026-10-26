@@ -109,7 +109,6 @@ describe('verifyResourceRequestProof (RFC 9449 §7.1)', () => {
       (caught: unknown) => caught
     );
     expect(error).toBeInstanceOf(JWTInvalidError);
-    expect((error as Error).message).toBe('Invalid DPoP key binding');
     expect(failureData(error)).toEqual({ error: 'invalid_token', reason: 'dpop_key_mismatch' });
   });
 

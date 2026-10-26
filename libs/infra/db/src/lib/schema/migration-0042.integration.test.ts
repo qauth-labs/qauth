@@ -1,5 +1,5 @@
 /**
- * Seed-then-migrate test for migration 0039: the browser session behind an
+ * Seed-then-migrate test for migration 0042: the browser session behind an
  * authorization code (ADR-019 Decisions 3 and 4, #549).
  *
  * The migration applies to a schema that holds codes and sessions: every
@@ -10,7 +10,7 @@
  * does not exist.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
- * and upgraded through 0038, then 0039, so a later migration cannot change
+ * and upgraded through 0041, then 0042, so a later migration cannot change
  * what this test sees.
  */
 import { rmSync } from 'node:fs';
@@ -25,10 +25,10 @@ import {
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const MIGRATION_IDX = 39;
+const MIGRATION_IDX = 42;
 const EXPIRES_AT = 4_000_000_000_000;
 
-describe('migration 0039 — authorization code session (seed-then-migrate)', () => {
+describe('migration 0042 — authorization code session (seed-then-migrate)', () => {
   let container: StartedPostgres | undefined;
   let pool: Pool | undefined;
   let dockerUp = false;
@@ -70,7 +70,7 @@ describe('migration 0039 — authorization code session (seed-then-migrate)', ()
     await applyQauthMigrations(container.connectionString, through);
   }
 
-  /** A realm, a user, a client and a live browser session, as 0038 left them. */
+  /** A realm, a user, a client and a live browser session, as 0041 left them. */
   async function seedOwner(): Promise<{ userId: string; clientId: string; sessionId: string }> {
     const {
       rows: [realm],
@@ -97,7 +97,7 @@ describe('migration 0039 — authorization code session (seed-then-migrate)', ()
     return { userId: user.id, clientId: client.id, sessionId: session.id };
   }
 
-  /** A code as 0038 and the previous release insert it: no session column. */
+  /** A code as 0041 and the previous release insert it: no session column. */
   async function seedCode(
     owner: { userId: string; clientId: string },
     code: string

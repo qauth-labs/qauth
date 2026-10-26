@@ -152,7 +152,9 @@ services:
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@qauth.dev}
       EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-QAuth}
-      EMAIL_BASE_URL: ${EMAIL_BASE_URL:-http://localhost:3000}
+      # Optional and not read since 0.2.0: mail links start at the realm's
+      # issuer. Blank when unset, which the schema reads as unset.
+      EMAIL_BASE_URL: ${EMAIL_BASE_URL:-}
       EMAIL_VERIFICATION_TOKEN_EXPIRY: ${EMAIL_VERIFICATION_TOKEN_EXPIRY:-86400}
       EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: ${EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND:-true}
       # Resend provider (only needed if EMAIL_PROVIDER=resend)
@@ -310,6 +312,9 @@ services:
 
       # DPoP-bound tokens (RFC 9449, #480). Off unless set.
       DPOP_ENABLED:
+
+      # Shared Signals Framework transmitter (#410). Off unless set.
+      SSF_TRANSMITTER_ENABLED:
 
       # Which proxies may report the client address (X-Forwarded-For). List
       # only the developer portal's fixed address (172.30.80.10 by default; see

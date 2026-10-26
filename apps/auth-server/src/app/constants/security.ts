@@ -319,3 +319,11 @@ export const WALLET_LOGIN_STATUS_RATE_WINDOW_S = 300;
  * is the identifier shape `PasswordProvider` already stores in that column.
  */
 export const ASSERTED_IDENTIFIER_MAX_LENGTH = 320;
+
+/**
+ * The `Cache-Control` of every JWKS the server publishes: the realm JWKS and
+ * the SSF transmitter's. A key set is cached for at most five minutes
+ * (ADR-019 Decision 9), so a key that is unpublished leaves relying parties'
+ * caches within that window.
+ */
+export const JWKS_CACHE_CONTROL = 'public, max-age=300';

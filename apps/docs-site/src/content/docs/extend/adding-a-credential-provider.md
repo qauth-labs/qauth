@@ -85,7 +85,7 @@ write `fastify.providerRegistry.resolve('password')`.
 
 `createConfiguredProviders`
 (`libs/fastify/plugins/federation/src/lib/configured-providers.ts:302`) is where "which upstreams
-exist" is decided, and `apps/auth-server/src/app/app.ts:125` is the only place that calls it.
+exist" is decided, and `apps/auth-server/src/app/app.ts:128` is the only place that calls it.
 
 Two properties make it worth understanding before you extend it:
 
@@ -121,11 +121,11 @@ The engine resolves a provider by `type` and delegates. Both production call sit
 - **Login** — `apps/auth-server/src/app/helpers/credential-auth.ts:80` resolves the provider and
   `apps/auth-server/src/app/helpers/credential-auth.ts:81` calls `verify()`. It does not call
   `extractAttributes()`; login reads the attributes that already exist.
-- **Registration** — `apps/auth-server/src/app/routes/auth/register.ts:222` resolves,
-  `apps/auth-server/src/app/routes/auth/register.ts:223` verifies, and
-  `apps/auth-server/src/app/routes/auth/register.ts:228` extracts the attributes, which are then
+- **Registration** — `apps/auth-server/src/app/routes/auth/register.ts:228` resolves,
+  `apps/auth-server/src/app/routes/auth/register.ts:229` verifies, and
+  `apps/auth-server/src/app/routes/auth/register.ts:234` extracts the attributes, which are then
   upserted inside the same transaction as the user and credential rows
-  (`apps/auth-server/src/app/routes/auth/register.ts:277`).
+  (`apps/auth-server/src/app/routes/auth/register.ts:283`).
 
 Neither site names a provider implementation. Both name a `type` constant. That is the whole
 property: a new upstream adds a file and one line in `createConfiguredProviders`, and the routes

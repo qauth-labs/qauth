@@ -196,7 +196,8 @@ describe('findStaleStatusClaims — fixtures', () => {
 
 /**
  * Real-tree scan set: the site content tree plus README.md and
- * docs/README.md (per the brief). `MVP-PRD.md` is deliberately excluded —
+ * docs/README.md (per the brief). `MVP-PRD.md`, now archived as
+ * `docs/archive/mvp-prd.md`, is deliberately excluded —
  * owner decision, not an oversight: it is a planning record that calls
  * already-shipped work "in progress" by design (that's what a PRD's status
  * column is for), so scanning it would make this guard permanently red for

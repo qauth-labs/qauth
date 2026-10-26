@@ -40,6 +40,13 @@ export interface EventRetentionJobOptions {
    */
   readonly routes: readonly RetentionRoute[];
   /**
+   * Route kinds no node serves, such as `ssf` while SSF_TRANSMITTER_ENABLED
+   * is off: their leftover positions and pending deliveries hold no event
+   * back, as for a route that lists no destination. A kind one of `routes`
+   * has is served, whatever this says.
+   */
+  readonly unservedKinds?: readonly string[];
+  /**
    * The retention of a realm whose row no longer exists: an event outlives
    * its realm. The auth server passes the seeds a new realm would get.
    */
@@ -67,9 +74,12 @@ function wellFormed(value: unknown): value is { kind?: unknown; id: string; real
  */
 async function listServed(
   routes: readonly RetentionRoute[],
+  unservedKinds: readonly string[],
   log: FastifyBaseLogger
 ): Promise<OfferedDestinations> {
-  const kinds: string[] = [];
+  // A kind no node serves is listed with no destination, so nothing of it
+  // holds events back.
+  const kinds = unservedKinds.filter((kind) => !routes.some((route) => route.kind === kind));
   const destinations: Array<{ kind: string; id: string; realmId: string }> = [];
   for (const route of routes) {
     let listed: readonly unknown[];
@@ -127,7 +137,7 @@ export function createEventRetentionJob(options: EventRetentionJobOptions): JobD
     role: 'delivery',
     intervalMs: EVENT_RETENTION_INTERVAL_MS,
     async run({ signal, now, log }) {
-      const served = await listServed(options.routes, log);
+      const served = await listServed(options.routes, options.unservedKinds ?? [], log);
       const realms = await options.retention.realms(options.fallback);
       const deleted = { user: 0, admin: 0 };
       let busyRealms = 0;

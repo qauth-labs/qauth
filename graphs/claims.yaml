@@ -9,3 +9,5 @@ kind: claims
 
 operations:
   POST /auth/logout: { flow: [logout] }
+  GET /ui/consent: { flow: [consent] }
+  POST /ui/consent: { flow: [consent] }

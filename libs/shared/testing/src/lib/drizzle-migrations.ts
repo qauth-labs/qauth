@@ -138,6 +138,8 @@ export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'oid4vp_request_states',
   'realm_public_keys',
   'realm_keys',
+  'ssf_stream_subjects',
+  'ssf_streams',
   'oauth_consents',
   'refresh_tokens',
   'authorization_codes',

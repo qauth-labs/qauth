@@ -41,7 +41,11 @@ export interface MemoryStore extends DeliveryStore {
 function matches(destination: DeliveryDestination, event: EventEnvelope): boolean {
   return (
     (destination.types === undefined || destination.types.includes(event.type)) &&
-    (destination.categories === undefined || destination.categories.includes(event.category))
+    (destination.categories === undefined || destination.categories.includes(event.category)) &&
+    (destination.subjects === undefined ||
+      destination.subjects.some(
+        (subject) => subject.type === event.subject?.type && subject.id === event.subject.id
+      ))
   );
 }
 
@@ -173,6 +177,13 @@ export function createMemoryStore(): MemoryStore {
     async record(claim, outcome: DeliveryAttemptRecord) {
       const row = rows.find((candidate) => holds(candidate, claim));
       if (!row) return false;
+      if (outcome.result === 'hold') {
+        // No attempt: give back the one the claim counted.
+        row.attempt -= 1;
+        row.lockedUntil = null;
+        row.nextAttemptAt = outcome.nextAttemptAt;
+        return true;
+      }
       row.status = outcome.result === 'retry' ? 'pending' : outcome.result;
       row.lockedUntil = null;
       if (outcome.result === 'retry') row.nextAttemptAt = outcome.nextAttemptAt;

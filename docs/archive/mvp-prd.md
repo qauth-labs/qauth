@@ -1,13 +1,19 @@
 # QAuth - Product Requirements Document (PRD)
 
+> **Archived.** This planning record is kept for history and is no longer
+> maintained. Its phases and status notes are out of date.
+> [ADR-018](../adr/018-1-0-scope-and-stability.md) sets the scope of 1.0, and
+> the [milestones](https://github.com/qauth-labs/qauth/milestones) hold the
+> plan.
+
 > **Version**: 2.4
 > **Last Updated**: 2026-07-31
 > **Author**: Muhammed Taha Ayan
-> **Status**: MCP-first re-baseline — see [ADR-007](./docs/adr/007-mcp-first-positioning.md). Phase 1 complete; the T4 platform track (Phases 4–5) is 37 issues closed / 3 open (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31).
+> **Status**: MCP-first re-baseline — see [ADR-007](../adr/007-mcp-first-positioning.md). Phase 1 complete; the T4 platform track (Phases 4–5) is 37 issues closed / 3 open (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31).
 
-> 🎉 **MVP delivered (June 2026).** The MVP milestone is complete and closed — core OAuth 2.1 / OIDC, the MCP authorization surface, client management, and the agent-native authorization track ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md)) all shipped. **Production hardening (T3)** — security headers, CSRF, secure cookies, XSS-safe output, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout, and the developer-portal Docker image — and **the environment-aware posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md) / T5)** are both complete.
+> 🎉 **MVP delivered (June 2026).** The MVP milestone is complete and closed — core OAuth 2.1 / OIDC, the MCP authorization surface, client management, and the agent-native authorization track ([ADR-007 §2](../adr/007-mcp-first-positioning.md)) all shipped. **Production hardening (T3)** — security headers, CSRF, secure cookies, XSS-safe output, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout, and the developer-portal Docker image — and **the environment-aware posture ([ADR-008](../adr/008-environment-aware-authorization.md) / T5)** are both complete.
 
-> 📌 **Status update (checked 2026-08-31) — the T4 platform track has largely landed.** This document's phase breakdown treats Phases 4–5 as future work; that is no longer accurate. The **ADR-002 identifier-abstraction migration is complete** (epic #224, migrations 0010–0012), **post-quantum hybrid signing is implemented and default-off** (epic #241), and the **wallet-federation verifier stack is merged** — OID4VP transport, SD-JWT VC validation, key attestations, status-list revocation, claims normalization, account linking, `acr` propagation and the sign-in UI. A browser **can complete a wallet sign-in** behind `WALLET_FEDERATION_ENABLED` (off by default), covered end-to-end against a mock wallet by the #240 suite. HAIP profile wiring (#377) and the HAIP same-device return leg (#405, [ADR-013](./docs/adr/013-same-device-return-leg.md)) both closed 2026-09-11 — `haip-1.0` boots when provisioned, and a same-device wallet sign-in is bound to its browser by a single-use Response Code. Remaining T4 work is the real-wallet interop pass (#376). (`WalletProvider.verify()` — the generic `CredentialProvider`-registry entry point — still throws by design; the wallet login path does not call it.) **This PRD is a planning record, not a live status surface** — for current status see the [README](./README.md#-current-status-august-2026) and the [docs index](./docs/README.md).
+> 📌 **Status update (checked 2026-08-31) — the T4 platform track has largely landed.** This document's phase breakdown treats Phases 4–5 as future work; that is no longer accurate. The **ADR-002 identifier-abstraction migration is complete** (epic #224, migrations 0010–0012), **post-quantum hybrid signing is implemented and default-off** (epic #241), and the **wallet-federation verifier stack is merged** — OID4VP transport, SD-JWT VC validation, key attestations, status-list revocation, claims normalization, account linking, `acr` propagation and the sign-in UI. A browser **can complete a wallet sign-in** behind `WALLET_FEDERATION_ENABLED` (off by default), covered end-to-end against a mock wallet by the #240 suite. HAIP profile wiring (#377) and the HAIP same-device return leg (#405, [ADR-013](../adr/013-same-device-return-leg.md)) both closed 2026-09-11 — `haip-1.0` boots when provisioned, and a same-device wallet sign-in is bound to its browser by a single-use Response Code. Remaining T4 work is the real-wallet interop pass (#376). (`WalletProvider.verify()` — the generic `CredentialProvider`-registry entry point — still throws by design; the wallet login path does not call it.) **This PRD is a planning record, not a live status surface** — for current status see the [README](../../README.md#status) and the [docs index](../README.md).
 
 ## Executive Summary
 
@@ -17,7 +23,7 @@ The project is built toward a future where digital identity is portable and user
 
 **Core Philosophy**: Ship working features incrementally. Each phase should be production-ready before moving to the next.
 
-> **2026-06-23 re-baseline (MCP-first).** While executing Phases 1–3, QAuth's OAuth 2.1 work (PR #156) delivered a working OAuth 2.1 **authorization server for MCP servers and AI agents** — the protocol foundation of Phase 9, years early and never previously in scope (validated end-to-end with Claude Code against a live MCP server). Per [ADR-007](./docs/adr/007-mcp-first-positioning.md), the near-term direction is now **MCP-first**: productize MCP auth (a resource-server SDK + dynamic-registration abuse controls) and build agent-native authorization (the Phase 9 substance), while wallet federation (Phase 4) and post-quantum signing (Phase 5) become the resequenced **long-term platform**. The identifier-abstraction migration ([ADR-002](./docs/adr/002-identifier-abstraction.md)) was **deferred** at the time and re-scoped as the Phase 4 gate — **that gate has since been passed** (epic #224 closed). The phase breakdown below predates this re-baseline and is retained for reference; **ADR-007 governs near-term priority**, and the July 2026 status note above supersedes the phase-completion claims.
+> **2026-06-23 re-baseline (MCP-first).** While executing Phases 1–3, QAuth's OAuth 2.1 work (PR #156) delivered a working OAuth 2.1 **authorization server for MCP servers and AI agents** — the protocol foundation of Phase 9, years early and never previously in scope (validated end-to-end with Claude Code against a live MCP server). Per [ADR-007](../adr/007-mcp-first-positioning.md), the near-term direction is now **MCP-first**: productize MCP auth (a resource-server SDK + dynamic-registration abuse controls) and build agent-native authorization (the Phase 9 substance), while wallet federation (Phase 4) and post-quantum signing (Phase 5) become the resequenced **long-term platform**. The identifier-abstraction migration ([ADR-002](../adr/002-identifier-abstraction.md)) was **deferred** at the time and re-scoped as the Phase 4 gate — **that gate has since been passed** (epic #224 closed). The phase breakdown below predates this re-baseline and is retained for reference; **ADR-007 governs near-term priority**, and the July 2026 status note above supersedes the phase-completion claims.
 
 ---
 
@@ -45,7 +51,7 @@ The project is built toward a future where digital identity is portable and user
 
 **Note**: Multi-tenancy is included via the Realms table for data isolation. Advanced multi-tenancy features (custom domains, tenant management UI) are Phase 6+.
 
-> **Amendment (2026-10-09):** [ADR-019](./docs/adr/019-deployment-topology-and-trust-boundaries.md) moves realm hosts and custom domains into 1.0. Automatic TLS and DNS verification for custom domains come later, with a hosted service.
+> **Amendment (2026-10-09):** [ADR-019](../adr/019-deployment-topology-and-trust-boundaries.md) moves realm hosts and custom domains into 1.0. Automatic TLS and DNS verification for custom domains come later, with a hosted service.
 
 ---
 
@@ -400,7 +406,7 @@ Response:
 - ✅ Authorization codes are single-use
 - ✅ State parameter is validated
 
-**Post-Phase 1 additions** (see [ADR-006](./docs/adr/006-oauth-grants-and-audience.md)):
+**Post-Phase 1 additions** (see [ADR-006](../adr/006-oauth-grants-and-audience.md)):
 
 - ✅ `client_credentials` grant (RFC 6749 4.4) for service-to-service auth — no refresh token, `sub = clientId`
 - ✅ `client_secret_basic` client authentication (RFC 6749 2.3.1) alongside `client_secret_post`
@@ -591,7 +597,7 @@ Response:
 - [ ] Delete/revoke client (portal UI in progress)
 - [x] List all clients for a developer — `GET /api/clients`, scoped by developer, secret never returned
 
-**REST API Endpoints** (all shipped in [ADR-006](./docs/adr/006-oauth-grants-and-audience.md)):
+**REST API Endpoints** (all shipped in [ADR-006](../adr/006-oauth-grants-and-audience.md)):
 
 ```typescript
 GET    /api/clients                        # shipped (#86)
@@ -1010,7 +1016,7 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 ## Phase 4: Wallet Federation Bridge (OID4VC / OID4VP)
 
 **Timeline**: 6-8 weeks
-**Status**: Not Started — **deferred** (long-term platform per [ADR-007](./docs/adr/007-mcp-first-positioning.md)); **gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) identifier-abstraction migration**, which is the first task of this phase.
+**Status**: Not Started — **deferred** (long-term platform per [ADR-007](../adr/007-mcp-first-positioning.md)); **gated on the [ADR-002](../adr/002-identifier-abstraction.md) identifier-abstraction migration**, which is the first task of this phase.
 
 **Objective**: Enable QAuth to accept identity from standards-compliant VC wallets as an upstream source. Downstream applications receive standard OAuth 2.1 tokens with no changes required. The EU EUDI Wallet (eIDAS 2.0) is the primary integration test target, but the architecture is wallet-agnostic.
 
@@ -1105,7 +1111,7 @@ These features are NOT part of Phases 1–5:
 - Horizontal scaling, CDN integration
 - Multi-region support
 
-### Phase 9: Agent Authentication & Authorization (pulled forward — see [ADR-007](./docs/adr/007-mcp-first-positioning.md))
+### Phase 9: Agent Authentication & Authorization (pulled forward — see [ADR-007](../adr/007-mcp-first-positioning.md))
 
 > **Re-baselined to near-term.** The OAuth 2.1 / MCP protocol foundation for this phase shipped early in PR #156 (discovery, dynamic client registration, resource-indicator audience binding, public-client PKCE, consent). The remaining substance below — agent client type, modes, granular scopes, step-up, agent-action audit — is now the **T2 differentiation track**, augmented with on-behalf-of delegation via OAuth Token Exchange (RFC 8693).
 
@@ -1245,9 +1251,9 @@ These features are NOT part of Phases 1–5:
 
 ## 🔗 Related Documents
 
-- [README.md](./README.md) - Project overview
-- [Docker Guide](./docs/docker.md) - Local development with Docker
-- [ADR Index](./docs/adr/README.md) - Architecture Decision Records
+- [README.md](../../README.md) - Project overview
+- [Docker Guide](../docker.md) - Local development with Docker
+- [ADR Index](../adr/README.md) - Architecture Decision Records
 
 ---
 

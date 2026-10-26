@@ -62,7 +62,7 @@ import { recordRouteForRepoPath } from '../lib/records';
  *      point: it makes the plugin's global registration correct for the
  *      first relative link someone writes, not just harmless.
  *   3. A relative link whose target is a real repository file but NOT one
- *      the `records` collection loads (e.g. `../../MVP-PRD.md`,
+ *      the `records` collection loads (e.g. `../../CHANGELOG.md`,
  *      `../eudi-regulatory-drift-log.md`) — rewritten to a GitHub blob URL.
  *      Leaving it as a site-relative path would be worse than useless: on
  *      GitHub `../eudi-regulatory-drift-log.md` resolves correctly relative
