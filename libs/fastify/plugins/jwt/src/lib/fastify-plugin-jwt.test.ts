@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from 'node:crypto';
+
 import {
   getSignatureBackend,
   type MlDsaKey,
@@ -980,6 +982,30 @@ describe('jwtPlugin without a private key (a process without the signer role, #4
         code: 'TEMPORARILY_UNAVAILABLE',
       });
     }
+    await app.close();
+  });
+
+  it('publishes an RS256 public key given without its private key, and advertises RS256', async () => {
+    const { publicKeyPem } = await keyPems();
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      publicKey: publicKeyPem,
+      rs256PublicKey: rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      rs256KeyId: 'rs-1',
+      issuer: ISSUER,
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 604800,
+    });
+    await app.ready();
+    const jwks = await app.jwtUtils.getJwks();
+    expect(jwks.keys.map((key) => key.kty)).toEqual(['OKP', 'RSA']);
+    expect(jwks.keys[1]).toMatchObject({ kid: 'rs-1', alg: 'RS256' });
+    expect(jwks.keys[1]).not.toHaveProperty('d');
+    expect(app.jwtUtils.getIdTokenSigningAlgValuesSupported()).toEqual(['RS256', 'EdDSA']);
+    await expect(
+      app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' })
+    ).rejects.toMatchObject({ statusCode: 503 });
     await app.close();
   });
 

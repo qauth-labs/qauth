@@ -4,7 +4,10 @@ import {
   cryptoEnvSchema,
   type EnvDeprecationWarning,
   jwtEnvSchema,
+  keyMaterialProblems,
   readConfiguredEnv,
+  ServiceRoleBootError,
+  serviceRolesEnvSchema,
 } from '@qauth-labs/server-config';
 import { switchesExperimentalFeature } from '@qauth-labs/shared-stability';
 import { z } from 'zod';
@@ -20,6 +23,21 @@ import { envSchema } from './env-schema';
  * boot fails here, naming both.
  */
 const configured = readConfiguredEnv(CONFIG_KEY_REGISTRY);
+
+/**
+ * A process without the signer role holds no key (ADR-019 Decision 9, #495).
+ * Refused here, before any schema below reads a key file (`JWT_*_PATH`, the
+ * ML-DSA seed, the OID4VP verifier key), so such a process never loads the
+ * key it refuses, and the refusal names the variable rather than a missing
+ * file.
+ */
+const keyMaterial = keyMaterialProblems(
+  configured.parse(serviceRolesEnvSchema).SERVICE_ROLES,
+  configured.env
+);
+if (keyMaterial.length > 0) {
+  throw new ServiceRoleBootError(keyMaterial);
+}
 
 /**
  * Validated environment configuration

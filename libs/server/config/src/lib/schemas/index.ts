@@ -53,10 +53,15 @@ export {
 export { type RedisEnv, redisEnvSchema } from './redis';
 export {
   ALL_SERVICE_ROLES,
+  describeServiceRoles,
+  isKeyMaterialVariable,
   isServiceRole,
+  keyMaterialProblems,
   parseServiceRoles,
   SERVICE_ROLE_NAMES,
   type ServiceRole,
+  ServiceRoleBootError,
+  type ServiceRoleProblem,
   type ServiceRolesEnv,
   serviceRolesEnvSchema,
 } from './service-roles';

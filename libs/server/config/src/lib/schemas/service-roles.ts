@@ -115,3 +115,71 @@ export const serviceRolesEnvSchema = z.object({
 });
 
 export type ServiceRolesEnv = z.infer<typeof serviceRolesEnvSchema>;
+
+/** `SERVICE_ROLES` as the operator would write it: `all`, or the list. */
+export function describeServiceRoles(roles: readonly ServiceRole[]): string {
+  return SERVICE_ROLE_NAMES.every((role) => roles.includes(role)) ? 'all' : roles.join(',');
+}
+
+/**
+ * Whether the variable `name`, set to `value`, puts key material in a process:
+ * the KEK and its adapters' settings (`KEK`, `KEK_PATH`, `KEK_PREVIOUS*`,
+ * `KEK_<ADAPTER>_*`, and `KEK_PROVIDER` naming an adapter rather than the
+ * default `local`), a JWT private key (`JWT_*_PRIVATE_KEY*`) or the OID4VP
+ * verifier's signing key (`OID4VP_VERIFIER_SIGNING_KEY*`). A blank value is
+ * unset.
+ */
+export function isKeyMaterialVariable(name: string, value: string | undefined): boolean {
+  if (value === undefined || value.trim() === '') return false;
+  if (name === 'KEK_PROVIDER') return value.trim() !== 'local';
+  return (
+    /^KEK(?:_|$)/.test(name) ||
+    /^JWT_(?:[A-Z0-9]+_)*PRIVATE_KEY/.test(name) ||
+    /^OID4VP_VERIFIER_SIGNING_KEY/.test(name)
+  );
+}
+
+/** One reason a process cannot start with its roles. */
+export interface ServiceRoleProblem {
+  /** The variable to set or remove. */
+  readonly variable: string;
+  readonly message: string;
+}
+
+/**
+ * The key variables a process with `roles` must not have, each with its
+ * refusal: none where the process holds the signer, which alone holds keys
+ * (ADR-019 Decision 9).
+ *
+ * The auth server checks this before its configuration reads any key file,
+ * so a process without the signer never loads the key it refuses.
+ *
+ * @param raw - the environment, after `.env` and the key aliases
+ */
+export function keyMaterialProblems(
+  roles: readonly ServiceRole[],
+  raw: Readonly<Record<string, string | undefined>>
+): ServiceRoleProblem[] {
+  if (roles.includes('signer')) return [];
+  const named = `SERVICE_ROLES=${describeServiceRoles(roles)}`;
+  return Object.keys(raw)
+    .sort()
+    .filter((variable) => isKeyMaterialVariable(variable, raw[variable]))
+    .map((variable) => ({
+      variable,
+      message: `${variable} is set, but ${named} does not hold the signer role, and only the signer holds keys. Remove ${variable} from this process: give it to the processes whose SERVICE_ROLES name signer, or all`,
+    }));
+}
+
+/** A boot refused for its service roles, naming every variable at fault. */
+export class ServiceRoleBootError extends Error {
+  readonly problems: readonly ServiceRoleProblem[];
+
+  constructor(problems: readonly ServiceRoleProblem[]) {
+    super(
+      `The service roles cannot start:\n${problems.map((problem) => `- ${problem.message}`).join('\n')}`
+    );
+    this.name = 'ServiceRoleBootError';
+    this.problems = problems;
+  }
+}

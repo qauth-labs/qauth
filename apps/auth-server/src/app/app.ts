@@ -381,10 +381,9 @@ async function registerJwt(fastify: FastifyInstance): Promise<void> {
   // names the key the same way.
   const ed25519KeyPem = env.JWT_PRIVATE_KEY ?? env.JWT_PUBLIC_KEY;
   const ed25519KeyId = ed25519KeyPem === undefined ? undefined : await thumbprintKid(ed25519KeyPem);
+  const rs256KeyPem = env.JWT_RS256_PRIVATE_KEY ?? env.JWT_RS256_PUBLIC_KEY;
   const rs256KeyId =
-    env.JWT_RS256_PRIVATE_KEY === undefined
-      ? undefined
-      : env.JWT_RS256_KID || (await thumbprintKid(env.JWT_RS256_PRIVATE_KEY));
+    rs256KeyPem === undefined ? undefined : env.JWT_RS256_KID || (await thumbprintKid(rs256KeyPem));
 
   await fastify.register(jwtPlugin, {
     // Absent on a process without the signer role (#495): the plugin then
@@ -401,13 +400,23 @@ async function registerJwt(fastify: FastifyInstance): Promise<void> {
     // RS256 — unblocking OIDC Basic/Config OP certification (#286). Absent →
     // EdDSA-only, exactly as before. Access tokens always stay EdDSA. Spread
     // conditionally so unset keys never appear as `undefined` options.
+    //
+    // A process without the signer role (#495) holds the public key alone,
+    // and the plugin publishes it so the JWKS and discovery match the
+    // signer's; a process with the Ed25519 private key ignores a lone public
+    // key, as before.
     ...(env.JWT_RS256_PRIVATE_KEY
       ? {
           rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
           ...(env.JWT_RS256_PUBLIC_KEY ? { rs256PublicKey: env.JWT_RS256_PUBLIC_KEY } : {}),
           ...(rs256KeyId ? { rs256KeyId } : {}),
         }
-      : {}),
+      : env.JWT_RS256_PUBLIC_KEY
+        ? {
+            rs256PublicKey: env.JWT_RS256_PUBLIC_KEY,
+            ...(rs256KeyId ? { rs256KeyId } : {}),
+          }
+        : {}),
     // RFC 7009 revocation: the shared `requireJwt` preHandler consults this
     // Redis-backed denylist after verification so a revoked access token is
     // rejected everywhere it is used as a bearer credential. Resolved lazily

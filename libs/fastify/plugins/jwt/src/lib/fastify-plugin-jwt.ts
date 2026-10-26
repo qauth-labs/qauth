@@ -152,6 +152,12 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         : derivePublicKeyPemFromPrivate(options.rs256PrivateKey);
       const rs256PublicKey = await importRs256PublicKey(rs256PublicPem);
       rs256Jwk = await exportRs256PublicJwk(rs256PublicKey, options.rs256KeyId);
+    } else if (options.rs256PublicKey && privateKey === undefined) {
+      // A process without the signer role (#495) publishes the RS256 key the
+      // signer signs ID tokens with, so its JWKS and discovery match the
+      // signer's; it signs nothing itself.
+      const rs256PublicKey = await importRs256PublicKey(options.rs256PublicKey);
+      rs256Jwk = await exportRs256PublicJwk(rs256PublicKey, options.rs256KeyId);
     }
 
     // ML-DSA keys (#246 JWKS publication, #275 live hybrid issuance, #248

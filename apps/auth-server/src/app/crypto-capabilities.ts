@@ -101,8 +101,11 @@ export interface ProvisionedSigningKeys {
 export function deriveCryptoCapabilities(keys: ProvisionedSigningKeys): VerifierCryptoCapabilities {
   const signingKeyProvisioned = {
     // The env schema REQUIRES an EdDSA key (`JWT_PRIVATE_KEY` or its `_PATH`)
-    // and refuses to parse without one, so any deployment that reached this
-    // function has one. This is the algorithm every QAuth token is signed with.
+    // wherever the signer runs, so the deployment has one. This is the
+    // algorithm every QAuth token is signed with. A process without the signer
+    // role (#495) holds no private key and signs through the signer; the claim
+    // is the deployment's, and its own attempts answer 503 until it can call
+    // the signer service.
     EdDSA: true,
     // OPTIONAL and env-provisioned (#309). Absent by default, and when it is
     // absent nothing in this build can produce an RS256 signature — claiming it

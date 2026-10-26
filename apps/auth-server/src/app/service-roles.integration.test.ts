@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
@@ -218,6 +218,24 @@ describe('service roles (#495)', () => {
     if (!jwt) throw new Error('infrastructure not started');
     await expect(boot('api', { JWT_PRIVATE_KEY: jwt.privateKey })).rejects.toThrow(
       /JWT_PRIVATE_KEY is set, but SERVICE_ROLES=api/
+    );
+  });
+
+  it('refuses a key file on SERVICE_ROLES=api by name, before reading it', async () => {
+    await expect(
+      boot('api', { JWT_PRIVATE_KEY_PATH: '/nonexistent/qauth-ed25519.pem' })
+    ).rejects.toThrow(/JWT_PRIVATE_KEY_PATH is set, but SERVICE_ROLES=api/);
+  });
+
+  it('publishes the RS256 public key on SERVICE_ROLES=api, as the signer does', async () => {
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const { app } = await boot('api', {
+      JWT_RS256_PUBLIC_KEY: rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      JWT_RS256_KID: 'rs-roles',
+    });
+    const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
+    expect(jwks.json<{ keys: { kid?: string; kty: string }[] }>().keys).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kty: 'RSA', kid: 'rs-roles' })])
     );
   });
 

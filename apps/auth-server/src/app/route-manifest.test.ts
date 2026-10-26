@@ -92,6 +92,41 @@ function isRepositoriesObject(node: ts.Expression): boolean {
   );
 }
 
+/**
+ * The places in a file that read `fastify.repositories` in a form this check
+ * cannot follow: `repositories[name]`, a variable holding the object or
+ * destructuring it, or a parameter of the whole type under another name.
+ */
+function opaqueRepositoryReads(file: string, text = readFileSync(file, 'utf8')): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const where = (node: ts.Node): string =>
+    `${relative(APP_DIR, file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
+  const visit = (node: ts.Node): void => {
+    if (ts.isElementAccessExpression(node) && isRepositoriesObject(node.expression)) {
+      found.push(`${where(node)} indexes repositories`);
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      isRepositoriesObject(node.initializer)
+    ) {
+      found.push(`${where(node)} holds or destructures repositories`);
+    }
+    if (
+      ts.isParameter(node) &&
+      node.type !== undefined &&
+      /\['repositories'\]$/.test(node.type.getText(source)) &&
+      node.name.getText(source) !== 'repositories'
+    ) {
+      found.push(`${where(node)} takes the repositories as ${node.name.getText(source)}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
 /** One file's imports, decorator reads and repository reads. */
 function scan(file: string): {
   imports: string[];
@@ -255,6 +290,54 @@ describe('the route manifest (#495)', () => {
   );
 });
 
+describe('what the check can see (#495)', () => {
+  it('finds every repository read of the app in a form it follows', () => {
+    const opaque = sourceFiles(APP_DIR).flatMap((file) => opaqueRepositoryReads(file));
+    expect(opaque).toEqual([]);
+  });
+
+  it.each([
+    ['an index', 'fastify.repositories[name].findById(id);', 'indexes repositories'],
+    [
+      'a destructuring',
+      'const { users } = fastify.repositories;',
+      'holds or destructures repositories',
+    ],
+    ['an alias', 'const repos = fastify.repositories;', 'holds or destructures repositories'],
+    [
+      'a renamed parameter',
+      "function f(repos: FastifyInstance['repositories']) {}",
+      'takes the repositories as repos',
+    ],
+  ])('would report %s', (_label, code, finding) => {
+    expect(opaqueRepositoryReads(join(APP_DIR, 'sample.ts'), code)).toEqual([
+      `sample.ts:1 ${finding}`,
+    ]);
+  });
+
+  it.each([
+    ['dpop', 'dpop'],
+    ['jwt', 'jwt'],
+    ['password', 'password'],
+    ['pkce', 'pkce'],
+    ['federation', 'federation'],
+    ['email', 'email'],
+    ['sessions', 'sessions'],
+    ['ssf', 'ssf'],
+  ] as const)('maps every decorator of the %s plugin library to its plugin', (lib, plugin) => {
+    const decorated = new Set<string>();
+    for (const file of sourceFiles(join(REPO_ROOT, 'libs/fastify/plugins', lib, 'src'))) {
+      for (const match of readFileSync(file, 'utf8').matchAll(/\.decorate\(\s*'(\w+)'/g)) {
+        decorated.add(match[1]);
+      }
+    }
+    expect(decorated.size, lib).toBeGreaterThan(0);
+    for (const name of decorated) {
+      expect(DECORATOR_PLUGINS[name], `${lib}: ${name}`).toBe(plugin);
+    }
+  });
+});
+
 describe('what the roles load beside their routes (#495)', () => {
   it.each(SERVER_JOBS.map((job) => [job.name, job] as const))(
     'places the job %s with exactly the repositories it reads',
@@ -269,7 +352,16 @@ describe('what the roles load beside their routes (#495)', () => {
   );
 
   it('loads in every process the repositories of the plugins every process registers', () => {
-    for (const plugin of ['realm-resolver', 'default-realm']) {
+    // The plugins every process registers; the jobs plugin builds the jobs of
+    // the process's roles (checked above) and the metrics plugin is below.
+    for (const plugin of [
+      'realm-resolver',
+      'default-realm',
+      'error-handler',
+      'rate-limit',
+      'request-id',
+      'security-headers',
+    ]) {
       const reached = reach(join(APP_DIR, 'plugins', `${plugin}.ts`));
       for (const name of reached.repositories) {
         expect(CORE_REPOSITORIES, plugin).toContain(name);

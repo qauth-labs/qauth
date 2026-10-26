@@ -10,7 +10,7 @@ import {
   federationEnvSchema,
   keyAttestationEnvSchema,
 } from '@qauth-labs/server-config';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Env-schema parsing tests for config fields added in the env-hardening
@@ -184,6 +184,69 @@ describe('REQUIRE_EMAIL_VERIFIED deprecated alias', () => {
   it('rejects a non-true/false value under the old name too', async () => {
     setGateEnv({ REQUIRE_EMAIL_VERIFIED: '0' });
     await expect(import('./env')).rejects.toThrow(/REQUIRE_EMAIL_VERIFIED/);
+  });
+});
+
+describe('service roles and key material (#495)', () => {
+  /** A process without the signer: no private key of its own. */
+  function setApiEnv(overrides: Record<string, string | undefined> = {}) {
+    setEnv({
+      NODE_ENV: 'development',
+      SERVICE_ROLES: 'api',
+      JWT_PRIVATE_KEY: undefined,
+      JWT_PRIVATE_KEY_PATH: undefined,
+      HYBRID_SIGNING_ENABLED: undefined,
+      SIGNING_ALGORITHM_MODE: undefined,
+      ...overrides,
+    });
+  }
+
+  afterEach(() => {
+    setEnv({
+      SERVICE_ROLES: undefined,
+      JWT_PRIVATE_KEY_PATH: undefined,
+      HYBRID_SIGNING_ENABLED: undefined,
+      SIGNING_ALGORITHM_MODE: undefined,
+      KEK: undefined,
+    });
+  });
+
+  it('parses a process without the signer and without a private key', async () => {
+    setApiEnv();
+    const mod = await import('./env');
+    expect(mod.env.SERVICE_ROLES).toEqual(['api']);
+    expect(mod.env.JWT_PRIVATE_KEY).toBeUndefined();
+  });
+
+  it('refuses a key file by name before reading it', async () => {
+    // The file does not exist: the refusal must name the variable, not the
+    // missing file the JWT schema would report if it read it first.
+    setApiEnv({ JWT_PRIVATE_KEY_PATH: '/nonexistent/qauth-ed25519.pem' });
+    const refused = import('./env');
+    await expect(refused).rejects.toThrow(
+      /JWT_PRIVATE_KEY_PATH is set, but SERVICE_ROLES=api does not hold the signer role/
+    );
+    await expect(refused).rejects.not.toThrow(/not found/);
+  });
+
+  it('refuses the KEK by name', async () => {
+    setApiEnv({ KEK: Buffer.alloc(32, 1).toString('base64') });
+    await expect(import('./env')).rejects.toMatchObject({
+      name: 'ServiceRoleBootError',
+      problems: [expect.objectContaining({ variable: 'KEK' })],
+    });
+  });
+
+  it('refuses hybrid signing without the signer, naming the switch', async () => {
+    setApiEnv({ HYBRID_SIGNING_ENABLED: 'true', SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65' });
+    await expect(import('./env')).rejects.toMatchObject({
+      issues: [
+        expect.objectContaining({
+          path: ['HYBRID_SIGNING_ENABLED'],
+          message: expect.stringContaining('needs the signer role'),
+        }),
+      ],
+    });
   });
 });
 

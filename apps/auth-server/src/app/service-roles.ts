@@ -1,5 +1,14 @@
 import { REPOSITORY_NAMES, type RepositoryName } from '@qauth-labs/fastify-plugin-db';
-import { isServiceRole, SERVICE_ROLE_NAMES, type ServiceRole } from '@qauth-labs/server-config';
+import {
+  describeServiceRoles,
+  isKeyMaterialVariable,
+  isServiceRole,
+  keyMaterialProblems,
+  SERVICE_ROLE_NAMES,
+  type ServiceRole,
+  ServiceRoleBootError,
+  type ServiceRoleProblem,
+} from '@qauth-labs/server-config';
 
 import { SERVER_JOBS } from './jobs';
 import { ROLE_PLUGINS, type RolePlugin, routeModulesFor } from './route-manifest';
@@ -20,7 +29,14 @@ import { ROLE_PLUGINS, type RolePlugin, routeModulesFor } from './route-manifest
  * roles run on separate nodes.
  */
 
-export { SERVICE_ROLE_NAMES, type ServiceRole };
+export {
+  describeServiceRoles,
+  isKeyMaterialVariable,
+  SERVICE_ROLE_NAMES,
+  type ServiceRole,
+  ServiceRoleBootError,
+  type ServiceRoleProblem,
+};
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -165,29 +181,6 @@ export function repositoriesFor(roles: readonly ServiceRole[]): readonly Reposit
   return REPOSITORY_NAMES.filter((name) => used.has(name));
 }
 
-/** `SERVICE_ROLES` as the operator would write it: `all`, or the list. */
-export function describeServiceRoles(roles: readonly ServiceRole[]): string {
-  return SERVICE_ROLE_NAMES.every((role) => roles.includes(role)) ? 'all' : roles.join(',');
-}
-
-/**
- * Whether the variable `name`, set to `value`, puts key material in a process:
- * the KEK and its adapters' settings (`KEK`, `KEK_PATH`, `KEK_PREVIOUS*`,
- * `KEK_<ADAPTER>_*`, and `KEK_PROVIDER` naming an adapter rather than the
- * default `local`), a JWT private key (`JWT_*_PRIVATE_KEY*`) or the OID4VP
- * verifier's signing key (`OID4VP_VERIFIER_SIGNING_KEY*`). A blank value is
- * unset.
- */
-export function isKeyMaterialVariable(name: string, value: string | undefined): boolean {
-  if (value === undefined || value.trim() === '') return false;
-  if (name === 'KEK_PROVIDER') return value.trim() !== 'local';
-  return (
-    /^KEK(?:_|$)/.test(name) ||
-    /^JWT_(?:[A-Z0-9]+_)*PRIVATE_KEY/.test(name) ||
-    /^OID4VP_VERIFIER_SIGNING_KEY/.test(name)
-  );
-}
-
 /** The settings the role checks read. */
 export interface ServiceRoleSettings {
   readonly SERVICE_ROLES: readonly ServiceRole[];
@@ -197,13 +190,6 @@ export interface ServiceRoleSettings {
   readonly INTERNAL_TLS_CA_PATH?: string | undefined;
   /** The parsed public key; only a process without the signer that verifies tokens needs it. */
   readonly JWT_PUBLIC_KEY?: string | undefined;
-}
-
-/** One reason a process cannot start with its roles. */
-export interface ServiceRoleProblem {
-  /** The variable to set or remove. */
-  readonly variable: string;
-  readonly message: string;
 }
 
 /** What the role checks found: refusals, and lines for the boot log. */
@@ -256,14 +242,9 @@ export function checkServiceRoles(
     return { problems, warnings };
   }
 
-  for (const variable of Object.keys(raw).sort()) {
-    if (isKeyMaterialVariable(variable, raw[variable])) {
-      problems.push({
-        variable,
-        message: `${variable} is set, but ${named} does not hold the signer role, and only the signer holds keys. Remove ${variable} from this process: give it to the processes whose SERVICE_ROLES name signer, or all`,
-      });
-    }
-  }
+  // Refused before the configuration reads a key file too (`config/env.ts`);
+  // checked again here for a caller that builds its settings another way.
+  problems.push(...keyMaterialProblems(roles, raw));
 
   if (settings.SIGNER_URL === undefined) {
     problems.push({
@@ -289,21 +270,8 @@ export function checkServiceRoles(
 
   warnings.push({
     variable: 'SERVICE_ROLES',
-    message: `${named} signs through the signer service, which this release cannot call yet: token issuance and every other signature answer 503 on this process until it can`,
+    message: `${named} signs through the signer service, which this release cannot call yet: until it can, a request that needs a signature answers 503 on this process, and an event delivery waits`,
   });
 
   return { problems, warnings };
-}
-
-/** A boot refused by {@link checkServiceRoles}, naming every variable at fault. */
-export class ServiceRoleBootError extends Error {
-  readonly problems: readonly ServiceRoleProblem[];
-
-  constructor(problems: readonly ServiceRoleProblem[]) {
-    super(
-      `The service roles cannot start:\n${problems.map((problem) => `- ${problem.message}`).join('\n')}`
-    );
-    this.name = 'ServiceRoleBootError';
-    this.problems = problems;
-  }
 }

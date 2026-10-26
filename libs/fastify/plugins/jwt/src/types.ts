@@ -57,7 +57,10 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
   /**
    * Optional RS256 public key in SPKI PEM (#309). When omitted, the public key
    * is derived from {@link rs256PrivateKey} (public material only). Provide it
-   * only when the private key is not available to this process.
+   * only when the private key is not available to this process. Without
+   * {@link privateKey} and {@link rs256PrivateKey}, on a process without the
+   * signer role (#495), it is published alone and ID tokens are advertised as
+   * RS256, as the signer signs them; this process signs none.
    */
   rs256PublicKey?: string;
   /**

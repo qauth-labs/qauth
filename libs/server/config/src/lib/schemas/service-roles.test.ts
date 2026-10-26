@@ -2,8 +2,15 @@ import { generateKeyPairSync } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
+import { cryptoEnvSchema } from './crypto';
 import { jwtEnvSchema } from './jwt';
-import { parseServiceRoles, SERVICE_ROLE_NAMES, serviceRolesEnvSchema } from './service-roles';
+import {
+  describeServiceRoles,
+  keyMaterialProblems,
+  parseServiceRoles,
+  SERVICE_ROLE_NAMES,
+  serviceRolesEnvSchema,
+} from './service-roles';
 
 /** The role switch (issue #495). */
 
@@ -107,5 +114,50 @@ describe('jwtEnvSchema under the role switch', () => {
       JWT_PRIVATE_KEY: privateKey,
     });
     expect(parsed.JWT_PRIVATE_KEY).toBe(privateKey.trim());
+  });
+});
+
+describe('cryptoEnvSchema under the role switch', () => {
+  const hybrid = { HYBRID_SIGNING_ENABLED: 'true', SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65' };
+
+  it('refuses hybrid signing on a process without the signer, naming the switch', () => {
+    const result = cryptoEnvSchema.safeParse({ ...hybrid, SERVICE_ROLES: 'api,web' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({
+        path: ['HYBRID_SIGNING_ENABLED'],
+        message: expect.stringContaining('needs the signer role'),
+      }),
+    ]);
+  });
+
+  it('still asks for the ML-DSA key where the signer runs', () => {
+    const result = cryptoEnvSchema.safeParse({ ...hybrid, SERVICE_ROLES: 'api,signer' });
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([['JWT_MLDSA_PRIVATE_KEY']]);
+  });
+});
+
+describe('keyMaterialProblems', () => {
+  it('finds nothing where the signer runs', () => {
+    expect(keyMaterialProblems(['signer'], { KEK: 'a2V5' })).toEqual([]);
+    expect(keyMaterialProblems(SERVICE_ROLE_NAMES, { JWT_PRIVATE_KEY: 'pem' })).toEqual([]);
+  });
+
+  it('names each key variable of a process without the signer, in order', () => {
+    expect(
+      keyMaterialProblems(['web'], {
+        OID4VP_VERIFIER_SIGNING_KEY_PATH: '/run/secrets/verifier.pem',
+        KEK: 'a2V5',
+        KEK_PROVIDER: 'local',
+        JWT_PUBLIC_KEY: 'pem',
+      }).map((problem) => problem.variable)
+    ).toEqual(['KEK', 'OID4VP_VERIFIER_SIGNING_KEY_PATH']);
+  });
+
+  it('writes the roles as the operator would', () => {
+    expect(describeServiceRoles(SERVICE_ROLE_NAMES)).toBe('all');
+    expect(keyMaterialProblems(['web', 'api'], { KEK: 'a2V5' })[0]?.message).toContain(
+      'SERVICE_ROLES=web,api'
+    );
   });
 });

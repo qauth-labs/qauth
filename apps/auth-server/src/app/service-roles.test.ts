@@ -264,7 +264,7 @@ describe('checkServiceRoles', () => {
     const check = checkServiceRoles(splitSettings(['web']), {});
     expect(check.problems).toEqual([]);
     expect(check.warnings.map((warning) => warning.message)).toEqual([
-      expect.stringContaining('answer 503'),
+      expect.stringContaining('answers 503'),
     ]);
   });
 
