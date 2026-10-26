@@ -73,6 +73,7 @@
       "required": [
         "count"
       ],
+      "additionalProperties": false,
       "examples": [
         {
           "count": 10
@@ -118,6 +119,7 @@
       "required": [
         "codes"
       ],
+      "additionalProperties": false,
       "examples": [
         {
           "codes": [

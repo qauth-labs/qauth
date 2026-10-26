@@ -176,7 +176,7 @@ export async function startWalletLinkFlow(
   const sameDevice = options.device === 'this';
 
   const realm = requestRealm(request);
-  const invocation = await buildWalletLoginInvocation(fastify, capability);
+  const invocation = await buildWalletLoginInvocation(fastify, capability, realm);
 
   await fastify.repositories.oid4vpRequestStates.create({
     realmId: realm.id,

@@ -213,7 +213,11 @@ export const deviceConfirm = defineStep({
             maximum: 4294967295,
             description: 'The autonomous system number of the requesting address.',
           },
-          name: displayText('server', 128, 'The name of that network.'),
+          name: displayText(
+            'declared',
+            128,
+            'The name of that network, as its registrant declared it in the address registry. The registrant chose it, so the screen marks it as declared.'
+          ),
         },
         [],
         'The network the request came from.'

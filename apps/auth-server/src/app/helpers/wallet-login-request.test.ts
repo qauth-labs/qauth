@@ -50,7 +50,13 @@ import {
   resolveWalletLoginCapability,
   WALLET_LOGIN_RETURN_PATH,
   type WalletLoginCapability,
+  walletLoginResponseUri,
 } from './wallet-login-request';
+
+/** The realm the browser's request was resolved to (#486). */
+const REALM = { issuer: 'https://auth.example.com' };
+/** Another realm of the same deployment, on its own issuer. */
+const REALM_B = { issuer: 'https://b.example.com' };
 
 /**
  * The availability gate (#296 LOCKED: no permissive fallback) and the request it
@@ -102,13 +108,10 @@ describe('resolveWalletLoginCapability', () => {
   it('resolves when the flag, the profile and a credential type are all present', () => {
     const capability = resolveWalletLoginCapability(fakeFastify());
     expect(capability?.profile.id).toBe('oid4vp-1.0-base');
-    // The trailing slash on JWT_ISSUER is canonicalised away, so the
-    // `response_uri` matches the endpoint the wallet actually posts to.
-    expect(capability?.responseUri).toBe(`https://auth.example.com${OID4VP_RESPONSE_PATH}`);
-    expect(capability?.requestObjectBaseUri).toBe(
-      `https://auth.example.com${OID4VP_REQUEST_OBJECT_PATH_PREFIX}`
-    );
     expect(capability?.credentials[0].typeValues).toEqual(['urn:example:pid']);
+    // The deployment's posture holds no URL: every wallet-facing URL is built
+    // on the request realm's issuer (#490), never on JWT_ISSUER.
+    expect(JSON.stringify(capability)).not.toContain('auth.example.com');
   });
 
   it('carries no signing material for a deployment that provisioned none', () => {
@@ -149,7 +152,7 @@ describe('resolveWalletLoginCapability', () => {
       profile: { ...VERIFIER_PROFILES['oid4vp-1.0-base'], responseEncryption: 'required' },
     };
 
-    return expect(buildWalletLoginInvocation(fastify, contradictory)).rejects.toThrow(
+    return expect(buildWalletLoginInvocation(fastify, contradictory, REALM)).rejects.toThrow(
       /does not permit the 'direct_post.jwt' Response Mode/
     );
   });
@@ -165,15 +168,16 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
   it('builds a direct_post request and encodes it as an opaque invocation URI', async () => {
     const fastify = fakeFastify();
     const capability = resolveWalletLoginCapability(fastify)!;
-    const invocation = await buildWalletLoginInvocation(fastify, capability);
+    const invocation = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(invocation.request.response_type).toBe('vp_token');
     expect(invocation.request.response_mode).toBe('direct_post');
-    expect(invocation.request.response_uri).toBe(capability.responseUri);
+    expect(invocation.request.response_uri).toBe(`https://auth.example.com${OID4VP_RESPONSE_PATH}`);
+    expect(invocation.request.response_uri).toBe(walletLoginResponseUri(REALM));
     // OID4VP 1.0 §8.2: `redirect_uri` MUST NOT be a parameter of a direct_post
     // request. It survives only as the Client Identifier Prefix.
     expect(Object.keys(invocation.request)).not.toContain('redirect_uri');
-    expect(invocation.request.client_id).toBe(`redirect_uri:${capability.responseUri}`);
+    expect(invocation.request.client_id).toBe(`redirect_uri:${walletLoginResponseUri(REALM)}`);
 
     expect(invocation.invocationUri.startsWith('openid4vp://?')).toBe(true);
     expect(invocation.invocationUri).toContain(`state=${invocation.request.state}`);
@@ -182,7 +186,7 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
   it('parks no request object — there is nothing to sign', async () => {
     const fastify = fakeFastify();
     const capability = resolveWalletLoginCapability(fastify)!;
-    const invocation = await buildWalletLoginInvocation(fastify, capability);
+    const invocation = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(invocation.requestObjectHandle).toBeUndefined();
     expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
@@ -191,7 +195,7 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
   it('stores only the digest of the state, and the nonce verbatim', async () => {
     const fastify = fakeFastify();
     const capability = resolveWalletLoginCapability(fastify)!;
-    const invocation = await buildWalletLoginInvocation(fastify, capability);
+    const invocation = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(invocation.stateHash).toMatch(/^[0-9a-f]{64}$/);
     expect(invocation.stateHash).not.toContain(invocation.request.state);
@@ -201,8 +205,8 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
   it('mints a fresh state and nonce for every request', async () => {
     const fastify = fakeFastify();
     const capability = resolveWalletLoginCapability(fastify)!;
-    const first = await buildWalletLoginInvocation(fastify, capability);
-    const second = await buildWalletLoginInvocation(fastify, capability);
+    const first = await buildWalletLoginInvocation(fastify, capability, REALM);
+    const second = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(first.stateHash).not.toBe(second.stateHash);
     expect(first.nonce).not.toBe(second.nonce);
@@ -211,7 +215,7 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
   it('bounds the request lifetime', async () => {
     const fastify = fakeFastify();
     const capability = resolveWalletLoginCapability(fastify)!;
-    const invocation = await buildWalletLoginInvocation(fastify, capability);
+    const invocation = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(invocation.expiresAt).toBeGreaterThan(Date.now());
     expect(invocation.expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60 * 1000);
@@ -237,7 +241,7 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
 
     expect(capability.profile.id).toBe('oid4vp-1.0-base');
 
-    const invocation = await buildWalletLoginInvocation(fastify, capability);
+    const invocation = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(invocation.request.client_id.startsWith('redirect_uri:')).toBe(true);
     expect(invocation.invocationUri.startsWith('openid4vp://?')).toBe(true);
@@ -251,7 +255,7 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
     envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = 'https://wallet.example/authorize?v=1';
     const fastify = fakeFastify();
     const capability = resolveWalletLoginCapability(fastify)!;
-    const invocation = await buildWalletLoginInvocation(fastify, capability);
+    const invocation = await buildWalletLoginInvocation(fastify, capability, REALM);
 
     expect(invocation.invocationUri.startsWith('https://wallet.example/authorize?v=1&')).toBe(true);
   });
@@ -273,14 +277,29 @@ const HAIP_SIGNING_POSTURE: VerifierProfile = {
   responseEncryption: 'permitted',
 };
 
+describe("buildWalletLoginInvocation — the request realm's issuer (ADR-019 Decision 1, #490)", () => {
+  it('builds the response_uri and the client_id on that realm, not on JWT_ISSUER', async () => {
+    const fastify = fakeFastify();
+    const invocation = await buildWalletLoginInvocation(
+      fastify,
+      resolveWalletLoginCapability(fastify)!,
+      REALM_B
+    );
+
+    expect(invocation.request.response_uri).toBe(`https://b.example.com${OID4VP_RESPONSE_PATH}`);
+    expect(invocation.request.client_id).toBe(
+      `redirect_uri:https://b.example.com${OID4VP_RESPONSE_PATH}`
+    );
+    expect(invocation.invocationUri).not.toContain('auth.example.com');
+  });
+});
+
 describe('buildWalletLoginInvocation — the signed request_uri path (#377)', () => {
   const pki = createMockVerifierPki();
 
   function signingCapability(): WalletLoginCapability {
     return {
       profile: HAIP_SIGNING_POSTURE,
-      responseUri: `https://auth.example.com${OID4VP_RESPONSE_PATH}`,
-      requestObjectBaseUri: `https://auth.example.com${OID4VP_REQUEST_OBJECT_PATH_PREFIX}`,
       walletInvocationEndpoint: 'openid4vp://',
       credentials: [
         { id: 'qauth_wallet_login', format: 'dc+sd-jwt', typeValues: ['urn:example:pid'] },
@@ -293,16 +312,27 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
     };
   }
 
+  it("parks the request object under the request realm's issuer (#490)", async () => {
+    const fastify = fakeFastify();
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM_B);
+    const reference = parseOid4vpRequestReference(invocation.invocationUri);
+
+    expect(reference.requestUri).toBe(
+      `https://b.example.com${OID4VP_REQUEST_OBJECT_PATH_PREFIX}${invocation.requestObjectHandle}`
+    );
+    expect(invocation.request.response_uri).toBe(`https://b.example.com${OID4VP_RESPONSE_PATH}`);
+  });
+
   it('identifies the Verifier by x509_hash', async () => {
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
 
     expect(invocation.request.client_id.startsWith('x509_hash:')).toBe(true);
   });
 
   it('delivers a request_uri reference, never the inline parameters', async () => {
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
     const reference = parseOid4vpRequestReference(invocation.invocationUri);
 
     expect(reference.clientId).toBe(invocation.request.client_id);
@@ -316,7 +346,7 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
 
   it('parks the signed object under the handle the reference names', async () => {
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
     const reference = parseOid4vpRequestReference(invocation.invocationUri);
 
     expect(invocation.requestObjectHandle).toBeDefined();
@@ -327,7 +357,7 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
   // The #377 acceptance criterion, end to end through the app's own builder.
   it('produces an object an INDEPENDENT wallet validates against an out-of-band anchor', async () => {
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
     const reference = parseOid4vpRequestReference(invocation.invocationUri);
 
     const stored = (await fastify.sessionUtils.getSession<{ requestObject: string }>(
@@ -349,7 +379,7 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
 
   it('ships leaf + intermediate in x5c and NOT the anchor', async () => {
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
     const stored = (await fastify.sessionUtils.getSession<{ requestObject: string }>(
       `wallet-request-object:${invocation.requestObjectHandle as string}`
     )) as { requestObject: string };
@@ -366,7 +396,7 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
     // The control that makes the assertion above mean something: the chain check
     // is real, not a shape check that any anchor would satisfy.
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
     const stored = (await fastify.sessionUtils.getSession<{ requestObject: string }>(
       `wallet-request-object:${invocation.requestObjectHandle as string}`
     )) as { requestObject: string };
@@ -395,8 +425,6 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
   function haipCapability(): WalletLoginCapability {
     return {
       profile: VERIFIER_PROFILES['haip-1.0'],
-      responseUri: `https://auth.example.com${OID4VP_RESPONSE_PATH}`,
-      requestObjectBaseUri: `https://auth.example.com${OID4VP_REQUEST_OBJECT_PATH_PREFIX}`,
       walletInvocationEndpoint: 'openid4vp://',
       credentials: [
         { id: 'qauth_wallet_login', format: 'dc+sd-jwt', typeValues: ['urn:example:pid'] },
@@ -410,13 +438,13 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
   }
 
   it('asks for direct_post.jwt under haip-1.0', async () => {
-    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
 
     expect(invocation.request.response_mode).toBe('direct_post.jwt');
   });
 
   it('publishes ONE per-request key in client_metadata, and hands back its private half for the row', async () => {
-    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
     const keys = invocation.request.client_metadata.jwks?.keys ?? [];
 
     expect(keys).toHaveLength(1);
@@ -440,7 +468,7 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
   it('stores the private half in the clear by default, as a JWK document', async () => {
     // The default posture: no `OID4VP_RESPONSE_KEY_SECRET` in this env, so the
     // column holds the JWK itself, `d` included, under the `plain` marker.
-    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
     const stored = JSON.parse(invocation.responseEncryption?.privateJwk as string) as JWK;
 
     expect(stored.kty).toBe('EC');
@@ -452,7 +480,7 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
     // The round trip, with the WALLET side written against `jose` directly —
     // no import of the code under test — and the VERIFIER side using the
     // crypto layer's own pinned decrypt.
-    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
     const published = invocation.request.client_metadata.jwks?.keys[0] as JWK;
     const stored = JSON.parse(invocation.responseEncryption?.privateJwk as string) as JWK;
 
@@ -472,8 +500,8 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
 
   it('mints a fresh pair and kid for every request (HAIP §5: specific to each request)', async () => {
     const fastify = fakeFastify();
-    const first = await buildWalletLoginInvocation(fastify, haipCapability());
-    const second = await buildWalletLoginInvocation(fastify, haipCapability());
+    const first = await buildWalletLoginInvocation(fastify, haipCapability(), REALM);
+    const second = await buildWalletLoginInvocation(fastify, haipCapability(), REALM);
 
     expect(first.responseEncryption?.kid).not.toBe(second.responseEncryption?.kid);
     expect(first.request.client_metadata.jwks?.keys[0]?.x).not.toBe(
@@ -486,7 +514,7 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
     // `client_metadata` — key set included — out of the JAR it fetched and
     // verified. The invocation URI itself carries neither.
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, haipCapability());
+    const invocation = await buildWalletLoginInvocation(fastify, haipCapability(), REALM);
     const reference = parseOid4vpRequestReference(invocation.invocationUri);
     const stored = (await fastify.sessionUtils.getSession<{ requestObject: string }>(
       `wallet-request-object:${invocation.requestObjectHandle as string}`
@@ -508,7 +536,8 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
     const fastify = fakeFastify();
     const invocation = await buildWalletLoginInvocation(
       fastify,
-      resolveWalletLoginCapability(fastify)!
+      resolveWalletLoginCapability(fastify)!,
+      REALM
     );
 
     expect(invocation.request.response_mode).toBe('direct_post');
@@ -522,24 +551,32 @@ describe('buildWalletLoginReturnUri — the same-device redirect_uri (#405)', ()
 
   it('(OID4VP 1.0 §8.2) is an absolute URI on the issuer origin carrying the code as response_code', () => {
     expect(WALLET_LOGIN_RETURN_PATH).toBe('/ui/wallet-login/return');
-    // The same canonicalised issuer `responseUri` is built on: the trailing
-    // slash on JWT_ISSUER is dropped, the `Host` header is never consulted.
-    expect(buildWalletLoginReturnUri(code)).toBe(
+    // The realm's issuer `response_uri` is built on; the `Host` header is
+    // never consulted.
+    expect(buildWalletLoginReturnUri(REALM, code)).toBe(
       `https://auth.example.com${WALLET_LOGIN_RETURN_PATH}?response_code=${code}`
     );
-    expect(new URL(buildWalletLoginReturnUri(code)).searchParams.get('response_code')).toBe(code);
+    expect(new URL(buildWalletLoginReturnUri(REALM, code)).searchParams.get('response_code')).toBe(
+      code
+    );
+  });
+
+  it("is built on the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", () => {
+    expect(buildWalletLoginReturnUri(REALM_B, code)).toBe(
+      `https://b.example.com${WALLET_LOGIN_RETURN_PATH}?response_code=${code}`
+    );
   });
 
   it('shares its origin with response_uri, so the two wallet-facing URLs cannot drift apart', () => {
-    const capability = resolveWalletLoginCapability(fakeFastify())!;
-
-    expect(new URL(buildWalletLoginReturnUri(code)).origin).toBe(
-      new URL(capability.responseUri).origin
-    );
+    for (const realm of [REALM, REALM_B]) {
+      expect(new URL(buildWalletLoginReturnUri(realm, code)).origin).toBe(
+        new URL(walletLoginResponseUri(realm)).origin
+      );
+    }
   });
 
   it('places the code in the query, never the fragment, so the noscript landing can read it', () => {
-    const uri = buildWalletLoginReturnUri(code);
+    const uri = buildWalletLoginReturnUri(REALM, code);
 
     expect(uri).not.toContain('#');
     expect(new URL(uri).hash).toBe('');
@@ -547,7 +584,7 @@ describe('buildWalletLoginReturnUri — the same-device redirect_uri (#405)', ()
   });
 
   it('percent-encodes a value outside the base64url alphabet rather than trusting its caller', () => {
-    expect(buildWalletLoginReturnUri('a&b=c#d')).toBe(
+    expect(buildWalletLoginReturnUri(REALM, 'a&b=c#d')).toBe(
       `https://auth.example.com${WALLET_LOGIN_RETURN_PATH}?response_code=a%26b%3Dc%23d`
     );
   });

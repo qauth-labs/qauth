@@ -13,6 +13,7 @@
  * Pure: no I/O, no Fastify. It takes the parsed document and returns one
  * violation per broken rule, so a failing test names every problem at once.
  */
+import { PERMISSION_ID_PATTERN, PERMISSION_REGISTRY } from '../helpers/admin-permissions';
 import type { OperationClass, OperationStability } from '../openapi-options';
 import { type ApiFamily, apiFamilyOf, isUnversionedFamilyPath } from './families';
 import { PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX } from './paging';
@@ -60,7 +61,7 @@ const STABILITIES: readonly OperationStability[] = ['stable', 'experimental'];
 const OPERATION_ID = /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)+$/;
 
 /** A permission id has the same shape: `realms.read`, `realms.policies.security`. */
-const PERMISSION_ID = OPERATION_ID;
+const PERMISSION_ID = PERMISSION_ID_PATTERN;
 
 const CAMEL_CASE = /^[a-z][a-zA-Z0-9]*$/;
 const KEBAB_CASE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -255,7 +256,7 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
   } else if (operationClass === 'security' && family !== 'admin') {
     report(
       'class',
-      'x-qauth-class "security" belongs to the admin API, where it means admin:security; account and developer operations are read or write'
+      'x-qauth-class "security" belongs to the admin API, where it means qauth:admin:security; account and developer operations are read or write'
     );
   }
 
@@ -270,6 +271,36 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
       'permission',
       'x-qauth-permission must be a permission id such as realms.read, or a list of distinct ids'
     );
+  } else if (family === 'admin') {
+    // An admin operation needs permissions a role can grant (#507): an id the
+    // catalog does not know, or a retired one, could never be authorized.
+    const classes = new Set<OperationClass>();
+    for (const id of permissions as string[]) {
+      const granted = PERMISSION_REGISTRY.isGrantable(id) ? PERMISSION_REGISTRY.get(id) : undefined;
+      if (granted === undefined) {
+        report(
+          'permission',
+          `x-qauth-permission names ${id}, which is not a grantable permission of the admin catalog (helpers/admin-permissions.ts)`
+        );
+      } else {
+        classes.add(granted.class);
+      }
+    }
+    // The class is the strictest class among the permissions: a security
+    // operation that named only a write permission would let `qauth:admin:write`
+    // reach it, and a write operation that named a security permission would
+    // escape the effects and two-admin rules (ADR-019 Decision 7).
+    const strictest = OPERATION_CLASSES.filter((candidate) => classes.has(candidate)).at(-1);
+    if (
+      strictest !== undefined &&
+      OPERATION_CLASSES.includes(operationClass as OperationClass) &&
+      operationClass !== strictest
+    ) {
+      report(
+        'permission',
+        `x-qauth-class is ${String(operationClass)}, but the strictest class of its permissions is ${strictest}; they must be the same`
+      );
+    }
   }
 
   const effects = operation['x-qauth-effects'];

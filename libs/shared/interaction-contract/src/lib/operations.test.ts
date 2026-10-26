@@ -10,6 +10,7 @@ import {
 import { INTERACTION_OPENAPI } from './openapi';
 import { INTERACTION_PROBLEM_CODES } from './problems';
 import type { JsonSchema } from './schema-kit';
+import { stepNamed } from './steps';
 
 /**
  * The operations of #590 and what each needs: every operation lists its
@@ -262,23 +263,78 @@ describe('the client display data and the problem body', () => {
       client({ ...unverified, logo: { url: '/ui/assets/logo-3f9a1c2e.svg', width: 1, height: 1 } })
     ).toBe(false);
     expect(client({ ...unverified, verifiedDomain: cimd.verifiedDomain })).toBe(false);
+    // Each kind refuses the other kinds' members.
+    const federation = {
+      kind: 'federation',
+      federation: { entityId: 'https://rp.example.com', trustMarks: [] },
+      newClient: false,
+    };
+    expect(client(federation), describeErrors(client)).toBe(true);
+    expect(client({ ...federation, verifiedDomain: cimd.verifiedDomain })).toBe(false);
+    expect(client({ ...cimd, federation: federation.federation })).toBe(false);
+    expect(client({ ...cimd, kind: 'admin_registered', federation: federation.federation })).toBe(
+      false
+    );
+    expect(client({ ...cimd, unknownMember: true })).toBe(false);
+  });
+
+  it('hold a step read to its step: its own params, a unique list of alternatives, a consent screen’s client', () => {
+    const interaction = validator.schema('Interaction');
+    const consent = 'urn:qauth:ia:consent:v1-rc.0';
+    const password = 'urn:qauth:ia:password:v1-rc.0';
+    const base = {
+      step: password,
+      alternatives: [],
+      params: { [password]: {} },
+      csrf: 'cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE',
+      brand: { font: 'system', darkMode: 'enabled' },
+      expiresAt: '2026-10-26T10:00:00Z',
+    };
+    expect(interaction(base), describeErrors(interaction)).toBe(true);
+    expect(interaction({ ...base, params: {} })).toBe(false);
+    const totp = 'urn:qauth:ia:totp:v1-rc.0';
+    expect(interaction({ ...base, alternatives: [totp, totp] })).toBe(false);
+    const unverified = { kind: 'unverified', newClient: true };
+    const consentRead = {
+      ...base,
+      step: consent,
+      params: { [consent]: stepNamed('consent').example.step.params },
+    };
+    expect(
+      interaction({
+        ...consentRead,
+        client: { ...unverified, redirect: { target: 'this_device' } },
+      }),
+      describeErrors(interaction)
+    ).toBe(true);
+    expect(interaction({ ...consentRead, client: unverified })).toBe(false);
+    expect(interaction(consentRead)).toBe(false);
+    expect(interaction({ ...base, client: unverified }), describeErrors(interaction)).toBe(true);
   });
 
   it('refuse a problem document that carries prose', () => {
     const problem = validator.schema('Problem');
     const base = {
-      type: 'about:blank',
-      title: 'Gone',
+      type: 'https://docs.qauth.dev/reference/problem-types/#interaction-expired',
+      title: 'Interaction expired',
       status: 410,
       code: 'interaction_expired',
       trace_id: 'req-1',
     };
     expect(problem(base), describeErrors(problem)).toBe(true);
-    expect(problem({ ...base, title: 'Payload Too Large', status: 413 })).toBe(true);
+    expect(
+      problem({
+        ...base,
+        type: 'https://docs.qauth.dev/reference/problem-types/#content-too-large',
+        title: 'Content too large',
+        status: 413,
+        code: 'content_too_large',
+      })
+    ).toBe(true);
     for (const member of ['detail', 'instance', 'errors']) {
       expect(problem({ ...base, [member]: 'The interaction expired.' }), member).toBe(false);
     }
-    expect(problem({ ...base, title: '<b>Gone</b>' })).toBe(false);
+    expect(problem({ ...base, title: '<b>Interaction expired</b>' })).toBe(false);
   });
 
   it('refuse a redirect to a scheme a browser would run', () => {

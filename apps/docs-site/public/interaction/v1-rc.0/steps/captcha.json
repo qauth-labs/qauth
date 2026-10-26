@@ -80,7 +80,8 @@
             "provider",
             "challenge",
             "difficulty"
-          ]
+          ],
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -108,7 +109,8 @@
             "provider",
             "name",
             "site_key"
-          ]
+          ],
+          "additionalProperties": false
         }
       ],
       "examples": [
@@ -143,6 +145,7 @@
     "personal": {
       "type": "object",
       "properties": {},
+      "additionalProperties": false,
       "examples": [
         {}
       ]

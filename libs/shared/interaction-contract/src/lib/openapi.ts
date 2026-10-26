@@ -26,9 +26,14 @@ import {
   STEP_URN_SCHEMA_PATTERN,
   WALLET_RETURN_PREFIX,
 } from './identifiers';
-import { codesWithStatus, STATUS_TITLES } from './problems';
+import {
+  codesWithStatus,
+  INTERACTION_PROBLEM_CODES,
+  problemTypeUri,
+  STATUS_TITLES,
+} from './problems';
 import { API_RULES, DOCUMENT_PATH_RULE, RESERVED_PREFIX_RULE, VERSIONING_RULES } from './rules';
-import { extensibleEnum, type JsonSchema } from './schema-kit';
+import { extensibleEnum, type JsonSchema, whenEquals } from './schema-kit';
 import type { StepDefinition } from './step-definition';
 import { stepErrorCodes, stepNamed, STEPS } from './steps';
 
@@ -135,6 +140,34 @@ function stepErrorSchema(): JsonSchema {
     64,
     'Why an answer was refused. Each step names its own closed set (`x-qauth-step` beside its params, and its schema file).'
   );
+}
+
+/**
+ * The step read, with one rule per step: `params` always holds the current
+ * step's own params, and a `consent` step names its client, with the redirect
+ * target when the client is unverified (ADR-019 Decision 6).
+ */
+function interactionComponent(): JsonSchema {
+  const consentUrn = stepNamed('consent').urn;
+  return {
+    ...interactionSchema,
+    allOf: STEPS.map((step) =>
+      step.urn === consentUrn
+        ? whenEquals('step', [step.urn], {
+            required: ['client'],
+            properties: {
+              params: { type: 'object', required: [step.urn] },
+              client: {
+                type: 'object',
+                ...whenEquals('kind', ['unverified'], { required: ['redirect'] }),
+              },
+            },
+          })
+        : whenEquals('step', [step.urn], {
+            properties: { params: { type: 'object', required: [step.urn] } },
+          })
+    ),
+  };
 }
 
 /** An object with one optional member per step, keyed by the step name. */
@@ -245,8 +278,8 @@ function problemResponses(statuses: readonly number[]) {
             'application/problem+json': {
               schema: ref('Problem'),
               example: {
-                type: 'about:blank',
-                title: STATUS_TITLES[status],
+                type: problemTypeUri(codes[0]),
+                title: INTERACTION_PROBLEM_CODES[codes[0]].title,
                 status,
                 code: codes[0],
                 trace_id: EXAMPLE_TRACE_ID,
@@ -282,8 +315,22 @@ function requirements(flowCookie: boolean, csrf: boolean) {
   };
 }
 
-const FORM_ENCODING_NOTE =
-  'As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The answer carries the flow cookie and comes from the realm origin: the server checks `Origin` and `Sec-Fetch-Site`, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413.';
+/**
+ * The same-origin check of every request that carries the flow cookie, before
+ * the cookie itself is looked at.
+ */
+const SAME_ORIGIN_NOTE =
+  'The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`.';
+
+/**
+ * The origin check of the personal-data read: a GET, which changes nothing.
+ * CORS already keeps its answer from another origin's page, so the check is
+ * defence in depth and lets a browser that sends neither header through.
+ */
+const SAME_ORIGIN_READ_NOTE =
+  'The read refuses a request from another origin with 403 `forbidden`: one whose `Sec-Fetch-Site` is present and not `same-origin`, or whose `Origin` is present and not the realm origin (`null` included). A request with neither header is allowed, such as from a browser that sends neither (Safari before 16.4): the server sends no CORS headers, so a page on another origin cannot read the answer anyway, and the check is defence in depth.';
+
+const FORM_ENCODING_NOTE = `As JSON or as a plain HTML form post (\`application/x-www-form-urlencoded\`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is \`true\` or \`false\` (an unchecked checkbox sends nothing, which means \`false\`), and no member may be repeated. ${SAME_ORIGIN_NOTE} The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to \`webauthn_create\` (ADR-017 Decision 7); a larger one gets 413.`;
 
 function paths() {
   const base = `${INTERACTION_API_PREFIX}/{interactionId}`;
@@ -317,8 +364,7 @@ function paths() {
       get: {
         operationId: 'interactions.personal.get',
         summary: 'Read the personal data of the current step',
-        description:
-          'The personal data the current step’s screen shows: the account chooser’s list, the identifier being signed in, a secret shown once. Only the browser that started the interaction can read it: the request needs the flow cookie, so the page calls it from the browser. A step with no personal data answers an empty `data`.',
+        description: `The personal data the current step’s screen shows: the account chooser’s list, the identifier being signed in, a secret shown once. Only the browser that started the interaction can read it: the request needs the flow cookie, so the page calls it from the browser. ${SAME_ORIGIN_READ_NOTE} The server checks the origin, then the flow cookie. A step with no personal data answers an empty \`data\`.`,
         tags: ['Interaction'],
         'x-qauth-stability': 'stable',
         ...requirements(true, false),
@@ -334,7 +380,7 @@ function paths() {
               },
             },
           },
-          ...problemResponses([410, 421, 429, 500, 503]),
+          ...problemResponses([403, 410, 421, 429, 500, 503]),
         },
       },
     },
@@ -484,7 +530,7 @@ export function buildInteractionOpenApi(): OpenApiDocument {
       schemas: Object.fromEntries([
         ['InteractionId', interactionIdSchema],
         ['Csrf', csrfSchema],
-        ['Interaction', interactionSchema],
+        ['Interaction', interactionComponent()],
         ['StepName', stepNameSchema()],
         ['StepError', stepErrorSchema()],
         [

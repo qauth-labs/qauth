@@ -484,6 +484,7 @@ A CIMD client starts with no scopes, so it is granted none of the scopes it asks
 
 - Write `client_id` exactly as the client sends it: an `https` URL of at most 255 ASCII characters, with a path beyond `/` and no fragment.
 - An entry sets only `scopes` and `audience`. `audience` is the token audience when the client names no `resource`. An empty `scopes` list withdraws the grant.
+- `audience` cannot hold a value in the reserved `urn:qauth:aud:` namespace, such as the developer API's `urn:qauth:aud:developer:v1-rc.0`: a CIMD client never gets an API family audience ([API conventions](/reference/api-conventions/#issuing-a-family-audience)). A `clients` entry may list one, and the token endpoint then issues it to that client.
 - An entry has no secret, so the seed prints none and `--rotate` does not apply. Every run sets the row to the entry's values and leaves the rest of it alone.
 - Until the client's first authorization, its row has no redirect URI. That authorization reads the document and fills the row in, and later re-resolutions never change the grant.
 - The grant is a ceiling: the user still consents, for each resource.

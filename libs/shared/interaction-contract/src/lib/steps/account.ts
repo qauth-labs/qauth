@@ -29,12 +29,12 @@ export const emailCode = defineStep({
   transports: ['interaction', 'fipa'],
   summary: 'Asks for the code mailed to the account’s address.',
   description:
-    'An emailed code proves control of a mailbox: it verifies a password account’s address and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). An answer with no `otp` asks for the code again. Works without JavaScript.',
+    'An emailed code proves control of a mailbox: it verifies a password account and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). For `recovery`, an address that gets no mail (no account, or no password) gets a phantom code: the step comes with the same `expires_in` and `resend_after`, and its answers are refused with the same errors at the same times as a real code’s (`invalid_credentials` for a wrong code, `code_expired` once `expires_in` has passed), so neither error tells a known address from an unknown one. An answer with no `otp` asks for the code again. Works without JavaScript.',
   params: object(
     {
       purpose: closedEnum(
-        ['verify_address', 'recovery', 'confirm_sign_in'],
-        'Why the code was sent, so one screen can say so: to verify the address, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password.'
+        ['verify_account', 'recovery', 'confirm_sign_in'],
+        'Why the code was sent, so one screen can say so: to verify the account, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password.'
       ),
       length: {
         type: 'integer',
@@ -75,7 +75,7 @@ export const emailCode = defineStep({
   errors: ['invalid_credentials', 'code_expired'],
   amr: [],
   example: {
-    params: { purpose: 'verify_address', length: 6, expires_in: 600, resend_after: 60 },
+    params: { purpose: 'verify_account', length: 6, expires_in: 600, resend_after: 60 },
     answer: { otp: '482913' },
     personal: { identifier: 'alice@example.com' },
     next: { redirect: EXAMPLE_REDIRECT },
@@ -145,7 +145,7 @@ export const passwordReset = defineStep({
   transports: ['interaction', 'fipa'],
   summary: 'Starts a password reset.',
   description:
-    'A path marker: answering it starts a reset. The next step is `email_code` with `purpose` `recovery` for every address, known or not; mail goes only to a known address with a password. A reset never unlocks an account whose strongest authenticator is stronger than email (ADR-017 Decision 8).',
+    'A path marker: answering it starts a reset. The next step is `email_code` with `purpose` `recovery` for every address, known or not; mail goes only to a known address with a password. An unknown address gets a phantom code, with the same `expires_in` and `resend_after` and the same error sequence as a real one, so the reset says nothing about whether the address has an account. A reset never unlocks an account whose strongest authenticator is stronger than email (ADR-017 Decision 8).',
   params: EMPTY_OBJECT,
   personal: EMPTY_OBJECT,
   answer: closedObject(

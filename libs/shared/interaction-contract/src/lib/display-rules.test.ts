@@ -34,6 +34,13 @@ const FORBIDDEN_SAMPLES = [
   `line${String.fromCodePoint(0x2028)}separator`,
 ];
 
+/**
+ * The only response objects that may carry members they do not declare: the
+ * two maps keyed by step name, which a new step widens, and the problem
+ * document, whose type may define extension members (RFC 9457 §3.2).
+ */
+const OPEN_OBJECTS = ['StepParams', 'StepPersonalData', 'Problem'];
+
 /** The longest bounded string a response may carry. */
 const MAX_LENGTH_CAP = 8192;
 
@@ -211,6 +218,7 @@ describe('the display rule (ADR-019 Decision 6)', () => {
       [
         'ClientDisplay.declaredName',
         'ConsentParams.resources.items',
+        'DeviceConfirmPersonalData.network.name',
         'DeviceConfirmPersonalData.user_agent',
       ].sort()
     );
@@ -245,6 +253,52 @@ describe('the display rule (ADR-019 Decision 6)', () => {
     const personal: StringNode[] = [];
     collectStrings({ $ref: '#/components/schemas/PersonalData' }, 'personal', personal, new Set());
     expect(personal.some(({ schema }) => schema['x-qauth-display'] === 'account')).toBe(true);
+  });
+
+  it('gives every schema a response reaches a type, and closes every object but the allowed open ones', () => {
+    const typed = ['type', 'const', 'enum', '$ref', 'oneOf', 'not'];
+    const problems: string[] = [];
+    const seen = new Set<string>();
+    let objects = 0;
+    const visit = (schema: JsonSchema, at: string) => {
+      const ref = schema['$ref'];
+      if (typeof ref === 'string') {
+        const name = ref.replace('#/components/schemas/', '');
+        if (seen.has(name)) return;
+        seen.add(name);
+        visit(schemas[name] ?? {}, name);
+        return;
+      }
+      if (!typed.some((keyword) => keyword in schema)) problems.push(`${at} has no type`);
+      if (schema['type'] === 'object') {
+        objects++;
+        const additional = schema['additionalProperties'];
+        const closed =
+          additional === false ||
+          (typeof additional === 'object' && additional !== null && 'propertyNames' in schema);
+        if (!closed && !OPEN_OBJECTS.includes(at)) problems.push(`${at} is not closed`);
+      }
+      for (const [name, inner] of Object.entries(
+        (schema['properties'] ?? {}) as Record<string, JsonSchema>
+      )) {
+        visit(inner, `${at}.${name}`);
+      }
+      // `allOf` holds the object's rules (`if`/`then`), which constrain members
+      // the object already declares; they are not schemas of a value.
+      for (const key of ['oneOf', 'anyOf', 'prefixItems']) {
+        ((schema[key] ?? []) as JsonSchema[]).forEach((inner, index) =>
+          visit(inner, `${at}.${key}[${index}]`)
+        );
+      }
+      for (const key of ['items', 'additionalProperties']) {
+        const inner = schema[key];
+        if (typeof inner === 'object' && inner !== null) visit(inner as JsonSchema, `${at}.${key}`);
+      }
+    };
+    for (const { at, schema } of responseSchemas()) visit(schema, at);
+    expect(problems).toEqual([]);
+    expect(objects).toBeGreaterThan(40);
+    for (const name of OPEN_OBJECTS) expect(seen.has(name), name).toBe(true);
   });
 
   it('applies to the step schema files the same way', () => {

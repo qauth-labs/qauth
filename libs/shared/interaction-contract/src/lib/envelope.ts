@@ -13,6 +13,7 @@ import {
   type JsonSchema,
   NEVER,
   object,
+  openObject,
   sameOriginPath,
   whenEquals,
 } from './schema-kit';
@@ -204,7 +205,7 @@ export const clientDisplaySchema = object(
         },
       },
       ['target'],
-      'Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout.',
+      'Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout. Always present on the `consent` step of an `unverified` client, whose screen shows where the code goes as the only fact it can check (ADR-019 Decision 6).',
       [
         whenEquals('target', ['host'], { required: ['host'] }),
         whenEquals('target', ['app'], { required: ['scheme'] }),
@@ -224,8 +225,14 @@ export const clientDisplaySchema = object(
   ['kind', 'newClient'],
   'Who the client is, as the auth server’s own records say (#593). Client-supplied text is untrusted: no logo comes from a client-supplied URL, and an unverified client shows none.',
   [
-    whenEquals('kind', ['cimd', 'admin_registered'], { required: ['verifiedDomain'] }),
-    whenEquals('kind', ['federation'], { required: ['federation'] }),
+    whenEquals('kind', ['cimd', 'admin_registered'], {
+      required: ['verifiedDomain'],
+      properties: { federation: NEVER },
+    }),
+    whenEquals('kind', ['federation'], {
+      required: ['federation'],
+      properties: { verifiedDomain: NEVER },
+    }),
     whenEquals('kind', ['unverified'], {
       properties: { verifiedDomain: NEVER, federation: NEVER, logo: NEVER },
     }),
@@ -246,9 +253,10 @@ export const interactionSchema = object(
     alternatives: {
       type: 'array',
       description:
-        'The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4).',
+        'The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4). The list is part of the read with the interaction id alone, so after a first factor that read shows which methods the account has. The contract accepts this: the read shows which methods remain, never who the account is or any of its data.',
       minItems: 0,
       maxItems: 15,
+      uniqueItems: true,
       items: { $ref: '#/components/schemas/StepName' },
     },
     params: { $ref: '#/components/schemas/StepParams' },
@@ -323,18 +331,19 @@ export const cancelRequestSchema = closedObject(
   'Cancel the interaction. The client gets `access_denied` with its `state` and `iss`; a logout ends with the person still signed in.'
 );
 
-export const problemSchema = object(
+export const problemSchema = openObject(
   {
     type: absoluteUri(
       2048,
-      'RFC 9457 §3.1.1. `about:blank` today: no type beyond the HTTP status. A code may get its own type URI later, so a page branches on `code`, never on `type`.'
+      'RFC 9457 §3.1.1: `https://docs.qauth.dev/reference/problem-types/#` followed by the type’s slug, a page a person can open. A page never dereferences it, and branches on `code`, never on `type`.'
     ),
     title: {
       type: 'string',
       minLength: 1,
       maxLength: 64,
       pattern: '^[A-Za-z][A-Za-z -]*$',
-      description: 'The HTTP status phrase. Not for branching, and not for a screen.',
+      description:
+        'The problem type’s title (RFC 9457 §3.1.3), the same in every document with this code. Not for branching, and not for a screen.',
     },
     status: {
       type: 'integer',

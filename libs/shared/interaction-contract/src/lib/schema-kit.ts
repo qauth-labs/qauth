@@ -39,13 +39,13 @@ export const DISPLAY_TEXT_PATTERN = `^[^<>\\p{C}\\p{Z}${FILLERS}](?:[^<>\\p{C}\\
  * Where a display value comes from, as the `x-qauth-display` annotation says:
  *
  * - `realm`: set by an admin of the realm (brand strings, a scope's consent text);
- * - `server`: derived by the auth server from its own data (a network name from
- *   an address lookup);
+ * - `server`: derived by the auth server from its own data (a region from an
+ *   address lookup);
  * - `account`: the signed-in or selected account's own data (an identifier),
  *   returned only by the personal-data read;
- * - `declared`: declared by a client or a device (a client's name, a device's
- *   user agent). A screen marks it as declared and never shows it above or
- *   instead of the verified data.
+ * - `declared`: declared by a client, a device or a registrant (a client's
+ *   name, a device's user agent, a network's registered name). A screen marks
+ *   it as declared and never shows it above or instead of the verified data.
  */
 export type DisplaySource = 'realm' | 'server' | 'account' | 'declared';
 
@@ -175,11 +175,29 @@ export function extensibleEnum(
 }
 
 /**
- * An object with the given members. `required` lists the members that are
- * always present; `rules` are conditions between members ({@link whenEquals}),
- * which constrain the object without changing its type.
+ * An object with the given members, closed (`additionalProperties: false`):
+ * a response schema lists every member that version of the contract sends, so
+ * no value can reach a screen past the display rule, and a request with a
+ * member it does not declare is refused. A later version may add members,
+ * which a client ignores (the versioning rules). `required` lists the members
+ * that are always present; `rules` are conditions between members
+ * ({@link whenEquals}), which constrain the object without changing its type.
  */
 export function object(
+  properties: Record<string, JsonSchema>,
+  required: readonly string[],
+  description?: string,
+  rules: readonly JsonSchema[] = []
+): JsonSchema {
+  return { ...openObject(properties, required, description, rules), additionalProperties: false };
+}
+
+/**
+ * An object that may carry members it does not declare. Only for a value the
+ * contract does not own: a WebAuthn response a browser serialises, and a
+ * problem document, whose type may define extension members (RFC 9457 §3.2).
+ */
+export function openObject(
   properties: Record<string, JsonSchema>,
   required: readonly string[],
   description?: string,
@@ -219,16 +237,16 @@ export function whenEquals(
 }
 
 /**
- * A request object: closed (`additionalProperties: false`), as the API
- * conventions require of every request body. A request with a member it does
- * not declare is refused.
+ * A request object: closed, as the API conventions require of every request
+ * body, like every {@link object}. A request with a member it does not
+ * declare is refused.
  */
 export function closedObject(
   properties: Record<string, JsonSchema>,
   required: readonly string[],
   description?: string
 ): JsonSchema {
-  return { ...object(properties, required, description), additionalProperties: false };
+  return object(properties, required, description);
 }
 
 /** An array of `items`, `min` to `max` long. */
@@ -241,8 +259,12 @@ export function array(
   return { type: 'array', description, items, minItems: min, maxItems: max };
 }
 
-/** An object with no members: a step that has no params, or no answer fields. */
-export const EMPTY_OBJECT: JsonSchema = { type: 'object', properties: {} };
+/** An object with no members: a step that has no params, or no personal data. */
+export const EMPTY_OBJECT: JsonSchema = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
 
 /** A request object with no members. */
 export const EMPTY_CLOSED_OBJECT: JsonSchema = {

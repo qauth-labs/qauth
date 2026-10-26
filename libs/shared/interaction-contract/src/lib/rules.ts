@@ -16,7 +16,7 @@ export const API_RULES: readonly string[] = [
   `Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (\`${FLOW_COOKIE_NAME}\`) and a CSRF value protect it, and the server sends no CORS headers.`,
   'Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.',
   'No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.',
-  'The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.',
+  'The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie and a same-origin request. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.',
   'Every operation answers with `Cache-Control: no-store`.',
 ];
 
@@ -25,6 +25,7 @@ export const VERSIONING_RULES: readonly string[] = [
   `The path carries the major version. Until QAuth 1.0.0 it is a release candidate, \`/interaction/v1-rc.<M>\` (today \`${INTERACTION_API_PREFIX}\`), and nothing about it is promised: a breaking change raises \`<M>\`. The release that ships 1.0.0 serves \`/interaction/v1\`.`,
   'Within a major version, changes are additive only: new operations, new steps, new optional request members, new response members, and new values of an extensible set (step names, problem codes, fonts).',
   'A client ignores response members it does not know, and a page shows its error page for a step it does not know. A request with a member the operation does not declare is refused.',
+  'The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.',
   'Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation or a step, and adding to a closed set, such as a step’s errors, need a new major version.',
   'A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.',
   'A step is named `urn:qauth:ia:<name>:v1-rc.<M>` until 1.0.0 and `urn:qauth:ia:<name>:v1` from then on, with the same release candidate as the path. QAuth never renames a step; if a registry of standard step names appears, its names are added beside QAuth’s.',

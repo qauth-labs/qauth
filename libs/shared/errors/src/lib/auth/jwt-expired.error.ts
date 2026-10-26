@@ -1,9 +1,9 @@
 /**
- * Error thrown when a JWT token has expired
+ * Error thrown when an access token has expired
  */
 export class JWTExpiredError extends Error {
   readonly statusCode = 401;
-  readonly code = 'JWT_EXPIRED';
+  readonly code = 'ACCESS_TOKEN_EXPIRED';
 
   constructor(message = 'JWT token has expired') {
     super(message);

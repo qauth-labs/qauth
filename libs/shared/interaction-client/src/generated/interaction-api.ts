@@ -22,7 +22,7 @@ export interface Interaction {
   step: StepName;
   /** Why the last answer to the current step was refused, from that step’s closed error set. Absent otherwise. */
   error?: StepError;
-  /** The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4). */
+  /** The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4). The list is part of the read with the interaction id alone, so after a first factor that read shows which methods the account has. The contract accepts this: the read shows which methods remain, never who the account is or any of its data. */
   alternatives: StepName[];
   params: StepParams;
   csrf: Csrf;
@@ -182,7 +182,7 @@ export interface ClientDisplay {
       issuer: string;
     }>;
   };
-  /** Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout. */
+  /** Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout. Always present on the `consent` step of an `unverified` client, whose screen shows where the code goes as the only fact it can check (ADR-019 Decision 6). */
   redirect?: {
     /** Where the authorization code goes: a web host, a loopback address (shown as "this device", with a warning), or a native app’s own URI scheme. */
     target: 'host' | 'this_device' | 'app';
@@ -270,9 +270,9 @@ export interface Asset {
 
 /** An RFC 9457 problem details document with a stable `code` and a `trace_id`, and no prose: no `detail`, no `instance`, no `errors`. */
 export interface Problem {
-  /** RFC 9457 §3.1.1. `about:blank` today: no type beyond the HTTP status. A code may get its own type URI later, so a page branches on `code`, never on `type`. */
+  /** RFC 9457 §3.1.1: `https://docs.qauth.dev/reference/problem-types/#` followed by the type’s slug, a page a person can open. A page never dereferences it, and branches on `code`, never on `type`. */
   type: string;
-  /** The HTTP status phrase. Not for branching, and not for a screen. */
+  /** The problem type’s title (RFC 9457 §3.1.3), the same in every document with this code. Not for branching, and not for a screen. */
   title: string;
   /** The HTTP status, repeated. */
   status: number;
@@ -327,13 +327,13 @@ export interface PasswordAnswer {
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface PasswordPersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
 export interface EmailCodeParams {
-  /** Why the code was sent, so one screen can say so: to verify the address, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password. */
-  purpose: 'verify_address' | 'recovery' | 'confirm_sign_in';
+  /** Why the code was sent, so one screen can say so: to verify the account, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password. */
+  purpose: 'verify_account' | 'recovery' | 'confirm_sign_in';
   /** How many digits the code has: six after a password, eight for recovery and registration. */
   length: 6 | 8;
   /** How many seconds the code stays valid. */
@@ -353,7 +353,7 @@ export interface EmailCodeAnswer {
 
 /** The address the code went to, when the transaction holds one. */
 export interface EmailCodePersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
@@ -379,7 +379,7 @@ export interface NewPasswordAnswer {
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface NewPasswordPersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
@@ -448,7 +448,7 @@ export interface WebauthnGetAnswer {
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface WebauthnGetPersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
@@ -492,7 +492,7 @@ export interface WebauthnCreateAnswer {
 }
 
 export interface WebauthnCreatePersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
   user: {
     /** The user handle: an opaque id, at most 64 bytes. */
@@ -527,7 +527,7 @@ export interface TotpAnswer {
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface TotpPersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
@@ -544,7 +544,7 @@ export interface RecoveryCodeAnswer {
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface RecoveryCodePersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
@@ -586,7 +586,7 @@ export interface TotpSetupAnswer {
 }
 
 export interface TotpSetupPersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
   /** The shared secret, 160 bits in base32 (RFC 4648 §6), unpadded. */
   secret: string;
@@ -625,7 +625,7 @@ export interface ConsentAnswer {
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface ConsentPersonalData {
-  /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+  /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
@@ -645,7 +645,7 @@ export interface SelectAccountPersonalData {
   accounts: Array<{
     /** An opaque reference to the account’s session, valid for this interaction only. */
     account: string;
-    /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+    /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
     identifier: string;
     /** Whether this is the account the browser last used. */
     current: boolean;
@@ -696,7 +696,7 @@ export interface DeviceConfirmPersonalData {
   network?: {
     /** The autonomous system number of the requesting address. */
     asn?: number;
-    /** The name of that network. */
+    /** The name of that network, as its registrant declared it in the address registry. The registrant chose it, so the screen marks it as declared. */
     name?: string;
   };
   /** The user agent the device declared, cut and stripped. The device chose it, so the screen marks it as declared. */
@@ -717,7 +717,7 @@ export interface LogoutConfirmAnswer {
 export interface LogoutConfirmPersonalData {
   /** The accounts signed in on this browser, the one being signed out first. */
   accounts: Array<{
-    /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
+    /** The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it. */
     identifier: string;
     /** Whether this is the account the logout request is for. */
     current: boolean;
@@ -747,6 +747,7 @@ export interface Operations {
     requestBody: never;
     responses: {
       200: PersonalData;
+      403: Problem;
       410: Problem;
       421: Problem;
       429: Problem;
@@ -810,7 +811,7 @@ export const OPERATIONS = {
     pathPatterns: { interactionId: '^[A-Za-z0-9_-]{43}$' },
     flowCookie: true,
     csrf: false,
-    statuses: [200, 410, 421, 429, 500, 503],
+    statuses: [200, 403, 410, 421, 429, 500, 503],
   },
   'interactions.answer': {
     method: 'POST',

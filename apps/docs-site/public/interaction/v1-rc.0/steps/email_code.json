@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/email_code.json",
   "title": "urn:qauth:ia:email_code:v1-rc.0",
-  "description": "An emailed code proves control of a mailbox: it verifies a password account’s address and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). An answer with no `otp` asks for the code again. Works without JavaScript.",
+  "description": "An emailed code proves control of a mailbox: it verifies a password account and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). For `recovery`, an address that gets no mail (no account, or no password) gets a phantom code: the step comes with the same `expires_in` and `resend_after`, and its answers are refused with the same errors at the same times as a real code’s (`invalid_credentials` for a wrong code, `code_expired` once `expires_in` has passed), so neither error tells a known address from an unknown one. An answer with no `otp` asks for the code again. Works without JavaScript.",
   "x-qauth-transports": [
     "interaction",
     "fipa"
@@ -40,7 +40,7 @@
     {
       "type": "urn:qauth:ia:email_code:v1-rc.0",
       "params": {
-        "purpose": "verify_address",
+        "purpose": "verify_account",
         "length": 6,
         "expires_in": 600,
         "resend_after": 60
@@ -61,11 +61,11 @@
         "purpose": {
           "type": "string",
           "enum": [
-            "verify_address",
+            "verify_account",
             "recovery",
             "confirm_sign_in"
           ],
-          "description": "Why the code was sent, so one screen can say so: to verify the address, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password."
+          "description": "Why the code was sent, so one screen can say so: to verify the account, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password."
         },
         "length": {
           "type": "integer",
@@ -94,9 +94,10 @@
         "expires_in",
         "resend_after"
       ],
+      "additionalProperties": false,
       "examples": [
         {
-          "purpose": "verify_address",
+          "purpose": "verify_account",
           "length": 6,
           "expires_in": 600,
           "resend_after": 60
@@ -129,9 +130,10 @@
           "maxLength": 254,
           "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
-          "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
         }
       },
+      "additionalProperties": false,
       "examples": [
         {
           "identifier": "alice@example.com"

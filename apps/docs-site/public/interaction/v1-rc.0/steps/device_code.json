@@ -63,6 +63,7 @@
       "required": [
         "length"
       ],
+      "additionalProperties": false,
       "examples": [
         {
           "length": 8
@@ -93,6 +94,7 @@
     "personal": {
       "type": "object",
       "properties": {},
+      "additionalProperties": false,
       "examples": [
         {}
       ]

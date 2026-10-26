@@ -3,7 +3,7 @@
   "info": {
     "title": "QAuth Interaction API",
     "version": "v1-rc.0",
-    "description": "The Interaction API is how a sign-in page reaches the QAuth engine (ADR-019 Decision 6). The reference ceremony app, and any UI that replaces it, reads the current step of an interaction, answers it and follows the result, until the interaction ends in a redirect. It shares its step grammar with the FiPA authorization challenge endpoint, the transport for first-party native apps (ADR-017 Decision 3): a step is the same object on both, and only the envelope differs.\n\nStatus: this document is the contract, published before the implementation. The auth server serves it today; the operations it describes arrive with the Interaction API implementation.\n\n## Rules\n\n- Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (`__Host-qauth_flow`) and a CSRF value protect it, and the server sends no CORS headers.\n- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.\n- No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.\n- The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.\n- Every operation answers with `Cache-Control: no-store`.\n\n## Versioning\n\n- The path carries the major version. Until QAuth 1.0.0 it is a release candidate, `/interaction/v1-rc.<M>` (today `/interaction/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>`. The release that ships 1.0.0 serves `/interaction/v1`.\n- Within a major version, changes are additive only: new operations, new steps, new optional request members, new response members, and new values of an extensible set (step names, problem codes, fonts).\n- A client ignores response members it does not know, and a page shows its error page for a step it does not know. A request with a member the operation does not declare is refused.\n- Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation or a step, and adding to a closed set, such as a step’s errors, need a new major version.\n- A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.\n- A step is named `urn:qauth:ia:<name>:v1-rc.<M>` until 1.0.0 and `urn:qauth:ia:<name>:v1` from then on, with the same release candidate as the path. QAuth never renames a step; if a registry of standard step names appears, its names are added beside QAuth’s.\n\n## Paths\n\n- The prefix `/interaction/v1-rc.0/wallet/` is reserved for the wallet return leg (ADR-013). No operation of this document is served under it.\n- The auth server serves this document at `/interaction/v1-rc.0/openapi.json`.",
+    "description": "The Interaction API is how a sign-in page reaches the QAuth engine (ADR-019 Decision 6). The reference ceremony app, and any UI that replaces it, reads the current step of an interaction, answers it and follows the result, until the interaction ends in a redirect. It shares its step grammar with the FiPA authorization challenge endpoint, the transport for first-party native apps (ADR-017 Decision 3): a step is the same object on both, and only the envelope differs.\n\nStatus: this document is the contract, published before the implementation. The auth server serves it today; the operations it describes arrive with the Interaction API implementation.\n\n## Rules\n\n- Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (`__Host-qauth_flow`) and a CSRF value protect it, and the server sends no CORS headers.\n- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.\n- No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.\n- The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie and a same-origin request. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.\n- Every operation answers with `Cache-Control: no-store`.\n\n## Versioning\n\n- The path carries the major version. Until QAuth 1.0.0 it is a release candidate, `/interaction/v1-rc.<M>` (today `/interaction/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>`. The release that ships 1.0.0 serves `/interaction/v1`.\n- Within a major version, changes are additive only: new operations, new steps, new optional request members, new response members, and new values of an extensible set (step names, problem codes, fonts).\n- A client ignores response members it does not know, and a page shows its error page for a step it does not know. A request with a member the operation does not declare is refused.\n- The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.\n- Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation or a step, and adding to a closed set, such as a step’s errors, need a new major version.\n- A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.\n- A step is named `urn:qauth:ia:<name>:v1-rc.<M>` until 1.0.0 and `urn:qauth:ia:<name>:v1` from then on, with the same release candidate as the path. QAuth never renames a step; if a registry of standard step names appears, its names are added beside QAuth’s.\n\n## Paths\n\n- The prefix `/interaction/v1-rc.0/wallet/` is reserved for the wallet return leg (ADR-013). No operation of this document is served under it.\n- The auth server serves this document at `/interaction/v1-rc.0/openapi.json`.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -210,7 +210,7 @@
                       "alternatives": [],
                       "params": {
                         "urn:qauth:ia:email_code:v1-rc.0": {
-                          "purpose": "verify_address",
+                          "purpose": "verify_account",
                           "length": 6,
                           "expires_in": 600,
                           "resend_after": 60
@@ -1182,8 +1182,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Gone",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#interaction-expired",
+                  "title": "Interaction expired",
                   "status": 410,
                   "code": "interaction_expired",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1207,8 +1207,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Misdirected Request",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#misdirected-request",
+                  "title": "Misdirected request",
                   "status": 421,
                   "code": "misdirected_request",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1235,8 +1235,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Too Many Requests",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#too-many-requests",
+                  "title": "Too many requests",
                   "status": 429,
                   "code": "too_many_requests",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1260,8 +1260,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Internal Server Error",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#internal-error",
+                  "title": "Internal error",
                   "status": 500,
                   "code": "internal_error",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1285,8 +1285,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Service Unavailable",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#service-unavailable",
+                  "title": "Service unavailable",
                   "status": 503,
                   "code": "service_unavailable",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1301,7 +1301,7 @@
       "get": {
         "operationId": "interactions.personal.get",
         "summary": "Read the personal data of the current step",
-        "description": "The personal data the current step’s screen shows: the account chooser’s list, the identifier being signed in, a secret shown once. Only the browser that started the interaction can read it: the request needs the flow cookie, so the page calls it from the browser. A step with no personal data answers an empty `data`.",
+        "description": "The personal data the current step’s screen shows: the account chooser’s list, the identifier being signed in, a secret shown once. Only the browser that started the interaction can read it: the request needs the flow cookie, so the page calls it from the browser. The read refuses a request from another origin with 403 `forbidden`: one whose `Sec-Fetch-Site` is present and not `same-origin`, or whose `Origin` is present and not the realm origin (`null` included). A request with neither header is allowed, such as from a browser that sends neither (Safari before 16.4): the server sends no CORS headers, so a page on another origin cannot read the answer anyway, and the check is defence in depth. The server checks the origin, then the flow cookie. A step with no personal data answers an empty `data`.",
         "tags": [
           "Interaction"
         ],
@@ -1560,6 +1560,31 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden: `forbidden`.",
+            "x-qauth-problem-codes": [
+              "forbidden"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "https://docs.qauth.dev/reference/problem-types/#forbidden",
+                  "title": "Forbidden",
+                  "status": 403,
+                  "code": "forbidden",
+                  "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
+                }
+              }
+            }
+          },
           "410": {
             "description": "Gone: `interaction_expired`.",
             "x-qauth-problem-codes": [
@@ -1576,8 +1601,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Gone",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#interaction-expired",
+                  "title": "Interaction expired",
                   "status": 410,
                   "code": "interaction_expired",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1601,8 +1626,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Misdirected Request",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#misdirected-request",
+                  "title": "Misdirected request",
                   "status": 421,
                   "code": "misdirected_request",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1629,8 +1654,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Too Many Requests",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#too-many-requests",
+                  "title": "Too many requests",
                   "status": 429,
                   "code": "too_many_requests",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1654,8 +1679,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Internal Server Error",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#internal-error",
+                  "title": "Internal error",
                   "status": 500,
                   "code": "internal_error",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1679,8 +1704,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Service Unavailable",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#service-unavailable",
+                  "title": "Service unavailable",
                   "status": 503,
                   "code": "service_unavailable",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -1695,7 +1720,7 @@
       "post": {
         "operationId": "interactions.answer",
         "summary": "Answer the current step",
-        "description": "Answer the current step, or one of the alternatives it offers, with the CSRF value of the step read. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The answer carries the flow cookie and comes from the realm origin: the server checks `Origin` and `Sec-Fetch-Site`, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413. A refused answer, such as a wrong password, is not an error: the same step comes back with `error` set and a new CSRF value.",
+        "description": "Answer the current step, or one of the alternatives it offers, with the CSRF value of the step read. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`. The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413. A refused answer, such as a wrong password, is not an error: the same step comes back with `error` set and a new CSRF value.",
         "tags": [
           "Interaction"
         ],
@@ -1991,7 +2016,7 @@
                         "alternatives": [],
                         "params": {
                           "urn:qauth:ia:email_code:v1-rc.0": {
-                            "purpose": "verify_address",
+                            "purpose": "verify_account",
                             "length": 6,
                             "expires_in": 600,
                             "resend_after": 60
@@ -2479,8 +2504,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Bad Request",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#bad-request",
+                  "title": "Bad request",
                   "status": 400,
                   "code": "bad_request",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2504,7 +2529,7 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#forbidden",
                   "title": "Forbidden",
                   "status": 403,
                   "code": "forbidden",
@@ -2529,8 +2554,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Gone",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#interaction-expired",
+                  "title": "Interaction expired",
                   "status": 410,
                   "code": "interaction_expired",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2554,8 +2579,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Payload Too Large",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#content-too-large",
+                  "title": "Content too large",
                   "status": 413,
                   "code": "content_too_large",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2579,8 +2604,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Unsupported Media Type",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#unsupported-media-type",
+                  "title": "Unsupported media type",
                   "status": 415,
                   "code": "unsupported_media_type",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2604,8 +2629,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Misdirected Request",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#misdirected-request",
+                  "title": "Misdirected request",
                   "status": 421,
                   "code": "misdirected_request",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2632,8 +2657,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Too Many Requests",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#too-many-requests",
+                  "title": "Too many requests",
                   "status": 429,
                   "code": "too_many_requests",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2657,8 +2682,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Internal Server Error",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#internal-error",
+                  "title": "Internal error",
                   "status": 500,
                   "code": "internal_error",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2682,8 +2707,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Service Unavailable",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#service-unavailable",
+                  "title": "Service unavailable",
                   "status": 503,
                   "code": "service_unavailable",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2698,7 +2723,7 @@
       "post": {
         "operationId": "interactions.cancel",
         "summary": "Cancel the interaction",
-        "description": "End the interaction without completing it: the client gets `access_denied`, and a logout ends with the person still signed in. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The answer carries the flow cookie and comes from the realm origin: the server checks `Origin` and `Sec-Fetch-Site`, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413.",
+        "description": "End the interaction without completing it: the client gets `access_denied`, and a logout ends with the person still signed in. As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The request must come from the realm origin: `Sec-Fetch-Site` must be `same-origin`; when the browser sent no `Sec-Fetch-Site`, `Origin` must equal the realm origin, and an `Origin` of `null` or of any other origin is refused. A request that fails gets 403 `forbidden`. The server checks the origin, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413.",
         "tags": [
           "Interaction"
         ],
@@ -2787,8 +2812,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Bad Request",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#bad-request",
+                  "title": "Bad request",
                   "status": 400,
                   "code": "bad_request",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2812,7 +2837,7 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#forbidden",
                   "title": "Forbidden",
                   "status": 403,
                   "code": "forbidden",
@@ -2837,8 +2862,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Gone",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#interaction-expired",
+                  "title": "Interaction expired",
                   "status": 410,
                   "code": "interaction_expired",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2862,8 +2887,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Payload Too Large",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#content-too-large",
+                  "title": "Content too large",
                   "status": 413,
                   "code": "content_too_large",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2887,8 +2912,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Unsupported Media Type",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#unsupported-media-type",
+                  "title": "Unsupported media type",
                   "status": 415,
                   "code": "unsupported_media_type",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2912,8 +2937,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Misdirected Request",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#misdirected-request",
+                  "title": "Misdirected request",
                   "status": 421,
                   "code": "misdirected_request",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2940,8 +2965,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Too Many Requests",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#too-many-requests",
+                  "title": "Too many requests",
                   "status": 429,
                   "code": "too_many_requests",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2965,8 +2990,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Internal Server Error",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#internal-error",
+                  "title": "Internal error",
                   "status": 500,
                   "code": "internal_error",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -2990,8 +3015,8 @@
                   "$ref": "#/components/schemas/Problem"
                 },
                 "example": {
-                  "type": "about:blank",
-                  "title": "Service Unavailable",
+                  "type": "https://docs.qauth.dev/reference/problem-types/#service-unavailable",
+                  "title": "Service unavailable",
                   "status": 503,
                   "code": "service_unavailable",
                   "trace_id": "7f3a9c1e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -3065,9 +3090,10 @@
           },
           "alternatives": {
             "type": "array",
-            "description": "The other steps the engine accepts as the next answer, preferred first: \"try another way\", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4).",
+            "description": "The other steps the engine accepts as the next answer, preferred first: \"try another way\", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4). The list is part of the read with the interaction id alone, so after a first factor that read shows which methods the account has. The contract accepts this: the read shows which methods remain, never who the account is or any of its data.",
             "minItems": 0,
             "maxItems": 15,
+            "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/StepName"
             }
@@ -3112,6 +3138,404 @@
           "csrf",
           "brand",
           "expiresAt"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:identifier:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:identifier:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:password:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:password:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:email_code:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:email_code:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:new_password:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:new_password:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:password_reset:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:password_reset:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:captcha:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:captcha:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:webauthn_get:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:webauthn_get:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:webauthn_create:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:webauthn_create:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:totp:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:totp:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:recovery_code:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:recovery_code:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:recovery_codes:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:recovery_codes:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:totp_setup:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:totp_setup:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:consent:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "required": [
+                "client"
+              ],
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:consent:v1-rc.0"
+                  ]
+                },
+                "client": {
+                  "type": "object",
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "unverified"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "redirect"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:select_account:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:select_account:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:device_code:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:device_code:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:device_confirm:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:device_confirm:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "step": {
+                  "const": "urn:qauth:ia:logout_confirm:v1-rc.0"
+                }
+              },
+              "required": [
+                "step"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "required": [
+                    "urn:qauth:ia:logout_confirm:v1-rc.0"
+                  ]
+                }
+              }
+            }
+          }
         ]
       },
       "StepName": {
@@ -3321,7 +3745,8 @@
         "required": [
           "result",
           "interaction"
-        ]
+        ],
+        "additionalProperties": false
       },
       "RedirectResult": {
         "type": "object",
@@ -3346,7 +3771,8 @@
         "required": [
           "result",
           "location"
-        ]
+        ],
+        "additionalProperties": false
       },
       "CancelRequest": {
         "type": "object",
@@ -3376,7 +3802,8 @@
         "required": [
           "step",
           "data"
-        ]
+        ],
+        "additionalProperties": false
       },
       "StepPersonalData": {
         "type": "object",
@@ -3476,7 +3903,8 @@
               "host",
               "registrableDomain",
               "sharedHosting"
-            ]
+            ],
+            "additionalProperties": false
           },
           "federation": {
             "type": "object",
@@ -3517,7 +3945,8 @@
                   "required": [
                     "id",
                     "issuer"
-                  ]
+                  ],
+                  "additionalProperties": false
                 },
                 "minItems": 0,
                 "maxItems": 16
@@ -3526,11 +3955,12 @@
             "required": [
               "entityId",
               "trustMarks"
-            ]
+            ],
+            "additionalProperties": false
           },
           "redirect": {
             "type": "object",
-            "description": "Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout.",
+            "description": "Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout. Always present on the `consent` step of an `unverified` client, whose screen shows where the code goes as the only fact it can check (ADR-019 Decision 6).",
             "properties": {
               "target": {
                 "type": "string",
@@ -3594,7 +4024,8 @@
                   ]
                 }
               }
-            ]
+            ],
+            "additionalProperties": false
           },
           "declaredName": {
             "type": "string",
@@ -3634,7 +4065,12 @@
             "then": {
               "required": [
                 "verifiedDomain"
-              ]
+              ],
+              "properties": {
+                "federation": {
+                  "not": {}
+                }
+              }
             }
           },
           {
@@ -3651,7 +4087,12 @@
             "then": {
               "required": [
                 "federation"
-              ]
+              ],
+              "properties": {
+                "verifiedDomain": {
+                  "not": {}
+                }
+              }
             }
           },
           {
@@ -3679,7 +4120,8 @@
               }
             }
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "Brand": {
         "type": "object",
@@ -3698,7 +4140,8 @@
             },
             "required": [
               "light"
-            ]
+            ],
+            "additionalProperties": false
           },
           "colors": {
             "type": "object",
@@ -3722,7 +4165,8 @@
                     "pattern": "^#[0-9a-f]{6}$",
                     "description": "The page background."
                   }
-                }
+                },
+                "additionalProperties": false
               },
               "dark": {
                 "type": "object",
@@ -3742,9 +4186,11 @@
                     "pattern": "^#[0-9a-f]{6}$",
                     "description": "The page background."
                   }
-                }
+                },
+                "additionalProperties": false
               }
-            }
+            },
+            "additionalProperties": false
           },
           "font": {
             "type": "string",
@@ -3786,7 +4232,8 @@
                 "pattern": "^https://[!#-;=?-\\[\\]-~]+$",
                 "description": "Where to get help."
               }
-            }
+            },
+            "additionalProperties": false
           },
           "strings": {
             "type": "object",
@@ -3816,7 +4263,8 @@
         "required": [
           "font",
           "darkMode"
-        ]
+        ],
+        "additionalProperties": false
       },
       "BrandStrings": {
         "type": "object",
@@ -3846,7 +4294,8 @@
             "x-qauth-display": "realm",
             "description": "A short notice at the foot of every page."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "Asset": {
         "type": "object",
@@ -3876,7 +4325,8 @@
           "url",
           "width",
           "height"
-        ]
+        ],
+        "additionalProperties": false
       },
       "Problem": {
         "type": "object",
@@ -3891,14 +4341,14 @@
               "type": "string",
               "pattern": "^(?:javascript|data|vbscript|file|blob):"
             },
-            "description": "RFC 9457 §3.1.1. `about:blank` today: no type beyond the HTTP status. A code may get its own type URI later, so a page branches on `code`, never on `type`."
+            "description": "RFC 9457 §3.1.1: `https://docs.qauth.dev/reference/problem-types/#` followed by the type’s slug, a page a person can open. A page never dereferences it, and branches on `code`, never on `type`."
           },
           "title": {
             "type": "string",
             "minLength": 1,
             "maxLength": 64,
             "pattern": "^[A-Za-z][A-Za-z -]*$",
-            "description": "The HTTP status phrase. Not for branching, and not for a screen."
+            "description": "The problem type’s title (RFC 9457 §3.1.3), the same in every document with this code. Not for branching, and not for a screen."
           },
           "status": {
             "type": "integer",
@@ -3955,6 +4405,7 @@
       "IdentifierParams": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:identifier:v1-rc.0",
           "transports": [
@@ -3993,11 +4444,13 @@
       },
       "IdentifierPersonalData": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       },
       "PasswordParams": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:password:v1-rc.0",
           "transports": [
@@ -4054,9 +4507,10 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "EmailCodeParams": {
         "type": "object",
@@ -4064,11 +4518,11 @@
           "purpose": {
             "type": "string",
             "enum": [
-              "verify_address",
+              "verify_account",
               "recovery",
               "confirm_sign_in"
             ],
-            "description": "Why the code was sent, so one screen can say so: to verify the address, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password."
+            "description": "Why the code was sent, so one screen can say so: to verify the account, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password."
           },
           "length": {
             "type": "integer",
@@ -4097,6 +4551,7 @@
           "expires_in",
           "resend_after"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:email_code:v1-rc.0",
           "transports": [
@@ -4143,9 +4598,10 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "NewPasswordParams": {
         "type": "object",
@@ -4194,6 +4650,7 @@
           "min_length",
           "max_length"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:new_password:v1-rc.0",
           "transports": [
@@ -4241,13 +4698,15 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "PasswordResetParams": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:password_reset:v1-rc.0",
           "transports": [
@@ -4285,7 +4744,8 @@
       },
       "PasswordResetPersonalData": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       },
       "CaptchaParams": {
         "description": "The challenge to solve: the built-in proof of work, or a hosted provider.",
@@ -4315,7 +4775,8 @@
               "provider",
               "challenge",
               "difficulty"
-            ]
+            ],
+            "additionalProperties": false
           },
           {
             "type": "object",
@@ -4343,7 +4804,8 @@
               "provider",
               "name",
               "site_key"
-            ]
+            ],
+            "additionalProperties": false
           }
         ],
         "x-qauth-step": {
@@ -4386,7 +4848,8 @@
       },
       "CaptchaPersonalData": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       },
       "WebauthnGetParams": {
         "type": "object",
@@ -4421,6 +4884,7 @@
           "rpId",
           "userVerification"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:webauthn_get:v1-rc.0",
           "transports": [
@@ -4521,9 +4985,10 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "WebauthnCreateParams": {
         "type": "object",
@@ -4564,7 +5029,8 @@
                 "required": [
                   "id",
                   "name"
-                ]
+                ],
+                "additionalProperties": false
               },
               "pubKeyCredParams": {
                 "type": "array",
@@ -4590,7 +5056,8 @@
                   "required": [
                     "type",
                     "alg"
-                  ]
+                  ],
+                  "additionalProperties": false
                 }
               },
               "timeout": {
@@ -4613,7 +5080,8 @@
                 "required": [
                   "residentKey",
                   "userVerification"
-                ]
+                ],
+                "additionalProperties": false
               },
               "attestation": {
                 "const": "none",
@@ -4626,13 +5094,15 @@
               "pubKeyCredParams",
               "authenticatorSelection",
               "attestation"
-            ]
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
           "optional",
           "options"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:webauthn_create:v1-rc.0",
           "transports": [
@@ -4727,7 +5197,7 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           },
           "user": {
             "type": "object",
@@ -4760,7 +5230,8 @@
               "id",
               "name",
               "displayName"
-            ]
+            ],
+            "additionalProperties": false
           },
           "excludeCredentials": {
             "type": "array",
@@ -4800,14 +5271,16 @@
               "required": [
                 "type",
                 "id"
-              ]
+              ],
+              "additionalProperties": false
             }
           }
         },
         "required": [
           "user",
           "excludeCredentials"
-        ]
+        ],
+        "additionalProperties": false
       },
       "TotpParams": {
         "type": "object",
@@ -4823,6 +5296,7 @@
         "required": [
           "digits"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:totp:v1-rc.0",
           "transports": [
@@ -4871,13 +5345,15 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "RecoveryCodeParams": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:recovery_code:v1-rc.0",
           "transports": [
@@ -4925,9 +5401,10 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "RecoveryCodesParams": {
         "type": "object",
@@ -4943,6 +5420,7 @@
         "required": [
           "count"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:recovery_codes:v1-rc.0",
           "transports": [
@@ -4995,7 +5473,8 @@
         },
         "required": [
           "codes"
-        ]
+        ],
+        "additionalProperties": false
       },
       "TotpSetupParams": {
         "type": "object",
@@ -5027,6 +5506,7 @@
           "digits",
           "period"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:totp_setup:v1-rc.0",
           "transports": [
@@ -5071,7 +5551,7 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           },
           "secret": {
             "type": "string",
@@ -5091,7 +5571,8 @@
         "required": [
           "secret",
           "otpauth_uri"
-        ]
+        ],
+        "additionalProperties": false
       },
       "ConsentParams": {
         "type": "object",
@@ -5132,7 +5613,8 @@
                 "scope",
                 "sensitive",
                 "dangerous"
-              ]
+              ],
+              "additionalProperties": false
             }
           },
           "resources": {
@@ -5163,6 +5645,7 @@
           "resources",
           "remember_default"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:consent:v1-rc.0",
           "transports": [
@@ -5214,13 +5697,15 @@
             "maxLength": 254,
             "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
             "x-qauth-display": "account",
-            "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+            "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "SelectAccountParams": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:select_account:v1-rc.0",
           "transports": [
@@ -5282,7 +5767,7 @@
                   "maxLength": 254,
                   "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
                   "x-qauth-display": "account",
-                  "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+                  "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
                 },
                 "current": {
                   "type": "boolean",
@@ -5293,13 +5778,15 @@
                 "account",
                 "identifier",
                 "current"
-              ]
+              ],
+              "additionalProperties": false
             }
           }
         },
         "required": [
           "accounts"
-        ]
+        ],
+        "additionalProperties": false
       },
       "DeviceCodeParams": {
         "type": "object",
@@ -5315,6 +5802,7 @@
         "required": [
           "length"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:device_code:v1-rc.0",
           "transports": [
@@ -5354,7 +5842,8 @@
       },
       "DeviceCodePersonalData": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       },
       "DeviceConfirmParams": {
         "type": "object",
@@ -5378,6 +5867,7 @@
           "user_code",
           "requested_at"
         ],
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:device_confirm:v1-rc.0",
           "transports": [
@@ -5436,7 +5926,8 @@
                 "x-qauth-display": "server",
                 "description": "The region of the requesting address."
               }
-            }
+            },
+            "additionalProperties": false
           },
           "network": {
             "type": "object",
@@ -5453,10 +5944,11 @@
                 "minLength": 1,
                 "maxLength": 128,
                 "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
-                "x-qauth-display": "server",
-                "description": "The name of that network."
+                "x-qauth-display": "declared",
+                "description": "The name of that network, as its registrant declared it in the address registry. The registrant chose it, so the screen marks it as declared."
               }
-            }
+            },
+            "additionalProperties": false
           },
           "user_agent": {
             "type": "string",
@@ -5466,11 +5958,13 @@
             "x-qauth-display": "declared",
             "description": "The user agent the device declared, cut and stripped. The device chose it, so the screen marks it as declared."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "LogoutConfirmParams": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false,
         "x-qauth-step": {
           "name": "urn:qauth:ia:logout_confirm:v1-rc.0",
           "transports": [
@@ -5525,7 +6019,7 @@
                   "maxLength": 254,
                   "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
                   "x-qauth-display": "account",
-                  "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+                  "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
                 },
                 "current": {
                   "type": "boolean",
@@ -5535,13 +6029,15 @@
               "required": [
                 "identifier",
                 "current"
-              ]
+              ],
+              "additionalProperties": false
             }
           }
         },
         "required": [
           "accounts"
-        ]
+        ],
+        "additionalProperties": false
       }
     }
   }

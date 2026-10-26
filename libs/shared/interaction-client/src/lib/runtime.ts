@@ -71,6 +71,21 @@ export class UnexpectedStatusError extends Error {
 }
 
 /**
+ * A redirect a JSON request got. The server sends `303 See Other` only to a
+ * form post, so a JSON request never gets one; the client never follows it.
+ * A browser hides such a redirect from `fetch` with `redirect: 'manual'` (an
+ * `opaqueredirect` response with status 0), so the client says so here
+ * instead of reporting status 0.
+ */
+export class UnexpectedRedirectError extends UnexpectedStatusError {
+  constructor(operation: OperationInfo, response: Response) {
+    super(operation, response);
+    this.name = 'UnexpectedRedirectError';
+    this.message = `${operation.method} ${operation.path} answered with a redirect, which a JSON request never gets`;
+  }
+}
+
+/**
  * Replace each `{name}` of `path` with its parameter, which must match the
  * pattern the document gives it. The id comes from the page's own URL, which
  * anyone can link to: a value such as `..` or `../answer` would otherwise send
@@ -122,6 +137,7 @@ export async function callOperation<O extends OperationShape>(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     ...(init?.signal === undefined ? {} : { signal: init.signal }),
   });
+  if (response.type === 'opaqueredirect') throw new UnexpectedRedirectError(operation, response);
   if (!operation.statuses.includes(response.status)) {
     throw new UnexpectedStatusError(operation, response);
   }

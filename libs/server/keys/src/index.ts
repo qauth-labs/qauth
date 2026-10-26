@@ -69,6 +69,7 @@ export {
   UpstreamClientNotFoundError,
 } from './lib/signer-errors';
 export {
+  DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
   SIGNER_CALLERS,

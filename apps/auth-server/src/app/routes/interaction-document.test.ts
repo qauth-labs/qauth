@@ -2,12 +2,13 @@ import {
   INTERACTION_OPENAPI,
   INTERACTION_OPENAPI_PATH,
   INTERACTION_PROBLEM_CODES,
+  PROBLEM_TYPE_BASE as INTERACTION_PROBLEM_TYPE_BASE,
   STATUS_TITLES,
 } from '@qauth-labs/shared-interaction-contract';
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { PROBLEM_CODES, statusTitle } from '../api-conventions/problem';
+import { PROBLEM_CODES, PROBLEM_TYPE_BASE, statusTitle } from '../api-conventions/problem';
 import interactionDocumentRoute from './interaction-document';
 
 /**
@@ -69,15 +70,20 @@ describe('GET /interaction/v1-rc.0/openapi.json', () => {
 describe('the Interaction API problem codes', () => {
   // The contract names the codes its errors carry; the error handler sends only
   // codes the server's registry publishes, with the status listed there.
-  it('are published in the server’s problem registry, each with the same status', () => {
-    for (const [code, entry] of Object.entries(INTERACTION_PROBLEM_CODES)) {
-      expect(PROBLEM_CODES[code as keyof typeof PROBLEM_CODES]?.status, code).toBe(entry.status);
+  it('are published in the server’s problem registry, each with the same status, type and title', () => {
+    expect(INTERACTION_PROBLEM_TYPE_BASE).toBe(PROBLEM_TYPE_BASE);
+    for (const [code, { status, type, title }] of Object.entries(INTERACTION_PROBLEM_CODES)) {
+      const entry = PROBLEM_CODES[code as keyof typeof PROBLEM_CODES];
+      expect(entry && { status: entry.status, type: entry.type, title: entry.title }, code).toEqual(
+        { status, type, title }
+      );
     }
   });
 
-  // The contract's examples and descriptions name the `title` the error handler
-  // sends, which is Node's status phrase (413 is still "Payload Too Large").
-  it('name the status phrase the error handler sends as title', () => {
+  // The contract describes each error response with the status phrase, as the
+  // server's own documents do (`problemResponses`); 413 is still "Payload Too
+  // Large" there.
+  it('describe each error response with the status phrase the server uses', () => {
     for (const { status } of Object.values(INTERACTION_PROBLEM_CODES)) {
       expect(STATUS_TITLES[status], String(status)).toBe(statusTitle(status));
     }

@@ -8,7 +8,7 @@ import {
   type Problem,
   type StepName,
 } from '../index';
-import { expandPath, UnexpectedStatusError } from './runtime';
+import { expandPath, UnexpectedRedirectError, UnexpectedStatusError } from './runtime';
 
 const ID = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
 const CSRF = 'cGVyLXN0ZXAtY3NyZi12YWx1ZS1vZi0zMi1ieXRlcyE';
@@ -57,8 +57,8 @@ describe('the Interaction API client', () => {
 
   it('reads a problem document as data, typed by its status', async () => {
     const problem = {
-      type: 'about:blank',
-      title: 'Gone',
+      type: 'https://docs.qauth.dev/reference/problem-types/#interaction-expired',
+      title: 'Interaction expired',
       status: 410,
       code: 'interaction_expired',
       trace_id: 'req-1',
@@ -81,6 +81,22 @@ describe('the Interaction API client', () => {
     const call = createInteractionClient({ fetch }).interactionsGet({ interactionId: ID });
     await expect(call).rejects.toBeInstanceOf(UnexpectedStatusError);
     await expect(call).rejects.toMatchObject({ status: 502 });
+  });
+
+  // A browser's `fetch` with `redirect: 'manual'` hides a redirect: an
+  // `opaqueredirect` response with status 0.
+  it('refuses a redirect a browser hid from it, by name rather than as status 0', async () => {
+    const opaque = new Response(null, { status: 200 });
+    Object.defineProperty(opaque, 'type', { value: 'opaqueredirect' });
+    Object.defineProperty(opaque, 'status', { value: 0 });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => opaque);
+    const call = createInteractionClient({ fetch }).interactionsAnswer(
+      { interactionId: ID },
+      { type: 'urn:qauth:ia:password:v1-rc.0', csrf: CSRF, password: 'x' }
+    );
+    await expect(call).rejects.toBeInstanceOf(UnexpectedRedirectError);
+    await expect(call).rejects.toBeInstanceOf(UnexpectedStatusError);
+    await expect(call).rejects.toThrow(/answered with a redirect/);
   });
 
   it('reads no body from a declared answer that is not JSON', async () => {

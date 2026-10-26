@@ -25,8 +25,9 @@ if (result.status === 200 && result.data.result === 'redirect')
 ```
 
 A result is typed by its status: the body the document declares for it. A status the document does
-not declare for the operation, such as a proxy's 502, rejects with `UnexpectedStatusError`. The
-client speaks JSON only; a page without JavaScript posts its forms straight to the auth server.
+not declare for the operation, such as a proxy's 502, rejects with `UnexpectedStatusError`, and a
+redirect a browser hides from `fetch` (an `opaqueredirect`, status 0) with its subclass
+`UnexpectedRedirectError`: a JSON request never gets one. The client speaks JSON only; a page without JavaScript posts its forms straight to the auth server.
 
 ## What it holds
 

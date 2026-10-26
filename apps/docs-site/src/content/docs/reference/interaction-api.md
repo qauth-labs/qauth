@@ -19,7 +19,7 @@ The contract is one OpenAPI 3.1 document, [openapi.json](/interaction/v1-rc.0/op
 - Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (`__Host-qauth_flow`) and a CSRF value protect it, and the server sends no CORS headers.
 - Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.
 - No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.
-- The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.
+- The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie and a same-origin request. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.
 - Every operation answers with `Cache-Control: no-store`.
 
 ## Versioning
@@ -27,6 +27,7 @@ The contract is one OpenAPI 3.1 document, [openapi.json](/interaction/v1-rc.0/op
 - The path carries the major version. Until QAuth 1.0.0 it is a release candidate, `/interaction/v1-rc.<M>` (today `/interaction/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>`. The release that ships 1.0.0 serves `/interaction/v1`.
 - Within a major version, changes are additive only: new operations, new steps, new optional request members, new response members, and new values of an extensible set (step names, problem codes, fonts).
 - A client ignores response members it does not know, and a page shows its error page for a step it does not know. A request with a member the operation does not declare is refused.
+- The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.
 - Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation or a step, and adding to a closed set, such as a step’s errors, need a new major version.
 - A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.
 - A step is named `urn:qauth:ia:<name>:v1-rc.<M>` until 1.0.0 and `urn:qauth:ia:<name>:v1` from then on, with the same release candidate as the path. QAuth never renames a step; if a registry of standard step names appears, its names are added beside QAuth’s.
@@ -38,7 +39,7 @@ Every operation sits under `/interaction/v1-rc.0`. The flow cookie is `__Host-qa
 | Operation                                  | Request                                             | Flow cookie | CSRF value | Success  | Errors                                      |
 | ------------------------------------------ | --------------------------------------------------- | ----------- | ---------- | -------- | ------------------------------------------- |
 | Read the current step                      | `GET /interaction/v1-rc.0/{interactionId}`          | No          | No         | 200      | 410, 421, 429, 500, 503                     |
-| Read the personal data of the current step | `GET /interaction/v1-rc.0/{interactionId}/personal` | Yes         | No         | 200      | 410, 421, 429, 500, 503                     |
+| Read the personal data of the current step | `GET /interaction/v1-rc.0/{interactionId}/personal` | Yes         | No         | 200      | 403, 410, 421, 429, 500, 503                |
 | Answer the current step                    | `POST /interaction/v1-rc.0/{interactionId}/answer`  | Yes         | Yes        | 200, 303 | 400, 403, 410, 413, 415, 421, 429, 500, 503 |
 | Cancel the interaction                     | `POST /interaction/v1-rc.0/{interactionId}/cancel`  | Yes         | Yes        | 200, 303 | 400, 403, 410, 413, 415, 421, 429, 500, 503 |
 
@@ -97,7 +98,7 @@ The password factor. A rejected password, an unknown account and a disabled acco
 
 `urn:qauth:ia:email_code:v1-rc.0` — Asks for the code mailed to the account’s address.
 
-An emailed code proves control of a mailbox: it verifies a password account’s address and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). An answer with no `otp` asks for the code again. Works without JavaScript.
+An emailed code proves control of a mailbox: it verifies a password account and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). For `recovery`, an address that gets no mail (no account, or no password) gets a phantom code: the step comes with the same `expires_in` and `resend_after`, and its answers are refused with the same errors at the same times as a real code’s (`invalid_credentials` for a wrong code, `code_expired` once `expires_in` has passed), so neither error tells a known address from an unknown one. An answer with no `otp` asks for the code again. Works without JavaScript.
 
 - Params: `purpose`, `length`, `expires_in`, `resend_after`
 - Schema: [steps/email_code.json](/interaction/v1-rc.0/steps/email_code.json)
@@ -115,7 +116,7 @@ Sets a password through the one password policy (ADR-017 Decision 8): at registr
 
 `urn:qauth:ia:password_reset:v1-rc.0` — Starts a password reset.
 
-A path marker: answering it starts a reset. The next step is `email_code` with `purpose` `recovery` for every address, known or not; mail goes only to a known address with a password. A reset never unlocks an account whose strongest authenticator is stronger than email (ADR-017 Decision 8).
+A path marker: answering it starts a reset. The next step is `email_code` with `purpose` `recovery` for every address, known or not; mail goes only to a known address with a password. An unknown address gets a phantom code, with the same `expires_in` and `resend_after` and the same error sequence as a real one, so the reset says nothing about whether the address has an account. A reset never unlocks an account whose strongest authenticator is stronger than email (ADR-017 Decision 8).
 
 - Params: —
 - Schema: [steps/password_reset.json](/interaction/v1-rc.0/steps/password_reset.json)
@@ -234,7 +235,7 @@ Every step read carries the realm's `brand`: the theme tier of ADR-019 Decision 
 
 ## Errors
 
-An error is an RFC 9457 problem details document (`application/problem+json`) with a stable `code` and a `trace_id`, as on the other API families ([API conventions](/reference/api-conventions/#errors)). It carries no `detail`, `instance` or `errors` list: a page shows its own text for the code, with the trace id. A page treats a code it does not know by its HTTP status.
+An error is an RFC 9457 problem details document (`application/problem+json`) with a stable `code` and a `trace_id`, as on the other API families ([API conventions](/reference/api-conventions/#errors)). Its `type` and `title` are the code's entry on [Problem types](/reference/problem-types/). It carries no `detail`, `instance` or `errors` list: a page shows its own text for the code, with the trace id. A page treats a code it does not know by its HTTP status.
 
 | Code                     | Status | Meaning                                                                                                                                                |
 | ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

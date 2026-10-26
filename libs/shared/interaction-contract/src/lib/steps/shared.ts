@@ -1,4 +1,4 @@
-import { displayText, type JsonSchema, object } from '../schema-kit';
+import { displayText, type JsonSchema, object, openObject } from '../schema-kit';
 
 /**
  * Pieces several steps share. Each step's published schema copies what it
@@ -9,7 +9,7 @@ import { displayText, type JsonSchema, object } from '../schema-kit';
 export const accountIdentifier: JsonSchema = displayText(
   'account',
   254,
-  'The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it.'
+  'The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it.'
 );
 
 /** The personal data of a step whose screen shows only who is signing in ("Not you?"). */
@@ -40,7 +40,7 @@ export const sixDigitOtp: JsonSchema = {
 export function webauthnResponse(maxLength: number, kind: 'assertion' | 'attestation'): JsonSchema {
   const response: JsonSchema =
     kind === 'assertion'
-      ? object(
+      ? openObject(
           {
             clientDataJSON: { type: 'string' },
             authenticatorData: { type: 'string' },
@@ -49,7 +49,7 @@ export function webauthnResponse(maxLength: number, kind: 'assertion' | 'attesta
           },
           ['clientDataJSON', 'authenticatorData', 'signature']
         )
-      : object(
+      : openObject(
           {
             clientDataJSON: { type: 'string' },
             attestationObject: { type: 'string' },
@@ -62,7 +62,7 @@ export function webauthnResponse(maxLength: number, kind: 'assertion' | 'attesta
     minLength: 2,
     maxLength,
     contentMediaType: 'application/json',
-    contentSchema: object(
+    contentSchema: openObject(
       {
         id: { type: 'string' },
         rawId: { type: 'string' },

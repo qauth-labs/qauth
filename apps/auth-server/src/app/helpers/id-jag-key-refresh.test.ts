@@ -71,7 +71,6 @@ beforeEach(async () => {
   redis = createExpiringRedis();
   fastify = {
     redis,
-    jwtUtils: { getIssuer: () => AS_ISSUER },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   ssrfSafeGet.mockReset();
@@ -102,10 +101,14 @@ async function assertion(signer: { kid: string; privateKey: CryptoKey }): Promis
 /** Validate one assertion; the IdJagValidationError reason, or `'accepted'`. */
 async function present(signer: { kid: string; privateKey: CryptoKey }): Promise<string> {
   try {
-    await validateIdJagAssertion(fastify, {
-      assertion: await assertion(signer),
-      expectedClientId: CLIENT_ID,
-    });
+    await validateIdJagAssertion(
+      fastify,
+      { issuer: AS_ISSUER },
+      {
+        assertion: await assertion(signer),
+        expectedClientId: CLIENT_ID,
+      }
+    );
     return 'accepted';
   } catch (err) {
     if (err instanceof IdJagValidationError) return err.reason;

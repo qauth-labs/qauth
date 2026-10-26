@@ -85,6 +85,7 @@
         "digits",
         "period"
       ],
+      "additionalProperties": false,
       "examples": [
         {
           "algorithm": "SHA1",
@@ -121,7 +122,7 @@
           "maxLength": 254,
           "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
-          "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
         },
         "secret": {
           "type": "string",
@@ -142,6 +143,7 @@
         "secret",
         "otpauth_uri"
       ],
+      "additionalProperties": false,
       "examples": [
         {
           "identifier": "alice@example.com",

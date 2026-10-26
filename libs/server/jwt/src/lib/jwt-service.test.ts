@@ -245,6 +245,38 @@ describe('signIdToken', () => {
     expect(Object.hasOwn(payload, 'acr')).toBe(false);
   });
 
+  it('carries the browser session as sid when one backs the token (#549)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const sid = '0199f9a1-0000-7000-8000-0000000000aa';
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-sid', audience: 'client-oidc-sid', sid },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(payload['sid']).toBe(sid);
+  });
+
+  it.each([
+    ['no session', {}],
+    ['an empty session id', { sid: '' }],
+  ])('omits sid entirely for %s (#549, the legacy Bearer path)', async (_case, extra) => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-nosid', audience: 'client-oidc-nosid', ...extra },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(Object.hasOwn(payload, 'sid')).toBe(false);
+  });
+
   it('omits nonce and name when not supplied', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();
 

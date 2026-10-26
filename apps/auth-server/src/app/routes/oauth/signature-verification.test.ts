@@ -54,7 +54,7 @@ import userinfoRoute from './userinfo';
 const ISSUER = 'https://auth.test.example.com';
 const CLIENT_ID = 'sig-test-client';
 const USER_ID = '019dbc24-7a2d-724d-bf26-1923f21f2234';
-const REALM = testRealm({ id: 'realm-1' });
+const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
 
 /** Generate a fresh extractable Ed25519 key pair as PEM strings. */
 function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
@@ -258,6 +258,7 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
       });
 
       expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: 'invalid_token', error_description: expect.any(String) });
       // The user lookup must never run when the signature is untrusted.
       const usersRepo = app.repositories.users as unknown as { findById: ReturnType<typeof vi.fn> };
       expect(usersRepo.findById).not.toHaveBeenCalled();
@@ -285,6 +286,7 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
       });
 
       expect(res.statusCode).toBe(401);
+      expect(res.json()).toMatchObject({ error: 'invalid_token' });
     } finally {
       await app.close();
     }
@@ -335,6 +337,7 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
 
       expect(res.statusCode).toBe(401);
       expect(res.headers['www-authenticate']).toContain('error="invalid_token"');
+      expect(res.json()).toMatchObject({ error: 'invalid_token' });
       expect(res.json()).not.toHaveProperty('email');
     } finally {
       await app.close();

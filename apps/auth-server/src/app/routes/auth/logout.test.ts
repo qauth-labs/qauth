@@ -1,4 +1,8 @@
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  MissingAccessTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -414,7 +418,8 @@ describe('POST /auth/logout', () => {
     );
   });
 
-  it('throws JWTInvalidError (401) when the Authorization header is missing', async () => {
+  // No credential is not a refused token (RFC 6750 §3.1): `unauthorized`.
+  it('throws MissingAccessTokenError (401) when the Authorization header is missing', async () => {
     const { fastify, ctx } = createFastifyStub();
     // extractFromHeader returns null for a missing/malformed header.
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -423,7 +428,9 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await expect(handler(logoutRequest(undefined), createReply())).rejects.toThrow(JWTInvalidError);
+    await expect(handler(logoutRequest(undefined), createReply())).rejects.toThrow(
+      MissingAccessTokenError
+    );
 
     // No verification, no revocation when the header is absent.
     expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
@@ -526,7 +533,7 @@ describe('POST /auth/logout', () => {
 
       await expect(
         handler(logoutRequest('Bearer bound.access.jwt'), createReply())
-      ).rejects.toThrow('A DPoP-bound access token cannot be used as a Bearer token');
+      ).rejects.toBeInstanceOf(JWTInvalidError);
       expect(sessions.redis.smembers).not.toHaveBeenCalled();
       expect(sessions.service.revoke).not.toHaveBeenCalled();
       expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
@@ -607,9 +614,7 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await expect(handler(logoutRequest(), createReply())).rejects.toThrow(
-      'Access token was not issued in this realm'
-    );
+    await expect(handler(logoutRequest(), createReply())).rejects.toBeInstanceOf(JWTInvalidError);
     expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });

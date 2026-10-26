@@ -15,57 +15,91 @@
  *
  * Every code here is also published in the auth server's problem registry
  * (`apps/auth-server/src/app/api-conventions/problem.ts`), with the same
- * status; a test there keeps the two equal.
+ * status, problem type and title; a test there keeps the two equal.
  */
 
+/**
+ * Where the problem types are documented: a document's `type` is this base
+ * followed by the type's slug (RFC 9457 §3.1.1), as on every other route that
+ * answers problem documents.
+ */
+export const PROBLEM_TYPE_BASE = 'https://docs.qauth.dev/reference/problem-types/#';
+
+/**
+ * One code: the status it is sent with, its problem type's slug and title
+ * (RFC 9457 §3.1.3, the same in every document with this code), and what it
+ * means here.
+ */
 export interface InteractionProblemCode {
   readonly status: number;
+  readonly type: string;
+  readonly title: string;
   readonly description: string;
 }
 
 export const INTERACTION_PROBLEM_CODES = {
   bad_request: {
     status: 400,
+    type: 'bad-request',
+    title: 'Bad request',
     description: 'The request is malformed and no more specific code applies.',
   },
   invalid_answer: {
     status: 400,
+    type: 'invalid-answer',
+    title: 'Invalid answer',
     description:
       'The answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field. The engine was not called.',
   },
   forbidden: {
     status: 403,
+    type: 'forbidden',
+    title: 'Forbidden',
     description:
       'The request is not same-origin, or its CSRF value is missing, already used or not the current step’s. The engine was not called.',
   },
   interaction_expired: {
     status: 410,
+    type: 'interaction-expired',
+    title: 'Interaction expired',
     description:
       'The interaction is unknown, expired or finished, or the flow cookie does not belong to it. Every reason gets this one answer.',
   },
   content_too_large: {
     status: 413,
+    type: 'content-too-large',
+    title: 'Content too large',
     description: 'The request body is larger than the server accepts.',
   },
   unsupported_media_type: {
     status: 415,
+    type: 'unsupported-media-type',
+    title: 'Unsupported media type',
     description:
       'The request body is neither `application/json` nor `application/x-www-form-urlencoded`.',
   },
   misdirected_request: {
     status: 421,
+    type: 'misdirected-request',
+    title: 'Misdirected request',
     description: 'The server does not answer for the host the request names.',
   },
   too_many_requests: {
     status: 429,
+    type: 'too-many-requests',
+    title: 'Too many requests',
     description: 'Too many requests. `Retry-After` says when to try again.',
   },
   internal_error: {
     status: 500,
+    type: 'internal-error',
+    title: 'Internal error',
     description: 'The server failed. `trace_id` finds the failure in the server log.',
   },
   service_unavailable: {
     status: 503,
+    type: 'service-unavailable',
+    title: 'Service unavailable',
     description:
       'The server cannot answer now, for example while a store the engine needs is down. It fails closed.',
   },
@@ -73,11 +107,17 @@ export const INTERACTION_PROBLEM_CODES = {
 
 export type InteractionProblemCodeName = keyof typeof INTERACTION_PROBLEM_CODES;
 
+/** The `type` URI of a code: {@link PROBLEM_TYPE_BASE} and its slug. */
+export function problemTypeUri(code: InteractionProblemCodeName): string {
+  return `${PROBLEM_TYPE_BASE}${INTERACTION_PROBLEM_CODES[code].type}`;
+}
+
 /**
- * The status phrase the server sends as `title` for each status a code is sent
- * with: Node's `http.STATUS_CODES`, which the error handler uses. Node still
- * calls 413 "Payload Too Large", the name RFC 9110 §15.5.14 replaced. A test in
- * the auth server keeps this table equal to what it sends.
+ * The status phrase that describes each error response in the document, as the
+ * auth server's own OpenAPI documents describe theirs: Node's
+ * `http.STATUS_CODES`. Node still calls 413 "Payload Too Large", the name RFC
+ * 9110 §15.5.14 replaced. A test in the auth server keeps this table equal to
+ * the phrase it uses.
  */
 export const STATUS_TITLES: Readonly<Record<number, string>> = {
   400: 'Bad Request',

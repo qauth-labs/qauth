@@ -138,7 +138,7 @@ ${STEPS.map(stepSection).join('\n\n')}`,
 Every step read carries the realm's ${code('brand')}: the theme tier of ADR-019 Decision 5. It holds a logo an admin uploaded (served from the realm origin), light and dark colours, a font from the safe list (${BRAND_FONTS.map(code).join(', ')}), links to the terms, the privacy notice and help, the realm's strings by locale, and whether dark mode is enabled. There are no uploaded templates, CSS or script. A realm that set nothing gets the defaults: ${code('system')} and dark mode enabled, and every member left out keeps the ceremony app's own value.`,
     `## Errors
 
-An error is an RFC 9457 problem details document (${code('application/problem+json')}) with a stable ${code('code')} and a ${code('trace_id')}, as on the other API families ([API conventions](/reference/api-conventions/#errors)). It carries no ${code('detail')}, ${code('instance')} or ${code('errors')} list: a page shows its own text for the code, with the trace id. A page treats a code it does not know by its HTTP status.
+An error is an RFC 9457 problem details document (${code('application/problem+json')}) with a stable ${code('code')} and a ${code('trace_id')}, as on the other API families ([API conventions](/reference/api-conventions/#errors)). Its ${code('type')} and ${code('title')} are the code's entry on [Problem types](/reference/problem-types/). It carries no ${code('detail')}, ${code('instance')} or ${code('errors')} list: a page shows its own text for the code, with the trace id. A page treats a code it does not know by its HTTP status.
 
 | Code | Status | Meaning |
 | ---- | ------ | ------- |

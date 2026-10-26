@@ -79,6 +79,7 @@
         "user_code",
         "requested_at"
       ],
+      "additionalProperties": false,
       "examples": [
         {
           "user_code": "WDJB-MJHT",
@@ -130,7 +131,8 @@
               "x-qauth-display": "server",
               "description": "The region of the requesting address."
             }
-          }
+          },
+          "additionalProperties": false
         },
         "network": {
           "type": "object",
@@ -147,10 +149,11 @@
               "minLength": 1,
               "maxLength": 128,
               "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
-              "x-qauth-display": "server",
-              "description": "The name of that network."
+              "x-qauth-display": "declared",
+              "description": "The name of that network, as its registrant declared it in the address registry. The registrant chose it, so the screen marks it as declared."
             }
-          }
+          },
+          "additionalProperties": false
         },
         "user_agent": {
           "type": "string",
@@ -161,6 +164,7 @@
           "description": "The user agent the device declared, cut and stripped. The device chose it, so the screen marks it as declared."
         }
       },
+      "additionalProperties": false,
       "examples": [
         {
           "location": {

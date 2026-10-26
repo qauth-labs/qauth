@@ -30,6 +30,7 @@
     "@qauth-labs/fastify-plugin-pkce": "workspace:*",
     "@qauth-labs/fastify-plugin-sessions": "workspace:*",
     "@qauth-labs/fastify-plugin-signer": "workspace:*",
+    "@qauth-labs/fastify-plugin-ssf": "workspace:*",
     "@qauth-labs/server-config": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
