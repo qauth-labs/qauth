@@ -40,13 +40,13 @@ fastify.get('/userinfo', {
 
 ## Options
 
-| Option                 | Type     | Required | Description                                         |
-| ---------------------- | -------- | -------- | --------------------------------------------------- |
-| `privateKey`           | `string` | yes      | EdDSA private key in PEM format                     |
-| `publicKey`            | `string` | no       | EdDSA public key in PEM format (derived if omitted) |
-| `issuer`               | `string` | yes      | JWT `iss` claim                                     |
-| `accessTokenLifespan`  | `number` | yes      | Access token TTL in seconds                         |
-| `refreshTokenLifespan` | `number` | yes      | Refresh token TTL in seconds                        |
+| Option                 | Type     | Required | Description                                                                                   |
+| ---------------------- | -------- | -------- | --------------------------------------------------------------------------------------------- |
+| `privateKey`           | `string` | no       | EdDSA private key in PEM format; without it the plugin only verifies, and signing answers 503 |
+| `publicKey`            | `string` | no       | EdDSA public key in PEM format (derived if omitted; required without `privateKey`)            |
+| `issuer`               | `string` | yes      | JWT `iss` claim                                                                               |
+| `accessTokenLifespan`  | `number` | yes      | Access token TTL in seconds                                                                   |
+| `refreshTokenLifespan` | `number` | yes      | Refresh token TTL in seconds                                                                  |
 
 ## Decorated Properties
 

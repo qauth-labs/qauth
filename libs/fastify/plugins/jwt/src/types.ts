@@ -14,9 +14,17 @@ import type { FastifyPluginOptions, FastifyRequest } from 'fastify';
  * JWT plugin configuration options
  */
 export interface JwtPluginOptions extends FastifyPluginOptions {
-  /** JWT private key in PEM format */
-  privateKey: string;
-  /** JWT public key in PEM format (optional, can be derived from private key) */
+  /**
+   * JWT private key in PEM format. Absent on a process that does not hold the
+   * signer role (ADR-019 Decision 9, #495): the plugin then only verifies, with
+   * {@link publicKey}, and every signing call fails with a 503
+   * `TemporarilyUnavailableError`.
+   */
+  privateKey?: string;
+  /**
+   * JWT public key in PEM format: derived from the private key when absent,
+   * and required without one.
+   */
   publicKey?: string;
   /** JWT issuer URL */
   issuer: string;
