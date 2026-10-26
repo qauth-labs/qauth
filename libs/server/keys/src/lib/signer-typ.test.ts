@@ -9,9 +9,9 @@ import {
 } from './signer-typ';
 
 describe('JWS_TYP_BY_PURPOSE', () => {
-  it('binds token signing to access and ID tokens, event signing to SETs and logout tokens', () => {
+  it('binds token signing to access tokens, ID tokens and ID-JAGs, event signing to SETs and logout tokens', () => {
     expect(JWS_TYP_BY_PURPOSE).toEqual({
-      token_signing: ['at+jwt', 'JWT'],
+      token_signing: ['at+jwt', 'JWT', 'oauth-id-jag+jwt'],
       event_signing: ['secevent+jwt', 'logout+jwt'],
     });
     expect(JWS_SIGNING_PURPOSES).toEqual(['token_signing', 'event_signing']);

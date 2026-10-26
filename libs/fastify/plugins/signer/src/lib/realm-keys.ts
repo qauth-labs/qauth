@@ -60,15 +60,16 @@ export interface RealmKeysDependencies {
  * The message logged at every boot for a key variable whose key is in the
  * store. It names the variable, never its value.
  *
- * Tokens and the session cookie are still signed with the variables until
- * they move onto the signer (#491, #493), and a signing variable that holds a
- * new key replaces the stored one until rotation through the store ships
- * (#544, #551). So the variable stays set until then.
+ * Tokens are signed through the realm's key store (#491), so a token variable
+ * is read only by the key boot step, where a new key in it replaces the stored
+ * key until rotation through the store ships (#544, #551). The session cookie
+ * is still signed with its variable until it moves onto the signer (#493), so
+ * that variable stays set.
  */
 export function keyVariableWarning(variable: string, purpose: KeyPurpose): string {
   return purpose === 'cookie_hmac'
     ? `${variable} is in the realm's key store, but the session cookie is still signed with the variable: keep it set until the upgrade guide says to remove it.`
-    : `${variable} is in the realm's key store, but tokens are still signed with the variable: keep it set until the upgrade guide says to remove it. A new key in it replaces the stored key at boot.`;
+    : `${variable} is in the realm's key store, which signs the tokens: the variable is read only at boot, where a new key in it replaces the stored key and unpublishes the old one at once. Remove it unless you may roll back to a release that signs with it.`;
 }
 
 /**
@@ -170,6 +171,32 @@ export async function bootRealmKeysByName(
     deps.log.warn({ variable, realm: realm.name }, keyVariableWarning(variable, purpose));
   }
   return result;
+}
+
+/**
+ * Run the key boot step for the realm named by `settings.realmName`, as
+ * {@link bootRealmKeysByName} does, loading the KEK provider from `kekEnv`
+ * first: for a caller outside the signer's wiring, such as a test harness that
+ * empties the database and runs the boot steps again, or that gives a second
+ * realm its standard keys.
+ *
+ * @throws the errors of `loadKekProvider` and of {@link bootRealmKeysByName}
+ */
+export async function bootRealmKeysWithKekEnv(
+  deps: CreateRealmKeyDependencies & { readonly log: Pick<FastifyBaseLogger, 'info' | 'warn'> },
+  settings: RealmKeysBootSettings
+): Promise<RealmKeysBootResult> {
+  const kekProvider = await loadKekProvider({ env: deps.kekEnv, warn: deps.warn });
+  return bootRealmKeysByName(
+    {
+      db: deps.db,
+      kekProvider,
+      enabledSignatureAlgorithms: deps.enabledSignatureAlgorithms,
+      hybridSigning: deps.hybridSigning,
+      log: deps.log,
+    },
+    settings
+  );
 }
 
 /** What {@link createRealmKey} works with: it loads the KEK provider itself. */

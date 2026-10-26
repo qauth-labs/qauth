@@ -370,10 +370,10 @@ What the signer guarantees:
   before signing, so what is checked is what is signed.
 - **Each purpose signs its own token types only** (`JWS_TYP_BY_PURPOSE`). Any other pair is refused.
 
-  | Purpose         | `typ`                        |
-  | --------------- | ---------------------------- |
-  | `token_signing` | `at+jwt`, `JWT` (ID token)   |
-  | `event_signing` | `secevent+jwt`, `logout+jwt` |
+  | Purpose         | `typ`                                                   |
+  | --------------- | ------------------------------------------------------- |
+  | `token_signing` | `at+jwt`, `JWT` (ID token), `oauth-id-jag+jwt` (ID-JAG) |
+  | `event_signing` | `secevent+jwt`, `logout+jwt`                            |
 
 - **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
   `SignerAccessDeniedError`. Every role may read public keys.

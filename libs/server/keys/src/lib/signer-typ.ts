@@ -29,9 +29,12 @@
 export const JWS_TYP_BY_PURPOSE = Object.freeze({
   /**
    * `at+jwt` is an RFC 9068 §2.1 access token; `JWT` is the `typ` QAuth stamps
-   * on an OIDC ID token (`ID_TOKEN_TYP` in `@qauth-labs/server-jwt`).
+   * on an OIDC ID token (`ID_TOKEN_TYP` in `@qauth-labs/server-jwt`);
+   * `oauth-id-jag+jwt` is an Identity Assertion JWT Authorization Grant
+   * (draft-ietf-oauth-identity-assertion-authz-grant), which a target
+   * authorization server verifies against the realm JWKS.
    */
-  token_signing: Object.freeze(['at+jwt', 'JWT'] as const),
+  token_signing: Object.freeze(['at+jwt', 'JWT', 'oauth-id-jag+jwt'] as const),
   /**
    * `secevent+jwt` is a Security Event Token (RFC 8417 §2.3); `logout+jwt` is
    * an OpenID Connect Back-Channel Logout 1.0 §2.4 logout token.

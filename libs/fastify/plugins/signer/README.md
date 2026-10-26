@@ -69,8 +69,10 @@ await fastify.register(signerPlugin, {
   realm's advisory lock (`lockRealm` of the realm keys repository).
 - It logs `realm keys ready` with the `kid`s it imported and generated, one warning per replaced
   key with the retired `kid`s (`keyReplacedWarning`), one per variable that holds a key the store
-  retired (`keyInactiveWarning`), and one per key variable still set (`keyVariableWarning`): tokens
-  and the session cookie are still signed with the variables (#491, #493), so they stay set.
+  retired (`keyInactiveWarning`), and one per key variable still set (`keyVariableWarning`).
+  Tokens are signed through the store (#491), so a token variable is read only here, where a new
+  key in it replaces the stored key; the session cookie is still signed with its variable (#493),
+  so that one stays set.
 - A refusal rejects `ready()`. The message names the variables, never a value. See the
   [server-keys README](../../../server/keys/README.md#importing-the-key-variables) for the
   refusals.
@@ -87,6 +89,10 @@ pnpm nx run auth-server:keys:create --purpose=token_signing --algorithm=RS256
 It returns the stored keys with their `kid`s and public JWKs, never material. A second active key
 of one purpose and algorithm is refused (`ActiveKeyConflictError`); create the replacement with
 `status: 'next'`.
+
+`bootRealmKeysWithKekEnv` runs the key boot step for a realm by name, loading the KEK provider
+itself, for a caller outside the plugin: the auth-server's test harness runs it again after it
+empties the database, and to give a second realm its standard keys.
 
 ## Storage adapters
 
@@ -106,3 +112,8 @@ of one purpose and algorithm is refused (`ActiveKeyConflictError`); create the r
 pnpm nx test fastify-plugin-signer
 pnpm nx test-integration fastify-plugin-signer # needs Docker
 ```
+
+`src/testing/memory-signer.ts` (not exported from the entry point) builds the real in-process
+signer over keys held in memory, sealed under a test KEK: `createTestSigner()` and
+`addRealm({ issuer, rs256? })`. A unit test that signs or verifies tokens without a database
+imports it by path, as the JWT plugin's tests do.
