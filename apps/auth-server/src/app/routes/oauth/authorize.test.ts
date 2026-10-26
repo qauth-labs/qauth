@@ -108,6 +108,18 @@ function createReply() {
   return { reply, state };
 }
 
+/** A stub transaction handle whose `transaction()` (a savepoint) runs in itself. */
+function transaction(): {
+  tx: true;
+  transaction: (cb: (inner: unknown) => Promise<unknown>) => unknown;
+} {
+  const tx = {
+    tx: true as const,
+    transaction: (cb: (inner: unknown) => Promise<unknown>) => cb(tx),
+  };
+  return tx;
+}
+
 function makeFastify() {
   const ctx: TestContext = {};
   const findActive = vi.fn();
@@ -148,7 +160,9 @@ function makeFastify() {
         findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })),
       },
     },
-    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
+    // A nested `transaction()` is a savepoint of the same transaction, as in
+    // drizzle, so the stub hands the code insert the same handle.
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(transaction())) },
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
@@ -287,7 +301,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     // written in.
     const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0];
-    expect(tx).toEqual({ tx: true });
+    expect(tx).toMatchObject({ tx: true });
     expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledWith(
       'user-1',
       CLIENT.id,

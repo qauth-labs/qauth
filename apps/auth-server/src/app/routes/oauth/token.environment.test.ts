@@ -100,8 +100,10 @@ function makeAuthCodeStub(opts: {
         }),
       },
       authorizationCodes: {
-        findByCode: vi.fn().mockResolvedValue({
+        findByCodeIncludingUsed: vi.fn().mockResolvedValue({
           id: 'code-1',
+          used: false,
+          expiresAt: Date.now() + 60_000,
           oauthClientId: 'client-uuid',
           userId: 'user-1',
           redirectUri: 'https://example.com/cb',

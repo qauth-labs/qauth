@@ -1,18 +1,16 @@
-import { randomBytes } from 'node:crypto';
-
-import { InvalidCsrfTokenError, isUniqueConstraintError } from '@qauth-labs/shared-errors';
+import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import {
-  AUTHORIZATION_CODE_TTL_MS,
   OAUTH_OPAQUE_PARAM_MAX_LENGTH,
   OAUTH_SCOPE_PARAM_MAX_LENGTH,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
@@ -57,6 +55,7 @@ import { markRelaxedCsp } from '../../plugins/security-headers';
 import { clientIdParamSchema, exactUrl } from '../../schemas/common';
 import {
   authorizeQuerySchema,
+  codeChallengeParamSchema,
   dpopJktParamSchema,
   maxAgeParamSchema,
   resourceParamSchema,
@@ -114,7 +113,10 @@ const consentFormSchema = z.object({
   // (#316) and this form POST reaches the same pending-authorization stash.
   scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  code_challenge: z.string().min(43).max(128),
+  // Same bound as `authorizeQuerySchema.code_challenge`, which is the one
+  // `mintAuthorizationCode` holds the code to: a form the screen did not
+  // render cannot reach the mint with a challenge it refuses.
+  code_challenge: codeChallengeParamSchema,
   code_challenge_method: z.literal('S256'),
   response_type: z.literal('code'),
   // ADR-007 §2 (#185): step-up params carried through so the POST mint path
@@ -859,49 +861,33 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
-      const MAX_CREATE_ATTEMPTS = 3;
-      let code: string | null = null;
-      for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
-        try {
-          const candidate = randomBytes(32).toString('base64url');
-          await fastify.repositories.authorizationCodes.create({
-            code: candidate,
-            oauthClientId: client.id,
-            userId: session.userId,
-            redirectUri: body.redirect_uri,
-            codeChallenge: body.code_challenge,
-            codeChallengeMethod: 'S256',
-            nonce: body.nonce ?? null,
-            // OIDC Core §2 `auth_time`: the REAL end-user authentication time
-            // (browser-session establishment, epoch MS), so /oauth/token can
-            // assert `auth_time` in the ID token and `max_age` evaluates the
-            // actual session age rather than this code's mint time.
-            authTime: session.authTime,
-            // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
-            // the code so /oauth/token can assert `acr`. NULL for a password
-            // login (`'low'`), which is the "omit the claim" outcome.
-            assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
-            // ADR-019 Decision 3 (#552): the session's absolute end, so the
-            // refresh family this code starts never outlives the session.
-            sessionExpiresAt: session.expiresAt,
-            scopes,
-            // RFC 8707: bind the resource(s) the screen named to this code so
-            // /oauth/token can set the issued access token's `aud` claim.
-            resource: resources,
-            state: body.state ?? null,
-            // RFC 9449 §10 (#480): the DPoP key the token request must prove.
-            dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
-            expiresAt,
-          });
-          code = candidate;
-          break;
-        } catch (err) {
-          if (!isUniqueConstraintError(err)) throw err;
-          if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
-        }
-      }
-      if (!code) throw new Error('Unreachable');
+      const code = await mintAuthorizationCode(fastify, {
+        oauthClientId: client.id,
+        userId: session.userId,
+        redirectUri: body.redirect_uri,
+        codeChallenge: body.code_challenge,
+        codeChallengeMethod: body.code_challenge_method,
+        nonce: body.nonce ?? null,
+        // OIDC Core §2 `auth_time`: the REAL end-user authentication time
+        // (browser-session establishment, epoch MS), so /oauth/token can
+        // assert `auth_time` in the ID token and `max_age` evaluates the
+        // actual session age rather than this code's mint time.
+        authTime: session.authTime,
+        // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
+        // the code so /oauth/token can assert `acr`. NULL for a password
+        // login (`'low'`), which is the "omit the claim" outcome.
+        assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
+        // ADR-019 Decision 3 (#552): the session's absolute end, so the
+        // refresh family this code starts never outlives the session.
+        sessionExpiresAt: session.expiresAt,
+        scopes,
+        // RFC 8707: bind the resource(s) the screen named to this code so
+        // /oauth/token can set the issued access token's `aud` claim.
+        resource: resources,
+        state: body.state ?? null,
+        // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+        dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
+      });
 
       // ADR-007 §2 (#185): every elevation that grants a dangerous scope is
       // recorded as a distinct step-up event (in addition to the normal

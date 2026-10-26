@@ -3928,8 +3928,7 @@
                         "minLength": 1
                       },
                       "redirect_uri": {
-                        "type": "string",
-                        "minLength": 1
+                        "type": "string"
                       },
                       "code_verifier": {
                         "type": "string",
@@ -3979,7 +3978,6 @@
                     "required": [
                       "grant_type",
                       "code",
-                      "redirect_uri",
                       "code_verifier"
                     ]
                   },
@@ -4852,7 +4850,8 @@
                   "code_challenge": {
                     "type": "string",
                     "minLength": 43,
-                    "maxLength": 128
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._~-]+$"
                   },
                   "code_challenge_method": {
                     "type": "string",

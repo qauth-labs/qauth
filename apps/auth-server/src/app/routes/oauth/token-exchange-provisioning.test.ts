@@ -249,7 +249,7 @@ function createTokenStub(persistedClient: {
     }),
     repositories: {
       oauthClients: { findByClientId: vi.fn().mockResolvedValue(client) },
-      authorizationCodes: { findByCode: vi.fn(), markUsed: vi.fn() },
+      authorizationCodes: { findByCodeIncludingUsed: vi.fn(), markUsed: vi.fn() },
       users: { findById: vi.fn().mockResolvedValue(user) },
       userCredentials: {
         findByRealmProviderSub: vi.fn().mockResolvedValue(undefined),

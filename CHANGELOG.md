@@ -982,14 +982,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `family_created_at` for every row of `refresh_tokens` in one statement,
   inside the runner's transaction, with the table locked until it commits.
   Measured on a 12-vCPU virtual machine against a default `postgres:18-alpine`
-  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. See the upgrade
-  guide (`operate/upgrades`) before upgrading a large deployment.
+  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. It first locks
+  `authorization_codes` and then `refresh_tokens`, the order a code redemption
+  takes them in, so a redemption in flight waits for it instead of deadlocking
+  with it; minting and redeeming codes wait for the same pause. A database
+  that ran 0038 from `main` before its locks moved to the start is unaffected:
+  the change only reorders its locks. See the upgrade guide
+  (`operate/upgrades`) before upgrading a large deployment.
 
   **Action for operators**: none for a realm without `sso_max_lifespan`. In a
   realm that sets it, a family already older than the limit ends at its next
   refresh after the upgrade, and its client sends the user through
   `/oauth/authorize` again. Nodes of the previous release do not enforce the
   limit, so it applies once the last of them is gone.
+
+- **A replayed authorization code revokes the tokens it issued** ([#627],
+  ADR-017 Decision 10). A second redemption of a code was refused with
+  `invalid_grant` but revoked nothing, because the token endpoint could not
+  tell a spent code from an unknown one. It now reads spent codes too, and a
+  second redemption that is otherwise a valid request (the code's own client,
+  its `redirect_uri`, the right `code_verifier`, the DPoP key the code is bound
+  to, a `resource` inside its binding) answers `invalid_grant` and revokes
+  every refresh token descended from the first redemption, rotations included,
+  and every access token issued from the code or in that family (OAuth 2.1
+  §4.1.3, RFC 6749 §4.1.2). Each access token's `jti` and `exp` are recorded
+  in Redis when it is issued; the replay puts the unexpired ones on the
+  revocation denylist, so userinfo, introspection, token exchange and the
+  bearer-protected routes refuse them. An access token issued while Redis
+  could not record it, or a replay while Redis cannot be written, leaves the
+  token valid until it expires; both are logged, and issuance does not wait on
+  a Redis failure to succeed. The `token.request_failed` event's reason is
+  `code_replay`; its new optional members `refreshFamilyId` and
+  `revokedRefreshCount` name the family and how many of its tokens the replay
+  revoked, and the event commits in the transaction of that revocation. A
+  replay that fails
+  any of those checks answers `invalid_grant` as before, with that check as its
+  reason, and revokes nothing, so whoever saw a code without the client's
+  credentials or verifier cannot end the client's tokens (OAuth 2.1 §7.5.3). A
+  redemption that loses the race to a concurrent one is the same replay, and
+  revokes the family the winner started. A refusal that burns the code (user
+  disabled, agent scope cap) and loses that race keeps its own answer,
+  `invalid_grant` or `invalid_scope`. A replay is recognised until the hourly
+  purge job deletes the code, at the
+  earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes); after
+  that the code is unknown and revokes nothing. `code_replay` is also the
+  reason for a code that a logout, a consent revocation or a refused
+  redemption (user disabled, agent scope cap) had spent: the server records no
+  difference, and such a code started no family, so nothing is revoked for it.
+  Migration 0041 adds the link that makes
+  this possible, `refresh_tokens.authorization_code_id` (nullable, set on the
+  first token of each family, `ON DELETE SET NULL` when the purge job deletes
+  the code). Families started before the upgrade, or by a node of the previous
+  release during a rolling upgrade, have no link, so a replay of their code is
+  refused but revokes nothing. The conformance matrix's RFC 9700 waiver for
+  this becomes a covered row, beside new OAuth 2.1 and RFC 6749 rows.
+  Migration 0041 locks `authorization_codes` and then `refresh_tokens` before
+  it changes them, the order a redemption takes them in, so a redemption in
+  flight during the upgrade waits for it instead of deadlocking with it.
+- **A replayed refresh token also revokes the access tokens of its family**
+  ([#627]). Presenting a refresh token that is no longer live revoked the
+  family's refresh tokens (RFC 9700 §4.14.2); every access token issued in the
+  family that has not expired is now put on the denylist too, as for a
+  replayed code. The `token.request_failed` event (reason `refresh_replay`)
+  carries `refreshFamilyId` and `revokedRefreshCount`, and commits with the
+  revocation.
+- **`POST /oauth/token`: an authorization code presented without
+  `redirect_uri` answers `invalid_grant`** ([#627], ADR-017 Decision 10). The
+  request schema required the parameter, so a missing one was refused as a
+  malformed request (`400 VALIDATION_ERROR` in v0.1, `invalid_request` with
+  the RFC 6749 error bodies of [#513]). Every code QAuth issues came through a
+  browser redirect and still needs the URI the authorization request named, so
+  a missing or empty value is now a mismatch: `400 invalid_grant`, like a
+  different value, with the `error_description` `redirect_uri is required for
+  this code`, and the code is not spent. A client that follows OAuth 2.1 alone,
+  which drops the parameter, is still refused, and the description tells it
+  what to send.
+- Every authorization code is minted by one helper, `mintAuthorizationCode`
+  ([#627], ADR-017 Decision 10), which refuses to write a code without an S256
+  PKCE challenge of 43 to 128 unreserved characters (RFC 7636 §4.2) in every
+  environment. `/oauth/authorize` validated the challenge that way already. The
+  consent screen's form checked only its length, so a hand-built
+  `POST /ui/consent` with a challenge outside that character set was given a
+  code that could never be redeemed; it now answers a `400` `validation_error`
+  problem document ([#513]). A consent screen the server rendered always
+  carries a valid challenge, so nothing a browser sends changes. The published
+  OpenAPI document gains the same `pattern` on that form's `code_challenge`, an
+  approved stable-surface break.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
@@ -1159,6 +1237,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#627]: https://github.com/qauth-labs/qauth/issues/627
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ## [0.1.3] - 2026-10-21

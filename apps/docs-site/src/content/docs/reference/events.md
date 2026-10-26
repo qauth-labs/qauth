@@ -460,11 +460,13 @@ The token endpoint refused a request: failed client authentication, an invalid o
 - Subject: `user`, when known
 - Schema: [token.request_failed.v1-rc.0.json](/schemas/events/token.request_failed.v1-rc.0.json)
 
-| Member      | Type   | Required | Meaning                                                                                         |
-| ----------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `grantType` | string | no       | The `grant_type` of the token request, such as `authorization_code`.                            |
-| `error`     | string | yes      | The OAuth or OpenID Connect `error` code the request was refused with, such as `invalid_grant`. |
-| `reason`    | string | no       | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release. |
+| Member                | Type    | Required | Meaning                                                                                                                                                   |
+| --------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grantType`           | string  | no       | The `grant_type` of the token request, such as `authorization_code`.                                                                                      |
+| `error`               | string  | yes      | The OAuth or OpenID Connect `error` code the request was refused with, such as `invalid_grant`.                                                           |
+| `reason`              | string  | no       | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                                           |
+| `refreshFamilyId`     | UUID    | no       | The refresh family a replayed grant (reason `code_replay` or `refresh_replay`) had issued, which the refusal revoked. Absent when the grant issued none.  |
+| `revokedRefreshCount` | integer | no       | How many refresh tokens of that family the refusal revoked; 0 when they were revoked already. Present for the reasons `code_replay` and `refresh_replay`. |
 
 ### token.revoked v1-rc.0
 
