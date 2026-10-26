@@ -188,7 +188,10 @@ async function buildProblemApp(): Promise<FastifyInstance> {
   return app;
 }
 
-describe('error-handler plugin', () => {
+// The first test pays for loading Fastify and the plugin: half a second alone,
+// but more than Vitest's 5 s default while every project's suite runs at once
+// (`nx run-many -t test --all`).
+describe('error-handler plugin', { timeout: 30_000 }, () => {
   it('maps JWTExpiredError to 401 response', async () => {
     const app = await buildTestApp();
 
