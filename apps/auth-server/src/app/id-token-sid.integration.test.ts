@@ -7,6 +7,7 @@ import {
   bootAuthServer,
   type BootedAuthServer,
   CookieJar,
+  decodeHtmlEntities,
   decodeJwtClaims,
   E2E_PASSWORD,
   E2E_REALM_NAME,
@@ -233,6 +234,11 @@ describe('sid on ID tokens and authorization codes (#549, real containers)', () 
     expect(await registryOf(app, sid)).toEqual([{ oauth_client_id: clientRowId }]);
   });
 
+  // One browser holds one session cookie today, so the second sign-in replaces
+  // the first; the cookie layout for several accounts at once (ADR-019
+  // Decision 3, 2026-10-10) will keep each account's session and its `sid`.
+  // What this proves now: each account's sign-in on the browser is its own
+  // session, and its ID token names that one.
   it('gives two accounts signed in on one browser different sid values', async () => {
     const app = server();
     const alice = await registerPasswordAccount(app, 'alice@example.test');
@@ -251,6 +257,60 @@ describe('sid on ID tokens and authorization codes (#549, real containers)', () 
     expect(aliceClaims).toMatchObject({ sub: alice, sid: aliceSid });
     expect(bobClaims).toMatchObject({ sub: bob, sid: bobSid });
     expect(aliceSid).not.toBe(bobSid);
+  });
+
+  it('records the session and the client when the consent form mints the code', async () => {
+    const app = server();
+    const userId = await registerPasswordAccount(app, 'consenting@example.test');
+    // No stored consent: the consent screen shows, and its form mints the code.
+    const clientRowId = await seedClient(app, []);
+    const jar = await signInWithPassword(app, 'consenting@example.test');
+    const sid = cookieSessionId(jar);
+    const pkce = pkcePair();
+
+    const authorizeResponse = await app.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPES.join(' '),
+        code_challenge: pkce.challenge,
+        code_challenge_method: 'S256',
+        state: 'sid-state',
+      }).toString()}`,
+      headers: { cookie: jar.header() as string },
+    });
+    const consentUrl = authorizeResponse.headers['location'] as string;
+    expect(consentUrl.startsWith('/ui/consent?')).toBe(true);
+    const screen = await app.inject({
+      method: 'GET',
+      url: consentUrl,
+      headers: { cookie: jar.header() as string },
+    });
+    expect(screen.statusCode).toBe(200);
+    const hidden = Object.fromEntries(
+      [...screen.body.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)].map(
+        ([, name, value]) => [name, decodeHtmlEntities(value)]
+      )
+    );
+    const decision = await app.inject({
+      method: 'POST',
+      url: '/ui/consent',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: jar.header() as string,
+      },
+      payload: new URLSearchParams({ ...hidden, decision: 'allow' }).toString(),
+    });
+    expect(decision.statusCode).toBe(302);
+    const code = new URL(decision.headers['location'] as string).searchParams.get('code');
+    if (code === null) throw new Error('the consent form issued no code');
+
+    expect(await codeSession(app, code)).toBe(sid);
+    expect(await registryOf(app, sid)).toEqual([{ oauth_client_id: clientRowId }]);
+    const claims = idTokenClaims(await exchange(app, { code, verifier: pkce.verifier }));
+    expect(claims).toMatchObject({ sub: userId, sid });
   });
 
   it('records one session_clients row for two codes of one client in one session', async () => {
