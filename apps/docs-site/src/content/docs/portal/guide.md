@@ -194,13 +194,13 @@ is enforced two levels below it, and neither is client-side:
   other calls return cannot carry one.
 - **On the auth-server**, where the actual guarantee is enforced: `POST /api/clients` generates
   the secret, hashes it with Argon2id, and keeps the plaintext only in a local variable
-  (`generateClientSecret`, `apps/auth-server/src/app/routes/clients/index.ts:269`). Only
+  (`generateClientSecret`, `apps/auth-server/src/app/routes/clients/index.ts:307`). Only
   `clientSecretHash` is passed to the repository's `create` call
-  (`apps/auth-server/src/app/routes/clients/index.ts:439`); the plaintext is spread into the
-  HTTP response once (`apps/auth-server/src/app/routes/clients/index.ts:480`) and then goes out
+  (`apps/auth-server/src/app/routes/clients/index.ts:529`); the plaintext is spread into the
+  HTTP response once (`apps/auth-server/src/app/routes/clients/index.ts:580`) and then goes out
   of scope. Regeneration is the same shape: only the new `hash` is persisted
-  (`apps/auth-server/src/app/routes/clients/index.ts:673`), and the plaintext is returned once
-  (`apps/auth-server/src/app/routes/clients/index.ts:694`). No code path — in the portal or the
+  (`apps/auth-server/src/app/routes/clients/index.ts:799`), and the plaintext is returned once
+  (`apps/auth-server/src/app/routes/clients/index.ts:817`). No code path — in the portal or the
   auth-server — reads a plaintext secret back out of storage, because no plaintext secret is
   ever stored.
 

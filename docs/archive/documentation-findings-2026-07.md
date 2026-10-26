@@ -1,5 +1,8 @@
 # Documentation findings
 
+> **Archived.** A report from July 2026, kept for history. Each finding was
+> filed as the issue it names, and the issue carries its current state.
+
 Defects surfaced while building `docs.qauth.dev`, July 2026.
 
 Eight issues, one of them a live security defect. None were found by looking for bugs — every

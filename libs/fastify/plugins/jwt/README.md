@@ -63,7 +63,7 @@ fastify.get('/userinfo', {
 
 ### `fastify.requireJwt`
 
-PreHandler that extracts and verifies the Bearer token from the `Authorization` header. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `JWTInvalidError` (401) on missing/malformed header, and lets `JWTExpiredError` (401) propagate for expired tokens.
+PreHandler that extracts and verifies the Bearer token from the `Authorization` header. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `MissingAccessTokenError` (401) when the request carries no credential (no `Authorization` header, no token in it, or a scheme the plugin does not take), `JWTInvalidError` (401) for a token that does not verify or is revoked, and lets `JWTExpiredError` (401) propagate for expired tokens. `verifyRequestAccessToken` throws the same.
 
 ### `fastify.verifyRequestAccessToken(request, policy?)`
 

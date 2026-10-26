@@ -359,7 +359,7 @@ only when an operator sets `HYBRID_SIGNING_ENABLED=true`. A hybrid token **is**
 an ordinary Ed25519 compact JWS — the ML-DSA-65 signature is detached and carried
 alongside it, never inside the compact string — so classical verifiers are
 unaffected. See the
-[verifier guide](../../../docs/hybrid-signing-verifier-guide.md).
+[verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).
 
 #### `signHybridAccessToken(payload, keys, issuer, expiresIn, backend): Promise<HybridSignedToken>`
 
@@ -447,7 +447,7 @@ try {
     // Token expired
     console.error(error.message); // "JWT token has expired"
     console.error(error.statusCode); // 401
-    console.error(error.code); // "JWT_EXPIRED"
+    console.error(error.code); // "ACCESS_TOKEN_EXPIRED"
   }
 }
 ```
@@ -466,7 +466,7 @@ try {
     // Token invalid
     console.error(error.message); // "Invalid JWT token: ..."
     console.error(error.statusCode); // 401
-    console.error(error.code); // "JWT_INVALID"
+    console.error(error.code); // "INVALID_ACCESS_TOKEN"
   }
 }
 ```

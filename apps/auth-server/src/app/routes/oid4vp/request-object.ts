@@ -87,6 +87,9 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body that
+        // OID4VP 1.0 uses (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         // IP-scoped, in the shape every other unauthenticated surface in this
         // app uses. Its own budget rather than the response endpoint's: see
         // OID4VP_REQUEST_OBJECT_RATE_LIMIT for why the two halves of the

@@ -108,9 +108,12 @@ describe('manifestSchema', () => {
         cimd_clients: [{ ...cimdClient, audience: ['https://mcp.example.com/mcp', audience] }],
       });
       expect(result.success).toBe(false);
-      expect(result.error?.issues[0]?.message).toBe(
-        'a CIMD client cannot hold a reserved urn:qauth:aud: audience'
-      );
+      expect(result.error?.issues[0]).toMatchObject({
+        path: ['cimd_clients', 0, 'audience', 1],
+        message: expect.stringContaining(
+          `"${audience}" is in the "urn:qauth:aud:" audience namespace`
+        ),
+      });
     }
   );
 
@@ -127,6 +130,40 @@ describe('manifestSchema', () => {
     expect(
       manifestSchema.safeParse({ realm: 'master', cimd_clients: [withoutScopes] }).success
     ).toBe(false);
+  });
+
+  // #507: QAuth's own scopes are never granted to a self-described client.
+  it.each(['qauth:admin:read', 'QAuth:admin:security', 'qauth:other'])(
+    'refuses a CIMD entry granting %s, naming it',
+    (scope) => {
+      const result = manifestSchema.safeParse({
+        realm: 'master',
+        cimd_clients: [{ ...cimdClient, scopes: ['mcp:read', scope] }],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]).toMatchObject({
+        path: ['cimd_clients', 0, 'scopes', 1],
+        message: expect.stringContaining(`"${scope}" is in the "qauth:" scope namespace`),
+      });
+    }
+  );
+
+  it("grants a CIMD entry other servers' admin: scopes, which are ordinary scopes", () => {
+    const parsed = manifestSchema.parse({
+      realm: 'master',
+      cimd_clients: [{ ...cimdClient, scopes: ['admin:org', 'admin:read'] }],
+    });
+    expect(parsed.cimd_clients?.[0]?.scopes).toEqual(['admin:org', 'admin:read']);
+  });
+
+  // An operator-provisioned client is the operator's own decision; the admin
+  // API's clients are provisioned this way (#510).
+  it('leaves the scopes of an operator-provisioned client to the operator', () => {
+    const parsed = manifestSchema.parse({
+      realm: 'master',
+      clients: [{ ...machineClient, scopes: ['qauth:admin:read'] }],
+    });
+    expect(parsed.clients?.[0]?.scopes).toEqual(['qauth:admin:read']);
   });
 
   it('refuses a CIMD client_id that is not a CIMD client_id', () => {

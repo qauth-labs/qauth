@@ -20,6 +20,18 @@ export interface RouteDestination {
   readonly types?: readonly string[];
   /** Only events of these categories. Absent: both. An empty list matches none. */
   readonly categories?: readonly EventCategory[];
+  /**
+   * Only events about one of these subjects: the envelope's `subject`, by
+   * type and id. Absent: any subject, or none. An empty list matches none,
+   * and an event without a subject never matches a list.
+   */
+  readonly subjects?: readonly EventSubjectRef[];
+}
+
+/** An event's subject, as a destination's filter names it. */
+export interface EventSubjectRef {
+  readonly type: string;
+  readonly id: string;
 }
 
 /** A destination with the kind of the route that delivers to it. */
@@ -45,7 +57,8 @@ export interface Delivery {
  * signed and gets the signature back, and never sees a key. The signer role
  * makes the handle (`deliverySignerHandle` in
  * `@qauth-labs/fastify-plugin-event-delivery`), which calls the signer as the
- * `delivery` caller, so the signer's policy allows these two and nothing else.
+ * `delivery` caller, so the signer's policy allows these three and nothing
+ * else.
  */
 export interface DeliverySigner {
   /**
@@ -76,6 +89,19 @@ export interface DeliverySigner {
     /** The claims set, without `iss`; the signer adds the realm's issuer. */
     readonly claims: Readonly<Record<string, unknown>>;
   }): Promise<string>;
+
+  /**
+   * Decrypt a destination's secret that the realm's `data_at_rest` key
+   * encrypted, such as the `Authorization` header an SSF receiver asked QAuth
+   * to send (#410). The plaintext lives only for the attempt.
+   */
+  decrypt(request: {
+    readonly realmId: string;
+    /** The ciphertext as stored. */
+    readonly ciphertext: string;
+    /** The context it was encrypted under: it names the destination. */
+    readonly context: string;
+  }): Promise<Uint8Array>;
 }
 
 /** What a route gets beside the delivery and the event. */
@@ -113,6 +139,16 @@ export type DeliveryOutcome =
        * no longer exists: the delivery ends `failed` at once. Retried by default.
        */
       readonly retry?: boolean;
+    }
+  | {
+      readonly ok: false;
+      /**
+       * The destination holds its events for now, such as a paused SSF stream
+       * (SSF 1.0 §8.1.2), and nothing was sent. The attempt does not count
+       * toward `maxAttempts` and records no failure; the delivery comes due
+       * again after `DELIVERY_HOLD_INTERVAL_MS`.
+       */
+      readonly hold: true;
     };
 
 /**
@@ -149,7 +185,11 @@ export interface ClaimedDelivery extends Delivery {
   readonly event: EventEnvelope | null;
 }
 
-/** How an attempt ended, as the store records it. */
+/**
+ * How an attempt ended, as the store records it. `hold` is no attempt: the
+ * store gives back the attempt the claim counted, keeps the last failure as
+ * it was, and makes the delivery due again at `nextAttemptAt`.
+ */
 export type DeliveryAttemptRecord =
   | { readonly result: 'delivered'; readonly statusCode?: number }
   | {
@@ -158,7 +198,8 @@ export type DeliveryAttemptRecord =
       readonly statusCode?: number;
       readonly errorClass: string;
     }
-  | { readonly result: 'failed'; readonly statusCode?: number; readonly errorClass: string };
+  | { readonly result: 'failed'; readonly statusCode?: number; readonly errorClass: string }
+  | { readonly result: 'hold'; readonly nextAttemptAt: number };
 
 /**
  * Where the role keeps its work: the delivery queue. In QAuth it is

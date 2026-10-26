@@ -11,4 +11,5 @@ export * from './oid4vp';
 export * from './roles';
 export * from './sessions';
 export * from './sql-helpers';
+export * from './ssf';
 export * from './tokens';

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SIGNER_OPERATIONS } from './signer';
 import {
+  DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
   SIGNER_CALLERS,
@@ -85,6 +86,27 @@ describe('SIGNER_POLICY', () => {
     expect(grantsOf('web').filter((grant) => grant.startsWith('sign'))).toEqual([]);
   });
 
+  it('lets delivery decrypt only a delivery destination secret, and never encrypt', () => {
+    expect(SIGNER_POLICY.delivery.decrypt).toEqual([DELIVERY_SECRET_CONTEXT_PREFIX]);
+    expect(isSignerCallAllowed('delivery', 'decrypt', 'delivery:ssf_streams.x:1')).toBe(true);
+    for (const context of [
+      undefined,
+      '',
+      'oid4vp_request_states.key:1',
+      'Delivery:x',
+      'xdelivery:',
+    ]) {
+      expect(isSignerCallAllowed('delivery', 'decrypt', context), String(context)).toBe(false);
+    }
+    // A grant of `true` takes any context, or none.
+    expect(isSignerCallAllowed('api', 'decrypt')).toBe(true);
+    expect(isSignerCallAllowed('api', 'decrypt', 'anything')).toBe(true);
+    expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'encrypt'))).toEqual([
+      'local',
+      'api',
+    ]);
+  });
+
   it('gives the cookie secrets to web and local only', () => {
     expect(
       SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'getCookieSecrets'))
@@ -96,6 +118,7 @@ describe('SIGNER_POLICY', () => {
     for (const grant of Object.values(SIGNER_POLICY)) {
       expect(Object.isFrozen(grant)).toBe(true);
       expect(Object.isFrozen(grant.signJws)).toBe(true);
+      if (Array.isArray(grant.decrypt)) expect(Object.isFrozen(grant.decrypt)).toBe(true);
     }
   });
 });

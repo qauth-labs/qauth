@@ -32,7 +32,7 @@ import {
   verifyAccessToken,
   verifyHybridAccessToken,
 } from '@qauth-labs/server-jwt';
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
+import { JWTInvalidError, MissingAccessTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -396,7 +396,10 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       // `verifyDpopProof` a `DPoP` header is no credential, as before DPoP.
       const credential = jwtUtils.extractCredentialFromHeader(request.headers.authorization);
       if (!credential) {
-        throw new JWTInvalidError('Missing or malformed Authorization header');
+        // No credential at all, an empty token or a scheme this server does
+        // not take: the request "lacks any authentication information" (RFC
+        // 6750 §3.1), which is not a refused token.
+        throw new MissingAccessTokenError('Missing or malformed Authorization header');
       }
       const { scheme, token } = credential;
       const { acceptIssuer } = policy;

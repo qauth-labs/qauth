@@ -62,8 +62,11 @@ function audiencesOf(claims: JWTPayload): string[] {
  *   rule the developer routes' guard (`assertManagementToken`) keeps today.
  */
 function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
+  // A structural check of the claims, not the refusal of a subject that names
+  // no active user, which the route makes (`inactiveSubjectError`) once it
+  // resolves the subject.
   if (typeof claims.sub !== 'string' || claims.sub.length === 0) {
-    throw new JWTInvalidError('Access token has no subject');
+    throw new JWTInvalidError('Access token lacks a sub claim');
   }
   if (claims.exp === undefined || claims.jti === undefined) {
     throw new JWTInvalidError('Access token lacks an expiry or a token id');
@@ -90,9 +93,18 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  * {@link assertFamilyClaims}) and `options.requiredScopes`. On success the
  * claims are on `request.jwtPayload`.
  *
- * A refused token answers 401 with `WWW-Authenticate: Bearer
- * error="invalid_token"`; a missing scope 403 with `error="insufficient_scope"`
- * (RFC 6750 §3.1).
+ * The answers follow RFC 6750 §3.1, in a problem document, as every family
+ * route answers an error (ADR-019 Decision 7):
+ *
+ * - no credentials (`MissingAccessTokenError`): 401 `unauthorized`, with a
+ *   challenge that names no error, `WWW-Authenticate: Bearer realm="OAuth"`;
+ * - a refused token: 401 `invalid_access_token` (or `access_token_expired`),
+ *   with `error="invalid_token"` in the challenge;
+ * - a missing scope: 403 `insufficient_scope`, whose challenge names the
+ *   scopes the route needs.
+ *
+ * So a route behind the guard lists 401 in its `x-qauth-errors`, and 403 too
+ * when it passes `requiredScopes`.
  *
  * The guard proves the token is one for the family, not who its subject is. It
  * does not check that `sub` names a user, that the user is enabled, or that

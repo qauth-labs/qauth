@@ -10,7 +10,11 @@ import {
   selectJwksKey,
   signAccessToken,
 } from '@qauth-labs/server-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  MissingAccessTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { exportPKCS8, exportSPKI, importJWK, jwtVerify, SignJWT } from 'jose';
@@ -51,17 +55,14 @@ async function signExpiredToken(
  */
 async function registerTestErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof JWTExpiredError) {
+    if (
+      error instanceof JWTExpiredError ||
+      error instanceof JWTInvalidError ||
+      error instanceof MissingAccessTokenError
+    ) {
       return reply.code(401).send({
         error: error.message,
-        code: 'JWT_EXPIRED',
-        statusCode: 401,
-      });
-    }
-    if (error instanceof JWTInvalidError) {
-      return reply.code(401).send({
-        error: error.message,
-        code: 'JWT_INVALID',
+        code: error.code,
         statusCode: 401,
       });
     }
@@ -151,7 +152,7 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_EXPIRED',
+        code: 'ACCESS_TOKEN_EXPIRED',
         error: expect.any(String),
       });
     } finally {
@@ -187,7 +188,7 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_INVALID',
+        code: 'INVALID_ACCESS_TOKEN',
         error: expect.any(String),
       });
     } finally {
@@ -207,7 +208,8 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_INVALID',
+        // No credential is not a refused token (RFC 6750 §3.1).
+        code: 'UNAUTHORIZED',
         error: 'Missing or malformed Authorization header',
       });
     } finally {
@@ -323,7 +325,8 @@ describe('requireJwt middleware', () => {
       const json = response.json();
       expect(json).toMatchObject({
         statusCode: 401,
-        code: 'JWT_INVALID',
+        // No credential is not a refused token (RFC 6750 §3.1).
+        code: 'UNAUTHORIZED',
         error: 'Missing or malformed Authorization header',
       });
     } finally {
@@ -397,7 +400,10 @@ describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
         headers: { authorization: `DPoP ${await sign(true)}` },
       });
       expect(response.statusCode).toBe(401);
-      expect(response.json().error).toBe('Missing or malformed Authorization header');
+      expect(response.json()).toMatchObject({
+        code: 'UNAUTHORIZED',
+        error: 'Missing or malformed Authorization header',
+      });
       expect(app.jwtUtils.extractCredentialFromHeader('DPoP abc')).toBeNull();
     } finally {
       await app.close();
@@ -1051,9 +1057,10 @@ describe('verifyRequestAccessToken policy (#509)', () => {
       await expect(app.verifyRequestAccessToken(requestWith(revoked), policy)).rejects.toThrow(
         'Token has been revoked'
       );
+      // No credential is not a refused token (RFC 6750 §3.1), under a policy too.
       await expect(
         app.verifyRequestAccessToken({ headers: {} } as FastifyRequest, policy)
-      ).rejects.toThrow('Missing or malformed Authorization header');
+      ).rejects.toBeInstanceOf(MissingAccessTokenError);
     } finally {
       await app.close();
     }

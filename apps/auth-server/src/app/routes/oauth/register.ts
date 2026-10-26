@@ -8,6 +8,7 @@ import { env } from '../../../config/env';
 import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import {
   assertNoReservedAudienceMetadata,
+  registrationSchemaError,
   validateAndNormalize,
 } from '../../helpers/dynamic-client-registration';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -42,9 +43,10 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list.",
+          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list, which never holds a scope in QAuth's reserved qauth: namespace.",
         tags: ['OAuth', 'Registration'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 403],
         body: dynamicClientRegistrationRequestSchema,
         response: {
           201: dynamicClientRegistrationResponseSchema,
@@ -55,8 +57,15 @@ export default async function (fastify: FastifyInstance) {
       preValidation: async (request) => {
         assertNoReservedAudienceMetadata(request.body);
       },
+      // RFC 7591 §3.2.2: a body the schema refuses answers
+      // `invalid_client_metadata` (or `invalid_redirect_uri`), never the
+      // generic `invalid_request` (#513).
+      schemaErrorFormatter: (issues) => registrationSchemaError(issues),
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body
+        // (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         // IP-scoped rate limit, at least as strict as /oauth/token.
         // Registration is append-only and expensive (argon2id hash on
         // confidential clients), so a burst-proof cap is mandatory.
@@ -108,9 +117,9 @@ export default async function (fastify: FastifyInstance) {
         }
       }
 
-      // Validate + normalize against realm policy. Throws BadRequestError
-      // with RFC 7591 error codes embedded in the message on policy
-      // violations; the global error handler maps to HTTP 400.
+      // Validate + normalize against realm policy. Throws the RFC 7591 §3.2.2
+      // error classes on policy violations; the global error handler answers
+      // them with HTTP 400 and the bare code in `error`.
       const normalized = validateAndNormalize(body, allowedScopes, env.REDIRECT_URI_CUSTOM_SCHEMES);
 
       // A registration attributed to a developer adds to the same list as

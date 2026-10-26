@@ -120,7 +120,7 @@ describe('requireFamilyToken (#509)', () => {
         await mint({ aud: API_FAMILY_AUDIENCES[other] })
       );
       expect(response.statusCode).toBe(401);
-      expect(response.json()).toMatchObject({ code: 'jwt_invalid' });
+      expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
     }
   });
 
@@ -216,13 +216,20 @@ describe('requireFamilyToken (#509)', () => {
   });
 
   it('answers a missing or malformed credential with the RFC 6750 challenge', async () => {
-    const missing = await app.inject({ method: 'GET', url: probePath('developer') });
-    expect(missing.statusCode).toBe(401);
-    expect(missing.headers['www-authenticate']).toMatch(/^Bearer realm="OAuth"/);
+    // No credentials: `unauthorized`, and a challenge that names no error
+    // (RFC 6750 §3.1), as on every bearer-protected route.
+    for (const headers of [{}, { authorization: 'Basic dXNlcjpwYXNz' }, { authorization: '' }]) {
+      const missing = await app.inject({ method: 'GET', url: probePath('developer'), headers });
+      expect(missing.statusCode).toBe(401);
+      expect(missing.headers['content-type']).toMatch(/^application\/problem\+json/);
+      expect(missing.json()).toMatchObject({ code: 'unauthorized' });
+      expect(missing.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+    }
 
     const malformed = await call(probePath('developer'), 'not-a-jwt');
     expect(malformed.statusCode).toBe(401);
     expect(malformed.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(malformed.json()).toMatchObject({ code: 'invalid_access_token' });
     expect(malformed.headers['www-authenticate']).toContain('error="invalid_token"');
   });
 

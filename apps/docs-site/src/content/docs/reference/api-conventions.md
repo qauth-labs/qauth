@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-22'
+lastVerified: '2026-10-25'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -14,7 +14,9 @@ before the families' first route. A test enforces them over the generated OpenAP
 ([Enforcement](#enforcement)).
 
 The Interaction API (`/interaction/v1-rc.0`) reuses these rules. The OAuth protocol endpoints do
-not: they keep the shapes their specifications define ([Errors](#errors)).
+not: they keep the shapes their specifications define ([Errors](#errors)). The error format of
+[Errors](#errors) is not limited to the families: every route that is not an OAuth protocol
+endpoint answers it.
 
 ## The three families
 
@@ -30,9 +32,11 @@ not: they keep the shapes their specifications define ([Errors](#errors)).
 - Each token carries one audience, and a family accepts only its own. The audience identifiers
   carry a version, as ADR-018 §5 requires for every QAuth-defined identifier, and it is the same
   release candidate as the path's.
-- The admin API's scopes are `admin:read`, `admin:write` and `admin:security`. The account and
-  developer families define no scopes here: their guards check the audience and the subject. A
-  route that needs a scope adds it in its own change.
+- The admin API's scopes are `qauth:admin:read`, `qauth:admin:write` and `qauth:admin:security`,
+  in QAuth's reserved `qauth:` scope namespace, intersected with the caller's admin roles. The
+  [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
+  built-in roles. The account and developer families define no scopes here: their guards check the
+  audience and the subject. A route that needs a scope adds it in its own change.
 
 ### Family tokens
 
@@ -52,11 +56,15 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
   developer's clients;
 - it carries every scope the route lists.
 
-A token that fails is refused with 401 and `WWW-Authenticate: Bearer error="invalid_token"`
-(`jwt_invalid`, or `jwt_expired`). A token that lacks a scope is refused with 403 and
+A request that presents no token is refused with 401 `unauthorized` and a challenge that names no
+error, `WWW-Authenticate: Bearer realm="OAuth"`. A token that fails is refused with 401 and
+`WWW-Authenticate: Bearer error="invalid_token"` (`invalid_access_token`, or
+`access_token_expired`). A token that lacks a scope is refused with 403 and
 `WWW-Authenticate: Bearer error="insufficient_scope"`, whose `scope` names the scopes the route
-needs (`insufficient_scope`). Both follow RFC 6750 §3.1. A request under the `DPoP` scheme gets a
-`DPoP` challenge instead (RFC 9449 §7.1).
+needs (`insufficient_scope`). All three follow RFC 6750 §3.1, and the body is a problem document
+with the code named in parentheses. A request under the `DPoP` scheme gets a `DPoP` challenge
+instead (RFC 9449 §7.1). A family route therefore lists 401 in its `x-qauth-errors`, and 403 when
+it requires a scope.
 
 The guard proves a token is one for the family, not who its subject is. It does not check that
 `sub` names an enabled user of the request's realm: until each realm has its own issuer, every
@@ -72,9 +80,10 @@ itself.
   with `invalid_target`, on every grant and before any consent screen.
 - `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case. Dynamic
   registration refuses it in an `audience` or `resource` member with `invalid_client_metadata`, a
-  Client ID Metadata Document that names it there does not resolve (`invalid_client`), and the
-  seed manifest refuses it in a `cimd_clients` entry. The rule is `isReservedAudience` in
-  `@qauth-labs/shared-validation`.
+  Client ID Metadata Document that names it there does not resolve, as a `client_id` that names
+  no client, and the seed manifest refuses it in a `cimd_clients` entry. The rule is
+  `isReservedAudience` in `@qauth-labs/shared-validation`. Registration refuses a reserved
+  audience, where it drops a reserved `qauth:` scope and registers the client with the rest.
 - The developer portal's system client has the developer audience, so the token `/auth/login`
   mints is a developer family token. Until the developer routes move under their prefix, the
   routes at `/api/clients` and `/api/consents` keep their own check (`assertManagementToken`),
@@ -167,32 +176,38 @@ document, sent as `application/problem+json` (ADR-019 Decision 7, decided 2026-1
 
 ```json
 {
-  "type": "about:blank",
-  "title": "Bad Request",
+  "type": "https://docs.qauth.dev/reference/problem-types/#validation-error",
+  "title": "Validation error",
   "status": 400,
   "detail": "The request is not valid.",
+  "instance": "/developer/v1-rc.0/clients",
   "code": "validation_error",
   "trace_id": "req-7f3a",
   "errors": [{ "pointer": "/limit", "message": "Too big: expected number to be <=200" }]
 }
 ```
 
-| Member     | Meaning                                                                                                            |
-| ---------- | ------------------------------------------------------------------------------------------------------------------ |
-| `type`     | `about:blank` today, so `title` is the HTTP status phrase (RFC 9457 §4.2.1). A code may get its own type URI.      |
-| `title`    | The status phrase. Not for branching.                                                                              |
-| `status`   | The HTTP status, repeated.                                                                                         |
-| `detail`   | A sentence for a person, when there is one. Never on a 5xx. Not for branching.                                     |
-| `instance` | Optional. A URI for this occurrence.                                                                               |
-| `code`     | A stable, machine-readable name for the error, from the list below.                                                |
-| `trace_id` | The id under which QAuth logged the request. An operator finds the failure by it.                                  |
-| `errors`   | Optional. One entry per field: `pointer`, an RFC 6901 JSON Pointer into the body or the parameters, and `message`. |
+| Member     | Meaning                                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`     | The problem type: a URI under [Problem types](/reference/problem-types/), one per code. Not for branching.                                |
+| `title`    | The problem type's title, the same for every occurrence. Not for branching.                                                               |
+| `status`   | The HTTP status, repeated.                                                                                                                |
+| `detail`   | A sentence for a person, when there is one. Never on a 5xx. Not for branching.                                                            |
+| `instance` | The path of the request, without its query.                                                                                               |
+| `code`     | A stable, machine-readable name for the error, from [Problem types](/reference/problem-types/).                                           |
+| `trace_id` | The id under which QAuth logged the request. An operator finds the failure by it.                                                         |
+| `errors`   | Present on a validation failure. One entry per field: `pointer`, an RFC 6901 JSON Pointer into the body or the parameters, and `message`. |
 
 - A client branches on `code` and the status, never on `title` or `detail`, whose wording may
   change.
 - A minor release may add codes. A client treats a code it does not know by its HTTP status.
-- A 401 from a bearer-protected route also carries the `WWW-Authenticate: Bearer` challenge of RFC
-  6750 §3.
+- A 401 or 403 from a bearer-protected route also carries a `WWW-Authenticate` challenge (RFC 6750
+  §3; the `DPoP` scheme of RFC 9449 §7.1 when the request used it): `invalid_token` for a token
+  that was presented and is not valid (`invalid_access_token`, `access_token_expired`), and no
+  error code for a request that presented none (`unauthorized`, RFC 6750 §3.1). A 403 says `insufficient_scope`, with the `scope`, only when a token with that
+  scope would be let through; a refusal no scope can lift, such as the developer client limit,
+  carries a challenge with no error code, so a client does not go back for a wider token.
+- A weak password's feedback is a list of `errors` under the pointer `/password`.
 - The shared schema is `Problem` (`#/components/schemas/Problem` in the OpenAPI document), and a
   route declares its error responses with `problemResponses(...)` from
   `apps/auth-server/src/app/api-conventions/problem.ts`.
@@ -200,54 +215,29 @@ document, sent as `application/problem+json` (ADR-019 Decision 7, decided 2026-1
 **OAuth protocol endpoints keep the shape their specification defines,** because the clients and
 libraries written to that specification parse it. These are the authorization, token, revocation,
 introspection, device authorization, dynamic registration and userinfo endpoints, the FiPA
-authorization challenge endpoint and the wallet-facing OID4VP endpoints. For example, the token
-endpoint answers with the `error` and `error_description` of RFC 6749 §5.2, and a bearer-protected
-endpoint answers with the `WWW-Authenticate` challenge of RFC 6750 §3.
-
-The routes under the family prefixes answer problem documents. The other routes that are not OAuth
-protocol endpoints (`/auth/*`, `/api/*`, `/consents`) still answer the earlier
-`{ "error", "statusCode", "code" }` body until their conversion (#513).
+authorization challenge endpoint and the wallet-facing OID4VP endpoints. They answer
+`application/json` with `error`, and `error_description` where there is something to say, and no
+other member: the token endpoint answers with the `error` of RFC 6749 §5.2, dynamic registration
+with that of RFC 7591 §3.2.2, and a bearer-protected endpoint with the `WWW-Authenticate` challenge
+of RFC 6750 §3 as well. Their schema in the OpenAPI document is `OAuthError`. Each route says which
+format it answers in its `config.errorFormat`: `oauth` on these endpoints, unset (`problem`)
+everywhere else.
 
 ### Error codes
 
-The codes are inside the 1.0 promise: a published code keeps its meaning within a major version.
-Each is sent with one status. An error that has no code of its own is sent with the code of its
-status. Codes are lower-case `snake_case`, like the `error` values of OAuth. The earlier body of the
-routes that #513 converts names the same errors in upper case (`VALIDATION_ERROR`).
+The codes, with each one's problem type, status and title, are listed on
+[Problem types](/reference/problem-types/). They are inside the 1.0 promise: a published code keeps
+its meaning within a major version. Each is sent with the status listed for it. An error that has
+no code of its own is sent with the code of its status, and a status with no code of its own with
+`bad_request` (any 4xx) or `internal_error` (any 5xx), so those two are the only codes sent with
+more than one status. Codes are lower-case `snake_case`, like the `error` values of OAuth.
 
-| Code                          | Status | Meaning                                                                                                                             |
-| ----------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `bad_request`                 | 400    | The request is malformed and no more specific code applies.                                                                         |
-| `validation_error`            | 400    | The request does not match the schema of the operation. `errors` names each field.                                                  |
-| `invalid_cursor`              | 400    | The `cursor` does not parse, or it belongs to another list.                                                                         |
-| `invalid_token`               | 400    | A one-time token in the request, such as an email verification token, is not valid.                                                 |
-| `unauthorized`                | 401    | The request carries no valid credentials.                                                                                           |
-| `jwt_expired`                 | 401    | The access token has expired.                                                                                                       |
-| `jwt_invalid`                 | 401    | The access token is not valid.                                                                                                      |
-| `invalid_credentials`         | 401    | The identifier or the credential is wrong. The answer does not say which.                                                           |
-| `forbidden`                   | 403    | The caller is authenticated but may not perform the operation.                                                                      |
-| `insufficient_scope`          | 403    | The access token lacks a scope the operation needs. The `WWW-Authenticate` challenge names the scopes.                              |
-| `email_not_verified`          | 403    | The account must verify its email address first.                                                                                    |
-| `not_found`                   | 404    | The resource does not exist, or the caller may not know that it exists.                                                             |
-| `method_not_allowed`          | 405    | The resource does not support the method.                                                                                           |
-| `conflict`                    | 409    | The request conflicts with the current state of the resource.                                                                       |
-| `unique_constraint_violation` | 409    | A resource with the same unique value already exists.                                                                               |
-| `email_already_verified`      | 409    | The email address is already verified.                                                                                              |
-| `token_already_used`          | 409    | The one-time token has already been used.                                                                                           |
-| `token_expired`               | 410    | The one-time token has expired.                                                                                                     |
-| `precondition_failed`         | 412    | The `If-Match` value does not match the current `ETag` of the resource.                                                             |
-| `content_too_large`           | 413    | The request body is larger than the server accepts.                                                                                 |
-| `unsupported_media_type`      | 415    | The media type of the request body is not one the operation accepts.                                                                |
-| `misdirected_request`         | 421    | The server does not answer for the host the request names, or not for this operation on that host.                                  |
-| `unprocessable_content`       | 422    | The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource. |
-| `weak_password`               | 422    | The new password is too weak. `errors` carries the feedback under `/password`.                                                      |
-| `precondition_required`       | 428    | The update needs an `If-Match` header.                                                                                              |
-| `too_many_requests`           | 429    | The caller has sent too many requests. `Retry-After` says when to try again.                                                        |
-| `internal_error`              | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                  |
-| `service_unavailable`         | 503    | The server cannot answer now, for example while a dependency is down.                                                               |
-
-`PROBLEM_CODES` in `apps/auth-server/src/app/api-conventions/problem.ts` is the source of this
-table, and a test fails when the two differ.
+Which code each domain error class of `@qauth-labs/shared-errors` answers, and which OAuth `error`
+it answers on a protocol endpoint, is set once, in
+`apps/auth-server/src/app/api-conventions/error-classes.ts`, as is the code of each error class a
+route or a server library defines itself, such as the Shared Signals Framework transmitter's. A
+test fails when a class has no entry, and a test keeps the problem types page equal to
+`PROBLEM_CODES` in `apps/auth-server/src/app/api-conventions/problem.ts`.
 
 ## OpenAPI
 
@@ -261,13 +251,27 @@ Each family is published as OpenAPI 3.1. Every operation of a family carries:
 - the five extensions below;
 - error responses that reference the shared `Problem` schema, as `application/problem+json`.
 
-| Extension            | Values                             | Meaning                                                                                                                                                                                                   |
-| -------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API the class names the scope it needs: `admin:read`, `admin:write` or `admin:security`. `security` is used on the admin API only.                                  |
-| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both. |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                           |
-| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                           |
-| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                            |
+Every other operation of the server lists its error responses too: a route names the statuses it
+answers by design in `x-qauth-errors`, and the document adds 421, 429 and 500, which any operation
+of a realm may answer (`/health` only 429), each referencing `Problem`, or `OAuthError` on an OAuth
+protocol endpoint.
+
+| Extension            | Values                             | Meaning                                                                                                                                                                                                                                                              |
+| -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
+| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                                                                                      |
+| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
+| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
+
+On the admin API every id in `x-qauth-permission` is a permission of the
+[admin catalog](/reference/admin-permissions/), and not a retired one, and `x-qauth-class` is the
+strictest class among them (`read` < `write` < `security`). With one permission the operation
+needs that class's scope. With a list, the request decides which scopes it needs: a policy patch
+that changes only a write field needs `qauth:admin:write`, one that changes a security field needs
+`qauth:admin:security`, and one that changes both needs both. The class still names the strictest
+case, so a security operation never hides behind a write class and always carries its effects and
+the two-admin marker.
 
 A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
 
@@ -345,9 +349,11 @@ their old paths are listed here.
 ## Enforcement
 
 - `apps/auth-server/src/app/api-conventions/openapi-conventions.ts` checks every operation under a
-  family prefix: the `operationId`, the security requirement, the five extensions, the names, the
-  id and time formats, closed request objects, the problem schema on error responses, cursor
-  paging, Merge Patch bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
+  family prefix: the `operationId`, the security requirement, the five extensions (an admin
+  operation's permissions come from the admin catalog, and its class is the strictest class among
+  them), the names, the id and time formats,
+  closed request objects, the problem schema on error responses, cursor paging, Merge Patch
+  bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
   over `stable-surface/openapi.json` and `apps/docs-site/public/openapi.json`. CI's stable-surface
   check regenerates both files and fails when they differ from the committed copies, so the check
   reads what the server serves.

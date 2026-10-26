@@ -128,8 +128,8 @@ describe('assertManagementToken', () => {
     it('rejects a token whose user belongs to another realm', async () => {
       users.findById.mockResolvedValue({ id: USER_ID, enabled: true, realmId: OTHER_REALM_ID });
 
-      await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toThrow(
-        'Access token was not issued in this realm'
+      await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toBeInstanceOf(
+        JWTInvalidError
       );
     });
 
@@ -138,7 +138,7 @@ describe('assertManagementToken', () => {
 
       await expect(
         assertManagementToken(fastify, REALM, portalClaims(), { requireActiveUser: false })
-      ).rejects.toThrow('Access token was not issued in this realm');
+      ).rejects.toBeInstanceOf(JWTInvalidError);
     });
   });
 

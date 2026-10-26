@@ -560,9 +560,15 @@ describe('validateScopes', () => {
   });
 
   it('names each scope it refuses once', () => {
-    expect(() => validateScopes('read admin admin', ['read'])).toThrow(
-      expect.objectContaining({ errorDescription: 'admin not permitted for this client' })
-    );
+    let refusal: unknown;
+    try {
+      validateScopes('read admin admin', ['read']);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(InvalidScopeError);
+    // Which scope, and how often: not the words around it.
+    expect((refusal as InvalidScopeError).errorDescription?.match(/\badmin\b/g)).toHaveLength(1);
   });
 
   // ADR-007 §2 (#184): the optional agent context enforces the scope-mode cap

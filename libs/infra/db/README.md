@@ -236,7 +236,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `upsertMany()`, `findVerifiedByUserIdAndKey()`, `setVerified()`
   - `findVerifiedByUserIdAndKey()` returns **every verified row** for that key as an array, in no particular order. It does **not** rank them — the ADR-002 trust order (`wallet > oidc_* > self_reported`) is enforced in application code by `rankAttributeSource()` / `selectTrustedAttribute()` in `libs/server/federation/src/claims/attribute-trust.ts`. Pair the two to resolve the `email` / `email_verified` claims.
 - **`createOAuthConsentsRepository(db)`**: Consent grants and revocation
-- **`createOid4vpRequestStatesRepository(db)`**: OID4VP request/response correlation (T4)
+- **`createOid4vpRequestStatesRepository(db)`**: OID4VP request/response correlation
   - Realm-scoped, unique `state_hash`, single-use via `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on.
 - **`createRealmKeysRepository(db)`**: Per-realm, per-purpose keys, envelope-encrypted (ADR-019 Decision 9)
   - `create()`, `findByKid()`, `listByRealm()`, `listPublicByRealm()`, `getWrappedForSigner()`, `updateStatus()`, `deleteByScope()`, `lockRealm(realmId, tx)`
@@ -276,7 +276,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - A secret field is stored as `ADMIN_AUDIT_SECRET_MARKER`, never as a value. Annotate every secret a diff can carry, a set-up or reset link, code or token included.
   - Triggers in migration 0026 hold for every role whose statements fire them (SQLSTATE 23514, the constraint named): an inserted row must follow the realm's chain head (`admin_audit_log_follows_head`); no row is updated and neither table is truncated (`admin_audit_log_append_only`, `admin_audit_log_checkpoints_append_only`); a row is deleted only when a checkpoint covers it; a checkpoint names a row still in the log with its hash (`admin_audit_log_checkpoints_match`), moves forward (`admin_audit_log_checkpoints_forward`), covers an unbroken, linked run of rows (`admin_audit_log_checkpoints_unbroken`) and none younger than 90 days (`admin_audit_log_retention_floor`). The retention job removes rows with `SELECT admin_audit_log_prune(realm_id, through_seq)`, which writes the checkpoint and deletes the realm's rows up to that `seq`; `EXECUTE` on it is revoked from `PUBLIC`. Run `verifyAdminAuditChain` before a prune: the database checks the links, not the row hashes. A table owner or a superuser can disable a trigger, so only the per-role grants (#498) protect the log from the application's own database user. The triggers are hand-written SQL, which `drizzle-kit push` does not create; use the migrations.
   - The hash is unkeyed: a party that can rewrite a row and every row after it, or cut the newest rows, leaves a chain that verifies. A copy of each head kept outside the database, such as the outbox event that mirrors the row with its `seq` and `row_hash`, is what shows that.
-  - `adminAuditLogWriterGrantStatements(role)` returns the statements that give a writing role `INSERT` and `SELECT` on the log and `SELECT` on the checkpoints, and nothing else. The per-role grants script (#498) applies them.
+  - `adminAuditLogWriterGrantStatements(role)` returns the statements that give a writing role `INSERT` and `SELECT` on the log and `SELECT` on the checkpoints, and nothing else. The per-role grants script that will apply them (#498) is not built yet.
 - **`createEventsRepository(db, options?)`**: The event store (ADR-019 Decision 8, #457): the transactional outbox and the event log in one append-only table, `events`. It takes the root database, which reads and `emitInOwnTransaction` use. See [Event store](#event-store) for the write rule, the read rule and the lag.
   - `emit(tx, event)` writes one event in the caller's transaction (a `DbTransaction`, not the root database) and returns its id. It checks the event with `parseEvent` from `@qauth-labs/shared-events` first and throws `EventValidationError` on an unknown type, a payload that fails its schema or the payload rules, or a NUL character; nothing is written then. The repository makes the id (a UUIDv7) and the time, and takes the category from the registry. The insert reads nothing back, so a role granted only `INSERT` on `events` can write.
   - `emitInOwnTransaction(event)` is the same for a caller without a transaction: one `INSERT`, a transaction of its own.
@@ -290,6 +290,11 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `fanOut({ kinds, destinations, now })` writes the rows for the events after each position, one per realm and route kind, and moves the position on, one stream at a time per node. It touches only the positions of the `kinds` the caller serves.
   - `dueDestinations(kinds, now)`, `claim({ picks, now, leaseMs, maxAttempts })`, `record(claim, outcome, now)` and `release(claims, now)` run the claims.
   - `minOffered(realmId)` returns the lowest position every destination has finished, for the retention job (#536).
+- **`createSsfStreamsRepository(db)`**: The streams of the Shared Signals Framework transmitter (#410): `ssf_streams`, one per receiver and realm, and the subjects each receiver added (`ssf_stream_subjects`).
+  - `create`, `find`, `list`, `update`, `remove` and `setStatus` name the realm and the receiver's client row, so a receiver reaches only its own stream; `create` returns `null` when the receiver already has one.
+  - `addSubject(streamId, subject, maxSubjects)` returns `added`, `present`, `full`, or `missing` for a stream deleted meanwhile (the count and the insert run under the stream's row lock); `removeSubject` and `listSubjects` complete the set.
+  - `listDestinations()` and `findForDelivery(streamId)` serve the SSF delivery route: streams of active receivers in realms whose `ssf_transmitter_enabled` is on, with the event store subjects of their subjects. `deliveryStatus(streamId, now)` reads the pending deliveries and the latest failed attempt, leaving out a row an attempt is running on.
+  - `enqueueForEvent(tx, { streamId, eventId, now })` writes the delivery of an event addressed to one stream (a verification event) in the transaction that wrote the event, for a stream of the event's realm only.
   - `pendingByKind()` and `deliveryLagSeconds(now)` feed the metrics; `listForEvent(eventId)` returns an event's deliveries.
 - **`createEventRetentionRepository(db)`**: The retention job's access to the event store (ADR-020 §3, #536). It needs the retention role's grants (`eventRetentionGrantStatements`), the only `DELETE` on `events`.
   - `realms(fallback)` lists every realm that has events with its retention from the realm row, or `fallback` for a realm whose row is gone.
@@ -297,9 +302,9 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `deleteBatch({ realmId, category, before, through, limit, now })` deletes one batch of the realm's oldest rows of one category, older than `before` and at or before `through`, in a short transaction under the realm's retention lock (`busy` when another instance holds it). Admin rows go only from the start of the chain, never its head, and only while each verifies; the last one deleted becomes the realm's anchor in `event_chain_anchors`, in the same transaction, and a row that breaks the chain stays (`chainBreak`).
   - `oldestEventTimes()` returns the time of each category's oldest event, for the `qauth_events_oldest_age_seconds` gauge.
 - **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
-  - `create()`, `findByCode()`, `markUsed()`
+  - `create()`, `findByCode()`, `findByCodeIncludingUsed()` (spent and expired codes too, so a second redemption is recognised as a replay), `markUsed()`
 - **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
-  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`
+  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`, `revokeFamilyByAuthorizationCode(codeId, reason, tx?)` (the family whose first token carries `authorization_code_id`; returns `{ familyId, revokedCount }`)
 - **`createEmailVerificationTokensRepository(db)`**: Verification tokens
   - `create()`, `findByTokenHash()`, `markUsed()`, `deleteExpired()`
 
@@ -453,7 +458,7 @@ Only the retention job deletes (#536). A writing role is granted `INSERT` on
 `events` and `EXECUTE` on `events_admin_chain_head` and `events_own_row`, and no
 `SELECT` (#827): with it, a writer could read every realm's events, request IPs,
 user agents and admin diffs included. `eventsWriterGrantStatements(role)`
-returns the statements, which the per-role grants of the topology area apply. QAuth creates no database users;
+returns the statements, which the per-role grants script (#498) will apply. That script is not built yet. QAuth creates no database users;
 until the roles are split, the one database user owns the table, and the hash
 chain shows an admin event it removed.
 
@@ -577,16 +582,24 @@ to each destination of a route, at least once and with the same id, through
   worker whose lease ran out cannot overwrite a newer attempt. A due row whose
   attempts are used up was interrupted on its last one and ends `failed`
   (`attempt_interrupted`). A row whose event is stored in a later layout than
-  this release reads is left to a node that reads it.
+  this release reads is left to a node that reads it. A `hold` outcome, for a
+  destination that holds its events for now, gives back the attempt the claim
+  counted and keeps the last failure, so holds never use up the attempts.
 - **Clock.** Every time in the queue is epoch milliseconds from the worker's
   clock, not the database's: the lease and the retry schedule run on one clock,
   and a test can drive them.
 - **Retention.** `minOffered(realmId)` is the lowest position every
   destination has finished: before the realm's oldest unfinished row, and at
   most the lowest of its positions. A row is deleted with its event (`ON DELETE CASCADE`).
+- **Subjects.** A destination may list `subjects`: it then gets only events
+  whose `subject` (type and id) is one of them; an empty list matches none.
 - **Grants.** `eventDeliveryGrantStatements(role)`: `SELECT` on `events`,
-  `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, and every row privilege
-  on `event_delivery_positions`. Nothing else.
+  `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, every row privilege
+  on `event_delivery_positions`, `SELECT` on `ssf_streams`, and `SELECT` on
+  `ssf_stream_subjects (stream_id, event_subject_type, event_subject_id)`,
+  `realms (id, ssf_transmitter_enabled)` and
+  `oauth_clients (id, enabled, suspended, scopes)`. Nothing else: not the raw
+  subject a receiver sent, which may be an email address.
 
 #### Base Repository Interface
 
@@ -638,13 +651,13 @@ This library provides several Nx targets for database management:
 
 ```bash
 # Generate new migration files
-nx run db:db:generate
+nx run infra-db:db:generate
 
 # Run pending migrations
-nx run db:db:migrate
+nx run infra-db:db:migrate
 
 # Push schema changes directly (dev only)
-nx run db:db:push
+nx run infra-db:db:push
 ```
 
 In a deployment, migrations are applied by the migration runner
@@ -676,10 +689,10 @@ pnpm nx run migration-runner:migrate -- --check
 
 ```bash
 # Open Drizzle Studio for database management
-nx run db:db:studio
+nx run infra-db:db:studio
 
 # Drop all tables (DANGER: use with caution)
-nx run db:db:drop
+nx run infra-db:db:drop
 ```
 
 ### Seeding
@@ -688,16 +701,16 @@ Two seeders live under `src/scripts/`. Both require `DATABASE_URL` in the enviro
 
 ```bash
 # Dev fixture generator (destructive — calls reset() then replants realms + oauth_clients)
-nx run db:db:seed
+nx run infra-db:db:seed
 
 # Idempotent OAuth-client provisioner (additive; production-safe)
 # Reads a JSON manifest; generates 32-byte client secrets; argon2id-hashes
 # them; prints plaintext secrets once to STDOUT (the DB only keeps hashes).
 # Existing client_ids are skipped unless `--rotate` is passed.
-nx run db:db:seed-oauth-clients -- --manifest=/path/to/manifest.json [--rotate]
+nx run infra-db:db:seed-oauth-clients -- --manifest=/path/to/manifest.json [--rotate]
 
 # Operator-only suspension of one client (or --lift to end it)
-nx run db:db:suspend-oauth-client -- --realm=<realm name> --client-id=<client_id> [--lift]
+nx run infra-db:db:suspend-oauth-client -- --realm=<realm name> --client-id=<client_id> [--lift]
 ```
 
 Manifest shape for `db:seed-oauth-clients`:
@@ -759,7 +772,7 @@ libs/infra/db/
 │   │   │   ├── sessions.ts     # sessions, session_clients (ADR-019 Decision 3)
 │   │   │   ├── audit.ts        # audit_logs (read-only since #458)
 │   │   │   ├── admin-audit.ts  # admin_audit_log, admin_audit_log_checkpoints (ADR-019 Decision 7)
-│   │   │   ├── roles.ts        # roles, user_roles (Phase 5+, currently unused)
+│   │   │   ├── roles.ts        # roles, user_roles (currently unused)
 │   │   │   ├── keys.ts         # realm_keys, realm_public_keys (ADR-019 Decision 9)
 │   │   │   ├── enums.ts        # PostgreSQL enum types
 │   │   │   └── sql-helpers.ts  # EPOCH_MS_NOW, JSONB_EMPTY_ARRAY, bytea
@@ -794,7 +807,7 @@ libs/infra/db/
 - **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010)
 - **refresh_tokens**: Refresh tokens with rotation support
 
-### Federation Tables (T4)
+### Federation Tables
 
 - **oid4vp_request_states**: OID4VP request/response correlation — realm-scoped, unique `state_hash`, a DCQL query, expiry and single-use `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on
 
@@ -822,7 +835,7 @@ libs/infra/db/
 - **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Deleting the session or the client deletes its rows
 - **audit_logs**: The audit log of the releases before the event store; read-only since #458, its rows copied into `events`
 - **api_keys**: Environment-gated static developer API keys (ADR-008 §6)
-- **roles**: Role-based access control (Phase 5+)
+- **roles**: Role-based access control (currently unused)
 - **user_roles**: User-role assignments
 
 ### Key Features
@@ -839,9 +852,9 @@ libs/infra/db/
 
 1. Create schema files in `src/lib/schema/`
 2. Export them from `src/lib/schema/index.ts`
-3. Generate migrations using `nx run db:db:generate`
+3. Generate migrations using `nx run infra-db:db:generate`
 4. Review the generated migration file in `drizzle/` directory
-5. Run migrations using `nx run db:db:migrate`
+5. Run migrations using `nx run infra-db:db:migrate`
 
 ### Schema Visualization
 
@@ -926,7 +939,6 @@ The Fastify plugin automatically manages the database connection lifecycle, so y
 
 ## Future Enhancements
 
-- Post-quantum cryptography key storage (Phase 7)
 - Advanced query optimizations
 - Read replicas support
 

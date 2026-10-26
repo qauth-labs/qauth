@@ -320,7 +320,9 @@ describe('one audience per API family and a guard for each (#509, real container
       const before = await clientCount();
       const response = await register(metadata);
       expect(response.statusCode).toBe(400);
-      expect(response.body).toContain('invalid_client_metadata');
+      // RFC 7591 §3.2.2: the OAuth error body, with no member QAuth adds.
+      expect(Object.keys(response.json()).sort()).toEqual(['error', 'error_description']);
+      expect(response.json()).toMatchObject({ error: 'invalid_client_metadata' });
       expect(await clientCount()).toBe(before);
     });
 
@@ -377,8 +379,9 @@ describe('one audience per API family and a guard for each (#509, real container
       async (extra) => {
         serveDocument(extra);
         const response = await authorizeCimd();
+        // A client_id that resolves to no client (#513).
         expect(response.statusCode).toBe(400);
-        expect(response.body).toContain('invalid_client');
+        expect(response.json()).toMatchObject({ error: 'invalid_request' });
         expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
         expect(await clientCount(CIMD_CLIENT_ID)).toBe(0);
       }
@@ -453,11 +456,22 @@ describe('one audience per API family and a guard for each (#509, real container
           const response = await call(probePath(family), token);
           expect(response.statusCode).toBe(401);
           expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
-          expect(response.json()).toMatchObject({ status: 401, code: 'jwt_invalid' });
+          expect(response.json()).toMatchObject({ status: 401, code: 'invalid_access_token' });
           expect(response.headers['www-authenticate']).toMatch(
             /^Bearer realm="OAuth", error="invalid_token", error_description="/
           );
         }
+      }
+    );
+
+    it.each(API_FAMILIES)(
+      'answers a request with no token on the %s family with 401 unauthorized and a bare challenge',
+      async (family) => {
+        const response = await app().inject({ method: 'GET', url: probePath(family) });
+        expect(response.statusCode).toBe(401);
+        expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
+        expect(response.json()).toMatchObject({ status: 401, code: 'unauthorized' });
+        expect(response.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
       }
     );
 

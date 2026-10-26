@@ -1,6 +1,10 @@
 import { DpopProofError, type DpopRejectionReason } from '@qauth-labs/fastify-plugin-dpop';
 import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
-import { InvalidDpopProofError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  InvalidDpopProofError,
+  InvalidRequestError,
+  JWTInvalidError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { withEventReason } from './user-events';
@@ -102,6 +106,18 @@ export type AuthorizationDpopJkt =
   | { readonly kind: 'bound'; readonly jkt: string }
   | { readonly kind: 'unbound' }
   | { readonly kind: 'malformed' };
+
+/**
+ * What a malformed `dpop_jkt` is told (#513): in the error redirect of the
+ * authorization endpoint and in the refusal of the consent endpoint alike.
+ */
+export const MALFORMED_DPOP_JKT_DESCRIPTION =
+  'dpop_jkt must be the base64url SHA-256 JWK thumbprint of a DPoP key';
+
+/** The refusal of a `dpop_jkt` {@link readAuthorizationDpopJkt} reads as malformed. */
+export function malformedDpopJktError(): InvalidRequestError {
+  return new InvalidRequestError(MALFORMED_DPOP_JKT_DESCRIPTION);
+}
 
 /**
  * Read the `dpop_jkt` parameter of an authorization request (RFC 9449 §10):

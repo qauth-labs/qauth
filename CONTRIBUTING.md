@@ -12,13 +12,13 @@ By participating in this project, you are expected to uphold our
 
 - **Node.js** ≥ 26.10.0 (see `.nvmrc` — `nvm use`)
 - **pnpm** ≥ 12.14.0 (`npm install --global pnpm@12.14.0`; Node 26 no longer ships corepack)
-- **Docker** 20.10+ and Docker Compose 2.0+ (for Postgres 18 + Redis 7)
+- **Docker** 23.0+ (BuildKit) and Docker Compose 2.0+ (for Postgres 18 + Redis 7)
 
 ## Getting started
 
 ```bash
 pnpm install
-cp .env.docker.example .env   # add JWT keys — see the Quick Start in README.md
+cp .env.docker.example .env   # fill in the values listed in the README's Quick start
 docker compose up -d          # Postgres + Redis + auth-server
 curl http://localhost:3000/health
 ```

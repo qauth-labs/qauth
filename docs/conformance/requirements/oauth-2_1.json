@@ -1,0 +1,33 @@
+{
+  "specId": "oauth-2_1",
+  "note": "Hand-authored, the authorization-code replay rows only (#627, ADR-017 Decision 10). `quote` is verbatim from draft-ietf-oauth-v2-1-16 (2026-09-03, the revision docs/spec-pin-log.md pins) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The same obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
+  "requirements": [
+    {
+      "id": "oauth-2_1-4_1_3-code-once",
+      "section": "4.1.3",
+      "level": "MUST",
+      "quote": "The authorization server MUST return an access token only once for a given authorization code.",
+      "applies": "POST /oauth/token, authorization_code grant. The redemption spends the code by a compare-and-set (`markUsed`, `WHERE used = false`) in the transaction that issues the tokens; a second redemption, read or concurrent, issues nothing.",
+      "status": "covered",
+      "evidenceMatch": "denies a replayed code|loses the race"
+    },
+    {
+      "id": "oauth-2_1-4_1_3-code-replay-revokes",
+      "section": "4.1.3",
+      "level": "SHOULD",
+      "quote": "If a second valid token request is made with the same authorization code as a previously successful token request, the authorization server MUST deny the request and SHOULD revoke (when possible) all access tokens and refresh tokens previously issued based on that authorization code.",
+      "applies": "POST /oauth/token, authorization_code grant. The replay answers `invalid_grant` and revokes the refresh-token family the first redemption started, rotations included, found through `refresh_tokens.authorization_code_id`; it is recorded as `token.request_failed` with reason `code_replay`, `refreshFamilyId` and `revokedRefreshCount`, in the transaction of the revocation. Every access token issued from the code or in that family is recorded at issuance (`jti` and `exp`, in Redis) and, after that transaction commits, put on the revocation denylist that userinfo, introspection, token exchange and every bearer-protected route consult. A replay is recognised until the hourly purge job deletes the spent code, at the earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes). \"(When possible)\": an access token issued while Redis could not record it, or a replay while Redis cannot be written, leaves that token valid until it expires; both are logged.",
+      "status": "covered",
+      "evidenceMatch": "revokes the refresh family|family revoked|revokes the access token"
+    },
+    {
+      "id": "oauth-2_1-7_5_3-no-revoke-on-invalid-replay",
+      "section": "7.5.3",
+      "level": "SHOULD NOT",
+      "quote": "The authorization server SHOULD NOT revoke any issued tokens when receiving a replayed authorization code that contains invalid parameters.",
+      "applies": "POST /oauth/token, authorization_code grant. The replay check runs after every check of the request: client authentication, the client binding, the `redirect_uri` rule, the PKCE verifier, the DPoP key binding and the `resource` binding. A replay that fails any of them is refused for that reason and revokes nothing.",
+      "status": "covered",
+      "evidenceMatch": "revokes nothing"
+    }
+  ]
+}

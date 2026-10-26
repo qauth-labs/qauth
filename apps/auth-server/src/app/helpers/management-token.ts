@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { resolveAudience } from './client-auth';
 import { getOrCreateSystemClient } from './oauth-client';
 import { type RealmRow, requestRealm } from './request-realm';
+import { inactiveSubjectError } from './token-subject';
 
 /** The claims of a verified access token that decide whether it is a management token. */
 interface ManagementTokenClaims {
@@ -93,11 +94,11 @@ export async function assertManagementToken(
     return;
   }
   if (!claims.sub || !uuidSubjectSchema.safeParse(claims.sub).success) {
-    throw new JWTInvalidError('Access token subject is not a user');
+    throw inactiveSubjectError();
   }
   const user = await fastify.repositories.users.findById(claims.sub);
   if (!user || !user.enabled) {
-    throw new JWTInvalidError('Access token subject is not an active user');
+    throw inactiveSubjectError();
   }
   assertUserOfRealm(user, realm);
 }

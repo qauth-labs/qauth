@@ -7,6 +7,7 @@
 import {
   InvalidWebAuthnOriginError,
   isReservedAudience,
+  isReservedQauthScope,
   normaliseWebAuthnOrigin,
 } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
@@ -161,8 +162,20 @@ export const cimdClientSpecSchema = z
       message: 'client_id must be a CIMD client_id: an https URL with a path and no fragment',
     }),
     // Required, so an entry always states the grant. An empty list grants
-    // nothing, which is how an operator withdraws one.
-    scopes: z.array(z.string().min(1)),
+    // nothing, which is how an operator withdraws one. No scope in QAuth's own
+    // `qauth:` namespace (#507, ADR-019 Decision 7): a CIMD client is a
+    // self-described public client, and the admin API's scopes are reached
+    // only through admin grants (#510), never through this file's grant to a
+    // document anyone can host.
+    scopes: z.array(
+      z
+        .string()
+        .min(1)
+        .refine((scope) => !isReservedQauthScope(scope), {
+          error: (issue) =>
+            `"${String(issue.input)}" is in the "qauth:" scope namespace, which is reserved for QAuth's own scopes: a CIMD client is never granted one`,
+        })
+    ),
     // Never a QAuth API audience (#509, ADR-019 Decision 7): a CIMD client is
     // whoever controls its URL, and it never holds a family audience, as its
     // own document cannot claim one either. A pre-registered client of
@@ -173,7 +186,8 @@ export const cimdClientSpecSchema = z
           .string()
           .min(1)
           .refine((value) => !isReservedAudience(value), {
-            message: 'a CIMD client cannot hold a reserved urn:qauth:aud: audience',
+            error: (issue) =>
+              `"${String(issue.input)}" is in the "urn:qauth:aud:" audience namespace, which is reserved for QAuth's own API audiences: a CIMD client is never granted one`,
           })
       )
       .nullable()

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { serverPath, wireConfig } from '../../config';
 import { createUser } from '../../fixtures/users';
-import { expectStandardError } from '../../helpers/error-shape';
+import { expectProblem } from '../../helpers/error-shape';
 
 const { baseUrl } = wireConfig();
 const registerUrl = serverPath(baseUrl, '/auth/register');
@@ -37,7 +37,7 @@ function header(response: Response, name: string): number {
  * a user after it would be refused for the rest of the window.
  */
 describe('the registration rate limit, with the limits raised for the run (RFC 6585 §4)', () => {
-  it('still answers 429 with Retry-After and the standard JSON error once the budget is spent', async () => {
+  it('still answers 429 with Retry-After and a too_many_requests problem once the budget is spent', async () => {
     // A real registration first: the users fixture works and is counted.
     await createUser();
 
@@ -58,6 +58,7 @@ describe('the registration rate limit, with the limits raised for the run (RFC 6
 
     const refused = await invalidRegistration();
     expect(refused.headers.get('retry-after') ?? '').toMatch(/^\d+$/);
-    await expectStandardError(refused, { status: 429 });
+    // POST /auth/register is no OAuth protocol endpoint: it answers RFC 9457.
+    await expectProblem(refused, { status: 429, code: 'too_many_requests' });
   });
 });

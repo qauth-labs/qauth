@@ -1,4 +1,5 @@
 import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
+import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -107,6 +108,18 @@ function createReply() {
   return { reply, state };
 }
 
+/** A stub transaction handle whose `transaction()` (a savepoint) runs in itself. */
+function transaction(): {
+  tx: true;
+  transaction: (cb: (inner: unknown) => Promise<unknown>) => unknown;
+} {
+  const tx = {
+    tx: true as const,
+    transaction: (cb: (inner: unknown) => Promise<unknown>) => cb(tx),
+  };
+  return tx;
+}
+
 function makeFastify() {
   const ctx: TestContext = {};
   const findActive = vi.fn();
@@ -154,7 +167,9 @@ function makeFastify() {
         findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })),
       },
     },
-    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
+    // A nested `transaction()` is a savepoint of the same transaction, as in
+    // drizzle, so the stub hands the code insert the same handle.
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(transaction())) },
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
@@ -293,7 +308,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     // written in.
     const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0];
-    expect(tx).toEqual({ tx: true });
+    expect(tx).toMatchObject({ tx: true });
     expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledWith(
       'user-1',
       CLIENT.id,
@@ -974,7 +989,13 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
         },
         reply
       )
-    ).rejects.toThrow(/redirect_uri/);
+    ).rejects.toBeInstanceOf(InvalidRequestError);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_request', reason: 'redirect_uri_not_registered' },
+      expect.objectContaining({ clientId: CIMD_ID, actor: 'client' })
+    );
   });
 
   // Regression (ANT-2026-D0XJAT8S): a CIMD document's `redirect_uris` never
@@ -1014,16 +1035,16 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
           },
           reply
         )
-      ).rejects.toThrow('invalid_client');
+      ).rejects.toBeInstanceOf(InvalidRequestError);
       expect(state.redirected).toBeUndefined();
       // Fail closed: nothing is materialised from the refused document.
       expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
-      // The refusal's prose stays in the log; the event carries its code,
-      // and names no client: none resolved.
+      // The refusal's prose stays in the log; the event carries the code the
+      // caller is answered, and names no client: none resolved.
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
         'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: 'invalid_client', reason: 'cimd_client_refused' },
+        { error: 'invalid_request', reason: 'cimd_client_refused' },
         { realmId: expect.any(String), actor: 'client' }
       );
     }
@@ -1132,7 +1153,7 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
             },
             reply
           )
-        ).rejects.toThrow('redirect_uri not permitted for this environment');
+        ).rejects.toBeInstanceOf(InvalidRequestError);
         expect(state.redirected).toBeUndefined();
         expect(emitUserEventMock).toHaveBeenCalledWith(
           expect.anything(),
@@ -1198,7 +1219,7 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
 
     it('refuses a registered bare scheme when the setting is empty', async () => {
       const { fastify, run, state } = await authorizeWith(cursorCallback, 'production');
-      await expect(run()).rejects.toThrow('redirect_uri not permitted for this environment');
+      await expect(run()).rejects.toBeInstanceOf(InvalidRequestError);
       expect(state.redirected).toBeUndefined();
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
@@ -1220,8 +1241,14 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
     it('still refuses a registered bare scheme that is not listed', async () => {
       env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
       const { run, state } = await authorizeWith('myapp:/callback', 'production');
-      await expect(run()).rejects.toThrow('redirect_uri not permitted for this environment');
+      await expect(run()).rejects.toBeInstanceOf(InvalidRequestError);
       expect(state.redirected).toBeUndefined();
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_request', reason: 'redirect_uri_scheme_not_allowed' },
+        expect.anything()
+      );
     });
   });
 });
@@ -1248,7 +1275,7 @@ describe('GET /oauth/authorize — plain-http redirect gate', () => {
           },
           reply
         )
-      ).rejects.toThrow('redirect_uri not permitted for this environment');
+      ).rejects.toBeInstanceOf(InvalidRequestError);
       expect(state.redirected).toBeUndefined();
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
@@ -2120,9 +2147,15 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
     ['userinfo host confusion', 'http://127.0.0.1:53817@evil.example/callback'],
   ])('rejects %s on a registered loopback redirect', async (_label, requested) => {
     const { fastify, state, call } = await authorize(['http://127.0.0.1/callback'], requested);
-    await expect(call()).rejects.toThrow('redirect_uri not registered');
+    await expect(call()).rejects.toBeInstanceOf(InvalidRequestError);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(state.redirected).toBeUndefined();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_request', reason: 'redirect_uri_not_registered' },
+      expect.anything()
+    );
   });
 
   it.each([
@@ -2131,8 +2164,14 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
     ['a custom scheme', 'com.example.app://localhost/cb', 'com.example.app://localhost:1234/cb'],
   ])('keeps exact matching, port included, for %s', async (_label, registered, requested) => {
     const { fastify, call } = await authorize([registered], requested);
-    await expect(call()).rejects.toThrow('redirect_uri not registered');
+    await expect(call()).rejects.toBeInstanceOf(InvalidRequestError);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_request', reason: 'redirect_uri_not_registered' },
+      expect.anything()
+    );
   });
 });
 

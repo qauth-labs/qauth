@@ -2,13 +2,13 @@
 
 The one DPoP proof verifier of QAuth ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449),
 [ADR-014 §3](../../../docs/adr/014-agent-authority-tree.md),
-[ADR-017 Decision 14](../../../docs/adr/017-first-party-login.md)). The token endpoint, the admin
-API, `resource-guard` and the Authority Tree all check proofs with it; none of them writes its own.
+[ADR-017 Decision 14](../../../docs/adr/017-first-party-login.md)). The token endpoint and
+`userinfo` check proofs with it. `resource-guard` does not verify DPoP proofs yet. The admin API
+and the Authority Tree are not built yet; they are to use this verifier, not one of their own.
 
 It is a plain library: it imports `jose` and `node:crypto` and nothing else, no Fastify, no Redis
 client and no other workspace package (`src/lib/fastify-free.test.ts` holds that down). The auth
-server reaches it through [`@qauth-labs/fastify-plugin-dpop`](../../fastify/plugins/dpop/README.md),
-and `resource-guard` imports it directly.
+server reaches it through [`@qauth-labs/fastify-plugin-dpop`](../../fastify/plugins/dpop/README.md).
 
 `DPOP_ENABLED` (default `false`) switches it on in the auth server (#480): the token endpoint binds
 access tokens, codes and public clients' refresh tokens to the proof's key, and `userinfo` accepts

@@ -1,4 +1,9 @@
 import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
+import {
+  InvalidCsrfTokenError,
+  InvalidRequestError,
+  UnauthorizedClientError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -584,7 +589,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
         },
         reply
       )
-    ).rejects.toThrow(/invalid_csrf_token/);
+    ).rejects.toBeInstanceOf(InvalidCsrfTokenError);
     // The posted client_id is not resolved before the check, so the event names no client.
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
@@ -1040,7 +1045,7 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
         },
         reply
       )
-    ).rejects.toThrow('redirect_uri not permitted for this environment');
+    ).rejects.toBeInstanceOf(InvalidRequestError);
     expect(state.body).toBeUndefined();
   });
 
@@ -1096,7 +1101,7 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
           },
           reply
         )
-      ).rejects.toThrow('redirect_uri not permitted for this environment');
+      ).rejects.toBeInstanceOf(InvalidRequestError);
       expect(state.body).toBeUndefined();
 
       await expect(
@@ -1104,7 +1109,7 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
           { body: allowBody('csrf-cursor-1'), headers: { cookie }, ip: '127.0.0.1' },
           createReply().reply
         )
-      ).rejects.toThrow('redirect_uri not permitted for this environment');
+      ).rejects.toBeInstanceOf(InvalidRequestError);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     });
 
@@ -1141,7 +1146,7 @@ describe('UI /ui/consent — operator-suspended client', () => {
 
   const SUSPENDED = { ...CLIENT, enabled: true, suspended: true };
 
-  it('GET refuses with invalid_client and renders nothing', async () => {
+  it('GET refuses with unauthorized_client and renders nothing', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
     const { cookie } = await signIn(sessions, { sid: 'sid-susp-g' });
@@ -1155,11 +1160,11 @@ describe('UI /ui/consent — operator-suspended client', () => {
         { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
         reply
       )
-    ).rejects.toMatchObject({ message: 'invalid_client' });
+    ).rejects.toBeInstanceOf(UnauthorizedClientError);
     expect(state.body).toBeUndefined();
   });
 
-  it('POST allow refuses with invalid_client and mints no code', async () => {
+  it('POST allow refuses with unauthorized_client and mints no code', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
     const csrf = 'csrf-token-suspended';
@@ -1187,7 +1192,114 @@ describe('UI /ui/consent — operator-suspended client', () => {
         },
         reply
       )
-    ).rejects.toMatchObject({ message: 'invalid_client' });
+    ).rejects.toBeInstanceOf(UnauthorizedClientError);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
+
+// #513: a client_id that names no client and a malformed dpop_jkt are refused
+// in place (RFC 6749 §4.1.2.1 forbids redirecting them), as `invalid_request`.
+describe('UI /ui/consent — refusals answered in place as invalid_request (#513)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** A `dpop_jkt` of the shape a JWK thumbprint has. */
+  const JKT = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
+  /** {@link JKT} without its last character: not the shape of a thumbprint. */
+  const MALFORMED_JKT = JKT.slice(0, -1);
+
+  async function setup(sid: string, { dpop = false }: { dpop?: boolean } = {}) {
+    const { fastify, ctx, sessions } = makeFastify();
+    if (dpop) {
+      (fastify as unknown as { dpop: unknown }).dpop = {
+        algorithms: ['ES256'],
+        verifyRequest: vi.fn(),
+      };
+    }
+    await consentRoute(fastify);
+    const { get: getHandler, post: postHandler } = ctx;
+    if (!getHandler || !postHandler) throw new Error('Handler missing');
+    const csrf = `csrf-${sid}`;
+    const { cookie } = await signIn(sessions, {
+      sid,
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    const get = (query: Record<string, unknown>) => {
+      const { reply, state } = createReply();
+      return {
+        state,
+        result: getHandler(
+          {
+            query: { ...BASE_QUERY, ...query },
+            url: '/ui/consent?...',
+            headers: { cookie },
+            ip: '127.0.0.1',
+          },
+          reply
+        ),
+      };
+    };
+    const post = (body: Record<string, unknown>) => {
+      const { reply, state } = createReply();
+      return {
+        state,
+        result: postHandler(
+          {
+            body: {
+              decision: 'allow',
+              csrf_token: csrf,
+              client_id: 'app-123',
+              redirect_uri: 'https://example.com/cb',
+              state: 'xyz',
+              scope: 'email',
+              code_challenge: 'A'.repeat(43),
+              code_challenge_method: 'S256',
+              response_type: 'code',
+              ...body,
+            },
+            headers: { cookie },
+            ip: '127.0.0.1',
+          },
+          reply
+        ),
+      };
+    };
+    return { fastify, get, post };
+  }
+
+  it('GET and POST refuse a client_id that names no client of the realm', async () => {
+    const { fastify, get, post } = await setup('sid-unknown');
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+
+    const rendered = get({ client_id: 'no-such-client' });
+    await expect(rendered.result).rejects.toBeInstanceOf(InvalidRequestError);
+    expect(rendered.state.body).toBeUndefined();
+    expect(rendered.state.redirected).toBeUndefined();
+
+    const posted = post({ client_id: 'no-such-client' });
+    await expect(posted.result).rejects.toBeInstanceOf(InvalidRequestError);
+    expect(posted.state.redirected).toBeUndefined();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('GET and POST refuse a malformed dpop_jkt while DPoP is on', async () => {
+    const { fastify, get, post } = await setup('sid-jkt', { dpop: true });
+    // The control: the same request with a well-formed key renders the screen.
+    const control = get({ dpop_jkt: JKT });
+    await control.result;
+    expect(control.state.body as string).toContain(JKT);
+
+    const rendered = get({ dpop_jkt: MALFORMED_JKT });
+    await expect(rendered.result).rejects.toBeInstanceOf(InvalidRequestError);
+    expect(rendered.state.body).toBeUndefined();
+
+    const posted = post({ dpop_jkt: MALFORMED_JKT });
+    await expect(posted.result).rejects.toBeInstanceOf(InvalidRequestError);
+    expect(posted.state.redirected).toBeUndefined();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
@@ -1303,14 +1415,14 @@ describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414
 
   it.each(REJECTED)('GET rejects %s', async (_label, registered, requested) => {
     const { get } = await setup([registered]);
-    await expect(get(requested)).rejects.toThrow('redirect_uri not registered');
+    await expect(get(requested)).rejects.toBeInstanceOf(InvalidRequestError);
   });
 
   it.each(REJECTED)(
     'POST rejects %s without issuing a code',
     async (_label, registered, requested) => {
       const { fastify, state, post } = await setup([registered]);
-      await expect(post(requested)).rejects.toThrow('redirect_uri not registered');
+      await expect(post(requested)).rejects.toBeInstanceOf(InvalidRequestError);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
       expect(state.redirected).toBeUndefined();
     }

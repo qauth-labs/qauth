@@ -1,26 +1,28 @@
-import { randomBytes } from 'node:crypto';
-
-import { BadRequestError, isUniqueConstraintError } from '@qauth-labs/shared-errors';
+import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import {
-  AUTHORIZATION_CODE_TTL_MS,
   OAUTH_OPAQUE_PARAM_MAX_LENGTH,
   OAUTH_SCOPE_PARAM_MAX_LENGTH,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import {
   findExceedingAgentScopesForClient,
   unlistedReservedAudiences,
 } from '../../helpers/client-auth';
-import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
-import { isClientUsable } from '../../helpers/client-status';
+import {
+  isAgentClient,
+  resolveClient,
+  unresolvedClientError,
+} from '../../helpers/client-resolution';
+import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import {
   canSkipConsent,
   describeScope,
@@ -30,13 +32,15 @@ import {
   redirectHost,
 } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
-import { readAuthorizationDpopJkt } from '../../helpers/dpop';
+import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
 import {
   buildRedirectUrl,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
+  redirectUriNotPermittedError,
+  unregisteredRedirectUriError,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -54,6 +58,7 @@ import { markRelaxedCsp } from '../../plugins/security-headers';
 import { clientIdParamSchema, exactUrl } from '../../schemas/common';
 import {
   authorizeQuerySchema,
+  codeChallengeParamSchema,
   dpopJktParamSchema,
   maxAgeParamSchema,
   resourceParamSchema,
@@ -111,7 +116,10 @@ const consentFormSchema = z.object({
   // (#316) and this form POST reaches the same pending-authorization stash.
   scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  code_challenge: z.string().min(43).max(128),
+  // Same bound as `authorizeQuerySchema.code_challenge`, which is the one
+  // `mintAuthorizationCode` holds the code to: a form the screen did not
+  // render cannot reach the mint with a challenge it refuses.
+  code_challenge: codeChallengeParamSchema,
   code_challenge_method: z.literal('S256'),
   response_type: z.literal('code'),
   // ADR-007 §2 (#185): step-up params carried through so the POST mint path
@@ -371,6 +379,7 @@ export default async function (fastify: FastifyInstance) {
           'Render the OAuth consent screen. Requires a valid __Host-qauth_session cookie; otherwise redirects to /ui/login.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         querystring: authorizeQuerySchema,
       },
       config: { surface: 'browser' },
@@ -408,12 +417,11 @@ export default async function (fastify: FastifyInstance) {
       // resolveClient hits it; if its document cache expired it is re-fetched
       // and re-validated here).
       const { client } = await resolveClient(fastify, realm.id, query.client_id);
+      if (!client) throw unresolvedClientError();
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
-      if (!client || !isClientUsable(client)) {
-        throw new BadRequestError('invalid_client');
-      }
+      if (!isClientUsable(client)) throw unusableClientError();
       if (!redirectUriMatchesRegistered(query.redirect_uri, client.redirectUris)) {
-        throw new BadRequestError('redirect_uri not registered');
+        throw unregisteredRedirectUriError();
       }
 
       // ADR-008 §5/§7 (#197): effective environment policy for this (client,
@@ -426,7 +434,7 @@ export default async function (fastify: FastifyInstance) {
       if (
         !isRedirectUriAllowedForPolicy(query.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
       ) {
-        throw new BadRequestError('redirect_uri not permitted for this environment');
+        throw redirectUriNotPermittedError();
       }
 
       // RFC 9449 §10 (#480): the DPoP key the code will be bound to, carried
@@ -434,7 +442,7 @@ export default async function (fastify: FastifyInstance) {
       // refused a malformed value before redirecting here.
       const dpopJkt = readAuthorizationDpopJkt(fastify, query.dpop_jkt);
       if (dpopJkt.kind === 'malformed') {
-        throw new BadRequestError('dpop_jkt is not a DPoP key thumbprint');
+        throw malformedDpopJktError();
       }
 
       // ADR-007 §2 (#184): fail fast on the render path too — don't show a
@@ -598,6 +606,7 @@ export default async function (fastify: FastifyInstance) {
           'Submit the consent decision. CSRF-protected; re-uses the authorize params to issue a code on Allow.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         body: consentFormSchema,
       },
       config: {
@@ -654,7 +663,7 @@ export default async function (fastify: FastifyInstance) {
           { form: 'consent' },
           { userId: session.userId, actor: 'user' }
         );
-        throw new BadRequestError('invalid_csrf_token');
+        throw new InvalidCsrfTokenError();
       }
 
       // Burn the CSRF token so the form cannot be replayed. A fresh one is
@@ -663,12 +672,11 @@ export default async function (fastify: FastifyInstance) {
 
       const realm = requestRealm(request);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
+      if (!client) throw unresolvedClientError();
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
-      if (!client || !isClientUsable(client)) {
-        throw new BadRequestError('invalid_client');
-      }
+      if (!isClientUsable(client)) throw unusableClientError();
       if (!redirectUriMatchesRegistered(body.redirect_uri, client.redirectUris)) {
-        throw new BadRequestError('redirect_uri not registered');
+        throw unregisteredRedirectUriError();
       }
 
       // ADR-008 §5/§7 (#197): effective environment policy for this (client,
@@ -677,14 +685,14 @@ export default async function (fastify: FastifyInstance) {
       if (
         !isRedirectUriAllowedForPolicy(body.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
       ) {
-        throw new BadRequestError('redirect_uri not permitted for this environment');
+        throw redirectUriNotPermittedError();
       }
 
       // RFC 9449 §10 (#480): the DPoP key the code is bound to, from the
       // rendered form. A malformed value was never rendered, so it is refused.
       const dpopJkt = readAuthorizationDpopJkt(fastify, body.dpop_jkt);
       if (dpopJkt.kind === 'malformed') {
-        throw new BadRequestError('dpop_jkt is not a DPoP key thumbprint');
+        throw malformedDpopJktError();
       }
 
       // Deny path: redirect with error=access_denied, state preserved
@@ -870,49 +878,33 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
-      const MAX_CREATE_ATTEMPTS = 3;
-      let code: string | null = null;
-      for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
-        try {
-          const candidate = randomBytes(32).toString('base64url');
-          await fastify.repositories.authorizationCodes.create({
-            code: candidate,
-            oauthClientId: client.id,
-            userId: session.userId,
-            redirectUri: body.redirect_uri,
-            codeChallenge: body.code_challenge,
-            codeChallengeMethod: 'S256',
-            nonce: body.nonce ?? null,
-            // OIDC Core §2 `auth_time`: the REAL end-user authentication time
-            // (browser-session establishment, epoch MS), so /oauth/token can
-            // assert `auth_time` in the ID token and `max_age` evaluates the
-            // actual session age rather than this code's mint time.
-            authTime: session.authTime,
-            // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
-            // the code so /oauth/token can assert `acr`. NULL for a password
-            // login (`'low'`), which is the "omit the claim" outcome.
-            assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
-            // ADR-019 Decision 3 (#552): the session's absolute end, so the
-            // refresh family this code starts never outlives the session.
-            sessionExpiresAt: session.expiresAt,
-            scopes,
-            // RFC 8707: bind the resource(s) the screen named to this code so
-            // /oauth/token can set the issued access token's `aud` claim.
-            resource: resources,
-            state: body.state ?? null,
-            // RFC 9449 §10 (#480): the DPoP key the token request must prove.
-            dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
-            expiresAt,
-          });
-          code = candidate;
-          break;
-        } catch (err) {
-          if (!isUniqueConstraintError(err)) throw err;
-          if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
-        }
-      }
-      if (!code) throw new Error('Unreachable');
+      const code = await mintAuthorizationCode(fastify, {
+        oauthClientId: client.id,
+        userId: session.userId,
+        redirectUri: body.redirect_uri,
+        codeChallenge: body.code_challenge,
+        codeChallengeMethod: body.code_challenge_method,
+        nonce: body.nonce ?? null,
+        // OIDC Core §2 `auth_time`: the REAL end-user authentication time
+        // (browser-session establishment, epoch MS), so /oauth/token can
+        // assert `auth_time` in the ID token and `max_age` evaluates the
+        // actual session age rather than this code's mint time.
+        authTime: session.authTime,
+        // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
+        // the code so /oauth/token can assert `acr`. NULL for a password
+        // login (`'low'`), which is the "omit the claim" outcome.
+        assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
+        // ADR-019 Decision 3 (#552): the session's absolute end, so the
+        // refresh family this code starts never outlives the session.
+        sessionExpiresAt: session.expiresAt,
+        scopes,
+        // RFC 8707: bind the resource(s) the screen named to this code so
+        // /oauth/token can set the issued access token's `aud` claim.
+        resource: resources,
+        state: body.state ?? null,
+        // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+        dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
+      });
 
       // ADR-007 §2 (#185): every elevation that grants a dangerous scope is
       // recorded as a distinct step-up event (in addition to the normal

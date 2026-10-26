@@ -11,6 +11,7 @@ import { systemClientId } from '../../helpers/oauth-client';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
@@ -116,10 +117,7 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // user lookup, so a `client_id` is never read as a `users.id` (#754; OIDC
     // Core §5.3.3, RFC 6750 §3.1 `invalid_token`).
     if (!hasUserSubject(payload)) {
-      throw withEventReason(
-        new JWTInvalidError('Access token subject is not a user'),
-        'subject_not_a_user'
-      );
+      throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
     }
 
     const user = await fastify.repositories.users.findById(payload.sub);
@@ -128,10 +126,7 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // the same refusal: the token is not valid for this endpoint any more.
     // RFC 6750 §3.1 defines no "not found" for a protected resource.
     if (!user) {
-      throw withEventReason(
-        new JWTInvalidError('Access token subject is not a user'),
-        'subject_not_a_user'
-      );
+      throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
     }
 
     userId = user.id;
@@ -141,7 +136,7 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // no claims, as introspection reports the token inactive and every grant
     // refuses to mint for the user (401, RFC 6750 §3.1 `invalid_token`).
     if (!user.enabled) {
-      throw withEventReason(new JWTInvalidError('Token subject is disabled'), 'user_disabled');
+      throw withEventReason(inactiveSubjectError(), 'user_disabled');
     }
 
     // OIDC Core §5.4: userinfo claims are gated by the scopes the access
@@ -302,10 +297,10 @@ export default async function (fastify: FastifyInstance) {
     {
       preHandler: fastify.requireJwt,
       schema: {
-        description:
-          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.",
+        description: `OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose \`aud\` contains its own \`client_id\` or this endpoint's URL, or the developer portal's token: \`client_id\` the system client and \`aud\` the developer API's audience, \`${API_FAMILY_AUDIENCES.developer}\`. A token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the \`DPoP\` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.`,
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401],
         security: [{ bearerAuth: [] }],
         response: {
           200: userinfoResponseSchema,
@@ -313,6 +308,9 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6750 §3 body and
+        // challenge (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit,
       },
     },
@@ -329,10 +327,10 @@ export default async function (fastify: FastifyInstance) {
       preHandler: (request: FastifyRequest, reply: FastifyReply) =>
         resolveUserinfoTokenPreHandler(fastify, request, reply),
       schema: {
-        description:
-          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.",
+        description: `OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's \`aud\` must contain its own \`client_id\` or this endpoint's URL, unless it is the developer portal's token: \`client_id\` the system client and \`aud\` the developer API's audience, \`${API_FAMILY_AUDIENCES.developer}\`. A token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the \`DPoP\` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.`,
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401],
         security: [{ bearerAuth: [] }],
         response: {
           200: userinfoResponseSchema,
@@ -340,6 +338,9 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6750 §3 body and
+        // challenge (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit,
       },
     },

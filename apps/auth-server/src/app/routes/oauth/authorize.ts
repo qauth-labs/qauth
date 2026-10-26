@@ -1,33 +1,23 @@
-import { randomBytes } from 'node:crypto';
-
 import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
-import {
-  BadRequestError,
-  isUniqueConstraintError,
-  JWTInvalidError,
-  UnauthorizedClientError,
-} from '@qauth-labs/shared-errors';
+import { JWTInvalidError, UnauthorizedClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import {
-  AUTHORIZATION_CODE_TTL_MS,
-  AUTHORIZE_BODY_LIMIT_BYTES,
-  STEP_UP_FRESH_AUTH_WINDOW_MS,
-} from '../../constants';
+import { AUTHORIZE_BODY_LIMIT_BYTES, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import {
   findExceedingAgentScopesForClient,
   unlistedReservedAudiences,
 } from '../../helpers/client-auth';
-import { resolveClient } from '../../helpers/client-resolution';
-import { isClientUsable } from '../../helpers/client-status';
+import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
+import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
-import { readAuthorizationDpopJkt } from '../../helpers/dpop';
+import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { assertManagementToken } from '../../helpers/management-token';
 import {
@@ -36,6 +26,8 @@ import {
   isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
+  redirectUriNotPermittedError,
+  unregisteredRedirectUriError,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
@@ -47,6 +39,7 @@ import {
   stepUpErrorForPromptNone,
 } from '../../helpers/step-up';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
@@ -124,6 +117,9 @@ export default async function (fastify: FastifyInstance) {
   const config = {
     // Reads and sets the browser session cookie: the realm host only (#486).
     surface: 'browser' as const,
+    // An OAuth protocol endpoint: an error it does not redirect answers the
+    // RFC 6749 body, not a problem document (ADR-019 Decision 7, #513).
+    errorFormat: 'oauth' as const,
     rateLimit: {
       // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
       // forces the strict cap; a development/staging ceiling permits the
@@ -171,14 +167,15 @@ export default async function (fastify: FastifyInstance) {
 
     if (!client) {
       // No client resolved: the `client_id` the request named is not one,
-      // so the event names no client.
+      // so the event names no client. Its `error` is the one the caller is
+      // answered, `invalid_request` (RFC 6749 §4.1.2.1; #513).
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: 'invalid_client', reason: unresolvedClientReason(reason) },
+        { error: 'invalid_request', reason: unresolvedClientReason(reason) },
         { realmId: realm.id, actor: 'client' }
       );
-      throw new BadRequestError('invalid_client');
+      throw unresolvedClientError();
     }
 
     // Who the events below name until a user is known: the requesting client.
@@ -202,7 +199,7 @@ export default async function (fastify: FastifyInstance) {
         { error: 'invalid_request', reason: 'redirect_uri_not_registered' },
         clientEvent
       );
-      throw new BadRequestError('redirect_uri not registered');
+      throw unregisteredRedirectUriError();
     }
 
     // ADR-008 §5/§7 (#197): resolve the effective environment policy now that
@@ -232,7 +229,7 @@ export default async function (fastify: FastifyInstance) {
         },
         clientEvent
       );
-      throw new BadRequestError('redirect_uri not permitted for this environment');
+      throw redirectUriNotPermittedError();
     }
 
     // A client that may not use this endpoint at all (disabled, or not
@@ -242,24 +239,28 @@ export default async function (fastify: FastifyInstance) {
     // send a visitor straight off the issuer; open DCR can register a client
     // that fails them (`grant_types: ["refresh_token"]`) with any redirect
     // URI, and no working flow depends on receiving this error by redirect.
-    let unauthorizedReason: string | null = null;
+    let unauthorized: UnauthorizedClientError | null = null;
     if (!isClientUsable(client)) {
       // A client its owner disabled and one an operator suspended
-      // (ANT-2026-DR5XI3LV) get the same answer.
-      unauthorizedReason = 'client is disabled';
+      // (ANT-2026-DR5XI3LV) get the same answer, as on the consent page.
+      unauthorized = unusableClientError();
     } else if (!client.grantTypes.includes('authorization_code')) {
-      unauthorizedReason = 'client is not registered for the authorization_code grant';
+      unauthorized = new UnauthorizedClientError(
+        'client is not registered for the authorization_code grant'
+      );
     } else if (!client.responseTypes.includes('code')) {
-      unauthorizedReason = 'client is not registered for the code response type';
+      unauthorized = new UnauthorizedClientError(
+        'client is not registered for the code response type'
+      );
     }
-    if (unauthorizedReason) {
+    if (unauthorized) {
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.failed:v1-rc.0',
         { error: 'unauthorized_client' },
         clientEvent
       );
-      throw new UnauthorizedClientError(unauthorizedReason);
+      throw unauthorized;
     }
 
     // RFC 9449 §10 (#480): `dpop_jkt` binds the code to a DPoP key, whose
@@ -276,7 +277,7 @@ export default async function (fastify: FastifyInstance) {
       );
       return sendAuthorizationError(reply, client, redirectUri, {
         error: 'invalid_request',
-        error_description: 'dpop_jkt must be the base64url SHA-256 JWK thumbprint of a DPoP key',
+        error_description: MALFORMED_DPOP_JKT_DESCRIPTION,
         state: state ?? undefined,
         iss,
       });
@@ -365,7 +366,7 @@ export default async function (fastify: FastifyInstance) {
         // `resolveBrowserSession`) and every grant at `/oauth/token` refuse.
         const user = await fastify.repositories.users.findById(payload.sub);
         if (!user || !user.enabled) {
-          throw new BadRequestError('Token subject is not an active user');
+          throw inactiveSubjectError();
         }
         userId = payload.sub;
       } catch {
@@ -635,8 +636,6 @@ export default async function (fastify: FastifyInstance) {
       }
     }
 
-    const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
-
     // Every path that reaches this point skipped the consent screen on the
     // strength of `existingConsent`. That read is only a snapshot: a
     // revocation can commit between it and the insert, and the code would be
@@ -646,80 +645,62 @@ export default async function (fastify: FastifyInstance) {
     // revocation either waits for this transaction to commit, or committed
     // first and the re-read finds no covering consent, in which case no code
     // is issued (`null`). The issued code's event commits with it.
-    const createCode = async (): Promise<string | null> => {
-      const code = randomBytes(32).toString('base64url');
-      return fastify.db.transaction(async (tx) => {
-        const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
+    const code = await fastify.db.transaction(async (tx) => {
+      const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
+        userId,
+        client.id,
+        tx
+      );
+      if (!canSkipConsent(lockedConsent, client, scopes, resources)) return null;
+      const issued = await mintAuthorizationCode(
+        fastify,
+        {
+          oauthClientId: client.id,
           userId,
-          client.id,
-          tx
-        );
-        if (!canSkipConsent(lockedConsent, client, scopes, resources)) return null;
-        await fastify.repositories.authorizationCodes.create(
-          {
-            code,
-            oauthClientId: client.id,
-            userId,
-            redirectUri,
-            codeChallenge: query.code_challenge,
-            codeChallengeMethod: 'S256',
-            nonce: query.nonce ?? null,
-            // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
-            // time (the browser session's `auth_time`, epoch MS) — never the code-mint
-            // time — so /oauth/token can assert it in the ID token and a `max_age`
-            // check evaluates the actual session age. Null on the legacy Bearer
-            // path (no interactive session) → the claim is simply omitted there.
-            authTime: browserSession?.authTime ?? null,
-            // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
-            // code so /oauth/token can assert `acr` in the ID token. NULL on the
-            // password path (`'low'`, no claim) and on the legacy Bearer path (no
-            // interactive session), which is the same "omit the claim" outcome.
-            assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
-            // ADR-019 Decision 3 (#552): the session's absolute end, so the
-            // refresh family this code starts never outlives the session. Null
-            // on the legacy Bearer path (no interactive session).
-            sessionExpiresAt: browserSession?.expiresAt ?? null,
-            scopes,
-            // RFC 8707: bind the resource indicator(s) to the authorization
-            // code so /oauth/token can set the access token's `aud` claim to
-            // exactly what the client requested. Reached on the consent-skip
-            // path (returning user, prior consent covers the requested scopes at
-            // these resources); the consent-screen path creates codes in
-            // ui/consent.ts. The same validated set the consent was checked
-            // against above.
-            resource: resources,
-            state: query.state ?? null,
-            // RFC 9449 §10 (#480): the DPoP key the token request must prove.
-            dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
-            expiresAt,
-          },
-          tx
-        );
-        await emitUserEvent(
-          request,
-          'urn:qauth:event:authorization.completed:v1-rc.0',
-          {},
-          { ...userEvent, tx }
-        );
-        return code;
-      });
-    };
+          redirectUri,
+          codeChallenge: query.code_challenge,
+          codeChallengeMethod: query.code_challenge_method,
+          nonce: query.nonce ?? null,
+          // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
+          // time (the browser session's `auth_time`, epoch MS) — never the code-mint
+          // time — so /oauth/token can assert it in the ID token and a `max_age`
+          // check evaluates the actual session age. Null on the legacy Bearer
+          // path (no interactive session) → the claim is simply omitted there.
+          authTime: browserSession?.authTime ?? null,
+          // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
+          // code so /oauth/token can assert `acr` in the ID token. NULL on the
+          // password path (`'low'`, no claim) and on the legacy Bearer path (no
+          // interactive session), which is the same "omit the claim" outcome.
+          assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
+          // ADR-019 Decision 3 (#552): the session's absolute end, so the
+          // refresh family this code starts never outlives the session. Null
+          // on the legacy Bearer path (no interactive session).
+          sessionExpiresAt: browserSession?.expiresAt ?? null,
+          scopes,
+          // RFC 8707: bind the resource indicator(s) to the authorization
+          // code so /oauth/token can set the access token's `aud` claim to
+          // exactly what the client requested. Reached on the consent-skip
+          // path (returning user, prior consent covers the requested scopes at
+          // these resources); the consent-screen path mints its codes in
+          // ui/consent.ts. The same validated set the consent was checked
+          // against above.
+          resource: resources,
+          state: query.state ?? null,
+          // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+          dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
+        },
+        tx
+      );
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.completed:v1-rc.0',
+        {},
+        { ...userEvent, tx }
+      );
+      return issued;
+    });
 
-    const MAX_CREATE_ATTEMPTS = 3;
-    let code: string | null = null;
-    let consentWithdrawn = false;
-    for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
-      try {
-        code = await createCode();
-        consentWithdrawn = code === null;
-        break;
-      } catch (err) {
-        if (!isUniqueConstraintError(err)) throw err;
-        if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
-      }
-    }
-
-    if (consentWithdrawn) {
+    if (code === null) {
       // The consent went away under this request. Fail closed, once — never
       // by re-running the handler — with the answer a request arriving after
       // the revocation gets: `access_denied` on the Bearer path (no screen
@@ -755,8 +736,6 @@ export default async function (fastify: FastifyInstance) {
       const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
       return reply.redirect(`/ui/consent${returnQuery}`, 302);
     }
-    if (!code) throw new Error('Unreachable');
-
     return reply.redirect(
       buildRedirectUrl(redirectUri, { code, state: state ?? undefined, iss }),
       302
@@ -772,6 +751,7 @@ export default async function (fastify: FastifyInstance) {
           'OAuth 2.1 authorization endpoint (GET). Issues an authorization code with PKCE and redirects to the client redirect_uri.',
         tags: ['OAuth', 'Authorization'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         querystring: authorizeQuerySchema,
       },
       config,
@@ -789,6 +769,7 @@ export default async function (fastify: FastifyInstance) {
           'OAuth 2.1 authorization endpoint (POST). Identical to GET; parameters are form-encoded in the request body (OIDC Core §3.1.2.1).',
         tags: ['OAuth', 'Authorization'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         body: authorizeQuerySchema,
       },
       config,

@@ -7,7 +7,7 @@ import {
   EXPERIMENTAL_DISCOVERY_MEMBERS,
   EXPERIMENTAL_OPERATIONS,
 } from '../../fixtures/experimental';
-import { expectStandardError } from '../../helpers/error-shape';
+import { expectProblem } from '../../helpers/error-shape';
 import { getJsonObject } from '../../helpers/http';
 
 /**
@@ -35,8 +35,10 @@ function concretePath(template: string): string {
 }
 
 /**
- * How the server answers `method` at `path`, as a standard `404`, with the
- * path itself replaced so that the answers at two paths compare.
+ * How the server answers `method` at `path`, as a `404` problem document,
+ * with the path itself replaced and the `trace_id` left out (it names the
+ * request, so it differs on every answer) so that the answers at two paths
+ * compare.
  */
 async function notFoundAnswer(method: string, path: string): Promise<unknown> {
   const response = await fetch(serverPath(baseUrl, path), {
@@ -46,7 +48,9 @@ async function notFoundAnswer(method: string, path: string): Promise<unknown> {
       ? {}
       : { headers: { 'content-type': 'application/json' }, body: '{}' }),
   });
-  const body = await expectStandardError(response, { status: 404 });
+  const problem = await expectProblem(response, { status: 404, code: 'not_found' });
+  const body: Record<string, unknown> = { ...problem };
+  delete body['trace_id'];
   return JSON.parse(JSON.stringify(body).replaceAll(path, '<path>'));
 }
 

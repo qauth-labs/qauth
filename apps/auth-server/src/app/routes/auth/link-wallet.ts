@@ -1,4 +1,4 @@
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -122,7 +122,25 @@ const statusResponseSchema = z.object({
   message: z.string().optional(),
 });
 
-const errorResponseSchema = z.object({ message: z.string() });
+/**
+ * A refusal this route answers by its status alone (#513): the error handler
+ * sends the problem document of that status, `unauthorized`, `not_found` or
+ * `internal_error`, with the message as its `detail` below 500.
+ */
+class WalletLinkRefusal extends Error {
+  constructor(
+    readonly statusCode: 401 | 404 | 500,
+    message: string
+  ) {
+    super(message);
+    this.name = 'WalletLinkRefusal';
+  }
+}
+
+/** The refusal of a request with no browser session. */
+function signInFirst(): WalletLinkRefusal {
+  return new WalletLinkRefusal(401, 'Sign in before linking a wallet credential.');
+}
 
 export default async function (fastify: FastifyInstance) {
   if (!env.WALLET_FEDERATION_ENABLED) {
@@ -138,13 +156,9 @@ export default async function (fastify: FastifyInstance) {
           "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). The optional `device` field (`this` | `other`, default `other`) says where the wallet is: a same-device link completes on the browser's return leg at `GET /ui/wallet-login/return` and polls as `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1); a cross-device link completes by polling. Issues #238, #405.",
         tags: ['Auth'],
         'x-qauth-stability': 'experimental',
+        'x-qauth-errors': [400, 401, 404],
         body: startRequestSchema,
-        response: {
-          200: startResponseSchema,
-          401: errorResponseSchema,
-          404: errorResponseSchema,
-          500: errorResponseSchema,
-        },
+        response: { 200: startResponseSchema },
       },
       config: {
         surface: 'browser',
@@ -157,10 +171,7 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const session = await resolveBrowserSession(fastify, request, reply);
-      if (!session) {
-        reply.code(401);
-        return reply.send({ message: 'Sign in before linking a wallet credential.' });
-      }
+      if (!session) throw signInFirst();
 
       const provided = request.headers[CSRF_HEADER] as string | undefined;
       const { apiCsrfToken } = await readSessionSideRecord(fastify, session);
@@ -171,7 +182,7 @@ export default async function (fastify: FastifyInstance) {
           { form: 'wallet_link' },
           { userId: session.userId, actor: 'user' }
         );
-        throw new BadRequestError('invalid_csrf_token');
+        throw new InvalidCsrfTokenError();
       }
 
       // `null` for a payload-less POST, `undefined` under a test stub that
@@ -184,8 +195,7 @@ export default async function (fastify: FastifyInstance) {
           ...(body?.device === undefined ? {} : { device: body.device }),
         });
         if (started === undefined) {
-          reply.code(404);
-          return reply.send({ message: WALLET_LINK_UNAVAILABLE });
+          throw new WalletLinkRefusal(404, WALLET_LINK_UNAVAILABLE);
         }
 
         return reply.send({
@@ -194,11 +204,11 @@ export default async function (fastify: FastifyInstance) {
           expires_at: started.expiresAt,
         });
       } catch (error) {
+        if (error instanceof WalletLinkRefusal) throw error;
         // A profile forbidding what the request needs, an unreachable store, a
         // failed insert: operator-visible, none of them the caller's business.
         fastify.log.error({ err: error }, 'failed to start a wallet-link flow');
-        reply.code(500);
-        return reply.send({ message: WALLET_LINK_REFUSAL });
+        throw new WalletLinkRefusal(500, WALLET_LINK_REFUSAL);
       }
     }
   );
@@ -211,8 +221,9 @@ export default async function (fastify: FastifyInstance) {
           'Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. A link started with `device=this` completes on the return leg instead and polls as `pending` until then, then `linked` once (#405). Issue #238.',
         tags: ['Auth'],
         'x-qauth-stability': 'experimental',
+        'x-qauth-errors': [400, 401],
         params: z.object({ handle: z.string() }),
-        response: { 200: statusResponseSchema, 401: errorResponseSchema },
+        response: { 200: statusResponseSchema },
       },
       config: {
         surface: 'browser',
@@ -228,10 +239,7 @@ export default async function (fastify: FastifyInstance) {
       reply.header('Cache-Control', 'no-store');
 
       const session = await resolveBrowserSession(fastify, request, reply);
-      if (!session) {
-        reply.code(401);
-        return reply.send({ message: 'Sign in before linking a wallet credential.' });
-      }
+      if (!session) throw signInFirst();
 
       const { handle } = request.params as { handle: string };
       if (!isWalletLoginHandle(handle)) {
