@@ -17,6 +17,7 @@ import { CompactEncrypt, importJWK, type JWK } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
 import type { emitUserEvent } from '../../helpers/user-events';
 
@@ -163,8 +164,11 @@ function makeReply() {
   return { reply, sent };
 }
 
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1' });
+
 function makeRequest(body: Record<string, unknown>) {
-  return { body, ip: '203.0.113.9', headers: { 'user-agent': 'test-wallet/1.0' } };
+  return { body, realm: REALM, ip: '203.0.113.9', headers: { 'user-agent': 'test-wallet/1.0' } };
 }
 
 function pendingState(overrides: Record<string, unknown> = {}) {
@@ -372,6 +376,7 @@ describe('POST /oid4vp/response — accepted submission', () => {
     await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
 
     expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+      REALM.id,
       hashOid4vpState(STATE),
       RESPONSE_CODE_DIGEST
     );
@@ -836,6 +841,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
     );
 
     expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+      REALM.id,
       pair.kid,
       RESPONSE_CODE_DIGEST
     );
@@ -1026,6 +1032,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
 
       expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+        REALM.id,
         pair.kid,
         RESPONSE_CODE_DIGEST
       );
@@ -1153,6 +1160,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       expect(reply.statusCode).toBe(200);
       expect(sent).toEqual([{}]);
       expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+        REALM.id,
         hashOid4vpState(STATE),
         RESPONSE_CODE_DIGEST
       );
@@ -1333,6 +1341,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       expect(reply.statusCode).toBe(200);
       expect(sent).toEqual([{}]);
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+        REALM.id,
         pair.kid,
         RESPONSE_CODE_DIGEST
       );
@@ -1424,6 +1433,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
       const app = Fastify({ logger: false });
       app.setValidatorCompiler(validatorCompiler);
       app.setSerializerCompiler(serializerCompiler);
+      supplyRequestRealm(app, REALM);
       await app.register(formbody);
       app.decorate('repositories', {
         oid4vpRequestStates: {
@@ -1502,6 +1512,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     // the wallet was handed — the same join the cleartext path pins — so a
     // HAIP return leg can redeem what this response emitted.
     expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+      REALM.id,
       pair.kid,
       { codeHash: sha256Hex(responseCodeOf(body)), codeExpiresAt: expect.any(Number) }
     );
@@ -1521,7 +1532,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
       expect(code).toMatch(RESPONSE_CODE_SHAPE);
       // The digest the row was consumed WITH is the digest of the code the
       // wallet was handed — the two halves of the return leg meet on it.
-      const [, written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[i];
+      const [, , written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[i];
       expect(written.codeHash).toBe(sha256Hex(code));
       codes.add(code);
     }
@@ -1545,7 +1556,9 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     const { fastify, store, body } = await submit(accepted, sameDeviceState());
     const code = responseCodeOf(body);
 
-    const [stateHash, written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[0];
+    const [realmId, stateHash, written] =
+      fastify.repositories.oid4vpRequestStates.redeem.mock.calls[0];
+    expect(realmId).toBe(REALM.id);
     expect(stateHash).toBe(hashOid4vpState(STATE));
     expect(written).toEqual({ codeHash: sha256Hex(code), codeExpiresAt: expect.any(Number) });
     expect(written.codeHash).not.toBe(code);
@@ -1565,7 +1578,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     const { fastify } = await submit(accepted, sameDeviceState({ expiresAt: before + 999_999 }));
     const after = Date.now();
 
-    const [, written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[0];
+    const [, , written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[0];
     expect(written.codeExpiresAt).toBeGreaterThanOrEqual(before + WALLET_RETURN_CODE_TTL_MS);
     expect(written.codeExpiresAt).toBeLessThanOrEqual(after + WALLET_RETURN_CODE_TTL_MS);
   });
@@ -1581,6 +1594,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     expect(sent).toEqual([{}]);
     expect(JSON.stringify(sent[0])).toBe('{}');
     expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+      REALM.id,
       hashOid4vpState(STATE),
       RESPONSE_CODE_DIGEST
     );
@@ -1649,6 +1663,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     expect(Object.keys(sent[0] as object)).toEqual(['redirect_uri']);
     expect(responseCodeOf(sent[0])).toMatch(RESPONSE_CODE_SHAPE);
     expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+      REALM.id,
       hashOid4vpState(STATE),
       RESPONSE_CODE_DIGEST
     );
@@ -1738,6 +1753,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
       expect(reply.header).not.toHaveBeenCalled();
       expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledOnce();
       expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+        REALM.id,
         hashOid4vpState(STATE),
         RESPONSE_CODE_DIGEST
       );
@@ -1759,6 +1775,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
 
       expect(sent).toEqual([]);
       expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+        REALM.id,
         hashOid4vpState(STATE),
         RESPONSE_CODE_DIGEST
       );
@@ -1785,6 +1802,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
       expect(sent).toEqual([]);
       expect(reply.header).not.toHaveBeenCalled();
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+        REALM.id,
         pair.kid,
         RESPONSE_CODE_DIGEST
       );

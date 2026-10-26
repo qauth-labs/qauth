@@ -189,7 +189,8 @@ function createResponseCodes() {
   const codes = new Map<string, { stateHash: string; expiresAt: number }>();
   return {
     codes,
-    redeemResponseCode: vi.fn(async (codeHash: string) => {
+    // The realm is the route's to pass (#489); the stub keys codes by digest only.
+    redeemResponseCode: vi.fn(async (_realmId: string, codeHash: string) => {
       const entry = codes.get(codeHash);
       if (entry === undefined || entry.expiresAt <= Date.now()) return undefined;
       codes.delete(codeHash);
@@ -1394,6 +1395,7 @@ describe('wallet login — the return leg (#405)', () => {
     // repository — and exactly once.
     expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
     expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledWith(
+      REALM.id,
       hashOid4vpResponseCode(code)
     );
     expect(hashOid4vpResponseCode(code)).toMatch(/^[0-9a-f]{64}$/);

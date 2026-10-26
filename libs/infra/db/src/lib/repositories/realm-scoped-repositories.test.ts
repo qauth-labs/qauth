@@ -8,6 +8,7 @@ import { createAuthorizationCodesRepository } from './authorization-codes.reposi
 import { createEmailVerificationTokensRepository } from './email-verification-tokens.repository';
 import { createOAuthClientsRepository } from './oauth-clients.repository';
 import { createOAuthConsentsRepository } from './oauth-consents.repository';
+import { createOid4vpRequestStatesRepository } from './oid4vp-request-states.repository';
 import { createRefreshTokensRepository } from './refresh-tokens.repository';
 import { createSessionsRepository } from './sessions.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
@@ -47,6 +48,7 @@ function createRecordingDb(): { db: DbClient; queries: CapturedQuery[] } {
 const REALM_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b';
 const ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f0001';
 const OTHER_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f0002';
+const RESPONSE_CODE = { codeHash: 'c'.repeat(64), codeExpiresAt: 1_800_000_180_000 } as const;
 
 /**
  * Compile-time half: each call below omits the realm and must not compile.
@@ -63,6 +65,7 @@ export function requiredRealmArgument(db: DbClient): void {
   const codes = createAuthorizationCodesRepository(db);
   const verificationTokens = createEmailVerificationTokensRepository(db);
   const sessions = createSessionsRepository(db);
+  const walletRequests = createOid4vpRequestStatesRepository(db);
 
   // @ts-expect-error a user id is looked up in a realm (#489)
   void users.findById(ID);
@@ -128,6 +131,13 @@ export function requiredRealmArgument(db: DbClient): void {
 
   // @ts-expect-error a browser session is looked up in a realm
   void sessions.findById(ID);
+
+  // @ts-expect-error a wallet's state is redeemed in a realm (#489)
+  void walletRequests.redeem('a'.repeat(64), RESPONSE_CODE);
+  // @ts-expect-error a wallet's encryption kid is redeemed in a realm (#489)
+  void walletRequests.redeemByEncryptionKid('kid', RESPONSE_CODE);
+  // @ts-expect-error a Response Code is spent in a realm (#489)
+  void walletRequests.redeemResponseCode('c'.repeat(64));
 }
 
 /** One method call, made with {@link REALM_ID}; it may reject (no row). */
@@ -202,6 +212,19 @@ const CALLS: readonly RealmScopedCall[] = [
   [
     'authorizationCodes.findByCode',
     (db) => createAuthorizationCodesRepository(db).findByCode(REALM_ID, 'code'),
+  ],
+  [
+    'oid4vpRequestStates.redeem',
+    (db) => createOid4vpRequestStatesRepository(db).redeem(REALM_ID, 'a'.repeat(64), RESPONSE_CODE),
+  ],
+  [
+    'oid4vpRequestStates.redeemByEncryptionKid',
+    (db) =>
+      createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(REALM_ID, 'kid', RESPONSE_CODE),
+  ],
+  [
+    'oid4vpRequestStates.redeemResponseCode',
+    (db) => createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, 'c'.repeat(64)),
   ],
   [
     'emailVerificationTokens.findByTokenHash',

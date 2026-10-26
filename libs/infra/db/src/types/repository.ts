@@ -669,9 +669,11 @@ export interface Oid4vpRequestStatesRepository {
    * @returns the redeemed row, or `undefined` when the state is unknown,
    * expired, or already consumed. Those three are DELIBERATELY indistinguishable
    * to the caller so the endpoint's rejection cannot be used to enumerate
-   * request states.
+   * request states. A state of another realm than `realmId`, the request's, is
+   * unknown too (#489): it is neither matched nor consumed.
    */
   redeem(
+    realmId: string,
     stateHash: string,
     responseCode: NewOid4vpResponseCode,
     tx?: DbClient
@@ -713,6 +715,7 @@ export interface Oid4vpRequestStatesRepository {
    * consumed, whichever correlator consumed it.
    */
   redeemByEncryptionKid(
+    realmId: string,
     kid: string,
     responseCode: NewOid4vpResponseCode,
     tx?: DbClient
@@ -745,7 +748,11 @@ export interface Oid4vpRequestStatesRepository {
    * (HAIP 1.0 §5.1) and guarantees the initiating flow can then never
    * complete. There is deliberately no `findByResponseCode`.
    */
-  redeemResponseCode(codeHash: string, tx?: DbClient): Promise<{ stateHash: string } | undefined>;
+  redeemResponseCode(
+    realmId: string,
+    codeHash: string,
+    tx?: DbClient
+  ): Promise<{ stateHash: string } | undefined>;
   /**
    * Delete expired rows. Cleanup only — expiry is already enforced by
    * {@link Oid4vpRequestStatesRepository.redeem}'s guard, so this never affects

@@ -1367,8 +1367,10 @@ export default async function (fastify: FastifyInstance) {
         return sendHtml(reply, refusalPage(), 200);
       }
 
-      // (2) Burn. The code is spent by this statement whatever follows.
+      // (2) Burn. The code is spent by this statement whatever follows; a code
+      // of another realm's request is not matched, and so not spent (#489).
       const redeemed = await fastify.repositories.oid4vpRequestStates.redeemResponseCode(
+        requestRealm(request).id,
         hashOid4vpResponseCode(code)
       );
       if (redeemed === undefined) {
