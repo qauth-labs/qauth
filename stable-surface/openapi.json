@@ -812,6 +812,68 @@
       }
     },
     "/auth/verify": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Landing page of the emailed verification link. Renders a form that asks for the account password; opening it verifies nothing. The form posts to POST /ui/verify.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "token",
+            "required": false
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "Auth"
@@ -5132,6 +5194,92 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/verify": {
+      "post": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Submit the form of the emailed verification link (GET /auth/verify): the token and the account password. Verifies as POST /auth/verify does and answers a page with the status that route answers.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-fA-F]{64}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "csrf_token": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "token",
+                  "password",
+                  "csrf_token"
+                ]
+              }
+            }
+          }
+        },
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "421": {
             "description": "Misdirected Request",

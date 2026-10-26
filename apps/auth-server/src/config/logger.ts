@@ -63,9 +63,10 @@ export const LOG_REDACT_PATHS = [
  *   business in a log shipper.
  * - `token`: the email verification token in the link a verification mail
  *   carries, `<issuer>/auth/verify?token=…` (#490). Opening the link sends a
- *   GET with the token in the query, logged by the request line and, while no
- *   route serves that GET, by the unknown-route line; the token proves the
- *   mailbox until it is used or expires.
+ *   GET with the token in the query (`routes/auth/verify-page.ts`), logged by
+ *   the request line; with the account's password it verifies the account
+ *   until it is used or expires (a day by default). Censored on every path,
+ *   so a link pasted onto a wrong path is censored too.
  *
  * Names are matched case-sensitively, as query parameter names are, and in
  * every spelling the route would accept: Fastify's querystring parser
@@ -85,7 +86,8 @@ export const LOG_REDACT_PATHS = [
  * `req` serializer below, and the global error handler
  * (`plugins/error-handler.ts`) does on the plain `url` key of its own lines —
  * a 429 from `@fastify/rate-limit` is thrown from an `onRequest` hook BEFORE the
- * return route runs, so on that line the code is not even spent yet.
+ * return route runs, so on that line the code is not even spent yet. So does
+ * the unknown-route line (`helpers/request-bounds.ts`).
  */
 export const LOG_REDACTED_QUERY_PARAMETERS = ['response_code', 'token'] as const;
 
