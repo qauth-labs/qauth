@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/recovery_codes.json",
+  "title": "urn:qauth:ia:recovery_codes:v1-rc.0",
+  "description": "A new recovery-code set: issued at the first enrolment of a second factor, at the registration of a passkey-only account, and when the person regenerates the set (ADR-017 Decision 8). The codes are personal data, readable with the flow cookie only while this step is current, and never shown again. The answer confirms the person saved them.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:recovery_codes:v1-rc.0"
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    }
+  },
+  "required": [
+    "type",
+    "params"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:recovery_codes:v1-rc.0",
+      "params": {
+        "count": 10
+      }
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "enum": [
+            10
+          ],
+          "description": "How many codes the set holds."
+        }
+      },
+      "required": [
+        "count"
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "acknowledged": {
+          "const": true,
+          "description": "The person confirms they saved the codes. In a form post: `true`."
+        }
+      },
+      "required": [
+        "acknowledged"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "acknowledged": true
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "codes": {
+          "type": "array",
+          "description": "The codes, each usable once.",
+          "minItems": 10,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 19,
+            "maxLength": 19,
+            "pattern": "^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}$",
+            "description": "One code."
+          }
+        }
+      },
+      "required": [
+        "codes"
+      ],
+      "examples": [
+        {
+          "codes": [
+            "k7qd-2mvw-x4ra-p6tn",
+            "b3hs-q6ze-u2yc-m5lf",
+            "w4na-j7rk-e3gx-t6pd",
+            "c5ub-y2mh-r7kw-a4qs",
+            "z6fe-n3td-g5vp-l2jx",
+            "h2ry-s4ka-v6cm-d7wb",
+            "q3lg-f5xn-k2ze-p4ut",
+            "m7ws-b6dj-x3hr-e5ca",
+            "t4pk-a2qf-n6ly-g3vz",
+            "r5ex-w7cu-j4mb-s2hd"
+          ]
+        }
+      ]
+    },
+    "amr": {
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

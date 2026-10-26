@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/select_account.json",
+  "title": "urn:qauth:ia:select_account:v1-rc.0",
+  "description": "The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. \"Use another account\" answers the `identifier` step, offered beside this one, which starts a new interaction for the same authorization request; nothing proved for one account carries over to another (#592). Needs JavaScript, to read the list.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:select_account:v1-rc.0"
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    }
+  },
+  "required": [
+    "type",
+    "params"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:select_account:v1-rc.0",
+      "params": {}
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {}
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "account": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{22,64}$",
+          "description": "The `account` reference of the chosen entry."
+        }
+      },
+      "required": [
+        "account"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "account": "c2Vzc2lvbi1yZWYtMDAwMDAx"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "description": "The accounts the browser holds a session for, the current one first.",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "properties": {
+              "account": {
+                "type": "string",
+                "minLength": 22,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9_-]{22,64}$",
+                "description": "An opaque reference to the account’s session, valid for this interaction only."
+              },
+              "identifier": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 254,
+                "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+                "x-qauth-display": "account",
+                "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+              },
+              "current": {
+                "type": "boolean",
+                "description": "Whether this is the account the browser last used."
+              }
+            },
+            "required": [
+              "account",
+              "identifier",
+              "current"
+            ]
+          }
+        }
+      },
+      "required": [
+        "accounts"
+      ],
+      "examples": [
+        {
+          "accounts": [
+            {
+              "account": "c2Vzc2lvbi1yZWYtMDAwMDAx",
+              "identifier": "alice@example.com",
+              "current": true
+            },
+            {
+              "account": "c2Vzc2lvbi1yZWYtMDAwMDAy",
+              "identifier": "alice@work.example",
+              "current": false
+            }
+          ]
+        }
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "account_unavailable"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/identifier.json",
+  "title": "urn:qauth:ia:identifier:v1-rc.0",
+  "description": "Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4).",
+  "x-qauth-transports": [
+    "interaction",
+    "fipa"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:identifier:v1-rc.0"
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    }
+  },
+  "required": [
+    "type",
+    "params"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:identifier:v1-rc.0",
+      "params": {}
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {}
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "login_hint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "description": "The identifier: today an email address of at most 254 bytes in email syntax (ADR-017 Decision 3). The server normalises it before use."
+        }
+      },
+      "required": [
+        "login_hint"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "login_hint": "alice@example.com"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {},
+      "examples": [
+        {}
+      ]
+    },
+    "amr": {
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

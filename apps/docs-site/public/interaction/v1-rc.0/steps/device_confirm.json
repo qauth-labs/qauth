@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/device_confirm.json",
+  "title": "urn:qauth:ia:device_confirm:v1-rc.0",
+  "description": "The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. Works without JavaScript, without the device details.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:device_confirm:v1-rc.0"
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    }
+  },
+  "required": [
+    "type",
+    "params"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:device_confirm:v1-rc.0",
+      "params": {
+        "user_code": "WDJB-MJHT",
+        "requested_at": "2026-10-26T09:29:12Z"
+      }
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "user_code": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 9,
+          "pattern": "^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$",
+          "description": "The code being confirmed, so the person can compare it with the device."
+        },
+        "requested_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 30,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$",
+          "description": "When the device started the request."
+        }
+      },
+      "required": [
+        "user_code",
+        "requested_at"
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "confirm",
+            "deny"
+          ],
+          "description": "The decision."
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "decision": "confirm"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "object",
+          "description": "Where the requesting address is, approximately. Absent when the lookup knows nothing.",
+          "properties": {
+            "country": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 2,
+              "pattern": "^[A-Z]{2}$",
+              "description": "The ISO 3166-1 alpha-2 country of the requesting address."
+            },
+            "region": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+              "x-qauth-display": "server",
+              "description": "The region of the requesting address."
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "description": "The network the request came from.",
+          "properties": {
+            "asn": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295,
+              "description": "The autonomous system number of the requesting address."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+              "x-qauth-display": "server",
+              "description": "The name of that network."
+            }
+          }
+        },
+        "user_agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "x-qauth-display": "declared",
+          "description": "The user agent the device declared, cut and stripped. The device chose it, so the screen marks it as declared."
+        }
+      },
+      "examples": [
+        {
+          "location": {
+            "country": "DE",
+            "region": "Bavaria"
+          },
+          "network": {
+            "asn": 64500,
+            "name": "Example Broadband"
+          },
+          "user_agent": "ExampleTV/4.2 (Linux; Android 14)"
+        }
+      ]
+    },
+    "amr": {
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

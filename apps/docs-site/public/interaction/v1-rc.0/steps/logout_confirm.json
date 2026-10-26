@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/logout_confirm.json",
+  "title": "urn:qauth:ia:logout_confirm:v1-rc.0",
+  "description": "The confirmation of an RP-initiated logout (ADR-019 Decision 4). The interaction’s `client` names the app that asked, when the request identified one. A browser may hold several accounts’ sessions, so the person signs out of this account or of every account on the browser (ADR-019 Decision 3). Works without JavaScript, without the account list.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:logout_confirm:v1-rc.0"
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    }
+  },
+  "required": [
+    "type",
+    "params"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:logout_confirm:v1-rc.0",
+      "params": {}
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {}
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "logout",
+            "logout_all",
+            "stay"
+          ],
+          "description": "Sign out of this account, of every account on the browser, or stay signed in."
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "decision": "logout"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "description": "The accounts signed in on this browser, the one being signed out first.",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "properties": {
+              "identifier": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 254,
+                "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+                "x-qauth-display": "account",
+                "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+              },
+              "current": {
+                "type": "boolean",
+                "description": "Whether this is the account the logout request is for."
+              }
+            },
+            "required": [
+              "identifier",
+              "current"
+            ]
+          }
+        }
+      },
+      "required": [
+        "accounts"
+      ],
+      "examples": [
+        {
+          "accounts": [
+            {
+              "identifier": "alice@example.com",
+              "current": true
+            },
+            {
+              "identifier": "alice@work.example",
+              "current": false
+            }
+          ]
+        }
+      ]
+    },
+    "amr": {
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

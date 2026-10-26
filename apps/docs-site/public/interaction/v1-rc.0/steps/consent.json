@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/consent.json",
+  "title": "urn:qauth:ia:consent:v1-rc.0",
+  "description": "The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:consent:v1-rc.0"
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    }
+  },
+  "required": [
+    "type",
+    "params"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:consent:v1-rc.0",
+      "params": {
+        "scopes": [
+          {
+            "scope": "openid",
+            "sensitive": false,
+            "dangerous": false
+          },
+          {
+            "scope": "notes:read",
+            "text": "Read your notes",
+            "sensitive": false,
+            "dangerous": false
+          },
+          {
+            "scope": "write:notes",
+            "text": "Change and delete your notes",
+            "sensitive": true,
+            "dangerous": true
+          }
+        ],
+        "resources": [
+          "https://notes.example.com/"
+        ],
+        "remember_default": true
+      }
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "description": "The scopes asked for, in the order the screen lists them.",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[!#-;=?-\\[\\]-~]+$",
+                "description": "The scope value (RFC 6749 §3.3), from its alphabet without `<` and `>`. A requested scope outside it never reaches this step: the request is refused first."
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 280,
+                "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+                "x-qauth-display": "realm",
+                "description": "The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Absent when the catalog has none: the screen shows the scope value."
+              },
+              "sensitive": {
+                "type": "boolean",
+                "description": "Whether the realm flagged the scope as sensitive."
+              },
+              "dangerous": {
+                "type": "boolean",
+                "description": "Whether the scope is dangerous (`write:*`, `agent:admin`, `agent:exec`): it always needs consent and a fresh sign-in."
+              }
+            },
+            "required": [
+              "scope",
+              "sensitive",
+              "dangerous"
+            ]
+          }
+        },
+        "resources": {
+          "type": "array",
+          "description": "Where the tokens may be used: the resource indicators (RFC 8707) of the request.",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^[a-z][a-z0-9+.-]*:[!#-;=?-\\[\\]-~]+$",
+            "description": "One resource indicator."
+          }
+        },
+        "remember_default": {
+          "type": "boolean",
+          "description": "Whether \"remember this decision\" starts checked."
+        }
+      },
+      "required": [
+        "scopes",
+        "resources",
+        "remember_default"
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny"
+          ],
+          "description": "The decision."
+        },
+        "remember": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to remember an `allow` for later requests that fit it. In a form post the checkbox sends `true`, and its absence means `false`."
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "decision": "allow",
+          "remember": true
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "description": "Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier.",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "x-qauth-display": "account",
+          "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
+        }
+      },
+      "examples": [
+        {
+          "identifier": "alice@example.com"
+        }
+      ]
+    },
+    "amr": {
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}
