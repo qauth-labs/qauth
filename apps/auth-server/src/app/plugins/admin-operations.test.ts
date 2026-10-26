@@ -128,6 +128,32 @@ describe('the boot check (#508)', () => {
     ).rejects.toThrow(/widgets\/:id/);
   });
 
+  it('reads the effects as a set, as the conventions check does', () => {
+    const multi = createOperationRegistry(
+      [
+        defineOperation({
+          ...PATCH_OPERATION,
+          effects: ['credential-path', 'posture-loosening'],
+        }) as AdminOperation,
+      ],
+      { reserved: [] }
+    );
+    expect(
+      adminRouteProblem(
+        {
+          method: 'PATCH',
+          url: '/x',
+          config: { operation: 'widgets.policies.update' },
+          schema: {
+            ...operationSchemaExtensions(multi.get('widgets.policies.update') as AdminOperation),
+            'x-qauth-effects': ['posture-loosening', 'credential-path'],
+          },
+        },
+        multi
+      )
+    ).toBeUndefined();
+  });
+
   it('refuses a security route without its effects or its two-admin marker', async () => {
     const withoutMarker: Record<string, unknown> = schemaOf(PATCH_OPERATION);
     delete withoutMarker['x-qauth-two-admin'];
@@ -164,6 +190,25 @@ describe('the boot check (#508)', () => {
         );
       })
     ).resolves.toBeUndefined();
+  });
+
+  // onRoute is not retroactive: a route registered before the stage would
+  // never pass the boot check, so the stage refuses to load after one.
+  it('refuses to load on an instance that already has a route, in any scope', async () => {
+    app = Fastify({ logger: false });
+    app.get('/admin/v1-rc.0/early', async () => ({}));
+    await expect(app.register(adminOperationsPlugin, { registry: REGISTRY })).rejects.toThrow(
+      /must be registered before any route of the admin listener/
+    );
+    await app.close();
+
+    app = Fastify({ logger: false });
+    await app.register(async (scope) => {
+      scope.get('/admin/v1-rc.0/early', async () => ({}));
+    });
+    await expect(app.register(adminOperationsPlugin, { registry: REGISTRY })).rejects.toThrow(
+      /must be registered before any route of the admin listener/
+    );
   });
 
   it('names the problem without Fastify', () => {
@@ -290,7 +335,7 @@ describe('the classification per request (#508)', () => {
   // consumption) still sees the security classification.
   it('hands a hostile handler a classification it cannot lower', async () => {
     const attempts: Record<string, string> = {};
-    let afterHandler: OperationClassification | null = null;
+    let afterHandler: OperationClassification | null | undefined = null;
     const weaker: OperationClassification = Object.freeze({
       operationId: 'widgets.policies.update',
       class: 'read',
@@ -411,13 +456,102 @@ describe('the classification per request (#508)', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('runs nothing for a route registered before the stage, which the boot check never saw', async () => {
+  it('runs nothing for a route a later onRoute hook changed after the boot check', async () => {
     const handler = vi.fn(async () => ({}));
     app = Fastify({ logger: false });
-    app.get('/admin/v1-rc.0/early', handler);
     await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    // Runs after the stage's own onRoute hook, so the boot check saw the
+    // route as declared.
+    app.addHook('onRoute', (route) => {
+      if (route.url === '/admin/v1-rc.0/swapped') {
+        route.config = { ...route.config, operation: 'widgets.policies.update' };
+      }
+      if (route.url === '/admin/v1-rc.0/cleared') {
+        route.config = {};
+      }
+    });
+    for (const url of ['/admin/v1-rc.0/swapped', '/admin/v1-rc.0/cleared']) {
+      app.get(
+        url,
+        { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
+        handler
+      );
+    }
     await app.ready();
-    const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/early' });
+    for (const url of ['/admin/v1-rc.0/swapped', '/admin/v1-rc.0/cleared']) {
+      const response = await app.inject({ method: 'GET', url });
+      expect(response.statusCode, url).toBe(500);
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // What runs is what was classified: no stage after the classification may
+  // change the parts of the request classify read.
+  it('freezes the parameters, query and body it classified', async () => {
+    const seen: unknown[] = [];
+    const attempts: Record<string, string> = {};
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
+      async (request) => {
+        const tryTo = (name: string, attempt: () => void) => {
+          try {
+            attempt();
+            attempts[name] = 'ran';
+          } catch (error) {
+            attempts[name] = (error as Error).name;
+          }
+        };
+        tryTo('add a body member', () => {
+          (request.body as Record<string, unknown>).password = 1;
+        });
+        tryTo('replace the body', () => {
+          (request as unknown as Record<string, unknown>).body = { password: 1 };
+        });
+        tryTo('change a query member', () => {
+          (request.query as Record<string, unknown>).dryRun = 'false';
+        });
+        tryTo('replace the parameters', () => {
+          (request as unknown as Record<string, unknown>).params = {};
+        });
+        seen.push(request.body, requestClassification(request).class);
+        return {};
+      }
+    );
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies?dryRun=true',
+      payload: { lifespan: 600 },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(seen).toEqual([{ lifespan: 600 }, 'write']);
+    expect(attempts).toEqual({
+      'add a body member': 'TypeError',
+      'replace the body': 'TypeError',
+      'change a query member': 'TypeError',
+      'replace the parameters': 'TypeError',
+    });
+  });
+
+  it('runs nothing when a later stage changes the classified body', async () => {
+    const handler = vi.fn(async () => ({}));
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    app.addHook('preHandler', async (request) => {
+      (request.body as Record<string, unknown>).password = 1;
+    });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
+      handler
+    );
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { lifespan: 600 },
+    });
     expect(response.statusCode).toBe(500);
     expect(handler).not.toHaveBeenCalled();
   });

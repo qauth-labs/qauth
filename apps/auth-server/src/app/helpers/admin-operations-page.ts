@@ -78,11 +78,11 @@ function reservedSection(registry: OperationRegistry): string {
       [
         `### ${code(effect)}`,
         '',
-        '| Operation | Effects | Registered | Source | Description |',
-        '| --- | --- | --- | --- | --- |',
+        '| Operation | Effects | Per request | Registered | Source | Description |',
+        '| --- | --- | --- | --- | --- | --- |',
         ...entries.map(
           (entry: ReservedOperation) =>
-            `| ${code(entry.id)} | ${codeList(entry.effects)} | ${registry.get(entry.id) === undefined ? 'no' : 'yes'} | ${tableCell(entry.source)} | ${tableCell(entry.description)} |`
+            `| ${code(entry.id)} | ${codeList(entry.effects)} | ${entry.requestDependent === true ? 'yes' : 'no'} | ${registry.get(entry.id) === undefined ? 'no' : 'yes'} | ${tableCell(entry.source)} | ${tableCell(entry.description)} |`
         ),
       ].join('\n')
     );
@@ -140,19 +140,21 @@ operation of the OpenAPI document as \`x-qauth-effects\`
   token use: no role reaches it through \`${ADMIN_SCOPES.write}\`.
 - An operation whose request decides what it needs, such as a policy patch or a realm-file import,
   declares the strictest case (class \`security\`, every effect it may have and every permission it
-  may need) and a \`classify\` function. \`classify\` is pure: it reads copies of the request's path
-  parameters, query and body, and the operation's current state, and returns the class, the
-  effects and the permissions that request needs, within the declaration.
+  may need) and a \`classify\` function. \`classify\` is pure: it reads copies of the request's
+  method, path parameters, query and body, and the operation's current state, and returns the
+  class, the effects and the permissions that request needs, within the declaration.
 - The admin pipeline classifies every request after validation and before the handler. The
   handler receives the classification and cannot lower it, and every later stage reads the same
-  one.
+  one. The path parameters, query and body it classified are frozen: a stage that changes them
+  fails the request.
 - Fail closed: when \`classify\` throws, meets a field it has no rule for, or returns an unknown
   member, effect, class or permission, or more than the operation declares, the request needs the
   operation as declared: \`security\`, with every declared effect and permission.
 - At boot, the admin listener refuses a route that names no registered operation, and one whose
   \`operationId\`, \`x-qauth-class\`, \`x-qauth-permission\`, \`x-qauth-effects\` or
-  \`x-qauth-two-admin\` differs from the registry. In CI, the API conventions check fails when an
-  admin operation of the OpenAPI document disagrees with the registry.
+  \`x-qauth-two-admin\` differs from the registry. The classification stage is registered before
+  every route, and checks each route again on its first request. In CI, the API conventions check
+  fails when an admin operation of the OpenAPI document disagrees with the registry.
 
 These are not security operations:
 
@@ -169,10 +171,12 @@ ${operationSection(registry.all)}
 
 ## Reserved operations
 
-The operations below are not registered yet; other areas add them. When one is registered, the
-registry refuses it unless it is a security operation that carries at least the effects listed. An
-operation may carry more, and an operation whose request decides what it needs lists every effect
-it may have. Each entry is listed under each of its effects. The table lives in
+Other areas register the operations below, and the Registered column says which are registered.
+When one is registered, the registry refuses it unless it is a security operation that carries at
+least the effects listed, and refuses an id that differs from one only in case. An operation may
+carry more effects. Only an operation marked "per request" may decide per request what it needs,
+with \`classify\`, and it lists every effect it may have; every other one needs its declaration on
+every request. Each entry is listed under each of its effects. The table lives in
 \`${RESERVED_PATH}\`.
 
 ${reservedSection(registry)}

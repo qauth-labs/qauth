@@ -4,6 +4,7 @@ import fp from 'fastify-plugin';
 import {
   type AdminOperation,
   classifyRequest,
+  deepFreeze,
   OPERATION_REGISTRY,
   type OperationClassification,
   type OperationRegistry,
@@ -27,7 +28,7 @@ declare module 'fastify' {
      * instance without {@link adminOperationsPlugin}, and before its stage.
      * Read it with {@link requestClassification}.
      */
-    adminOperation: OperationClassification | null;
+    adminOperation?: OperationClassification | null;
   }
 }
 
@@ -48,9 +49,18 @@ const SCHEMA_MEMBERS = [
   'x-qauth-two-admin',
 ] as const;
 
-/** A permission member as a sorted list: a single id and a one-item list say the same. */
+/** A list member as a sorted list: a single id and a one-item list say the same. */
 const asSortedList = (value: unknown): unknown =>
   typeof value === 'string' ? [value] : Array.isArray(value) ? [...value].sort() : value;
+
+/** The members compared as sets: their order says nothing. */
+const LIST_MEMBERS: ReadonlySet<string> = new Set(['x-qauth-permission', 'x-qauth-effects']);
+
+/** The parts of a request `classify` saw, which no later stage may change. */
+const CLASSIFIED_PARTS = ['params', 'query', 'body'] as const;
+
+/** What an empty Fastify instance prints for its routes. */
+const NO_ROUTES = '(empty tree)';
 
 /**
  * Why `route` cannot be booted on an admin listener, or `undefined` when it
@@ -75,9 +85,8 @@ export function adminRouteProblem(
   const expected: Record<string, unknown> = { ...operationSchemaExtensions(operation) };
   const schema = (route.schema ?? {}) as Record<string, unknown>;
   for (const member of SCHEMA_MEMBERS) {
-    const want =
-      member === 'x-qauth-permission' ? asSortedList(expected[member]) : expected[member];
-    const have = member === 'x-qauth-permission' ? asSortedList(schema[member]) : schema[member];
+    const want = LIST_MEMBERS.has(member) ? asSortedList(expected[member]) : expected[member];
+    const have = LIST_MEMBERS.has(member) ? asSortedList(schema[member]) : schema[member];
     if (JSON.stringify(have) !== JSON.stringify(want)) {
       return `${where}: its schema's ${member} is ${JSON.stringify(schema[member])}, but the registry's ${operation.id} gives ${JSON.stringify(expected[member])}; spread operationSchemaExtensions(operation) into the schema`;
     }
@@ -101,32 +110,48 @@ export function requestClassification(request: FastifyRequest): OperationClassif
 
 /**
  * The classification stage of the admin pipeline (ADR-019 Decision 7, #508),
- * for the admin listener (#511).
+ * for the admin listener (#511). Register it at the listener's root, before
+ * any route: it refuses to load on an instance that already has a route,
+ * whose boot check would have been skipped, and its hooks reach only the
+ * scope it is registered in and that scope's children.
  *
  * - AT BOOT, an `onRoute` hook refuses every route that names no registered
  *   operation in `config.operation`, and every route whose schema's
  *   `operationId`, `x-qauth-class`, `x-qauth-permission`, `x-qauth-effects`
  *   or `x-qauth-two-admin` differs from the registry's
- *   (`operationSchemaExtensions`), so the boot fails. `onRoute` is not
- *   retroactive: register this plugin before the routes.
+ *   (`operationSchemaExtensions`), so the boot fails.
  * - ON EVERY REQUEST, a `preHandler` hook, after validation and before the
- *   handler, reads the operation's current state (`loadState`) and classifies
- *   the request (`classifyRequest`, which fails closed). It sets the result as
+ *   handler, checks the route again as it was finally built (once per route;
+ *   a later `onRoute` hook may have changed it), reads the operation's
+ *   current state (`loadState`) and classifies the request
+ *   (`classifyRequest`, which fails closed). It sets the result as
  *   `request.adminOperation`, a frozen value on a property that is neither
  *   writable nor configurable, so the handler and every later stage (the
  *   approval gate, the audit row) read one classification and none can lower
- *   it. A request whose route escaped the boot check, or whose property was
- *   already taken, fails and runs nothing. A classification that failed closed
- *   is logged at `warn`, with the operation and the reason only.
+ *   it. It then freezes the path parameters, query and body it classified and
+ *   makes those properties permanent too, so what runs is what was
+ *   classified: a later stage that changes them fails the request. A request
+ *   whose route fails the check, whose state cannot be read, or whose
+ *   property an earlier stage already took fails and runs nothing. A
+ *   classification that failed closed is logged at `warn`, with the operation
+ *   and the reason only.
  *
  * Scope-level hooks run in registration order, so the listener registers
- * this plugin where the stage belongs: after the token guard, the realm
- * lookup and the caller's authority, before the approval gate. The
- * permission check reads `requestClassification(request).permissions`.
+ * the earlier stages (the token guard, the realm lookup, the caller's
+ * authority) as hooks before this plugin's and the approval gate after them.
+ * The permission check reads `requestClassification(request).permissions`.
+ * A request that matches no route is not classified, so a custom not-found
+ * handler on the listener must not act.
  */
 export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
   async (fastify: FastifyInstance, options: AdminOperationsPluginOptions) => {
     const registry = options.registry ?? OPERATION_REGISTRY;
+
+    if (fastify.printRoutes() !== NO_ROUTES) {
+      throw new Error(
+        'The admin operations stage must be registered before any route of the admin listener: a route registered earlier never passes its boot check'
+      );
+    }
 
     fastify.decorateRequest('adminOperation', null);
 
@@ -135,15 +160,32 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
       if (problem !== undefined) throw new Error(problem);
     });
 
+    /** Each route's problem as it was finally built, by its config object, checked once. */
+    const checkedRoutes = new WeakMap<object, string | undefined>();
+
     fastify.addHook('preHandler', async (request: FastifyRequest) => {
       if (request.is404) return;
-      const id = request.routeOptions.config?.operation;
-      const operation = typeof id === 'string' ? registry.get(id) : undefined;
-      if (operation === undefined) {
-        // Only a route registered before this plugin gets here; it runs nothing.
-        throw new Error(
-          `${request.method} ${request.routeOptions.url ?? ''} has no registered admin operation`
+      const route = request.routeOptions;
+      const key = route.config as object;
+      if (!checkedRoutes.has(key)) {
+        checkedRoutes.set(
+          key,
+          adminRouteProblem(
+            {
+              method: route.method,
+              url: route.url ?? '',
+              config: route.config,
+              schema: route.schema,
+            },
+            registry
+          )
         );
+      }
+      const problem = checkedRoutes.get(key);
+      const operation =
+        problem === undefined ? registry.get(route.config.operation as string) : undefined;
+      if (operation === undefined) {
+        throw new Error(problem ?? `${request.method} ${route.url ?? ''} has no admin operation`);
       }
 
       const currentState =
@@ -174,6 +216,14 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
         writable: false,
         configurable: false,
       });
+      for (const part of CLASSIFIED_PARTS) {
+        Object.defineProperty(request, part, {
+          value: deepFreeze(request[part]),
+          enumerable: true,
+          writable: false,
+          configurable: false,
+        });
+      }
     });
   },
   { name: ADMIN_OPERATIONS_PLUGIN_NAME }

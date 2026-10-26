@@ -121,13 +121,17 @@ describe('the security operations page (#508)', () => {
     }
   });
 
-  it('lists every reserved id under each of its effects, with its effects', () => {
+  it('lists every reserved id under each of its effects, with its effects and whether the request decides', () => {
     for (const effect of SECURITY_EFFECTS) {
       const rows = tableRows(sectionOf(page, `\`${effect}\``, '###'));
-      expect(rows.map(([id, effects]) => [id, effects])).toEqual(
+      expect(rows.map(([id, effects, perRequest]) => [id, effects, perRequest])).toEqual(
         OPERATION_REGISTRY.reserved
           .filter((entry) => entry.effects.includes(effect))
-          .map((entry) => [`\`${entry.id}\``, listCell(entry.effects)])
+          .map((entry) => [
+            `\`${entry.id}\``,
+            listCell(entry.effects),
+            entry.requestDependent === true ? 'yes' : 'no',
+          ])
       );
     }
   });
@@ -207,6 +211,7 @@ describe('renderSecurityOperationsPage', () => {
         [
           '`widgets.rotate`',
           '`key-custody`, `token-content`',
+          'no',
           'yes',
           'a \\| test',
           'Rotate a widget.',

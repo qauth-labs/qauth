@@ -717,15 +717,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown field or returns an unknown member, effect, class or permission, or
   more than the declaration, gives the request the declared security
   classification. The admin pipeline's classification stage
-  (`plugins/admin-operations.ts`, for the admin listener) refuses at boot a
-  route that names no registered operation or whose OpenAPI members differ from
-  the registry, and on every request hands the handler a frozen classification
-  it cannot lower. A reserved table names, for each effect, the operation ids
-  later areas register, and the registry refuses one registered with a weaker
-  classification. The API conventions check fails when an admin operation of
-  the OpenAPI document disagrees with the registry, and the docs site's new
-  **Security operations** page (`reference/security-operations`) is generated
-  from it. No admin operation is registered yet.
+  (`plugins/admin-operations.ts`, for the admin listener) loads only before any
+  route, refuses at boot a route that names no registered operation or whose
+  OpenAPI members differ from the registry, and on every request hands the
+  handler a frozen classification it cannot lower and freezes the parameters,
+  query and body it classified. A reserved table names, for each effect, the
+  operation ids later areas register; the registry refuses one registered with
+  a weaker classification, a case variant of one, and a `classify` on one whose
+  entry does not say the request decides. The API conventions check fails when
+  an admin operation of the OpenAPI document disagrees with the registry, and
+  the docs site's new **Security operations** page
+  (`reference/security-operations`) is generated from it. No admin operation is
+  registered yet.
 
 ### Changed
 
