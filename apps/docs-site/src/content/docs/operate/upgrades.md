@@ -131,13 +131,16 @@ until the last old node is gone.
 
 Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records
 when each refresh-token family started. It fills the new column for every row
-of `refresh_tokens` in one statement, inside the runner's transaction. The
-`ALTER TABLE` on `refresh_tokens` that runs first takes a lock on the table and
-holds it until that transaction commits. While
-the runner works, every token request that reads or writes a refresh token
-waits: a code exchange, a refresh, `POST /auth/login` and the purge job. Nothing
-fails; those requests finish once the runner does, unless your proxy or client
-gives up first.
+of `refresh_tokens` in one statement, inside the runner's transaction. Before
+anything else it locks `authorization_codes` and then `refresh_tokens`, the
+order a code redemption takes them in, and holds both until that transaction
+commits. While the runner works, every request that reads or writes a refresh
+token or an authorization code waits: a code exchange, a refresh,
+`POST /auth/login`, minting a code at `/oauth/authorize` or on the consent
+screen, and the purge job. Nothing fails; those requests finish once the runner
+does, unless your proxy or client gives up first. A database that ran 0038 from
+`main` before its locks moved to the start is unaffected: the change only
+reorders its locks, and the runner never runs a migration twice.
 
 The pause grows with the number of rows in `refresh_tokens`, rotated and
 revoked tokens included. Measured on a 12-vCPU AMD EPYC virtual machine with
@@ -150,7 +153,9 @@ family:
 | 100,000                  | 58 MB      | 5.7 s           | 4.7 s                 |
 | 1,000,000                | 588 MB     | 100 s           | 99.8 s                |
 
-Almost all of it is the `UPDATE` (5.5 s and 98.4 s). These were default
+Almost all of it is the `UPDATE` (5.5 s and 98.4 s). Taking the locks first
+adds no work, so these figures, measured before the locks moved, still hold;
+minting a code now waits as long as a token insert. These were default
 settings; more `shared_buffers` and a larger `max_wal_size` may shorten the
 pause, which we have not measured. To estimate your own, count first:
 
@@ -161,19 +166,10 @@ SELECT count(*) FROM refresh_tokens;
 With many rows, run the migration at a quiet hour, and keep the proxy's and
 the clients' timeouts above the expected pause.
 
-Migration 0038 can also be aborted by a deadlock. It locks `refresh_tokens`
-first and `authorization_codes` after, while every code redemption, on either
-release, locks them the other way round: it spends its code, then stores the
-refresh token it buys. A redemption that spends its code while the runner holds
-`refresh_tokens` waits for the runner, the runner then waits for that
-redemption's lock on `authorization_codes`, and PostgreSQL aborts one of the
-two. When it aborts the runner, the whole upgrade is rolled back (nothing is
-half-applied) and the runner exits non-zero; run it again. To avoid it, run an
-upgrade from a release before 0038 with the token endpoint drained: stop
-routing traffic to the auth servers, or scale them to zero, while the runner
-works, or at the quietest hour you have. Migration 0038 is left as it is;
-migration 0041 takes its locks in the redemption's order and cannot deadlock
-this way.
+Migrations 0038 and 0041 both take their locks in a redemption's order: a
+redemption spends its code in `authorization_codes`, then stores the refresh
+token it buys. So a redemption in flight during the upgrade, on a node of either
+version, waits for the runner instead of deadlocking with it.
 
 ### Migration 0041 reads `refresh_tokens` once more
 

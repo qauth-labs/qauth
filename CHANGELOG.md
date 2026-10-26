@@ -982,12 +982,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `family_created_at` for every row of `refresh_tokens` in one statement,
   inside the runner's transaction, with the table locked until it commits.
   Measured on a 12-vCPU virtual machine against a default `postgres:18-alpine`
-  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. It locks
-  `refresh_tokens` before `authorization_codes`, the opposite of a code
-  redemption, so a redemption in flight can deadlock with it; PostgreSQL then
-  aborts one of the two, and when that is the runner the upgrade rolls back and
-  the runner must be run again. Drain the token endpoint while it runs. See the
-  upgrade guide (`operate/upgrades`) before upgrading a large deployment.
+  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. It first locks
+  `authorization_codes` and then `refresh_tokens`, the order a code redemption
+  takes them in, so a redemption in flight waits for it instead of deadlocking
+  with it; minting and redeeming codes wait for the same pause. A database
+  that ran 0038 from `main` before its locks moved to the start is unaffected:
+  the change only reorders its locks. See the upgrade guide
+  (`operate/upgrades`) before upgrading a large deployment.
 
   **Action for operators**: none for a realm without `sso_max_lifespan`. In a
   realm that sets it, a family already older than the limit ends at its next
