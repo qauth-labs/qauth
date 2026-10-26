@@ -49,6 +49,14 @@ const WORKSPACE_ROOT = resolve(__dirname, '../../../..');
 /** The functions that sign an ID token or build its claims. */
 const ID_TOKEN_SIGNERS = new Set(['signIdToken', 'signHybridIdToken', 'buildIdTokenClaims']);
 
+/**
+ * The receivers whose signers take the realm first and the payload second:
+ * the JWT plugin's `jwtUtils` (#491). Every other signer takes the payload
+ * first. A call through any other receiver is read at the first argument, so
+ * a realm-first call through an alias is a pass-through, which fails below.
+ */
+const REALM_FIRST_RECEIVERS = new Set(['jwtUtils']);
+
 /** Where the signers live: the only files that may assign a `sid` claim. */
 const SIGNER_HOMES = ['libs/server/jwt/src/', 'libs/fastify/plugins/jwt/src/'];
 
@@ -138,6 +146,24 @@ function calleeName(call: ts.CallExpression): string | undefined {
   if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
   if (ts.isElementAccessExpression(callee)) return keyText(callee.argumentExpression);
   return undefined;
+}
+
+/** The name a callee's receiver goes by: `x` of `x.f`, `y` of `x.y.f` or `x.y['f']`. */
+function receiverName(call: ts.CallExpression): string | undefined {
+  const callee = call.expression;
+  if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) {
+    return undefined;
+  }
+  const receiver = unwrap(callee.expression);
+  if (ts.isIdentifier(receiver)) return receiver.text;
+  if (ts.isPropertyAccessExpression(receiver)) return receiver.name.text;
+  return undefined;
+}
+
+/** The argument a signer call takes its ID-token payload from. */
+function payloadArgument(call: ts.CallExpression): ts.Expression | undefined {
+  const receiver = receiverName(call);
+  return call.arguments[receiver !== undefined && REALM_FIRST_RECEIVERS.has(receiver) ? 1 : 0];
 }
 
 function unwrap(expression: ts.Expression): ts.Expression {
@@ -230,8 +256,8 @@ function scanSource(file: string, text: string, scan: Scan): void {
       const name = calleeName(node);
       if (name !== undefined && ID_TOKEN_SIGNERS.has(name)) {
         const site = { file, within: enclosingName(node) };
-        const [first] = node.arguments;
-        const payload = first === undefined ? undefined : unwrap(first);
+        const argument = payloadArgument(node);
+        const payload = argument === undefined ? undefined : unwrap(argument);
         if (payload === undefined || !ts.isObjectLiteralExpression(payload)) {
           scan.passThrough.push(site);
         } else {
@@ -370,15 +396,17 @@ describe('the ID token’s sid comes from the code exchange alone (#549)', () =>
     scanSource(
       'sample.ts',
       `
-        async function plain(app, s) { await app.jwtUtils.signIdToken({ sub: 'u', audience: 'c', sid: s }); }
-        async function shorthand(app, sid) { await app.jwtUtils.signIdToken({ sub: 'u', audience: 'c', sid }); }
+        async function plain(app, r, s) { await app.jwtUtils.signIdToken(r, { sub: 'u', audience: 'c', sid: s }); }
+        async function shorthand(app, r, sid) { await app.jwtUtils.signIdToken(r, { sub: 'u', audience: 'c', sid }); }
         async function quoted(s) { await signIdToken({ sub: 'u', audience: 'c', 'sid': s }, k, i, 1); }
         async function computed(s) { await signIdToken({ sub: 'u', audience: 'c', ['sid']: s }, k, i, 1); }
         async function spread(s) { buildIdTokenClaims({ sub: 'u', audience: 'c', ...(s ? { sid: s } : {}) }); }
-        async function bracket(app, s) { await app.jwtUtils['signIdToken']({ sub: 'u', audience: 'c', sid: s }); }
-        async function clean(app) { await app.jwtUtils.signIdToken({ sub: 'u', audience: 'c' }); }
-        async function helper(app, s) { await app.jwtUtils.signIdToken({ sub: 'u', audience: 'c', ...claimsOf(s) }); }
-        async function variable(app, payload) { await app.jwtUtils.signIdToken(payload); }
+        async function bracket(app, r, s) { await app.jwtUtils['signIdToken'](r, { sub: 'u', audience: 'c', sid: s }); }
+        async function clean(app, r) { await app.jwtUtils.signIdToken(r, { sub: 'u', audience: 'c' }); }
+        async function helper(app, r, s) { await app.jwtUtils.signIdToken(r, { sub: 'u', audience: 'c', ...claimsOf(s) }); }
+        async function variable(app, r, payload) { await app.jwtUtils.signIdToken(r, payload); }
+        async function realmLiteral(app, payload) { await app.jwtUtils.signIdToken({ id: 'r' }, payload); }
+        async function viaAlias(utils, r, s) { await utils.signIdToken(r, { sid: s }); }
         async function aliased(app, s) { const sign = app.jwtUtils.signIdToken; await sign({ sid: s }); }
         async function called(app, p) { await app.jwtUtils.signIdToken.call(app.jwtUtils, p); }
         async function bound(app) { return [signIdToken].map((f) => f); }
@@ -399,7 +427,13 @@ describe('the ID token’s sid comes from the code exchange alone (#549)', () =>
     expect(sample.opaqueSpreads.map((site) => [site.within, site.spread])).toEqual([
       ['helper', 'claimsOf(s)'],
     ]);
-    expect(sample.passThrough.map((site) => site.within)).toEqual(['variable']);
+    // The realm is not the payload, even when written in place, and a
+    // realm-first call through another receiver is read at its first argument.
+    expect(sample.passThrough.map((site) => site.within)).toEqual([
+      'variable',
+      'realmLiteral',
+      'viaAlias',
+    ]);
     expect(sample.escaped.map((site) => site.within)).toEqual(['aliased', 'called', 'bound']);
     expect(sample.sidWrites.map((site) => site.within)).toEqual(['write', 'write']);
   });

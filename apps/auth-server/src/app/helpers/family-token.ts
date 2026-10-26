@@ -14,10 +14,13 @@ import { inactiveSubjectError } from './token-subject';
  * claim after the signature check, and with the request, so a rule may depend
  * on what the request names.
  *
- * The default, {@link requestRealmIssuer}, accepts only the token issuer of
- * the request's realm. The admin family supplies its own (#510): an
- * operator-realm admin's token names the operator realm's issuer, and a
- * realm-local admin's names its own realm's.
+ * The default, {@link requestRealmIssuer}, accepts only the issuer of the
+ * request's realm. A family may supply its own (#510). The signature is
+ * checked with the request realm's keys first (#491), so a rule can only
+ * narrow which of that realm's tokens pass: a token another realm issued,
+ * such as an operator-realm admin's at a tenant realm, verifies with none of
+ * them, and admitting one needs a way to verify with that realm's keys, which
+ * a rule does not choose.
  */
 export type IssuerResolver = (
   issuer: string,

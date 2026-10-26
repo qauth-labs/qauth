@@ -10,6 +10,7 @@ import {
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
+  JWTInvalidError,
   NotFoundError,
   UnauthorizedClientError,
   UnsupportedGrantTypeError,
@@ -1821,9 +1822,12 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(expect.objectContaining({ sid }));
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ sid })
+    );
     // Not on the access token, nor on the refresh row the exchange stores.
-    const [accessClaims] = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0];
+    const [, accessClaims] = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0];
     expect(JSON.stringify(accessClaims)).not.toContain(sid);
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledOnce();
     const [refreshRow] = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
@@ -1849,10 +1853,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
+    expect(idClaims).toMatchObject({ sub: expect.any(String) });
     expect(idClaims['sid']).toBeUndefined();
   });
 
@@ -4238,7 +4243,9 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation(
       (realm: { id: string; issuer: string }, _token: string) => {
         if (subjectPayload.iss !== realm.issuer) {
-          return Promise.reject(new Error('unexpected "iss" claim value'));
+          return Promise.reject(
+            new JWTInvalidError('Invalid JWT token: unexpected "iss" claim value')
+          );
         }
         return Promise.resolve(subjectPayload);
       }
@@ -4602,9 +4609,18 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
   it('rejects an unverifiable subject_token (invalid_request)', async () => {
     const { fastify, ctx } = setupExchangeStub();
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
-      new Error('bad signature')
+      new JWTInvalidError('Invalid JWT token: signature verification failed')
     );
     await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('fails closed, not as invalid_request, when the subject token could not be checked (#491)', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    // Verification reads the realm's keys from the key store; it is down.
+    const outage = new Error('connection refused');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(outage);
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toBe(outage);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 

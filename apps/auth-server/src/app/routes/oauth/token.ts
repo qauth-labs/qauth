@@ -9,6 +9,8 @@ import {
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
+  JWTExpiredError,
+  JWTInvalidError,
   NotFoundError,
   TemporarilyUnavailableError,
   UnauthorizedClientError,
@@ -1593,6 +1595,11 @@ function arrayToAud(values: string[]): string | string[] {
  * grant the agent can use. The delegation branch does not apply it yet; ADR-014
  * adds it there behind `AUTHORITY_TREE_ENABLED`.
  */
+/** Whether a verification error refused the token, rather than failing to check it. */
+function isTokenRefusal(error: unknown): boolean {
+  return error instanceof JWTInvalidError || error instanceof JWTExpiredError;
+}
+
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
 ): Promise<TokenEndpointResponse> {
@@ -1661,12 +1668,15 @@ async function handleTokenExchange(
   // `verifyAccessToken` (RFC 9700 mix-up defence), so a token minted by a
   // different AS or by another realm (#490, #491) fails verification here.
   // Success establishes provenance; an unverifiable / expired / foreign-issuer
-  // token is "unacceptable" → invalid_request.
+  // token is "unacceptable" → invalid_request. Verification reads the realm's
+  // keys from the key store, so any other failure (the store unreachable) is
+  // the server's, not the token's: it propagates and fails the exchange closed.
   const verifyingRealm = tokenRealm(requestRealm(request));
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
     subjectPayload = await fastify.jwtUtils.verifyAccessToken(verifyingRealm, body.subject_token);
-  } catch {
+  } catch (error) {
+    if (!isTokenRefusal(error)) throw error;
     await emitRequestFailed(ctx, 'invalid_request', 'subject_token_invalid');
     throw new InvalidRequestError('subject_token is not a valid access token');
   }
@@ -1702,7 +1712,8 @@ async function handleTokenExchange(
   if (body.actor_token !== undefined) {
     try {
       actorPayload = await fastify.jwtUtils.verifyAccessToken(verifyingRealm, body.actor_token);
-    } catch {
+    } catch (error) {
+      if (!isTokenRefusal(error)) throw error;
       await emitRequestFailed(ctx, 'invalid_request', 'actor_token_invalid');
       throw new InvalidRequestError('actor_token is not a valid access token');
     }

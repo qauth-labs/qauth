@@ -791,10 +791,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token-exchange subject and actor tokens and the Bearer path of
   `/oauth/authorize`. A token issued before the upgrade carries no `kid` and
   still verifies against the realm's Ed25519 keys. A deployment whose
-  `JWT_ISSUER` ends with a slash: tokens now name the issuer without it, and an
-  access token issued before the upgrade, which names it with the slash, is
-  refused until it expires (`ACCESS_TOKEN_LIFESPAN`); clients get a new one with
-  their refresh token.
+  `JWT_ISSUER` ends with a slash: its access and ID tokens now name the issuer
+  without it, as discovery already did, so a relying party that compares `iss`
+  with the slashed form must drop the slash. During a rolling upgrade the nodes
+  of the previous release refuse the new tokens and the new nodes refuse the
+  access tokens the old ones issued, until they expire
+  (`ACCESS_TOKEN_LIFESPAN`): upgrade such a deployment all at once.
 - ID tokens are signed with RS256 when the realm's key store holds an RS256
   key, and discovery's `id_token_signing_alg_values_supported` lists what each
   realm holds: `["RS256","EdDSA"]` or `["EdDSA"]`. A fresh deployment generates

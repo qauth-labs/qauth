@@ -92,6 +92,12 @@ the realm the request is for, so a token one realm issued is refused by
 another. A token issued before the upgrade carries no `kid`; it still verifies
 against the realm's Ed25519 keys.
 
+If `JWT_ISSUER` ends with a slash, the tokens now name the issuer without it,
+as discovery does, while the previous release names it with the slash. Upgrade
+such a deployment all at once rather than node by node: in a mixed fleet each
+release refuses the other's access tokens until they expire. A relying party
+that compares `iss` with the slashed form must drop the slash.
+
 The token key variables are read only by the key step above: once the store
 holds a key, the variable no longer signs anything, and a new key in it is how
 you replace the stored one (below). The server boots without them. Remove them

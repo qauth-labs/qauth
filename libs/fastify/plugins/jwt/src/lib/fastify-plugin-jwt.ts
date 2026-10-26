@@ -159,7 +159,9 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     const importedKeys = new Map<string, Promise<SigningKey>>();
 
     function importEdKey(realmId: string, key: VerificationKey): Promise<SigningKey> {
-      const cacheKey = `${realmId}\u0000${key.kid}\u0000${JSON.stringify(key.publicJwk)}`;
+      // The public value is part of the key, so a kid a realm ever reused for
+      // another key would not find the old one.
+      const cacheKey = `${realmId}\u0000${key.kid}\u0000${String(key.publicJwk.x)}`;
       let imported = importedKeys.get(cacheKey);
       if (imported === undefined) {
         imported = importPublicSigningJwk(key.publicJwk, ACCESS_TOKEN_ALGORITHM);

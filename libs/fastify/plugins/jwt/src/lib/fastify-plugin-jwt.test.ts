@@ -939,6 +939,36 @@ describe('RFC 9068 typ rollout switch (#283)', () => {
   });
 });
 
+describe('RFC 9068 typ rollout switch at requireJwt (#283)', () => {
+  it('applies the switch at the plugin seam, so requireJwt refuses a typ-less token too', async () => {
+    const realms = await createRealms();
+    const strict = await buildTestApp(realms, { requireAccessTokenTyp: true });
+    const lenient = await buildTestApp(realms);
+    try {
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
+      const typed = await strict.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      const call = (app: FastifyInstance, token: string) =>
+        app.inject({
+          method: 'GET',
+          url: '/protected',
+          headers: { authorization: `Bearer ${token}` },
+        });
+
+      expect((await call(lenient, legacy)).statusCode).toBe(200);
+      const refused = await call(strict, legacy);
+      expect(refused.statusCode).toBe(401);
+      expect(refused.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN' });
+      expect((await call(strict, typed)).statusCode).toBe(200);
+    } finally {
+      await strict.close();
+      await lenient.close();
+    }
+  });
+});
+
 /**
  * `verifyRequestAccessToken` under a route's own policy (#509): the API family
  * guards require `typ` whatever the rollout switch says, and take the issuer

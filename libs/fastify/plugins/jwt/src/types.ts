@@ -123,8 +123,10 @@ export interface AccessTokenCheckPolicy {
    * Decide whether the verified token's `iss` is one the route accepts. It
    * replaces the comparison with the issuer of the request's realm, and runs
    * after the signature check with that realm's keys, so it never sees an
-   * unverified claim. A token with no `iss` is refused before it is called.
-   * Absent: `iss` must equal the realm's issuer.
+   * unverified claim, and it can only narrow which of the realm's tokens
+   * pass: a token another realm's keys signed is refused before it runs. A
+   * token with no `iss` is refused before it is called. Absent: `iss` must
+   * equal the realm's issuer.
    */
   acceptIssuer?: (issuer: string, request: FastifyRequest) => boolean | Promise<boolean>;
   /**
