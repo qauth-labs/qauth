@@ -1,6 +1,10 @@
 import {
+  type AdminGrantsRepository,
+  type AdminRolesRepository,
   type ApiKeysRepository,
   type AuthorizationCodesRepository,
+  createAdminGrantsRepository,
+  createAdminRolesRepository,
   createApiKeysRepository,
   createAuditLogsRepository,
   createAuthorizationCodesRepository,
@@ -98,6 +102,17 @@ declare module 'fastify' {
        * route read and write them.
        */
       ssfStreams: SsfStreamsRepository;
+      /**
+       * Custom admin roles (ADR-019 Decision 7, #510). Built-in roles are
+       * defined in the auth server's code, not stored.
+       */
+      adminRoles: AdminRolesRepository;
+      /**
+       * Admin grants (ADR-019 Decision 7, #510): which account administers
+       * which realm through which role. The admin API reads them on every
+       * request (`resolveAdminAuthority`), never from a token.
+       */
+      adminGrants: AdminGrantsRepository;
     };
   }
 }
@@ -150,6 +165,8 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       eventRetention: createEventRetentionRepository(database.db),
       sessions: createSessionsRepository(database.db),
       ssfStreams: createSsfStreamsRepository(database.db),
+      adminRoles: createAdminRolesRepository(database.db, { catalog: options.adminRoleCatalog }),
+      adminGrants: createAdminGrantsRepository(database.db, { catalog: options.adminRoleCatalog }),
     });
 
     fastify.addHook('onReady', async () => {

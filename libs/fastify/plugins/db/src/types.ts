@@ -1,7 +1,12 @@
-import type { DatabaseConfig, EventTelemetrySink, RealmPolicySeeds } from '@qauth-labs/infra-db';
+import type {
+  AdminRoleCatalog,
+  DatabaseConfig,
+  EventTelemetrySink,
+  RealmPolicySeeds,
+} from '@qauth-labs/infra-db';
 import type { FastifyPluginOptions } from 'fastify';
 
-export type { EventTelemetrySink, RealmPolicySeeds };
+export type { AdminRoleCatalog, EventTelemetrySink, RealmPolicySeeds };
 
 /**
  * Options for the database plugin
@@ -21,4 +26,11 @@ export interface DatabasePluginOptions extends FastifyPluginOptions {
    * takes the column defaults.
    */
   realmPolicySeeds?: RealmPolicySeeds;
+  /**
+   * The auth server's admin permission catalog and built-in roles (#510),
+   * which the admin role and grant repositories check every write against.
+   * Absent, they refuse to create or change a custom role and to grant a
+   * built-in role; they still read.
+   */
+  adminRoleCatalog?: AdminRoleCatalog;
 }

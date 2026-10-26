@@ -35,6 +35,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
+import { ADMIN_ROLE_CATALOG } from './helpers/admin-roles';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
@@ -174,6 +175,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   await fastify.register(databasePlugin, {
     eventTelemetry,
+    // The admin permission catalog and built-in roles (#507), which every
+    // admin role and grant write is checked against (#510).
+    adminRoleCatalog: ADMIN_ROLE_CATALOG,
     // Realm policies the environment seeds into a new realm (ADR-019
     // Decision 10): the realm row owns them once it exists (#536).
     realmPolicySeeds: {

@@ -105,6 +105,14 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
   findByHost(host: string, tx?: DbClient): Promise<RealmWithHost | undefined>;
 
   /**
+   * Find the realm whose issuer is exactly `issuer` (#510): the realm a
+   * token's `iss` names. Exact match: issuers are stored without a trailing
+   * slash, so `https://auth.example.com/` names no realm. The realm comes back
+   * as stored: a disabled realm is the caller's to refuse.
+   */
+  findByIssuer(issuer: string, tx?: DbClient): Promise<Realm | undefined>;
+
+  /**
    * Whether one of `values` is the issuer of a realm other than `realmId`:
    * an access token whose `aud` names one may have been minted in that realm
    * (#410). Exact match: issuers are stored without a trailing slash.
@@ -471,6 +479,13 @@ export function createRealmsRepository(
         .where(eq(realmHosts.host, normalised))
         .limit(1);
       return row;
+    },
+
+    async findByIssuer(issuer: string, tx?: DbClient): Promise<Realm | undefined> {
+      if (typeof issuer !== 'string' || issuer.length === 0) return undefined;
+      const invoker = tx ?? defaultDb;
+      const [realm] = await invoker.select().from(realms).where(eq(realms.issuer, issuer)).limit(1);
+      return realm;
     },
 
     async anotherRealmHasIssuer(

@@ -695,6 +695,22 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
       await expect(repo.findOperator()).resolves.toMatchObject({ id: realmId, isOperator: true });
     });
 
+    it('findByIssuer finds the realm by its exact issuer, or nothing (#510)', async () => {
+      const host = `${unique('iss')}.example.com`;
+      const realmId = await realmOn(host);
+      await bareRealm();
+
+      await expect(repo.findByIssuer(`https://${host}`)).resolves.toMatchObject({ id: realmId });
+      for (const other of [
+        `https://${host}/`,
+        `https://${host.toUpperCase()}`,
+        `http://${host}`,
+        '',
+      ]) {
+        await expect(repo.findByIssuer(other)).resolves.toBeUndefined();
+      }
+    });
+
     it('lockProvisioning keeps a second transaction waiting until the first ends', async () => {
       const order: string[] = [];
       let releaseFirst: () => void = () => undefined;

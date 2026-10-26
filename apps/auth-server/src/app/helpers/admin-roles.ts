@@ -16,12 +16,18 @@
  * `security-admin` every permission. They follow the catalog, so a permission
  * added to it joins them, and they cannot be edited: the objects are frozen,
  * and no table holds them. CUSTOM ROLES are stored per realm by the admin
- * grants work (#510) and checked with {@link validateCustomRole}.
+ * grants work (#510) and checked with {@link validateCustomRole}: the admin
+ * role and grant repositories call it through {@link ADMIN_ROLE_CATALOG}, which
+ * the app hands the database plugin. A custom role name follows the grammar
+ * of `ADMIN_ROLE_NAME_PATTERN` (`@qauth-labs/infra-db`): lower-case ASCII
+ * words joined by single hyphens.
  *
  * Admin roles are not the `roles` table (`libs/infra/db/src/lib/schema/roles.ts`):
  * that table holds application roles, which reach tokens as claims (ADR-020
  * fork D).
  */
+import type { AdminRoleCatalog } from '@qauth-labs/fastify-plugin-db';
+
 import { PERMISSION_REGISTRY, type PermissionRegistry } from './admin-permissions';
 import { allowedPermissionClasses, type PermissionClass } from './admin-scopes';
 
@@ -201,3 +207,15 @@ export function effectivePermissions(
   }
   return effective;
 }
+
+/**
+ * The admin role catalog the database plugin hands the admin role and grant
+ * repositories (#510): the built-in role names a grant may name, the folded
+ * built-in name check a custom role name must pass, and
+ * {@link validateCustomRole} over the auth server's permission catalog.
+ */
+export const ADMIN_ROLE_CATALOG: AdminRoleCatalog = Object.freeze({
+  builtInRoleNames: BUILT_IN_ROLE_NAMES,
+  isBuiltInRoleName,
+  validatePermissionIds: (permissionIds: readonly string[]) => validateCustomRole(permissionIds),
+});
