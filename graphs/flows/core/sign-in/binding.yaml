@@ -1,0 +1,494 @@
+# core.sign-in bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
+# delurio's replay drives a browser today, and `request` below is the request template QAuth asks of its replay over
+# HTTP (method, path, query, form, headers, and values saved from earlier responses), with a cookie jar per walk. The
+# shared server binding (#565) gives the server's address, the realm's hosts and how a replay reaches the database;
+# this file adds the server settings this flow needs, the accounts and their seed, the three requests, where the page
+# and the cookie are read, and the scenarios. What each state answers is its `response` in flow.yaml.
+#
+# - A scenario's `request` is merged over the template of every event its walks send: `query` into the GETs' query,
+#   `form` into the POST's form, `headers` into all three. A field or a header set to null is left out.
+# - `walks` on a scenario lists the walks its replay sends, each the request events in order (the DONE of a step is the
+#   server's own); the comment at the top of each scenario names the guards of flow.yaml it makes true.
+# - Before each walk the replay empties the cache, then runs the scenario's `setup`: the rate-limit and failed-login
+#   counters of the replay's address are shared by every walk, and a walk must not inherit another's.
+schema: delurio-graph/0
+kind: binding
+flow: core.sign-in
+extends: ../../../bindings/server.binding.yaml # written by #565
+
+server:
+  # QAuth's settings for every replay of this flow, over the shared binding's. Each is set explicitly, the defaults
+  # included, so that a changed default cannot change what the replay proves. A scenario's `server` is merged over
+  # this one, and the replay starts a server of its own for a scenario that changes it.
+  env:
+    REQUIRE_VERIFIED_ACCOUNT: 'true' # the default: unset or blank also mean true. Its deprecated name,
+    # REQUIRE_EMAIL_VERIFIED, stays unset: the boot fails when the two names disagree.
+    FAILED_LOGIN_TRACKING_ENABLED: 'true'
+    FAILED_LOGIN_MAX_ATTEMPTS: '3'
+    FAILED_LOGIN_WINDOW: '900'
+    FAILED_LOGIN_LOCKOUT_DURATION: '900'
+    RATE_LIMIT_ENABLED: 'true'
+    # Above FAILED_LOGIN_MAX_ATTEMPTS. With the defaults (5 and 5) the request after the fifth counted failure from
+    # one address meets the login limit first, so a lockout is never seen from that address.
+    LOGIN_RATE_LIMIT: '10'
+    LOGIN_RATE_WINDOW: '900'
+  resetBeforeEachWalk: [cache]
+
+seed:
+  # the accounts below, in the realm of the shared binding's default host
+  - run: [psql, '{databaseUrl}', -v, ON_ERROR_STOP=1, --file, ../../../fixtures/users.sql]
+
+data:
+  # The password of every account in graphs/fixtures/users.sql: a throwaway, for replays only.
+  password: replay-sign-in-throwaway-2026
+  # A same-origin path for walks that do not resume an authorization request. No route serves it: the replay does
+  # not follow the redirect.
+  returnTo: /after-sign-in
+  # The authorization request a resume scenario parks: a public client the scenario registers, and one PKCE pair.
+  client:
+    redirectUri: https://sign-in-replay.example/callback
+  pkce:
+    verifier: sign-in-replay-code-verifier-0123456789-abcdefghijk
+    challenge: 0MlVTv5v_6fspHp60TjOfb0B-RudyqCUKhQtdQntLC0 # BASE64URL(SHA-256(verifier)), RFC 7636 §4.2
+
+accounts:
+  # graphs/fixtures/users.sql creates each in the default realm, with data.password
+  verified: { email: verified@sign-in.example } # enabled, address confirmed
+  unverified: { email: unverified@sign-in.example } # enabled, address not confirmed
+  disabled: { email: disabled@sign-in.example } # disabled, address confirmed
+  disabledUnverified: { email: disabled-unverified@sign-in.example } # disabled, address not confirmed
+  lockout: { email: lockout@sign-in.example } # enabled, address confirmed; the lockout scenario locks it
+  unknown: { email: nobody@sign-in.example } # no account has this address
+
+events:
+  SHOW:
+    # the sign-in page
+    - request:
+        method: GET
+        path: /ui/login
+        query: { return_to: '{returnTo}' }
+        follow: false
+  SUBMIT:
+    # the page's form: the CSRF value from the page, and the cookie the GET set (or the one it reused)
+    - request:
+        method: POST
+        path: /ui/login
+        form:
+          email: '{account.email}'
+          password: '{password}'
+          return_to: '{returnTo}'
+          csrf_token: '{csrfToken}'
+        headers: { Cookie: '__Host-qauth_login_csrf={csrfCookie}' }
+        follow: false
+  RESUME:
+    # the redirect the sign-in answered with, followed
+    - request:
+        method: GET
+        path: '{resumePath}'
+        follow: false
+
+states:
+  rendered:
+    # where the replay reads the two halves of the CSRF pair: the hidden field of the page's form, and the cookie
+    save:
+      csrfToken:
+        from: body
+        css: 'form[action="/ui/login"] input[name="csrf_token"]'
+        attribute: value
+      csrfCookie:
+        # <value>.<signature>; absent from a response that reused the request's cookie, which the jar then still holds
+        from: cookie
+        name: __Host-qauth_login_csrf
+  redirectedToResume:
+    save:
+      resumePath: { from: header, name: Location }
+
+scenarios:
+  # The main story first, then one scenario for each exit and each guard of flow.yaml, in the order the server checks
+  # them.
+
+  verifiedUserResumes:
+    # a verified user, arriving from /oauth/authorize: the main story
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: resume
+      handle: live
+    walks: [[SHOW, SUBMIT, RESUME]]
+    as: verified
+    setup:
+      - request:
+          # a client registers itself: registration is open
+          method: POST
+          path: /oauth/register
+          json:
+            client_name: Sign-in replay client
+            redirect_uris: ['{client.redirectUri}']
+            grant_types: [authorization_code]
+            response_types: [code]
+            token_endpoint_auth_method: none
+        save: { clientId: body.client_id }
+      - request:
+          # with no session, /oauth/authorize parks the request and answers with the sign-in redirect
+          method: GET
+          path: /oauth/authorize
+          query:
+            response_type: code
+            client_id: '{clientId}'
+            redirect_uri: '{client.redirectUri}'
+            scope: openid
+            state: sign-in-replay-state
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+          follow: false
+        save: { returnTo: { from: header, name: Location, query: return_to } } # /ui/resume/<handle>
+
+  verifiedUser:
+    # pathReturn: a verified user who opened the page with a same-origin return_to
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: verified
+
+  offsiteReturnTo:
+    # return_to on another host: the page carries /, and a form that posts the address anyway is sent to / too
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: unsafe
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: verified
+    request:
+      query: { return_to: 'https://elsewhere.example/' }
+      form: { return_to: 'https://elsewhere.example/' }
+
+  unverifiedUser:
+    # unverifiedUnderTheGate: the right password of an account whose address is not confirmed
+    given:
+      gate: open
+      account: unverified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: unverified
+
+  unverifiedUserWithoutTheGate:
+    # the same account on a server with REQUIRE_VERIFIED_ACCOUNT=false: it signs in
+    given:
+      gate: open
+      account: unverified
+      password: right
+      requireVerified: false
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: unverified
+    server: { env: { REQUIRE_VERIFIED_ACCOUNT: 'false' } }
+
+  disabledUser:
+    # userDisabled: the right password of a disabled account
+    given:
+      gate: open
+      account: disabled
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: disabled
+
+  disabledUnverifiedUser:
+    # unverifiedUnderTheGate, before userDisabled: the gate reads the credential before the users row
+    given:
+      gate: open
+      account: disabledUnverified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: disabledUnverified
+
+  unknownIdentifier:
+    # noCredential: an address with no account
+    given:
+      gate: open
+      account: unknown
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: unknown
+
+  wrongPassword:
+    # wrongPassword: a verified account and another password
+    given:
+      gate: open
+      account: verified
+      password: wrong
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: verified
+    request: { form: { password: not-the-password } }
+
+  pastTheLockoutThreshold:
+    # lockedOut: FAILED_LOGIN_MAX_ATTEMPTS wrong passwords, then the right one
+    given:
+      gate: lockedOut
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: lockout
+    setup:
+      - request: { method: GET, path: /ui/login, follow: false }
+        save:
+          csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value }
+          csrfCookie: { from: cookie, name: __Host-qauth_login_csrf }
+      - request:
+          method: POST
+          path: /ui/login
+          form:
+            email: '{account.email}'
+            password: not-the-password
+            csrf_token: '{csrfToken}'
+          headers: { Cookie: '__Host-qauth_login_csrf={csrfCookie}' }
+          # counted, then refused with 401; the third arms the lockout
+        repeat: '{server.env.FAILED_LOGIN_MAX_ATTEMPTS}'
+
+  csrfMismatch:
+    # csrfMismatch: the page's cookie, and a csrf_token of another page
+    given:
+      gate: csrfMismatch
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW, SUBMIT]]
+    as: verified
+    request: { form: { csrf_token: dGhpcy1pcy1ub3QtdGhlLWNvb2tpZXMtdmFsdWUtYXQtYWxs } }
+
+  forgedForm:
+    # csrfMismatch: a form posted by another site, which can send neither the cookie nor its value
+    given:
+      gate: csrfMismatch
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SUBMIT]]
+    as: verified
+    request:
+      form: { csrf_token: dGhpcy1pcy1ub3QtdGhlLWNvb2tpZXMtdmFsdWUtYXQtYWxs }
+      headers: { Cookie: null }
+
+  malformedCookie:
+    # cookieMalformed: a login-CSRF cookie that is not valid percent-encoding
+    given:
+      gate: malformedCookie
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW], [SUBMIT]]
+    as: verified
+    request: { form: { csrf_token: anything }, headers: { Cookie: '__Host-qauth_login_csrf=%zz' } }
+
+  invalidInput:
+    # inputInvalid: the GET repeats return_to, the POST has an empty password
+    given:
+      gate: invalidInput
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW], [SUBMIT]]
+    as: verified
+    setup:
+      - request: { method: GET, path: /ui/login, follow: false }
+        save:
+          csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value }
+          csrfCookie: { from: cookie, name: __Host-qauth_login_csrf }
+    request: { query: { return_to: ['/a', '/b'] }, form: { password: '' } }
+
+  unknownHost:
+    # hostUnknown
+    given:
+      gate: unknownHost
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW], [SUBMIT], [RESUME]]
+    as: verified
+    data: { csrfToken: anything, csrfCookie: anything, resumePath: /ui/resume/anything }
+    request: { headers: { Host: sign-in.unknown-host.invalid } }
+
+  endpointHost:
+    # endpointHost: the shared binding gives the realm an endpoint host beside its primary one
+    given:
+      gate: endpointHost
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW], [SUBMIT], [RESUME]]
+    as: verified
+    data: { csrfToken: anything, csrfCookie: anything, resumePath: /ui/resume/anything }
+    request: { headers: { Host: '{realm.endpointHost}' } }
+
+  overGlobalLimit:
+    # rateLimited, for the two GETs: the address has sent RATE_LIMIT_MAX requests in this window already
+    given:
+      gate: rateLimited
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SHOW], [RESUME]]
+    data: { resumePath: /ui/resume/anything }
+    setup:
+      - request: { method: GET, path: /ui/login, follow: false }
+        repeat: '{rateLimitMax}' # the shared binding: the server's RATE_LIMIT_MAX
+
+  overLoginLimit:
+    # rateLimited, for the POST: the address has sent LOGIN_RATE_LIMIT sign-in posts in this window already
+    given:
+      gate: rateLimited
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    walks: [[SUBMIT]]
+    as: verified
+    data: { csrfToken: anything, csrfCookie: anything }
+    setup:
+      - request: { method: POST, path: /ui/login, form: {} }
+        # counted, then refused with 400
+        repeat: '{server.env.LOGIN_RATE_LIMIT}'
+
+  replayedHandle:
+    # handleSpent: the handle has resumed its request once already
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: resume
+      handle: spent
+    walks: [[RESUME]]
+    setup:
+      - request:
+          # a client registers itself: registration is open
+          method: POST
+          path: /oauth/register
+          json:
+            client_name: Sign-in replay client
+            redirect_uris: ['{client.redirectUri}']
+            grant_types: [authorization_code]
+            response_types: [code]
+            token_endpoint_auth_method: none
+        save: { clientId: body.client_id }
+      - request:
+          # with no session, /oauth/authorize parks the request and answers with the sign-in redirect
+          method: GET
+          path: /oauth/authorize
+          query:
+            response_type: code
+            client_id: '{clientId}'
+            redirect_uri: '{client.redirectUri}'
+            scope: openid
+            state: sign-in-replay-state
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+          follow: false
+        save: { returnTo: { from: header, name: Location, query: return_to } } # /ui/resume/<handle>
+      - request: { method: GET, path: '{returnTo}', follow: false } # the first resume, which burns the handle
+    data: { resumePath: '{returnTo}' }
+
+  unknownHandle:
+    # handleSpent: a handle no request parked, of the right shape
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: resume
+      handle: spent
+    walks: [[RESUME]]
+    data: { resumePath: /ui/resume/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA }
+
+  resumeWithoutSession:
+    # a live handle resumed by a browser that never signed in: the resume reads no session
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: resume
+      handle: live
+    walks: [[RESUME]]
+    setup:
+      - request:
+          # a client registers itself: registration is open
+          method: POST
+          path: /oauth/register
+          json:
+            client_name: Sign-in replay client
+            redirect_uris: ['{client.redirectUri}']
+            grant_types: [authorization_code]
+            response_types: [code]
+            token_endpoint_auth_method: none
+        save: { clientId: body.client_id }
+      - request:
+          # with no session, /oauth/authorize parks the request and answers with the sign-in redirect
+          method: GET
+          path: /oauth/authorize
+          query:
+            response_type: code
+            client_id: '{clientId}'
+            redirect_uri: '{client.redirectUri}'
+            scope: openid
+            state: sign-in-replay-state
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+          follow: false
+        save: { returnTo: { from: header, name: Location, query: return_to } } # /ui/resume/<handle>
+    data: { resumePath: '{returnTo}' }
+
+  # A replay over HTTP cannot make a store fail, and apps/auth-server/src/app/routes/ui/login.test.ts does not reach
+  # this exit either: server_error.store is drawn from the code alone.
+  storeFailure:
+    given:
+      gate: open
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    skip: the replay cannot make the database, the session store or the event store fail
