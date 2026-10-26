@@ -148,6 +148,66 @@
     "breaks": []
   },
   {
+    "name": "a new variant of a request body's oneOf passes (a new Interaction API step's answer, #590)",
+    "format": "openapi",
+    "basePatch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema",
+        "value": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "small"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "large"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/oneOf/-",
+        "value": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "medium"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
     "name": "a changed response field type breaks",
     "format": "openapi",
     "patch": [

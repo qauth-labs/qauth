@@ -22,10 +22,11 @@ export const identifierPersonal: JsonSchema = object(
 /** The identifier as an answer field (ADR-017 Decision 3: `login_hint`). */
 export const loginHint: JsonSchema = {
   type: 'string',
-  minLength: 1,
+  minLength: 3,
   maxLength: 254,
+  pattern: '^[^@\\s]+@[^@\\s]+$',
   description:
-    'The identifier: today an email address of at most 254 bytes in email syntax (ADR-017 Decision 3). The server normalises it before use.',
+    'The identifier: today an email address of at most 254 bytes in UTF-8 (ADR-017 Decision 3). The schema counts characters; the server counts bytes, checks the full email syntax and normalises the address before use.',
 };
 
 /** A one-time code of six digits, as an answer field (FiPA Appendix B.1 names it `otp`). */

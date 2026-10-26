@@ -20,8 +20,20 @@
 /** A JSON Schema object. Loose on purpose: the contract tests compile every one. */
 export type JsonSchema = { readonly [keyword: string]: unknown };
 
-/** The characters a display value may hold: anything but `<`, `>`, controls, format and line/paragraph separators. */
-export const DISPLAY_TEXT_PATTERN = '^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$';
+/**
+ * Hangul filler characters: letters by category, but they render as nothing,
+ * so a name made of them looks blank.
+ */
+const FILLERS = '\\u115F\\u1160\\u3164\\uFFA0';
+
+/**
+ * A display value: no `<` or `>`, no character of the Unicode category Other
+ * (controls, format characters such as the bidirectional overrides and
+ * zero-width spaces, surrogates, private use, unassigned), no line or
+ * paragraph separator and no Hangul filler; spaces only between other
+ * characters, so a value is never blank or padded.
+ */
+export const DISPLAY_TEXT_PATTERN = `^[^<>\\p{C}\\p{Z}${FILLERS}](?:[^<>\\p{C}\\p{Zl}\\p{Zp}${FILLERS}]*[^<>\\p{C}\\p{Z}${FILLERS}])?$`;
 
 /**
  * Where a display value comes from, as the `x-qauth-display` annotation says:
@@ -102,27 +114,42 @@ export function httpsUrl(maxLength: number, description: string): JsonSchema {
   };
 }
 
-/** An absolute URI of any scheme (a redirect to a native app uses its own scheme). */
+/**
+ * An absolute URI of any scheme (a redirect to a native app uses its own
+ * scheme), except the schemes a browser runs or reads locally. The scheme is
+ * lower case, so `JavaScript:` is refused by the pattern and `javascript:` by
+ * the `not`.
+ */
 export function absoluteUri(maxLength: number, description: string): JsonSchema {
   return {
     type: 'string',
     format: 'uri',
     maxLength,
     pattern: `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS}+$`,
+    not: { type: 'string', pattern: '^(?:javascript|data|vbscript|file|blob):' },
     description,
   };
 }
 
 /**
+ * Mark a value that a client or a device declared, which is not text but must
+ * still be shown as declared (a resource URL the request named). Text a client
+ * declared is a {@link displayText} with the `declared` source.
+ */
+export function declared(schema: JsonSchema): JsonSchema {
+  return { ...schema, 'x-qauth-declared': true };
+}
+
+/**
  * A path on the realm origin, such as `/ui/assets/logo-3f9a1c2e.svg`. Never
- * `//…`, which a browser reads as another host.
+ * `//…`, which a browser reads as another host, and no `.` or `..` segment.
  */
 export function sameOriginPath(description: string): JsonSchema {
   return {
     type: 'string',
     minLength: 2,
     maxLength: 255,
-    pattern: '^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$',
+    pattern: '^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$',
     description,
   };
 }
@@ -147,11 +174,16 @@ export function extensibleEnum(
   return { type: 'string', maxLength, pattern, 'x-extensible-enum': [...values], description };
 }
 
-/** An object with the given members. `required` lists the members that are always present. */
+/**
+ * An object with the given members. `required` lists the members that are
+ * always present; `rules` are conditions between members ({@link whenEquals}),
+ * which constrain the object without changing its type.
+ */
 export function object(
   properties: Record<string, JsonSchema>,
   required: readonly string[],
-  description?: string
+  description?: string,
+  rules: readonly JsonSchema[] = []
 ): JsonSchema {
   for (const name of required) {
     if (!(name in properties)) throw new Error(`required member ${name} is not declared`);
@@ -161,6 +193,28 @@ export function object(
     ...(description === undefined ? {} : { description }),
     properties,
     ...(required.length === 0 ? {} : { required: [...required] }),
+    ...(rules.length === 0 ? {} : { allOf: [...rules] }),
+  };
+}
+
+/** A schema no value matches: a member that is never present. */
+export const NEVER: JsonSchema = { not: {} };
+
+/**
+ * A rule of an object: when `member` holds one of `values`, the object also
+ * matches `then` (more required members, or members that must be absent).
+ */
+export function whenEquals(
+  member: string,
+  values: readonly string[],
+  then: JsonSchema
+): JsonSchema {
+  return {
+    if: {
+      properties: { [member]: values.length === 1 ? { const: values[0] } : { enum: [...values] } },
+      required: [member],
+    },
+    then,
   };
 }
 

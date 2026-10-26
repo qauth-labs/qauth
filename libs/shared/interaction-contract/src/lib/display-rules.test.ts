@@ -43,7 +43,8 @@ interface StringNode {
 }
 
 const SUBSCHEMA_LISTS = ['oneOf', 'anyOf', 'allOf', 'prefixItems'];
-const SUBSCHEMAS = ['items', 'additionalProperties', 'propertyNames', 'not', 'contains'];
+/** `not` is left out: what it holds is a value a response never carries. */
+const SUBSCHEMAS = ['items', 'additionalProperties', 'propertyNames', 'contains'];
 
 /** Every string schema reachable from `schema`, references followed once each. */
 function collectStrings(
@@ -171,6 +172,22 @@ describe('the display rule (ADR-019 Decision 6)', () => {
     }
   });
 
+  it('refuses a blank, padded or invisible display value', () => {
+    const pattern = new RegExp(DISPLAY_TEXT_PATTERN, 'u');
+    for (const sample of [
+      ' ',
+      '   ',
+      ' padded',
+      'padded ',
+      String.fromCodePoint(0x3164),
+      `A${String.fromCodePoint(0x115f)}`,
+      `private${String.fromCodePoint(0xe000)}use`,
+      `bidi${String.fromCodePoint(0x202e)}`,
+    ]) {
+      expect(pattern.test(sample), JSON.stringify(sample)).toBe(false);
+    }
+  });
+
   it('accepts ordinary display text, so the pattern is not a refusal of everything', () => {
     const pattern = new RegExp(DISPLAY_TEXT_PATTERN, 'u');
     for (const sample of [
@@ -183,13 +200,51 @@ describe('the display rule (ADR-019 Decision 6)', () => {
     }
   });
 
-  it('lists a client-declared value only as declared', () => {
-    const declared = responseStrings().filter(
-      ({ schema }) => schema['x-qauth-display'] === 'declared'
+  it('marks every value a client or a device declared as declared', () => {
+    const declared = responseStrings()
+      .filter(
+        ({ schema }) =>
+          schema['x-qauth-display'] === 'declared' || schema['x-qauth-declared'] === true
+      )
+      .map(({ at }) => at);
+    expect(declared.sort()).toEqual(
+      [
+        'ClientDisplay.declaredName',
+        'ConsentParams.resources.items',
+        'DeviceConfirmPersonalData.user_agent',
+      ].sort()
     );
-    expect(declared.map(({ at }) => at).sort()).toEqual(
-      ['ClientDisplay.declaredName', 'DeviceConfirmPersonalData.user_agent'].sort()
+  });
+
+  // The id alone reads the step (ADR-019 Decision 6): nothing it can reach may
+  // be personal data. The walk follows every reference from the step read and
+  // from the next-step result, so personal data reached through a component
+  // fails here too.
+  it('reaches no personal data from the step read or the next-step result', () => {
+    const strings: StringNode[] = [];
+    const reached = new Set<string>();
+    const read = paths['/interaction/v1-rc.0/{interactionId}']?.['get'] as {
+      responses: Record<string, { content: Record<string, { schema: JsonSchema }> }>;
+    };
+    collectStrings(
+      read.responses['200']?.content['application/json']?.schema ?? {},
+      'read',
+      strings,
+      reached
     );
+    collectStrings({ $ref: '#/components/schemas/NextStepResult' }, 'next', strings, reached);
+    expect(reached.has('Interaction')).toBe(true);
+    expect(reached.has('StepParams')).toBe(true);
+    for (const name of reached) {
+      expect(name, `${name} is personal data`).not.toMatch(/PersonalData$/);
+    }
+    expect(
+      strings.filter(({ schema }) => schema['x-qauth-display'] === 'account').map(({ at }) => at)
+    ).toEqual([]);
+    // And the walk is not vacuous: from the personal read it does reach them.
+    const personal: StringNode[] = [];
+    collectStrings({ $ref: '#/components/schemas/PersonalData' }, 'personal', personal, new Set());
+    expect(personal.some(({ schema }) => schema['x-qauth-display'] === 'account')).toBe(true);
   });
 
   it('applies to the step schema files the same way', () => {

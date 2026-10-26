@@ -2,36 +2,70 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/select_account.json",
   "title": "urn:qauth:ia:select_account:v1-rc.0",
-  "description": "The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. \"Use another account\" answers the `identifier` step, offered beside this one, which starts a new interaction for the same authorization request; nothing proved for one account carries over to another (#592). Needs JavaScript, to read the list.",
+  "description": "The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. \"Use another account\" answers the `identifier` step, offered beside this one: that starts a new interaction for the same authorization request, and the result is a redirect to its page (#592). Needs JavaScript, to read the list.",
   "x-qauth-transports": [
     "interaction"
   ],
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:select_account:v1-rc.0"
+      "const": "urn:qauth:ia:select_account:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
       "type": "urn:qauth:ia:select_account:v1-rc.0",
-      "params": {}
+      "params": {},
+      "answer": {
+        "account": "c2Vzc2lvbi1yZWYtMDAwMDAx"
+      },
+      "personal": {
+        "accounts": [
+          {
+            "account": "c2Vzc2lvbi1yZWYtMDAwMDAx",
+            "identifier": "alice@example.com",
+            "current": true
+          },
+          {
+            "account": "c2Vzc2lvbi1yZWYtMDAwMDAy",
+            "identifier": "alice@work.example",
+            "current": false
+          }
+        ]
+      },
+      "amr": []
     }
   ],
   "$defs": {
     "params": {
       "type": "object",
-      "properties": {}
+      "properties": {},
+      "examples": [
+        {}
+      ]
     },
     "answer": {
       "type": "object",
@@ -76,7 +110,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 254,
-                "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
                 "x-qauth-display": "account",
                 "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
               },
@@ -121,6 +155,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

@@ -9,15 +9,28 @@
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:consent:v1-rc.0"
+      "const": "urn:qauth:ia:consent:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
@@ -46,7 +59,15 @@
           "https://notes.example.com/"
         ],
         "remember_default": true
-      }
+      },
+      "answer": {
+        "decision": "allow",
+        "remember": true
+      },
+      "personal": {
+        "identifier": "alice@example.com"
+      },
+      "amr": []
     }
   ],
   "$defs": {
@@ -72,7 +93,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 280,
-                "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
                 "x-qauth-display": "realm",
                 "description": "The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Absent when the catalog has none: the screen shows the scope value."
               },
@@ -102,7 +123,12 @@
             "format": "uri",
             "maxLength": 2048,
             "pattern": "^[a-z][a-z0-9+.-]*:[!#-;=?-\\[\\]-~]+$",
-            "description": "One resource indicator."
+            "not": {
+              "type": "string",
+              "pattern": "^(?:javascript|data|vbscript|file|blob):"
+            },
+            "description": "One resource indicator, as the request named it. The request chose it, so the screen marks it as asked for by the app.",
+            "x-qauth-declared": true
           }
         },
         "remember_default": {
@@ -114,6 +140,33 @@
         "scopes",
         "resources",
         "remember_default"
+      ],
+      "examples": [
+        {
+          "scopes": [
+            {
+              "scope": "openid",
+              "sensitive": false,
+              "dangerous": false
+            },
+            {
+              "scope": "notes:read",
+              "text": "Read your notes",
+              "sensitive": false,
+              "dangerous": false
+            },
+            {
+              "scope": "write:notes",
+              "text": "Change and delete your notes",
+              "sensitive": true,
+              "dangerous": true
+            }
+          ],
+          "resources": [
+            "https://notes.example.com/"
+          ],
+          "remember_default": true
+        }
       ]
     },
     "answer": {
@@ -152,7 +205,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 254,
-          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
           "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
         }
@@ -164,6 +217,10 @@
       ]
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

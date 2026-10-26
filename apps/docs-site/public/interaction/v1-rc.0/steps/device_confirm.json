@@ -2,22 +2,35 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/device_confirm.json",
   "title": "urn:qauth:ia:device_confirm:v1-rc.0",
-  "description": "The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. Works without JavaScript, without the device details.",
+  "description": "The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. The device details come with the personal data, so this step needs JavaScript: a page shows them before it offers `confirm`.",
   "x-qauth-transports": [
     "interaction"
   ],
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:device_confirm:v1-rc.0"
+      "const": "urn:qauth:ia:device_confirm:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
@@ -25,7 +38,22 @@
       "params": {
         "user_code": "WDJB-MJHT",
         "requested_at": "2026-10-26T09:29:12Z"
-      }
+      },
+      "answer": {
+        "decision": "confirm"
+      },
+      "personal": {
+        "location": {
+          "country": "DE",
+          "region": "Bavaria"
+        },
+        "network": {
+          "asn": 64500,
+          "name": "Example Broadband"
+        },
+        "user_agent": "ExampleTV/4.2 (Linux; Android 14)"
+      },
+      "amr": []
     }
   ],
   "$defs": {
@@ -50,6 +78,12 @@
       "required": [
         "user_code",
         "requested_at"
+      ],
+      "examples": [
+        {
+          "user_code": "WDJB-MJHT",
+          "requested_at": "2026-10-26T09:29:12Z"
+        }
       ]
     },
     "answer": {
@@ -92,7 +126,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+              "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
               "x-qauth-display": "server",
               "description": "The region of the requesting address."
             }
@@ -112,7 +146,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128,
-              "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+              "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
               "x-qauth-display": "server",
               "description": "The name of that network."
             }
@@ -122,7 +156,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "declared",
           "description": "The user agent the device declared, cut and stripped. The device chose it, so the screen marks it as declared."
         }
@@ -142,6 +176,10 @@
       ]
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

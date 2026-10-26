@@ -12,8 +12,10 @@
  * - `$ref` to `#/components/schemas/*`, `const`, `enum`, `x-extensible-enum`
  *   (a union of the known values and any other string), `oneOf`;
  * - `type` `object` with `properties`, `required` and `additionalProperties`
- *   (an index signature), `array` with `items`, `string`, `integer`, `number`,
- *   `boolean`.
+ *   (an index signature), and rules between its members (`allOf` of
+ *   `if`/`then`), which constrain it without changing its type; `array` with
+ *   `items`, `string`, `integer`, `number`, `boolean`;
+ * - `{ "not": {} }`, a member that is never present, as `never`.
  *
  * Annotations and validation keywords (`pattern`, `maxLength`, `format`, `not`,
  * `contentSchema`, …) carry no type and are left to the server; the
@@ -47,9 +49,13 @@ const NON_TYPE_KEYWORDS = new Set([
   'contentSchema',
   'discriminator',
   'x-qauth-display',
+  'x-qauth-declared',
   'x-qauth-transports',
-  'x-qauth-amr',
+  'x-qauth-step',
 ]);
+
+/** The keywords a rule of an object (`allOf` member) may use: conditions, with no type of their own. */
+const RULE_KEYWORDS = new Set(['if', 'then', 'else', 'description']);
 
 const TYPE_KEYWORDS = new Set([
   '$ref',
@@ -62,6 +68,7 @@ const TYPE_KEYWORDS = new Set([
   'required',
   'additionalProperties',
   'items',
+  'allOf',
 ]);
 
 const SCHEMA_REF = '#/components/schemas/';
@@ -96,7 +103,26 @@ function assertKnownKeywords(schema: Schema, at: string): void {
       throw new Error(`${at}: the generator does not know the keyword ${keyword}`);
     }
   }
+  const rules = schema['allOf'];
+  if (rules === undefined) return;
+  if (schema['type'] !== 'object' || !Array.isArray(rules)) {
+    throw new Error(`${at}: allOf is only read as the rules of an object`);
+  }
+  for (const [index, rule] of (rules as Schema[]).entries()) {
+    for (const keyword of Object.keys(rule)) {
+      if (!RULE_KEYWORDS.has(keyword)) {
+        throw new Error(`${at}.allOf[${index}]: a rule may hold only if/then/else, not ${keyword}`);
+      }
+    }
+  }
 }
+
+/** Whether `schema` is `{ "not": {} }` (with a description at most): nothing matches it. */
+const isNever = (schema: Schema) =>
+  typeof schema['not'] === 'object' &&
+  schema['not'] !== null &&
+  Object.keys(schema['not'] as object).length === 0 &&
+  Object.keys(schema).every((keyword) => keyword === 'not' || keyword === 'description');
 
 /** A union of `members`; a member that is itself a union is parenthesised. */
 const union = (members: string[]) => {
@@ -110,6 +136,7 @@ const union = (members: string[]) => {
 /** The TypeScript type of `schema`. */
 export function typeOf(schema: Schema, at: string): string {
   assertKnownKeywords(schema, at);
+  if (isNever(schema)) return 'never';
   if (typeof schema['$ref'] === 'string') return typeName(schema['$ref']);
   if ('const' in schema) return literal(schema['const']);
   if (Array.isArray(schema['enum'])) return schema['enum'].map(literal).join(' | ');
@@ -241,10 +268,37 @@ function operationType({ id, method, path, operation }: OperationEntry): string 
   ].join('\n');
 }
 
-function operationInfo({ id, method, path, operation }: OperationEntry): string {
-  return `  ${literal(id)}: { method: ${literal(method)}, path: ${literal(path)}, flowCookie: ${
-    operation['x-qauth-flow-cookie'] === 'required'
-  }, csrf: ${operation['x-qauth-csrf'] === 'required'}, statuses: [${Object.keys(operation.responses).join(', ')}] },`;
+/** The pattern of each path parameter, following a `$ref` to its component. */
+function pathPatterns(
+  operation: OperationObject,
+  components: Record<string, Schema>,
+  id: string
+): string {
+  const entries = (operation.parameters ?? [])
+    .filter((parameter) => parameter.in === 'path')
+    .map((parameter) => {
+      const ref = parameter.schema['$ref'];
+      const schema = typeof ref === 'string' ? components[typeName(ref)] : parameter.schema;
+      const pattern = schema?.['pattern'];
+      if (typeof pattern !== 'string') {
+        throw new Error(`${id}: the path parameter ${parameter.name} has no pattern`);
+      }
+      return `${key(parameter.name)}: ${literal(pattern)}`;
+    });
+  return `{ ${entries.join(', ')} }`;
+}
+
+function operationInfo(
+  { id, method, path, operation }: OperationEntry,
+  components: Record<string, Schema>
+): string {
+  return `  ${literal(id)}: { method: ${literal(method)}, path: ${literal(path)}, pathPatterns: ${pathPatterns(
+    operation,
+    components,
+    id
+  )}, flowCookie: ${operation['x-qauth-flow-cookie'] === 'required'}, csrf: ${
+    operation['x-qauth-csrf'] === 'required'
+  }, statuses: [${Object.keys(operation.responses).join(', ')}] },`;
 }
 
 function clientMethod({ id, operation }: OperationEntry): string {
@@ -280,7 +334,7 @@ ${operations.map(operationType).join('\n')}
 }`,
     `/** What each operation needs, from the document's \`x-qauth-flow-cookie\` and \`x-qauth-csrf\`. */
 export const OPERATIONS = {
-${operations.map(operationInfo).join('\n')}
+${operations.map((entry) => operationInfo(entry, components)).join('\n')}
 } as const;`,
     `/**
  * A client of the Interaction API. In a browser, leave \`baseUrl\` out: the API

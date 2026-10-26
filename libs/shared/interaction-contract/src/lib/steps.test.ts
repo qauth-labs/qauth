@@ -11,7 +11,7 @@ import {
   stepComponentNames,
 } from './openapi';
 import type { JsonSchema } from './schema-kit';
-import { stepJsonSchema } from './step-schema';
+import { stepJsonSchema, stepRecordExample } from './step-schema';
 import { stepErrorCodes, STEPS } from './steps';
 
 /** The steps ADR-017 Decision 3 lists, which both transports serve. */
@@ -163,19 +163,6 @@ describe('the steps', () => {
       expect(request(withoutType), step.name).toBe(false);
     }
   });
-
-  it('keep personal data out of the params: no account value is readable with the id alone', () => {
-    const accountValues = (schema: unknown): number =>
-      JSON.stringify(schema).split('"x-qauth-display":"account"').length - 1;
-    for (const step of STEPS) {
-      expect(accountValues(step.params), step.name).toBe(0);
-    }
-    const read = (INTERACTION_OPENAPI['components'] as { schemas: Record<string, unknown> })
-      .schemas;
-    for (const name of ['Interaction', 'ClientDisplay', 'Brand']) {
-      expect(accountValues(read[name]), name).toBe(0);
-    }
-  });
 });
 
 describe('the step examples', () => {
@@ -184,15 +171,16 @@ describe('the step examples', () => {
   it.each(STEPS.map((step) => [step.name, step] as const))(
     '%s: each part validates against the step’s own schema file',
     (_name, step) => {
-      expectValid(stepFilePart(step, ''), step.example.step, 'step object');
+      expectValid(stepFilePart(step, ''), stepRecordExample(step), 'the whole step');
       expectValid(stepFilePart(step, 'params'), step.example.step.params, 'params');
       expectValid(stepFilePart(step, 'answer'), step.example.answer, 'answer');
       expectValid(stepFilePart(step, 'personal'), step.example.personal ?? {}, 'personal');
       if (step.example.step.error !== undefined) {
         expect(step.errors).toContain(step.example.step.error);
       }
+      expectValid(stepFilePart(step, 'amr'), [...step.amr], 'amr');
       const file = stepJsonSchema(step);
-      expect(file['examples']).toEqual([step.example.step]);
+      expect(file['examples']).toEqual([stepRecordExample(step)]);
     }
   );
 
@@ -210,6 +198,17 @@ describe('the step examples', () => {
     for (const step of STEPS) {
       const members = Object.keys((step.personal['properties'] ?? {}) as object);
       expect(step.example.personal !== undefined, step.name).toBe(members.length > 0);
+    }
+  });
+
+  it('offer the current step’s params and each alternative’s, keyed by step name', () => {
+    for (const step of STEPS) {
+      const read = exampleInteraction(step);
+      expect(Object.keys(read.params).sort(), step.name).toEqual(
+        [read.step, ...read.alternatives].sort()
+      );
+      expect(read.alternatives, step.name).not.toContain(read.step);
+      if (read.error !== undefined) expect(step.errors).toContain(read.error);
     }
   });
 
@@ -231,8 +230,17 @@ describe('the step examples', () => {
     expect(answer({})).toBe(false);
     const read = validator.schema('Interaction');
     expect(read({ ...exampleInteraction(password), csrf: 'short' })).toBe(false);
-    expect(
-      read({ ...exampleInteraction(password), step: { ...password.example.step, error: 'nope' } })
-    ).toBe(false);
+    expect(read({ ...exampleInteraction(password), error: 'Not a code' })).toBe(false);
+    expect(read({ ...exampleInteraction(password), step: 'urn:qauth:ia:password:v1' })).toBe(false);
+    const emailCode = STEPS.find((step) => step.name === 'email_code');
+    if (emailCode === undefined) throw new Error('no email_code step');
+    const wrongParams = {
+      ...exampleInteraction(emailCode),
+      params: {
+        [emailCode.urn]: { ...(emailCode.example.step.params as object), purpose: 'login' },
+      },
+    };
+    expect(read(wrongParams)).toBe(false);
+    expect(stepFilePart(password, 'amr')(['pwd', 'mfa'])).toBe(false);
   });
 });

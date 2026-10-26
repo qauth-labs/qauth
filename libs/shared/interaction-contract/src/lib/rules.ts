@@ -14,10 +14,10 @@ import {
 /** The rules of ADR-019 Decision 6 that every operation shows. */
 export const API_RULES: readonly string[] = [
   `Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (\`${FLOW_COOKIE_NAME}\`) and a CSRF value protect it, and the server sends no CORS headers.`,
-  'Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded display value; a display value has no markup, control, format or line-separator character.',
+  'Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.',
   'No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.',
   'The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.',
-  'Every answer is `Cache-Control: no-store`.',
+  'Every operation answers with `Cache-Control: no-store`.',
 ];
 
 /** The versioning rules (ADR-018 §5, ADR-019 Decision 6, ADR-017 Decision 3). */

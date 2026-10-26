@@ -6,12 +6,13 @@ import type { StepDefinition } from './step-definition';
  * One JSON Schema (draft 2020-12) per step: the step's params, answer fields,
  * personal data, closed error set and `amr`, in one self-contained file (#590).
  *
- * The file's own schema is the step object as a step read carries it
- * (`{ type, params, error? }`); the other parts are `$defs` of it, addressable
- * as `<file>#/$defs/answer` and so on. Every reference points at the file's
- * own `$defs`, as the stable-surface registry requires of a JSON Schema
- * surface. Each part carries the step's example, so the file is its own test
- * vector. These are the files the step grammar library (#591) generates from
+ * The file's own schema describes the whole step as one record, `{ type,
+ * params, answer, personal, error?, amr }`, and each part is a `$def`
+ * addressable as `<file>#/$defs/answer` and so on. The record is the shape of
+ * the step's test vector, and every part is reachable from the root, so the
+ * stable-surface check compares all of them. Every reference points at the
+ * file's own `$defs`, as the stable-surface registry requires of a JSON Schema
+ * surface. These are the files the step grammar library (#591) generates from
  * its Zod schemas and compares with.
  */
 
@@ -28,6 +29,18 @@ const withExamples = (schema: JsonSchema, example: unknown): JsonSchema => ({
   examples: [example],
 });
 
+/** The step's example as one record, the root of its schema file. */
+export function stepRecordExample(step: StepDefinition) {
+  return {
+    type: step.urn,
+    params: step.example.step.params,
+    answer: step.example.answer,
+    personal: step.example.personal ?? {},
+    ...(step.example.step.error === undefined ? {} : { error: step.example.step.error }),
+    amr: [...step.amr],
+  };
+}
+
 /** The JSON Schema file of one step. */
 export function stepJsonSchema(step: StepDefinition): JsonSchema {
   const hasErrors = step.errors.length > 0;
@@ -39,14 +52,17 @@ export function stepJsonSchema(step: StepDefinition): JsonSchema {
     'x-qauth-transports': [...step.transports],
     type: 'object',
     properties: {
-      type: { const: step.urn },
+      type: { const: step.urn, description: 'The step name.' },
       params: { $ref: '#/$defs/params' },
+      answer: { $ref: '#/$defs/answer' },
+      personal: { $ref: '#/$defs/personal' },
       ...(hasErrors ? { error: { $ref: '#/$defs/error' } } : {}),
+      amr: { $ref: '#/$defs/amr' },
     },
-    required: ['type', 'params'],
-    examples: [step.example.step],
+    required: ['type', 'params', 'answer', 'personal', 'amr'],
+    examples: [stepRecordExample(step)],
     $defs: {
-      params: step.params,
+      params: { ...step.params, examples: [step.example.step.params] },
       answer: withExamples(step.answer, step.example.answer),
       personal: withExamples(step.personal, step.example.personal ?? {}),
       ...(hasErrors
@@ -59,6 +75,8 @@ export function stepJsonSchema(step: StepDefinition): JsonSchema {
           }
         : {}),
       amr: {
+        type: 'array',
+        items: { type: 'string' },
         const: [...step.amr],
         description:
           step.amr.length === 0

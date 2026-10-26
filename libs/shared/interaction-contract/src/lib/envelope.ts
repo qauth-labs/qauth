@@ -1,4 +1,4 @@
-import { INTERACTION_PROBLEM_CODES, STATUS_TITLES } from './problems';
+import { INTERACTION_PROBLEM_CODES } from './problems';
 import {
   absoluteUri,
   array,
@@ -11,8 +11,10 @@ import {
   host,
   httpsUrl,
   type JsonSchema,
+  NEVER,
   object,
   sameOriginPath,
+  whenEquals,
 } from './schema-kit';
 
 /**
@@ -202,7 +204,11 @@ export const clientDisplaySchema = object(
         },
       },
       ['target'],
-      'Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout.'
+      'Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout.',
+      [
+        whenEquals('target', ['host'], { required: ['host'] }),
+        whenEquals('target', ['app'], { required: ['scheme'] }),
+      ]
     ),
     declaredName: displayText(
       'declared',
@@ -216,20 +222,36 @@ export const clientDisplaySchema = object(
     },
   },
   ['kind', 'newClient'],
-  'Who the client is, as the auth server’s own records say (#593). Client-supplied text is untrusted: no logo comes from a client-supplied URL, and an unverified client shows none.'
+  'Who the client is, as the auth server’s own records say (#593). Client-supplied text is untrusted: no logo comes from a client-supplied URL, and an unverified client shows none.',
+  [
+    whenEquals('kind', ['cimd', 'admin_registered'], { required: ['verifiedDomain'] }),
+    whenEquals('kind', ['federation'], { required: ['federation'] }),
+    whenEquals('kind', ['unverified'], {
+      properties: { verifiedDomain: NEVER, federation: NEVER, logo: NEVER },
+    }),
+  ]
 );
 
 export const interactionSchema = object(
   {
-    step: { $ref: '#/components/schemas/Step' },
+    step: {
+      $ref: '#/components/schemas/StepName',
+      description: 'The current step: the one the engine asks for.',
+    },
+    error: {
+      $ref: '#/components/schemas/StepError',
+      description:
+        'Why the last answer to the current step was refused, from that step’s closed error set. Absent otherwise.',
+    },
     alternatives: {
       type: 'array',
       description:
-        'The other steps the engine accepts as the next answer, preferred first: "try another way" and the paths a page links to (a reset, a resend). Never the current step, and never with `error`.',
+        'The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4).',
       minItems: 0,
       maxItems: 15,
-      items: { $ref: '#/components/schemas/Step' },
+      items: { $ref: '#/components/schemas/StepName' },
     },
+    params: { $ref: '#/components/schemas/StepParams' },
     csrf: { $ref: '#/components/schemas/Csrf' },
     client: { $ref: '#/components/schemas/ClientDisplay' },
     brand: { $ref: '#/components/schemas/Brand' },
@@ -242,8 +264,8 @@ export const interactionSchema = object(
     },
     expiresAt: dateTime('When the interaction expires.'),
   },
-  ['step', 'alternatives', 'csrf', 'brand', 'expiresAt'],
-  'An interaction as its current step shows it: the step, the alternatives, the CSRF value for one answer, who the client is and the realm’s brand. No personal data.'
+  ['step', 'alternatives', 'params', 'csrf', 'brand', 'expiresAt'],
+  'An interaction as its current step shows it: the step, the alternatives and their params, a CSRF value for one answer, who the client is and the realm’s brand. No personal data. The step grammar’s part has the shape of the FiPA endpoint’s answer (ADR-017 Decision 3): `step` is its `interaction_type_required`, `step` and `alternatives` its `qauth_interaction_types_offered`, `params` its `qauth_interaction_params` and `error` its `qauth_interaction_error`.'
 );
 
 export const nextStepResultSchema = object(
@@ -260,7 +282,7 @@ export const redirectResultSchema = object(
     result: { const: 'redirect', description: 'The interaction is finished.' },
     location: absoluteUri(
       8192,
-      'Where the browser goes now: the authorization response to the client, the post-logout redirect, or a page of the ceremony app when no client waits, as at the end of a device authorization. Taken from the interaction record and the realm, never from the request.'
+      'Where the browser goes now: the authorization response to the client, the post-logout redirect, the ceremony app’s page of a new interaction (after an account switch), or a page of the ceremony app when no client waits, as at the end of a device authorization. Taken from the interaction record and the realm, never from the request.'
     ),
   },
   ['result', 'location'],
@@ -283,27 +305,43 @@ export const answerResultSchema: JsonSchema = {
   },
 };
 
+export const personalDataSchema = object(
+  {
+    step: {
+      $ref: '#/components/schemas/StepName',
+      description: 'The current step, whose personal data this is.',
+    },
+    data: { $ref: '#/components/schemas/StepPersonalData' },
+  },
+  ['step', 'data'],
+  'The personal data of the current step: only the browser that holds the flow cookie reads it.'
+);
+
 export const cancelRequestSchema = closedObject(
   { csrf: { $ref: '#/components/schemas/Csrf' } },
   ['csrf'],
   'Cancel the interaction. The client gets `access_denied` with its `state` and `iss`; a logout ends with the person still signed in.'
 );
 
-const statuses = [
-  ...new Set(Object.values(INTERACTION_PROBLEM_CODES).map((entry) => entry.status)),
-];
-
 export const problemSchema = object(
   {
-    type: {
-      const: 'about:blank',
-      description: 'RFC 9457 §4.2.1: no type beyond the HTTP status. Branch on `code`.',
-    },
-    title: closedEnum(
-      statuses.map((status) => STATUS_TITLES[status] ?? 'Error'),
-      'The HTTP status phrase. Not for branching, and not for a screen.'
+    type: absoluteUri(
+      2048,
+      'RFC 9457 §3.1.1. `about:blank` today: no type beyond the HTTP status. A code may get its own type URI later, so a page branches on `code`, never on `type`.'
     ),
-    status: { type: 'integer', enum: statuses, description: 'The HTTP status, repeated.' },
+    title: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[A-Za-z][A-Za-z -]*$',
+      description: 'The HTTP status phrase. Not for branching, and not for a screen.',
+    },
+    status: {
+      type: 'integer',
+      minimum: 400,
+      maximum: 599,
+      description: 'The HTTP status, repeated.',
+    },
     code: extensibleEnum(
       Object.keys(INTERACTION_PROBLEM_CODES),
       '^[a-z][a-z0-9_]{0,63}$',
@@ -317,6 +355,12 @@ export const problemSchema = object(
       pattern: '^[!#-;=?-~]+$',
       description:
         'The id the server logged the request under. A page shows it, so an operator can find the failure (ADR-020 §3).',
+    },
+    detail: { ...NEVER, description: 'Never sent: no prose.' },
+    instance: { ...NEVER, description: 'Never sent.' },
+    errors: {
+      ...NEVER,
+      description: 'Never sent: a refused answer comes back as its step’s `error`.',
     },
   },
   ['type', 'title', 'status', 'code', 'trace_id'],

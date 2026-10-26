@@ -17,10 +17,10 @@ The contract is one OpenAPI 3.1 document, [openapi.json](/interaction/v1-rc.0/op
 ## Rules
 
 - Browser-facing and same-origin. A page calls the API on the realm origin it was served from. A flow cookie (`__Host-qauth_flow`) and a CSRF value protect it, and the server sends no CORS headers.
-- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded display value; a display value has no markup, control, format or line-separator character.
+- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end.
 - No URL carries `return_to`, a redirect or a client parameter. A page reads one opaque interaction id from its own URL, and the client, the redirect target and everything else it shows come from the API.
 - The interaction id alone reads the current step, with no personal data. Personal data, such as the account chooser’s list, needs the flow cookie. Answering a step or cancelling the interaction needs the flow cookie, the step’s CSRF value and a same-origin request.
-- Every answer is `Cache-Control: no-store`.
+- Every operation answers with `Cache-Control: no-store`.
 
 ## Versioning
 
@@ -51,7 +51,7 @@ A form post gets the same as a `303 See Other`. Anything the API refuses is an *
 
 ## Steps
 
-Each step is named `urn:qauth:ia:<name>:v1-rc.0`. Its params are what any reader of the interaction id may see; its personal data needs the flow cookie. The params and answer fields keep the step grammar's names on both transports, which is why they are `snake_case` while the envelope is `camelCase`.
+Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current step (`step`), the other steps the engine accepts next (`alternatives`), their params keyed by step name (`params`) and, after a refused answer, the reason (`error`): the shape of the FiPA endpoint's answer, so a new step is a new name and a new member, not a break. A step's params are what any reader of the interaction id may see; its personal data needs the flow cookie. Each step's schema file holds the whole step as one record (params, answer, personal data, errors and `amr`) with its example, which the implementation reuses as a test vector. The params and answer fields keep the step grammar's names on both transports, which is why they are `snake_case` while the envelope is `camelCase`.
 
 | Step                                  | Transports      | Answer fields            | Errors                                | `amr`        | Personal data                              |
 | ------------------------------------- | --------------- | ------------------------ | ------------------------------------- | ------------ | ------------------------------------------ |
@@ -79,10 +79,9 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. Its params are what any reader
 
 `urn:qauth:ia:identifier:v1-rc.0` — Asks who is signing in.
 
-Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4).
+Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4). Offered as an alternative of a later step, it is the account switch ("Not you?", "Use another account"): answering it ends the interaction and starts a new one for the same authorization request, and the result is a redirect to the ceremony app’s page of the new interaction. Nothing proved for the first account carries over (#592).
 
 - Params: —
-
 - Schema: [steps/identifier.json](/interaction/v1-rc.0/steps/identifier.json)
 
 ### password
@@ -92,7 +91,6 @@ Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets
 The password factor. A rejected password, an unknown account and a disabled account give the same `invalid_credentials`, after the same timing floor (ADR-017 Decisions 3 and 4). Works without JavaScript: the form posts straight to the auth server with the step’s CSRF value (ADR-019 Decision 5).
 
 - Params: —
-
 - Schema: [steps/password.json](/interaction/v1-rc.0/steps/password.json)
 
 ### email_code
@@ -102,7 +100,6 @@ The password factor. A rejected password, an unknown account and a disabled acco
 An emailed code proves control of a mailbox: it verifies a password account’s address and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). An answer with no `otp` asks for the code again. Works without JavaScript.
 
 - Params: `purpose`, `length`, `expires_in`, `resend_after`
-
 - Schema: [steps/email_code.json](/interaction/v1-rc.0/steps/email_code.json)
 
 ### new_password
@@ -112,7 +109,6 @@ An emailed code proves control of a mailbox: it verifies a password account’s 
 Sets a password through the one password policy (ADR-017 Decision 8): at registration, at the end of a reset, or when an admin or a breach-list match requires a new one (ADR-020 §3). The reasons of a refusal are returned, never prose. The page marks the field for password managers, with the identifier from the personal data as the username. Works without JavaScript.
 
 - Params: `purpose`, `min_length`, `max_length`, `reasons`
-
 - Schema: [steps/new_password.json](/interaction/v1-rc.0/steps/new_password.json)
 
 ### password_reset
@@ -122,7 +118,6 @@ Sets a password through the one password policy (ADR-017 Decision 8): at registr
 A path marker: answering it starts a reset. The next step is `email_code` with `purpose` `recovery` for every address, known or not; mail goes only to a known address with a password. A reset never unlocks an account whose strongest authenticator is stronger than email (ADR-017 Decision 8).
 
 - Params: —
-
 - Schema: [steps/password_reset.json](/interaction/v1-rc.0/steps/password_reset.json)
 
 ### captcha
@@ -131,8 +126,7 @@ A path marker: answering it starts a reset. The next step is `email_code` with `
 
 A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped.
 
-- Params: —
-
+- Params: `provider`, `challenge`, `difficulty`, or `provider`, `name`, `site_key`
 - Schema: [steps/captcha.json](/interaction/v1-rc.0/steps/captcha.json)
 
 ### webauthn_get
@@ -142,7 +136,6 @@ A bot challenge, when a soft threshold requires one; the pending step resumes af
 Passkey sign-in: the WebAuthn Level 3 request options as JSON, for `PublicKeyCredential.parseRequestOptionsFromJSON()`. Discoverable credentials only: the options never carry `allowCredentials`, so the step read reveals no account’s passkeys (ADR-017 Decision 4, ADR-019 Decision 6). The engine checks that the passkey belongs to the transaction’s account. The RP ID is the realm’s host (ADR-019 Decision 2). Needs JavaScript.
 
 - Params: `challenge`, `rpId`, `timeout`, `userVerification`
-
 - Schema: [steps/webauthn_get.json](/interaction/v1-rc.0/steps/webauthn_get.json)
 
 ### webauthn_create
@@ -152,7 +145,6 @@ Passkey sign-in: the WebAuthn Level 3 request options as JSON, for `PublicKeyCre
 Passkey enrolment. `options` is the WebAuthn Level 3 creation options as JSON without `user` and `excludeCredentials`, which are the account’s own data and come with the personal data; the page joins the two for `PublicKeyCredential.parseCreationOptionsFromJSON()`. The RP ID is the realm’s host and locks at the first enrolment (ADR-019 Decision 2). Enrolment adds no `amr` value. Needs JavaScript.
 
 - Params: `optional`, `options`
-
 - Schema: [steps/webauthn_create.json](/interaction/v1-rc.0/steps/webauthn_create.json)
 
 ### totp
@@ -162,7 +154,6 @@ Passkey enrolment. `options` is the WebAuthn Level 3 creation options as JSON wi
 A TOTP second factor (RFC 6238) with the fixed parameters of ADR-020 §3: SHA-1, six digits, 30 seconds, one step of tolerance. An accepted code is never accepted twice (ADR-017 Decision 8). Works without JavaScript.
 
 - Params: `digits`
-
 - Schema: [steps/totp.json](/interaction/v1-rc.0/steps/totp.json)
 
 ### recovery_code
@@ -172,27 +163,24 @@ A TOTP second factor (RFC 6238) with the fixed parameters of ADR-020 §3: SHA-1,
 A recovery code stands in for a second factor after the first, or for the passkey of a passkey-only account. Only the hosted pages redeem one; the FiPA endpoint answers `redirect_to_web` for that path. It adds no `amr` value and never `mfa`, so a policy that needs a second factor makes the person bind a new one before the transaction completes (ADR-017 Decisions 4 and 8). Works without JavaScript.
 
 - Params: —
-
 - Schema: [steps/recovery_code.json](/interaction/v1-rc.0/steps/recovery_code.json)
 
 ### recovery_codes
 
 `urn:qauth:ia:recovery_codes:v1-rc.0` — Shows a new set of recovery codes once.
 
-A new recovery-code set: issued at the first enrolment of a second factor, at the registration of a passkey-only account, and when the person regenerates the set (ADR-017 Decision 8). The codes are personal data, readable with the flow cookie only while this step is current, and never shown again. The answer confirms the person saved them.
+A new recovery-code set: issued at the first enrolment of a second factor, at the registration of a passkey-only account, and when the person regenerates the set (ADR-017 Decision 8). The codes are personal data: readable with the flow cookie while this step is current, and never after. The answer confirms the person saved them.
 
 - Params: `count`
-
 - Schema: [steps/recovery_codes.json](/interaction/v1-rc.0/steps/recovery_codes.json)
 
 ### totp_setup
 
 `urn:qauth:ia:totp_setup:v1-rc.0` — Sets up an authenticator app.
 
-TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data, read once with the flow cookie; it is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.
+TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data: readable with the flow cookie while this step is current, and never after. It is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.
 
 - Params: `algorithm`, `digits`, `period`
-
 - Schema: [steps/totp_setup.json](/interaction/v1-rc.0/steps/totp_setup.json)
 
 ### consent
@@ -202,17 +190,15 @@ TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal
 The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript.
 
 - Params: `scopes`, `resources`, `remember_default`
-
 - Schema: [steps/consent.json](/interaction/v1-rc.0/steps/consent.json)
 
 ### select_account
 
 `urn:qauth:ia:select_account:v1-rc.0` — Asks which signed-in account to continue with.
 
-The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. "Use another account" answers the `identifier` step, offered beside this one, which starts a new interaction for the same authorization request; nothing proved for one account carries over to another (#592). Needs JavaScript, to read the list.
+The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. "Use another account" answers the `identifier` step, offered beside this one: that starts a new interaction for the same authorization request, and the result is a redirect to its page (#592). Needs JavaScript, to read the list.
 
 - Params: —
-
 - Schema: [steps/select_account.json](/interaction/v1-rc.0/steps/select_account.json)
 
 ### device_code
@@ -222,17 +208,15 @@ The account chooser for `prompt=select_account`, when the browser holds sessions
 Code entry for the OAuth 2.0 device authorization grant (RFC 8628 §3.3). Unknown, expired and used codes give the same `invalid_user_code`. Entry is rate-limited per code, per session and per address. A person who arrives through `verification_uri_complete` skips this step and still confirms on `device_confirm` (ADR-020 §3). Works without JavaScript.
 
 - Params: `length`
-
 - Schema: [steps/device_code.json](/interaction/v1-rc.0/steps/device_code.json)
 
 ### device_confirm
 
 `urn:qauth:ia:device_confirm:v1-rc.0` — Asks the person to confirm the device in front of them.
 
-The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. Works without JavaScript, without the device details.
+The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. The device details come with the personal data, so this step needs JavaScript: a page shows them before it offers `confirm`.
 
 - Params: `user_code`, `requested_at`
-
 - Schema: [steps/device_confirm.json](/interaction/v1-rc.0/steps/device_confirm.json)
 
 ### logout_confirm
@@ -242,7 +226,6 @@ The explicit confirmation of a device authorization, always asked, also after `v
 The confirmation of an RP-initiated logout (ADR-019 Decision 4). The interaction’s `client` names the app that asked, when the request identified one. A browser may hold several accounts’ sessions, so the person signs out of this account or of every account on the browser (ADR-019 Decision 3). Works without JavaScript, without the account list.
 
 - Params: —
-
 - Schema: [steps/logout_confirm.json](/interaction/v1-rc.0/steps/logout_confirm.json)
 
 ## Brand

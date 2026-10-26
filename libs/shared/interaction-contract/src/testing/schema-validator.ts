@@ -16,8 +16,9 @@ import type { JsonSchema } from '../lib/schema-kit';
 /** The annotation keywords the contract uses beyond JSON Schema's own. */
 const ANNOTATIONS = [
   'x-qauth-display',
+  'x-qauth-declared',
   'x-qauth-transports',
-  'x-qauth-amr',
+  'x-qauth-step',
   'x-extensible-enum',
   // OpenAPI's base vocabulary: an annotation here. Its `mapping` is checked by
   // the lint test, against the `const` of each variant.
@@ -25,13 +26,17 @@ const ANNOTATIONS = [
 ];
 
 /**
- * A strict validator: an unknown keyword, a `required` member that is not
- * declared, a keyword on the wrong type or an unknown format fails the compile,
- * so a typo in a schema (`maxLenght`) is an error, not a schema that accepts
- * anything.
+ * A strict validator: an unknown keyword, a keyword on the wrong type or an
+ * unknown format fails the compile, so a typo in a schema (`maxLenght`) is an
+ * error, not a schema that accepts anything.
+ *
+ * `strictRequired` is off: an object's rules (`if`/`then`, `whenEquals` in
+ * `schema-kit.ts`) require members the enclosing object declares, which that
+ * check does not look at. `object()` refuses a required member it does not
+ * declare when the contract is built.
  */
 export function strictValidator(): Ajv2020 {
-  const ajv = new Ajv2020({ strict: true, allErrors: true });
+  const ajv = new Ajv2020({ strict: true, strictRequired: false, allErrors: true });
   addFormats(ajv);
   for (const keyword of ANNOTATIONS) ajv.addKeyword(keyword);
   return ajv;

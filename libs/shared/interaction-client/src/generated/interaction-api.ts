@@ -16,11 +16,15 @@ export type InteractionId = string;
 /** The CSRF value of the step read it came with: valid for one answer to that step view, bound to the interaction, and never put in a URL. The ceremony app embeds it; it cannot mint one. */
 export type Csrf = string;
 
-/** An interaction as its current step shows it: the step, the alternatives, the CSRF value for one answer, who the client is and the realm’s brand. No personal data. */
+/** An interaction as its current step shows it: the step, the alternatives and their params, a CSRF value for one answer, who the client is and the realm’s brand. No personal data. The step grammar’s part has the shape of the FiPA endpoint’s answer (ADR-017 Decision 3): `step` is its `interaction_type_required`, `step` and `alternatives` its `qauth_interaction_types_offered`, `params` its `qauth_interaction_params` and `error` its `qauth_interaction_error`. */
 export interface Interaction {
-  step: Step;
-  /** The other steps the engine accepts as the next answer, preferred first: "try another way" and the paths a page links to (a reset, a resend). Never the current step, and never with `error`. */
-  alternatives: Step[];
+  /** The current step: the one the engine asks for. */
+  step: StepName;
+  /** Why the last answer to the current step was refused, from that step’s closed error set. Absent otherwise. */
+  error?: StepError;
+  /** The other steps the engine accepts as the next answer, preferred first: "try another way", the paths a page links to (a reset, a resend), and the account switch. Never the current step. Before a first factor succeeds, the list holds only what the same request would offer every account, so it reveals no account’s methods; after it, that account’s remaining methods (ADR-017 Decision 4). */
+  alternatives: StepName[];
+  params: StepParams;
   csrf: Csrf;
   client?: ClientDisplay;
   brand: Brand;
@@ -30,27 +34,59 @@ export interface Interaction {
   expiresAt: string;
 }
 
-/** One step, by its name. */
-export type Step =
-  | IdentifierStep
-  | PasswordStep
-  | EmailCodeStep
-  | NewPasswordStep
-  | PasswordResetStep
-  | CaptchaStep
-  | WebauthnGetStep
-  | WebauthnCreateStep
-  | TotpStep
-  | RecoveryCodeStep
-  | RecoveryCodesStep
-  | TotpSetupStep
-  | ConsentStep
-  | SelectAccountStep
-  | DeviceCodeStep
-  | DeviceConfirmStep
-  | LogoutConfirmStep;
+/** A step name, `urn:qauth:ia:<name>:v1-rc.0`. A page shows its error page for a step it does not know. */
+export type StepName =
+  | 'urn:qauth:ia:identifier:v1-rc.0'
+  | 'urn:qauth:ia:password:v1-rc.0'
+  | 'urn:qauth:ia:email_code:v1-rc.0'
+  | 'urn:qauth:ia:new_password:v1-rc.0'
+  | 'urn:qauth:ia:password_reset:v1-rc.0'
+  | 'urn:qauth:ia:captcha:v1-rc.0'
+  | 'urn:qauth:ia:webauthn_get:v1-rc.0'
+  | 'urn:qauth:ia:webauthn_create:v1-rc.0'
+  | 'urn:qauth:ia:totp:v1-rc.0'
+  | 'urn:qauth:ia:recovery_code:v1-rc.0'
+  | 'urn:qauth:ia:recovery_codes:v1-rc.0'
+  | 'urn:qauth:ia:totp_setup:v1-rc.0'
+  | 'urn:qauth:ia:consent:v1-rc.0'
+  | 'urn:qauth:ia:select_account:v1-rc.0'
+  | 'urn:qauth:ia:device_code:v1-rc.0'
+  | 'urn:qauth:ia:device_confirm:v1-rc.0'
+  | 'urn:qauth:ia:logout_confirm:v1-rc.0'
+  | (string & {});
 
-/** An answer to one step, by its name: the envelope’s `type` and `csrf`, and the step’s answer fields. */
+/** Why an answer was refused. Each step names its own closed set (`x-qauth-step` beside its params, and its schema file). */
+export type StepError =
+  | 'invalid_credentials'
+  | 'code_expired'
+  | 'password_rejected'
+  | 'captcha_failed'
+  | 'account_unavailable'
+  | 'invalid_user_code'
+  | (string & {});
+
+/** The params of the offered steps, keyed by step name: the current step’s and each alternative’s. What any reader of the interaction id may see. */
+export interface StepParams {
+  'urn:qauth:ia:identifier:v1-rc.0'?: IdentifierParams;
+  'urn:qauth:ia:password:v1-rc.0'?: PasswordParams;
+  'urn:qauth:ia:email_code:v1-rc.0'?: EmailCodeParams;
+  'urn:qauth:ia:new_password:v1-rc.0'?: NewPasswordParams;
+  'urn:qauth:ia:password_reset:v1-rc.0'?: PasswordResetParams;
+  'urn:qauth:ia:captcha:v1-rc.0'?: CaptchaParams;
+  'urn:qauth:ia:webauthn_get:v1-rc.0'?: WebauthnGetParams;
+  'urn:qauth:ia:webauthn_create:v1-rc.0'?: WebauthnCreateParams;
+  'urn:qauth:ia:totp:v1-rc.0'?: TotpParams;
+  'urn:qauth:ia:recovery_code:v1-rc.0'?: RecoveryCodeParams;
+  'urn:qauth:ia:recovery_codes:v1-rc.0'?: RecoveryCodesParams;
+  'urn:qauth:ia:totp_setup:v1-rc.0'?: TotpSetupParams;
+  'urn:qauth:ia:consent:v1-rc.0'?: ConsentParams;
+  'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountParams;
+  'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodeParams;
+  'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmParams;
+  'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmParams;
+}
+
+/** An answer to one step, by its name: the envelope’s `type` and `csrf`, and the step’s answer fields. A new step adds a variant, which widens what the server accepts. */
 export type AnswerRequest =
   | IdentifierAnswer
   | PasswordAnswer
@@ -84,7 +120,7 @@ export interface NextStepResult {
 export interface RedirectResult {
   /** The interaction is finished. */
   result: 'redirect';
-  /** Where the browser goes now: the authorization response to the client, the post-logout redirect, or a page of the ceremony app when no client waits, as at the end of a device authorization. Taken from the interaction record and the realm, never from the request. */
+  /** Where the browser goes now: the authorization response to the client, the post-logout redirect, the ceremony app’s page of a new interaction (after an account switch), or a page of the ceremony app when no client waits, as at the end of a device authorization. Taken from the interaction record and the realm, never from the request. */
   location: string;
 }
 
@@ -93,25 +129,33 @@ export interface CancelRequest {
   csrf: Csrf;
 }
 
-/** The personal data of the current step, by its name. */
-export type PersonalData =
-  | IdentifierPersonal
-  | PasswordPersonal
-  | EmailCodePersonal
-  | NewPasswordPersonal
-  | PasswordResetPersonal
-  | CaptchaPersonal
-  | WebauthnGetPersonal
-  | WebauthnCreatePersonal
-  | TotpPersonal
-  | RecoveryCodePersonal
-  | RecoveryCodesPersonal
-  | TotpSetupPersonal
-  | ConsentPersonal
-  | SelectAccountPersonal
-  | DeviceCodePersonal
-  | DeviceConfirmPersonal
-  | LogoutConfirmPersonal;
+/** The personal data of the current step: only the browser that holds the flow cookie reads it. */
+export interface PersonalData {
+  /** The current step, whose personal data this is. */
+  step: StepName;
+  data: StepPersonalData;
+}
+
+/** The current step’s personal data, under its step name. Empty for a step that has none. */
+export interface StepPersonalData {
+  'urn:qauth:ia:identifier:v1-rc.0'?: IdentifierPersonalData;
+  'urn:qauth:ia:password:v1-rc.0'?: PasswordPersonalData;
+  'urn:qauth:ia:email_code:v1-rc.0'?: EmailCodePersonalData;
+  'urn:qauth:ia:new_password:v1-rc.0'?: NewPasswordPersonalData;
+  'urn:qauth:ia:password_reset:v1-rc.0'?: PasswordResetPersonalData;
+  'urn:qauth:ia:captcha:v1-rc.0'?: CaptchaPersonalData;
+  'urn:qauth:ia:webauthn_get:v1-rc.0'?: WebauthnGetPersonalData;
+  'urn:qauth:ia:webauthn_create:v1-rc.0'?: WebauthnCreatePersonalData;
+  'urn:qauth:ia:totp:v1-rc.0'?: TotpPersonalData;
+  'urn:qauth:ia:recovery_code:v1-rc.0'?: RecoveryCodePersonalData;
+  'urn:qauth:ia:recovery_codes:v1-rc.0'?: RecoveryCodesPersonalData;
+  'urn:qauth:ia:totp_setup:v1-rc.0'?: TotpSetupPersonalData;
+  'urn:qauth:ia:consent:v1-rc.0'?: ConsentPersonalData;
+  'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountPersonalData;
+  'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodePersonalData;
+  'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmPersonalData;
+  'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmPersonalData;
+}
 
 /** Who the client is, as the auth server’s own records say (#593). Client-supplied text is untrusted: no logo comes from a client-supplied URL, and an unverified client shows none. */
 export interface ClientDisplay {
@@ -226,21 +270,12 @@ export interface Asset {
 
 /** An RFC 9457 problem details document with a stable `code` and a `trace_id`, and no prose: no `detail`, no `instance`, no `errors`. */
 export interface Problem {
-  /** RFC 9457 §4.2.1: no type beyond the HTTP status. Branch on `code`. */
-  type: 'about:blank';
+  /** RFC 9457 §3.1.1. `about:blank` today: no type beyond the HTTP status. A code may get its own type URI later, so a page branches on `code`, never on `type`. */
+  type: string;
   /** The HTTP status phrase. Not for branching, and not for a screen. */
-  title:
-    | 'Bad Request'
-    | 'Forbidden'
-    | 'Gone'
-    | 'Content Too Large'
-    | 'Unsupported Media Type'
-    | 'Misdirected Request'
-    | 'Too Many Requests'
-    | 'Internal Server Error'
-    | 'Service Unavailable';
+  title: string;
   /** The HTTP status, repeated. */
-  status: 400 | 403 | 410 | 413 | 415 | 421 | 429 | 500 | 503;
+  status: number;
   /** The error, from the published list. A page shows its own text for it, and treats a code it does not know by its HTTP status. */
   code:
     | 'bad_request'
@@ -256,12 +291,12 @@ export interface Problem {
     | (string & {});
   /** The id the server logged the request under. A page shows it, so an operator can find the failure (ADR-020 §3). */
   trace_id: string;
-}
-
-/** Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4). */
-export interface IdentifierStep {
-  type: 'urn:qauth:ia:identifier:v1-rc.0';
-  params: IdentifierParams;
+  /** Never sent: no prose. */
+  detail?: never;
+  /** Never sent. */
+  instance?: never;
+  /** Never sent: a refused answer comes back as its step’s `error`. */
+  errors?: never;
 }
 
 export type IdentifierParams = Record<string, never>;
@@ -271,29 +306,13 @@ export interface IdentifierAnswer {
   /** The step this request answers. */
   type: 'urn:qauth:ia:identifier:v1-rc.0';
   csrf: Csrf;
-  /** The identifier: today an email address of at most 254 bytes in email syntax (ADR-017 Decision 3). The server normalises it before use. */
+  /** The identifier: today an email address of at most 254 bytes in UTF-8 (ADR-017 Decision 3). The schema counts characters; the server counts bytes, checks the full email syntax and normalises the address before use. */
   login_hint: string;
-}
-
-/** The personal data of `urn:qauth:ia:identifier:v1-rc.0`. */
-export interface IdentifierPersonal {
-  type: 'urn:qauth:ia:identifier:v1-rc.0';
-  data: IdentifierPersonalData;
 }
 
 export type IdentifierPersonalData = Record<string, never>;
 
-/** The password factor. A rejected password, an unknown account and a disabled account give the same `invalid_credentials`, after the same timing floor (ADR-017 Decisions 3 and 4). Works without JavaScript: the form posts straight to the auth server with the step’s CSRF value (ADR-019 Decision 5). */
-export interface PasswordStep {
-  type: 'urn:qauth:ia:password:v1-rc.0';
-  params: PasswordParams;
-  error?: PasswordError;
-}
-
 export type PasswordParams = Record<string, never>;
-
-/** Why the last answer to `urn:qauth:ia:password:v1-rc.0` was refused. A closed set. */
-export type PasswordError = 'invalid_credentials';
 
 /** An answer to `urn:qauth:ia:password:v1-rc.0`. */
 export interface PasswordAnswer {
@@ -302,27 +321,14 @@ export interface PasswordAnswer {
   csrf: Csrf;
   /** The password. The server refuses one longer than 256 UTF-16 code units before anything else (ADR-017 Decision 8). */
   password: string;
-  /** The identifier: today an email address of at most 254 bytes in email syntax (ADR-017 Decision 3). The server normalises it before use. Sent only when the transaction holds no identifier yet: a page that asks for both at once. */
+  /** The identifier: today an email address of at most 254 bytes in UTF-8 (ADR-017 Decision 3). The schema counts characters; the server counts bytes, checks the full email syntax and normalises the address before use. Sent only when the transaction holds no identifier yet: a page that asks for both at once. */
   login_hint?: string;
-}
-
-/** The personal data of `urn:qauth:ia:password:v1-rc.0`. */
-export interface PasswordPersonal {
-  type: 'urn:qauth:ia:password:v1-rc.0';
-  data: PasswordPersonalData;
 }
 
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface PasswordPersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
-}
-
-/** An emailed code proves control of a mailbox: it verifies a password account’s address and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). An answer with no `otp` asks for the code again. Works without JavaScript. */
-export interface EmailCodeStep {
-  type: 'urn:qauth:ia:email_code:v1-rc.0';
-  params: EmailCodeParams;
-  error?: EmailCodeError;
 }
 
 export interface EmailCodeParams {
@@ -336,9 +342,6 @@ export interface EmailCodeParams {
   resend_after: number;
 }
 
-/** Why the last answer to `urn:qauth:ia:email_code:v1-rc.0` was refused. A closed set. */
-export type EmailCodeError = 'invalid_credentials' | 'code_expired';
-
 /** An answer to `urn:qauth:ia:email_code:v1-rc.0`. */
 export interface EmailCodeAnswer {
   /** The step this request answers. */
@@ -348,23 +351,10 @@ export interface EmailCodeAnswer {
   otp?: string;
 }
 
-/** The personal data of `urn:qauth:ia:email_code:v1-rc.0`. */
-export interface EmailCodePersonal {
-  type: 'urn:qauth:ia:email_code:v1-rc.0';
-  data: EmailCodePersonalData;
-}
-
 /** The address the code went to, when the transaction holds one. */
 export interface EmailCodePersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
-}
-
-/** Sets a password through the one password policy (ADR-017 Decision 8): at registration, at the end of a reset, or when an admin or a breach-list match requires a new one (ADR-020 §3). The reasons of a refusal are returned, never prose. The page marks the field for password managers, with the identifier from the personal data as the username. Works without JavaScript. */
-export interface NewPasswordStep {
-  type: 'urn:qauth:ia:new_password:v1-rc.0';
-  params: NewPasswordParams;
-  error?: NewPasswordError;
 }
 
 export interface NewPasswordParams {
@@ -378,9 +368,6 @@ export interface NewPasswordParams {
   reasons?: Array<'too_short' | 'too_long' | 'blocklisted' | 'too_weak'>;
 }
 
-/** Why the last answer to `urn:qauth:ia:new_password:v1-rc.0` was refused. A closed set. */
-export type NewPasswordError = 'password_rejected';
-
 /** An answer to `urn:qauth:ia:new_password:v1-rc.0`. */
 export interface NewPasswordAnswer {
   /** The step this request answers. */
@@ -390,22 +377,10 @@ export interface NewPasswordAnswer {
   new_password: string;
 }
 
-/** The personal data of `urn:qauth:ia:new_password:v1-rc.0`. */
-export interface NewPasswordPersonal {
-  type: 'urn:qauth:ia:new_password:v1-rc.0';
-  data: NewPasswordPersonalData;
-}
-
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface NewPasswordPersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
-}
-
-/** A path marker: answering it starts a reset. The next step is `email_code` with `purpose` `recovery` for every address, known or not; mail goes only to a known address with a password. A reset never unlocks an account whose strongest authenticator is stronger than email (ADR-017 Decision 8). */
-export interface PasswordResetStep {
-  type: 'urn:qauth:ia:password_reset:v1-rc.0';
-  params: PasswordResetParams;
 }
 
 export type PasswordResetParams = Record<string, never>;
@@ -415,24 +390,11 @@ export interface PasswordResetAnswer {
   /** The step this request answers. */
   type: 'urn:qauth:ia:password_reset:v1-rc.0';
   csrf: Csrf;
-  /** The identifier: today an email address of at most 254 bytes in email syntax (ADR-017 Decision 3). The server normalises it before use. Sent only when the transaction holds no identifier yet. */
+  /** The identifier: today an email address of at most 254 bytes in UTF-8 (ADR-017 Decision 3). The schema counts characters; the server counts bytes, checks the full email syntax and normalises the address before use. Sent only when the transaction holds no identifier yet. */
   login_hint?: string;
 }
 
-/** The personal data of `urn:qauth:ia:password_reset:v1-rc.0`. */
-export interface PasswordResetPersonal {
-  type: 'urn:qauth:ia:password_reset:v1-rc.0';
-  data: PasswordResetPersonalData;
-}
-
 export type PasswordResetPersonalData = Record<string, never>;
-
-/** A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped. */
-export interface CaptchaStep {
-  type: 'urn:qauth:ia:captcha:v1-rc.0';
-  params: CaptchaParams;
-  error?: CaptchaError;
-}
 
 /** The challenge to solve: the built-in proof of work, or a hosted provider. */
 export type CaptchaParams =
@@ -445,38 +407,24 @@ export type CaptchaParams =
       difficulty: number;
     }
   | {
+      /** A hosted provider the operator named. */
+      provider: 'hosted';
       /** The name the operator gave the hosted provider. */
-      provider: string;
+      name: string;
       /** The provider’s public site key. */
       site_key: string;
     };
-
-/** Why the last answer to `urn:qauth:ia:captcha:v1-rc.0` was refused. A closed set. */
-export type CaptchaError = 'captcha_failed';
 
 /** An answer to `urn:qauth:ia:captcha:v1-rc.0`. */
 export interface CaptchaAnswer {
   /** The step this request answers. */
   type: 'urn:qauth:ia:captcha:v1-rc.0';
   csrf: Csrf;
-  /** The solution, or the provider’s token. */
+  /** The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes. */
   captcha_token: string;
 }
 
-/** The personal data of `urn:qauth:ia:captcha:v1-rc.0`. */
-export interface CaptchaPersonal {
-  type: 'urn:qauth:ia:captcha:v1-rc.0';
-  data: CaptchaPersonalData;
-}
-
 export type CaptchaPersonalData = Record<string, never>;
-
-/** Passkey sign-in: the WebAuthn Level 3 request options as JSON, for `PublicKeyCredential.parseRequestOptionsFromJSON()`. Discoverable credentials only: the options never carry `allowCredentials`, so the step read reveals no account’s passkeys (ADR-017 Decision 4, ADR-019 Decision 6). The engine checks that the passkey belongs to the transaction’s account. The RP ID is the realm’s host (ADR-019 Decision 2). Needs JavaScript. */
-export interface WebauthnGetStep {
-  type: 'urn:qauth:ia:webauthn_get:v1-rc.0';
-  params: WebauthnGetParams;
-  error?: WebauthnGetError;
-}
 
 export interface WebauthnGetParams {
   /** The challenge, at least 32 random bytes. */
@@ -489,9 +437,6 @@ export interface WebauthnGetParams {
   userVerification: 'required';
 }
 
-/** Why the last answer to `urn:qauth:ia:webauthn_get:v1-rc.0` was refused. A closed set. */
-export type WebauthnGetError = 'invalid_credentials';
-
 /** An answer to `urn:qauth:ia:webauthn_get:v1-rc.0`. */
 export interface WebauthnGetAnswer {
   /** The step this request answers. */
@@ -501,23 +446,10 @@ export interface WebauthnGetAnswer {
   webauthn_response: string;
 }
 
-/** The personal data of `urn:qauth:ia:webauthn_get:v1-rc.0`. */
-export interface WebauthnGetPersonal {
-  type: 'urn:qauth:ia:webauthn_get:v1-rc.0';
-  data: WebauthnGetPersonalData;
-}
-
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface WebauthnGetPersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
-}
-
-/** Passkey enrolment. `options` is the WebAuthn Level 3 creation options as JSON without `user` and `excludeCredentials`, which are the account’s own data and come with the personal data; the page joins the two for `PublicKeyCredential.parseCreationOptionsFromJSON()`. The RP ID is the realm’s host and locks at the first enrolment (ADR-019 Decision 2). Enrolment adds no `amr` value. Needs JavaScript. */
-export interface WebauthnCreateStep {
-  type: 'urn:qauth:ia:webauthn_create:v1-rc.0';
-  params: WebauthnCreateParams;
-  error?: WebauthnCreateError;
 }
 
 export interface WebauthnCreateParams {
@@ -550,9 +482,6 @@ export interface WebauthnCreateParams {
   };
 }
 
-/** Why the last answer to `urn:qauth:ia:webauthn_create:v1-rc.0` was refused. A closed set. */
-export type WebauthnCreateError = 'invalid_credentials';
-
 /** An answer to `urn:qauth:ia:webauthn_create:v1-rc.0`. */
 export interface WebauthnCreateAnswer {
   /** The step this request answers. */
@@ -560,12 +489,6 @@ export interface WebauthnCreateAnswer {
   csrf: Csrf;
   /** The registration response, `PublicKeyCredential.toJSON()` (WebAuthn Level 3), as a JSON string. It is a string on both transports, so a form post carries it in one field (ADR-017 Decision 3). */
   webauthn_response?: string;
-}
-
-/** The personal data of `urn:qauth:ia:webauthn_create:v1-rc.0`. */
-export interface WebauthnCreatePersonal {
-  type: 'urn:qauth:ia:webauthn_create:v1-rc.0';
-  data: WebauthnCreatePersonalData;
 }
 
 export interface WebauthnCreatePersonalData {
@@ -588,20 +511,10 @@ export interface WebauthnCreatePersonalData {
   }>;
 }
 
-/** A TOTP second factor (RFC 6238) with the fixed parameters of ADR-020 §3: SHA-1, six digits, 30 seconds, one step of tolerance. An accepted code is never accepted twice (ADR-017 Decision 8). Works without JavaScript. */
-export interface TotpStep {
-  type: 'urn:qauth:ia:totp:v1-rc.0';
-  params: TotpParams;
-  error?: TotpError;
-}
-
 export interface TotpParams {
   /** How many digits the code has. */
   digits: 6;
 }
-
-/** Why the last answer to `urn:qauth:ia:totp:v1-rc.0` was refused. A closed set. */
-export type TotpError = 'invalid_credentials';
 
 /** An answer to `urn:qauth:ia:totp:v1-rc.0`. */
 export interface TotpAnswer {
@@ -612,29 +525,13 @@ export interface TotpAnswer {
   otp: string;
 }
 
-/** The personal data of `urn:qauth:ia:totp:v1-rc.0`. */
-export interface TotpPersonal {
-  type: 'urn:qauth:ia:totp:v1-rc.0';
-  data: TotpPersonalData;
-}
-
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface TotpPersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
-/** A recovery code stands in for a second factor after the first, or for the passkey of a passkey-only account. Only the hosted pages redeem one; the FiPA endpoint answers `redirect_to_web` for that path. It adds no `amr` value and never `mfa`, so a policy that needs a second factor makes the person bind a new one before the transaction completes (ADR-017 Decisions 4 and 8). Works without JavaScript. */
-export interface RecoveryCodeStep {
-  type: 'urn:qauth:ia:recovery_code:v1-rc.0';
-  params: RecoveryCodeParams;
-  error?: RecoveryCodeError;
-}
-
 export type RecoveryCodeParams = Record<string, never>;
-
-/** Why the last answer to `urn:qauth:ia:recovery_code:v1-rc.0` was refused. A closed set. */
-export type RecoveryCodeError = 'invalid_credentials';
 
 /** An answer to `urn:qauth:ia:recovery_code:v1-rc.0`. */
 export interface RecoveryCodeAnswer {
@@ -645,22 +542,10 @@ export interface RecoveryCodeAnswer {
   recovery_code: string;
 }
 
-/** The personal data of `urn:qauth:ia:recovery_code:v1-rc.0`. */
-export interface RecoveryCodePersonal {
-  type: 'urn:qauth:ia:recovery_code:v1-rc.0';
-  data: RecoveryCodePersonalData;
-}
-
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface RecoveryCodePersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
-}
-
-/** A new recovery-code set: issued at the first enrolment of a second factor, at the registration of a passkey-only account, and when the person regenerates the set (ADR-017 Decision 8). The codes are personal data, readable with the flow cookie only while this step is current, and never shown again. The answer confirms the person saved them. */
-export interface RecoveryCodesStep {
-  type: 'urn:qauth:ia:recovery_codes:v1-rc.0';
-  params: RecoveryCodesParams;
 }
 
 export interface RecoveryCodesParams {
@@ -677,22 +562,9 @@ export interface RecoveryCodesAnswer {
   acknowledged: true;
 }
 
-/** The personal data of `urn:qauth:ia:recovery_codes:v1-rc.0`. */
-export interface RecoveryCodesPersonal {
-  type: 'urn:qauth:ia:recovery_codes:v1-rc.0';
-  data: RecoveryCodesPersonalData;
-}
-
 export interface RecoveryCodesPersonalData {
   /** The codes, each usable once. */
   codes: string[];
-}
-
-/** TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data, read once with the flow cookie; it is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text. */
-export interface TotpSetupStep {
-  type: 'urn:qauth:ia:totp_setup:v1-rc.0';
-  params: TotpSetupParams;
-  error?: TotpSetupError;
 }
 
 export interface TotpSetupParams {
@@ -704,9 +576,6 @@ export interface TotpSetupParams {
   period: 30;
 }
 
-/** Why the last answer to `urn:qauth:ia:totp_setup:v1-rc.0` was refused. A closed set. */
-export type TotpSetupError = 'invalid_credentials';
-
 /** An answer to `urn:qauth:ia:totp_setup:v1-rc.0`. */
 export interface TotpSetupAnswer {
   /** The step this request answers. */
@@ -716,12 +585,6 @@ export interface TotpSetupAnswer {
   otp: string;
 }
 
-/** The personal data of `urn:qauth:ia:totp_setup:v1-rc.0`. */
-export interface TotpSetupPersonal {
-  type: 'urn:qauth:ia:totp_setup:v1-rc.0';
-  data: TotpSetupPersonalData;
-}
-
 export interface TotpSetupPersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
@@ -729,12 +592,6 @@ export interface TotpSetupPersonalData {
   secret: string;
   /** The same secret as an `otpauth://` URI, for the QR code. */
   otpauth_uri: string;
-}
-
-/** The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript. */
-export interface ConsentStep {
-  type: 'urn:qauth:ia:consent:v1-rc.0';
-  params: ConsentParams;
 }
 
 export interface ConsentParams {
@@ -766,29 +623,13 @@ export interface ConsentAnswer {
   remember?: boolean;
 }
 
-/** The personal data of `urn:qauth:ia:consent:v1-rc.0`. */
-export interface ConsentPersonal {
-  type: 'urn:qauth:ia:consent:v1-rc.0';
-  data: ConsentPersonalData;
-}
-
 /** Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier. */
 export interface ConsentPersonalData {
   /** The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it. */
   identifier?: string;
 }
 
-/** The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. "Use another account" answers the `identifier` step, offered beside this one, which starts a new interaction for the same authorization request; nothing proved for one account carries over to another (#592). Needs JavaScript, to read the list. */
-export interface SelectAccountStep {
-  type: 'urn:qauth:ia:select_account:v1-rc.0';
-  params: SelectAccountParams;
-  error?: SelectAccountError;
-}
-
 export type SelectAccountParams = Record<string, never>;
-
-/** Why the last answer to `urn:qauth:ia:select_account:v1-rc.0` was refused. A closed set. */
-export type SelectAccountError = 'account_unavailable';
 
 /** An answer to `urn:qauth:ia:select_account:v1-rc.0`. */
 export interface SelectAccountAnswer {
@@ -797,12 +638,6 @@ export interface SelectAccountAnswer {
   csrf: Csrf;
   /** The `account` reference of the chosen entry. */
   account: string;
-}
-
-/** The personal data of `urn:qauth:ia:select_account:v1-rc.0`. */
-export interface SelectAccountPersonal {
-  type: 'urn:qauth:ia:select_account:v1-rc.0';
-  data: SelectAccountPersonalData;
 }
 
 export interface SelectAccountPersonalData {
@@ -817,20 +652,10 @@ export interface SelectAccountPersonalData {
   }>;
 }
 
-/** Code entry for the OAuth 2.0 device authorization grant (RFC 8628 §3.3). Unknown, expired and used codes give the same `invalid_user_code`. Entry is rate-limited per code, per session and per address. A person who arrives through `verification_uri_complete` skips this step and still confirms on `device_confirm` (ADR-020 §3). Works without JavaScript. */
-export interface DeviceCodeStep {
-  type: 'urn:qauth:ia:device_code:v1-rc.0';
-  params: DeviceCodeParams;
-  error?: DeviceCodeError;
-}
-
 export interface DeviceCodeParams {
   /** How many characters the code has, without the dash. */
   length: 8;
 }
-
-/** Why the last answer to `urn:qauth:ia:device_code:v1-rc.0` was refused. A closed set. */
-export type DeviceCodeError = 'invalid_user_code';
 
 /** An answer to `urn:qauth:ia:device_code:v1-rc.0`. */
 export interface DeviceCodeAnswer {
@@ -841,19 +666,7 @@ export interface DeviceCodeAnswer {
   user_code: string;
 }
 
-/** The personal data of `urn:qauth:ia:device_code:v1-rc.0`. */
-export interface DeviceCodePersonal {
-  type: 'urn:qauth:ia:device_code:v1-rc.0';
-  data: DeviceCodePersonalData;
-}
-
 export type DeviceCodePersonalData = Record<string, never>;
-
-/** The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. Works without JavaScript, without the device details. */
-export interface DeviceConfirmStep {
-  type: 'urn:qauth:ia:device_confirm:v1-rc.0';
-  params: DeviceConfirmParams;
-}
 
 export interface DeviceConfirmParams {
   /** The code being confirmed, so the person can compare it with the device. */
@@ -869,12 +682,6 @@ export interface DeviceConfirmAnswer {
   csrf: Csrf;
   /** The decision. */
   decision: 'confirm' | 'deny';
-}
-
-/** The personal data of `urn:qauth:ia:device_confirm:v1-rc.0`. */
-export interface DeviceConfirmPersonal {
-  type: 'urn:qauth:ia:device_confirm:v1-rc.0';
-  data: DeviceConfirmPersonalData;
 }
 
 export interface DeviceConfirmPersonalData {
@@ -896,12 +703,6 @@ export interface DeviceConfirmPersonalData {
   user_agent?: string;
 }
 
-/** The confirmation of an RP-initiated logout (ADR-019 Decision 4). The interaction’s `client` names the app that asked, when the request identified one. A browser may hold several accounts’ sessions, so the person signs out of this account or of every account on the browser (ADR-019 Decision 3). Works without JavaScript, without the account list. */
-export interface LogoutConfirmStep {
-  type: 'urn:qauth:ia:logout_confirm:v1-rc.0';
-  params: LogoutConfirmParams;
-}
-
 export type LogoutConfirmParams = Record<string, never>;
 
 /** An answer to `urn:qauth:ia:logout_confirm:v1-rc.0`. */
@@ -911,12 +712,6 @@ export interface LogoutConfirmAnswer {
   csrf: Csrf;
   /** Sign out of this account, of every account on the browser, or stay signed in. */
   decision: 'logout' | 'logout_all' | 'stay';
-}
-
-/** The personal data of `urn:qauth:ia:logout_confirm:v1-rc.0`. */
-export interface LogoutConfirmPersonal {
-  type: 'urn:qauth:ia:logout_confirm:v1-rc.0';
-  data: LogoutConfirmPersonalData;
 }
 
 export interface LogoutConfirmPersonalData {
@@ -1004,6 +799,7 @@ export const OPERATIONS = {
   'interactions.get': {
     method: 'GET',
     path: '/interaction/v1-rc.0/{interactionId}',
+    pathPatterns: { interactionId: '^[A-Za-z0-9_-]{43}$' },
     flowCookie: false,
     csrf: false,
     statuses: [200, 410, 421, 429, 500, 503],
@@ -1011,6 +807,7 @@ export const OPERATIONS = {
   'interactions.personal.get': {
     method: 'GET',
     path: '/interaction/v1-rc.0/{interactionId}/personal',
+    pathPatterns: { interactionId: '^[A-Za-z0-9_-]{43}$' },
     flowCookie: true,
     csrf: false,
     statuses: [200, 410, 421, 429, 500, 503],
@@ -1018,6 +815,7 @@ export const OPERATIONS = {
   'interactions.answer': {
     method: 'POST',
     path: '/interaction/v1-rc.0/{interactionId}/answer',
+    pathPatterns: { interactionId: '^[A-Za-z0-9_-]{43}$' },
     flowCookie: true,
     csrf: true,
     statuses: [200, 303, 400, 403, 410, 413, 415, 421, 429, 500, 503],
@@ -1025,6 +823,7 @@ export const OPERATIONS = {
   'interactions.cancel': {
     method: 'POST',
     path: '/interaction/v1-rc.0/{interactionId}/cancel',
+    pathPatterns: { interactionId: '^[A-Za-z0-9_-]{43}$' },
     flowCookie: true,
     csrf: true,
     statuses: [200, 303, 400, 403, 410, 413, 415, 421, 429, 500, 503],

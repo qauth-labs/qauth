@@ -4,9 +4,9 @@ import {
   type AnswerRequest,
   createInteractionClient,
   type Interaction,
-  type PasswordParams,
+  type NewPasswordParams,
   type Problem,
-  type Step,
+  type StepName,
 } from '../index';
 import { expandPath, UnexpectedStatusError } from './runtime';
 
@@ -93,23 +93,31 @@ describe('the Interaction API client', () => {
     expect(result.data).toBeUndefined();
   });
 
-  it('encodes path parameters and refuses a missing one', () => {
-    expect(expandPath('/interaction/v1-rc.0/{interactionId}', { interactionId: 'a/b?c' })).toBe(
-      '/interaction/v1-rc.0/a%2Fb%3Fc'
-    );
-    expect(() => expandPath('/interaction/v1-rc.0/{interactionId}', {})).toThrow(TypeError);
+  it('refuses an interaction id that does not have the id’s shape', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse(200, {}));
+    const client = createInteractionClient({ fetch });
+    for (const interactionId of ['..', '../answer', '', `${ID}/../x`, 'a'.repeat(42)]) {
+      await expect(
+        client.interactionsAnswer({ interactionId }, { csrf: CSRF } as never),
+        interactionId
+      ).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(expandPath('/i/{id}', { id: 'a_b-c' }, { id: '^[a-z_-]+$' })).toBe('/i/a_b-c');
+    expect(() => expandPath('/i/{id}', { id: 'x' }, {})).toThrow(TypeError);
   });
 
-  it('narrows a step by its name to its params', () => {
-    const narrow = (step: Step) => {
-      if (step.type === 'urn:qauth:ia:password:v1-rc.0') {
-        expectTypeOf(step.params).toEqualTypeOf<PasswordParams>();
-        expectTypeOf(step.error).toEqualTypeOf<'invalid_credentials' | undefined>();
+  it('types each offered step’s params by its name', () => {
+    const read = (interaction: Interaction) => {
+      expectTypeOf(interaction.step).toEqualTypeOf<StepName>();
+      const params = interaction.params['urn:qauth:ia:new_password:v1-rc.0'];
+      expectTypeOf(params).toEqualTypeOf<NewPasswordParams | undefined>();
+      if (params !== undefined) {
+        expectTypeOf(params.purpose).toEqualTypeOf<'register' | 'reset' | 'update_required'>();
       }
-      if (step.type === 'urn:qauth:ia:new_password:v1-rc.0') {
-        expectTypeOf(step.params.purpose).toEqualTypeOf<'register' | 'reset' | 'update_required'>();
-      }
+      const captcha = interaction.params['urn:qauth:ia:captcha:v1-rc.0'];
+      if (captcha?.provider === 'pow') expectTypeOf(captcha.difficulty).toEqualTypeOf<number>();
     };
-    expect(narrow).toBeTypeOf('function');
+    expect(read).toBeTypeOf('function');
   });
 });

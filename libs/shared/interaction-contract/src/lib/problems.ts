@@ -73,12 +73,17 @@ export const INTERACTION_PROBLEM_CODES = {
 
 export type InteractionProblemCodeName = keyof typeof INTERACTION_PROBLEM_CODES;
 
-/** The status phrase of each status a code is sent with (RFC 9110 §15). */
+/**
+ * The status phrase the server sends as `title` for each status a code is sent
+ * with: Node's `http.STATUS_CODES`, which the error handler uses. Node still
+ * calls 413 "Payload Too Large", the name RFC 9110 §15.5.14 replaced. A test in
+ * the auth server keeps this table equal to what it sends.
+ */
 export const STATUS_TITLES: Readonly<Record<number, string>> = {
   400: 'Bad Request',
   403: 'Forbidden',
   410: 'Gone',
-  413: 'Content Too Large',
+  413: 'Payload Too Large',
   415: 'Unsupported Media Type',
   421: 'Misdirected Request',
   429: 'Too Many Requests',

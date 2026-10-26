@@ -9,29 +9,52 @@
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:recovery_code:v1-rc.0"
+      "const": "urn:qauth:ia:recovery_code:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
       "type": "urn:qauth:ia:recovery_code:v1-rc.0",
-      "params": {}
+      "params": {},
+      "answer": {
+        "recovery_code": "k7qd-2mvw-x4ra-p6tn"
+      },
+      "personal": {
+        "identifier": "alice@example.com"
+      },
+      "amr": []
     }
   ],
   "$defs": {
     "params": {
       "type": "object",
-      "properties": {}
+      "properties": {},
+      "examples": [
+        {}
+      ]
     },
     "answer": {
       "type": "object",
@@ -62,7 +85,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 254,
-          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
           "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
         }
@@ -81,6 +104,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

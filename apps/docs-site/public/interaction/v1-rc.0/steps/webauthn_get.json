@@ -10,18 +10,31 @@
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:webauthn_get:v1-rc.0"
+      "const": "urn:qauth:ia:webauthn_get:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
@@ -31,7 +44,17 @@
         "rpId": "auth.example.com",
         "timeout": 300000,
         "userVerification": "required"
-      }
+      },
+      "answer": {
+        "webauthn_response": "{\"id\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"rawId\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"type\":\"public-key\",\"response\":{\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0\",\"authenticatorData\":\"SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAQ\",\"signature\":\"MEUCIQDzVOkaFj9Kf2m9VE3e3Jx1yX2w\",\"userHandle\":\"b2Zmc2V0LXVzZXItaGFuZGxl\"},\"authenticatorAttachment\":\"platform\",\"clientExtensionResults\":{}}"
+      },
+      "personal": {
+        "identifier": "alice@example.com"
+      },
+      "amr": [
+        "pop",
+        "mfa"
+      ]
     }
   ],
   "$defs": {
@@ -67,6 +90,14 @@
         "challenge",
         "rpId",
         "userVerification"
+      ],
+      "examples": [
+        {
+          "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+          "rpId": "auth.example.com",
+          "timeout": 300000,
+          "userVerification": "required"
+        }
       ]
     },
     "answer": {
@@ -75,7 +106,7 @@
         "webauthn_response": {
           "type": "string",
           "minLength": 2,
-          "maxLength": 16384,
+          "maxLength": 8192,
           "contentMediaType": "application/json",
           "contentSchema": {
             "type": "object",
@@ -147,7 +178,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 254,
-          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
           "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
         }
@@ -166,6 +197,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [
         "pop",
         "mfa"

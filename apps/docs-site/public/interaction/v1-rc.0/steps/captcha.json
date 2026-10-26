@@ -10,18 +10,31 @@
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:captcha:v1-rc.0"
+      "const": "urn:qauth:ia:captcha:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
@@ -30,7 +43,12 @@
         "provider": "pow",
         "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
         "difficulty": 18
-      }
+      },
+      "answer": {
+        "captcha_token": "AAAAAAAABl9x"
+      },
+      "personal": {},
+      "amr": []
     }
   ],
   "$defs": {
@@ -68,12 +86,14 @@
           "type": "object",
           "properties": {
             "provider": {
+              "const": "hosted",
+              "description": "A hosted provider the operator named."
+            },
+            "name": {
               "type": "string",
+              "minLength": 1,
               "maxLength": 32,
               "pattern": "^[a-z][a-z0-9_-]{0,31}$",
-              "not": {
-                "const": "pow"
-              },
               "description": "The name the operator gave the hosted provider."
             },
             "site_key": {
@@ -86,8 +106,16 @@
           },
           "required": [
             "provider",
+            "name",
             "site_key"
           ]
+        }
+      ],
+      "examples": [
+        {
+          "provider": "pow",
+          "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+          "difficulty": 18
         }
       ]
     },
@@ -98,7 +126,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096,
-          "description": "The solution, or the provider’s token."
+          "pattern": "^[!-~]+$",
+          "description": "The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes."
         }
       },
       "required": [
@@ -126,6 +155,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

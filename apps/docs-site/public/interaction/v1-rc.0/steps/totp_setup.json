@@ -2,25 +2,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/totp_setup.json",
   "title": "urn:qauth:ia:totp_setup:v1-rc.0",
-  "description": "TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data, read once with the flow cookie; it is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.",
+  "description": "TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data: readable with the flow cookie while this step is current, and never after. It is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.",
   "x-qauth-transports": [
     "interaction"
   ],
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:totp_setup:v1-rc.0"
+      "const": "urn:qauth:ia:totp_setup:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
@@ -29,7 +42,16 @@
         "algorithm": "SHA1",
         "digits": 6,
         "period": 30
-      }
+      },
+      "answer": {
+        "otp": "482913"
+      },
+      "personal": {
+        "identifier": "alice@example.com",
+        "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        "otpauth_uri": "otpauth://totp/Example:alice%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Example&algorithm=SHA1&digits=6&period=30"
+      },
+      "amr": []
     }
   ],
   "$defs": {
@@ -62,6 +84,13 @@
         "algorithm",
         "digits",
         "period"
+      ],
+      "examples": [
+        {
+          "algorithm": "SHA1",
+          "digits": 6,
+          "period": 30
+        }
       ]
     },
     "answer": {
@@ -90,7 +119,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 254,
-          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
           "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
         },
@@ -129,6 +158,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

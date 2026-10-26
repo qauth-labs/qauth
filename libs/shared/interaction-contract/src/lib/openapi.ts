@@ -15,6 +15,7 @@ import {
   interactionIdSchema,
   interactionSchema,
   nextStepResultSchema,
+  personalDataSchema,
   problemSchema,
   redirectResultSchema,
 } from './envelope';
@@ -22,13 +23,14 @@ import {
   FLOW_COOKIE_NAME,
   INTERACTION_API_PREFIX,
   INTERACTION_API_VERSION,
+  STEP_URN_SCHEMA_PATTERN,
   WALLET_RETURN_PREFIX,
 } from './identifiers';
 import { codesWithStatus, STATUS_TITLES } from './problems';
 import { API_RULES, DOCUMENT_PATH_RULE, RESERVED_PREFIX_RULE, VERSIONING_RULES } from './rules';
-import type { JsonSchema } from './schema-kit';
+import { extensibleEnum, type JsonSchema } from './schema-kit';
 import type { StepDefinition } from './step-definition';
-import { stepNamed, STEPS } from './steps';
+import { stepErrorCodes, stepNamed, STEPS } from './steps';
 
 /**
  * The Interaction API v1 contract as one OpenAPI 3.1 document (#590). Pure:
@@ -59,32 +61,28 @@ export function pascalCase(name: string): string {
 export function stepComponentNames(step: StepDefinition) {
   const base = pascalCase(step.name);
   return {
-    step: `${base}Step`,
     params: `${base}Params`,
-    error: `${base}Error`,
     answer: `${base}Answer`,
-    personal: `${base}Personal`,
     personalData: `${base}PersonalData`,
   } as const;
 }
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
-/** The step object of `step`, as a step read carries it. */
-function stepObjectSchema(step: StepDefinition): JsonSchema {
-  const names = stepComponentNames(step);
+/**
+ * The step's params, with what the step grammar says about the step beside
+ * them: its name, transports, closed error set and `amr`. The per-step schema
+ * file (`step-schema.ts`) carries the same as JSON Schema.
+ */
+function paramsComponent(step: StepDefinition): JsonSchema {
   return {
-    type: 'object',
-    title: step.urn,
-    description: step.description,
-    'x-qauth-transports': [...step.transports],
-    'x-qauth-amr': [...step.amr],
-    properties: {
-      type: { const: step.urn },
-      params: ref(names.params),
-      ...(step.errors.length === 0 ? {} : { error: ref(names.error) }),
+    ...step.params,
+    'x-qauth-step': {
+      name: step.urn,
+      transports: [...step.transports],
+      errors: [...step.errors],
+      amr: [...step.amr],
     },
-    required: ['type', 'params'],
   };
 }
 
@@ -105,52 +103,59 @@ function answerRequestSchema(step: StepDefinition): JsonSchema {
   };
 }
 
-/** The personal-data response of `step`. */
-function personalSchema(step: StepDefinition): JsonSchema {
-  return {
-    type: 'object',
-    description: `The personal data of \`${step.urn}\`.`,
-    properties: {
-      type: { const: step.urn },
-      data: ref(stepComponentNames(step).personalData),
-    },
-    required: ['type', 'data'],
-  };
-}
-
 /** Every component one step contributes, in a fixed order. */
 function stepComponents(step: StepDefinition): Array<[string, JsonSchema]> {
   const names = stepComponentNames(step);
   return [
-    [names.step, stepObjectSchema(step)],
-    [names.params, step.params],
-    ...(step.errors.length === 0
-      ? []
-      : ([
-          [
-            names.error,
-            {
-              type: 'string',
-              enum: [...step.errors],
-              description: `Why the last answer to \`${step.urn}\` was refused. A closed set.`,
-            },
-          ],
-        ] as Array<[string, JsonSchema]>)),
+    [names.params, paramsComponent(step)],
     [names.answer, answerRequestSchema(step)],
-    [names.personal, personalSchema(step)],
     [names.personalData, step.personal],
   ];
 }
 
-/** A union of one component per step, discriminated by `type`. */
-function stepUnion(description: string, component: (step: StepDefinition) => string): JsonSchema {
+/**
+ * The step names: an extensible set. A new step within a major version is a
+ * new value here and a new optional member of the keyed objects below, both
+ * additions a client already ignores, so it is not a break.
+ */
+function stepNameSchema(): JsonSchema {
+  return extensibleEnum(
+    STEPS.map((step) => step.urn),
+    STEP_URN_SCHEMA_PATTERN,
+    96,
+    'A step name, `urn:qauth:ia:<name>:v1-rc.0`. A page shows its error page for a step it does not know.'
+  );
+}
+
+/** The errors of every step: each step’s own set is closed; the union grows with new steps. */
+function stepErrorSchema(): JsonSchema {
+  return extensibleEnum(
+    stepErrorCodes(),
+    '^[a-z][a-z0-9_]{0,63}$',
+    64,
+    'Why an answer was refused. Each step names its own closed set (`x-qauth-step` beside its params, and its schema file).'
+  );
+}
+
+/** An object with one optional member per step, keyed by the step name. */
+function keyedByStep(description: string, component: (step: StepDefinition) => string): JsonSchema {
   return {
+    type: 'object',
     description,
-    oneOf: STEPS.map((step) => ref(component(step))),
+    properties: Object.fromEntries(STEPS.map((step) => [step.urn, ref(component(step))])),
+  };
+}
+
+/** The request body of an answer: one variant per step, by its name. */
+function answerUnion(): JsonSchema {
+  return {
+    description:
+      'An answer to one step, by its name: the envelope’s `type` and `csrf`, and the step’s answer fields. A new step adds a variant, which widens what the server accepts.',
+    oneOf: STEPS.map((step) => ref(stepComponentNames(step).answer)),
     discriminator: {
       propertyName: 'type',
       mapping: Object.fromEntries(
-        STEPS.map((step) => [step.urn, `#/components/schemas/${component(step)}`])
+        STEPS.map((step) => [step.urn, `#/components/schemas/${stepComponentNames(step).answer}`])
       ),
     },
   };
@@ -160,12 +165,6 @@ function stepUnion(description: string, component: (step: StepDefinition) => str
 // Examples
 // ---------------------------------------------------------------------------
 
-/** The step object a step read carries for `step` when it is offered beside the current one. */
-function alternativeObject(step: StepDefinition) {
-  const { type, params } = step.example.step;
-  return { type, params };
-}
-
 /** The client an example interaction is for. */
 function exampleClient(step: StepDefinition) {
   if (step.name === 'device_code') return undefined;
@@ -174,12 +173,16 @@ function exampleClient(step: StepDefinition) {
 }
 
 /** The step read of an interaction whose current step is `step`, as its example shows it. */
-export function exampleInteraction(step: StepDefinition) {
+export function exampleInteraction(step: StepDefinition, options: { withError?: boolean } = {}) {
   const client = exampleClient(step);
+  const alternatives = (step.example.alternatives ?? []).map(stepNamed);
+  const error = options.withError === false ? undefined : step.example.step.error;
   return {
-    step: step.example.step,
-    alternatives: (step.example.alternatives ?? []).map((name) =>
-      alternativeObject(stepNamed(name))
+    step: step.urn,
+    ...(error === undefined ? {} : { error }),
+    alternatives: alternatives.map((alternative) => alternative.urn),
+    params: Object.fromEntries(
+      [step, ...alternatives].map((offered) => [offered.urn, offered.example.step.params])
     ),
     csrf: EXAMPLE_CSRF,
     ...(client === undefined ? {} : { client }),
@@ -198,20 +201,18 @@ export function exampleAnswer(step: StepDefinition) {
 export function exampleAnswerResult(step: StepDefinition) {
   const { next } = step.example;
   if ('redirect' in next) return { result: 'redirect', location: next.redirect };
-  const nextStep = stepNamed(next.step);
-  const following = exampleInteraction(nextStep);
   return {
     result: 'step',
-    interaction: {
-      ...following,
-      step: { type: nextStep.urn, params: nextStep.example.step.params },
-    },
+    interaction: exampleInteraction(stepNamed(next.step), { withError: false }),
   };
 }
 
 /** The personal-data read of `step`, as its example shows it. */
 export function examplePersonal(step: StepDefinition) {
-  return { type: step.urn, data: step.example.personal ?? {} };
+  return {
+    step: step.urn,
+    data: step.example.personal === undefined ? {} : { [step.urn]: step.example.personal },
+  };
 }
 
 const examplesByStep = (value: (step: StepDefinition) => unknown) =>
@@ -282,7 +283,7 @@ function requirements(flowCookie: boolean, csrf: boolean) {
 }
 
 const FORM_ENCODING_NOTE =
-  'As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The answer carries the flow cookie and comes from the realm origin: the server checks `Origin` and `Sec-Fetch-Site`, then the flow cookie, then the CSRF value, and runs no engine work before all three pass.';
+  'As JSON or as a plain HTML form post (`application/x-www-form-urlencoded`, UTF-8) with the same members, so a page works without JavaScript. In a form post every value is a string: a boolean is `true` or `false` (an unchecked checkbox sends nothing, which means `false`), and no member may be repeated. The answer carries the flow cookie and comes from the realm origin: the server checks `Origin` and `Sec-Fetch-Site`, then the flow cookie, then the CSRF value, and runs no engine work before all three pass. A body is at most 16 KiB, or 64 KiB for an answer to `webauthn_create` (ADR-017 Decision 7); a larger one gets 413.';
 
 function paths() {
   const base = `${INTERACTION_API_PREFIX}/{interactionId}`;
@@ -484,23 +485,26 @@ export function buildInteractionOpenApi(): OpenApiDocument {
         ['InteractionId', interactionIdSchema],
         ['Csrf', csrfSchema],
         ['Interaction', interactionSchema],
-        ['Step', stepUnion('One step, by its name.', (step) => stepComponentNames(step).step)],
+        ['StepName', stepNameSchema()],
+        ['StepError', stepErrorSchema()],
         [
-          'AnswerRequest',
-          stepUnion(
-            'An answer to one step, by its name: the envelope’s `type` and `csrf`, and the step’s answer fields.',
-            (step) => stepComponentNames(step).answer
+          'StepParams',
+          keyedByStep(
+            'The params of the offered steps, keyed by step name: the current step’s and each alternative’s. What any reader of the interaction id may see.',
+            (step) => stepComponentNames(step).params
           ),
         ],
+        ['AnswerRequest', answerUnion()],
         ['AnswerResult', answerResultSchema],
         ['NextStepResult', nextStepResultSchema],
         ['RedirectResult', redirectResultSchema],
         ['CancelRequest', cancelRequestSchema],
+        ['PersonalData', personalDataSchema],
         [
-          'PersonalData',
-          stepUnion(
-            'The personal data of the current step, by its name.',
-            (step) => stepComponentNames(step).personal
+          'StepPersonalData',
+          keyedByStep(
+            'The current step’s personal data, under its step name. Empty for a step that has none.',
+            (step) => stepComponentNames(step).personalData
           ),
         ],
         ['ClientDisplay', clientDisplaySchema],

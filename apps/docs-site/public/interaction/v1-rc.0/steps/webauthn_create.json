@@ -10,18 +10,31 @@
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:webauthn_create:v1-rc.0"
+      "const": "urn:qauth:ia:webauthn_create:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
@@ -55,7 +68,20 @@
           },
           "attestation": "none"
         }
-      }
+      },
+      "answer": {
+        "webauthn_response": "{\"id\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"rawId\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"type\":\"public-key\",\"response\":{\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0\",\"attestationObject\":\"o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjE\",\"transports\":[\"internal\",\"hybrid\"]},\"authenticatorAttachment\":\"platform\",\"clientExtensionResults\":{}}"
+      },
+      "personal": {
+        "identifier": "alice@example.com",
+        "user": {
+          "id": "b2Zmc2V0LXVzZXItaGFuZGxl",
+          "name": "alice@example.com",
+          "displayName": "alice@example.com"
+        },
+        "excludeCredentials": []
+      },
+      "amr": []
     }
   ],
   "$defs": {
@@ -90,7 +116,7 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 64,
-                  "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+                  "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
                   "x-qauth-display": "realm",
                   "description": "The realm’s display name."
                 }
@@ -166,6 +192,38 @@
       "required": [
         "optional",
         "options"
+      ],
+      "examples": [
+        {
+          "optional": true,
+          "options": {
+            "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+            "rp": {
+              "id": "auth.example.com",
+              "name": "Example"
+            },
+            "pubKeyCredParams": [
+              {
+                "type": "public-key",
+                "alg": -8
+              },
+              {
+                "type": "public-key",
+                "alg": -7
+              },
+              {
+                "type": "public-key",
+                "alg": -257
+              }
+            ],
+            "timeout": 300000,
+            "authenticatorSelection": {
+              "residentKey": "required",
+              "userVerification": "required"
+            },
+            "attestation": "none"
+          }
+        }
       ]
     },
     "answer": {
@@ -174,7 +232,7 @@
         "webauthn_response": {
           "type": "string",
           "minLength": 2,
-          "maxLength": 65536,
+          "maxLength": 16384,
           "contentMediaType": "application/json",
           "contentSchema": {
             "type": "object",
@@ -241,7 +299,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 254,
-          "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
           "x-qauth-display": "account",
           "description": "The identifier of the account this transaction is for, as the person gave it or as the account holds it. Personal data: only the personal-data read returns it."
         },
@@ -259,7 +317,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+              "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
               "x-qauth-display": "account",
               "description": "The account name the authenticator shows."
             },
@@ -267,7 +325,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "pattern": "^[^<>\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$",
+              "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
               "x-qauth-display": "account",
               "description": "The display name the authenticator shows."
             }
@@ -344,6 +402,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

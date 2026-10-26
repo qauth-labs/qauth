@@ -233,3 +233,61 @@ describe('the Interaction API operations', () => {
     expect(checked).toBeGreaterThan(70);
   });
 });
+
+describe('the client display data and the problem body', () => {
+  const validator = componentValidator(INTERACTION_OPENAPI);
+
+  it('require the verified data each kind of client has, and no logo for an unverified one', () => {
+    const client = validator.schema('ClientDisplay');
+    const cimd = {
+      kind: 'cimd',
+      verifiedDomain: {
+        host: 'app.example.com',
+        registrableDomain: 'example.com',
+        sharedHosting: false,
+      },
+      redirect: { target: 'host', host: 'app.example.com' },
+      newClient: false,
+    };
+    expect(client(cimd), describeErrors(client)).toBe(true);
+    const withoutDomain: Record<string, unknown> = { ...cimd };
+    delete withoutDomain['verifiedDomain'];
+    expect(client(withoutDomain)).toBe(false);
+    expect(client({ kind: 'federation', newClient: false })).toBe(false);
+    expect(client({ ...cimd, redirect: { target: 'host' } })).toBe(false);
+    expect(client({ ...cimd, redirect: { target: 'app' } })).toBe(false);
+    const unverified = { kind: 'unverified', redirect: { target: 'this_device' }, newClient: true };
+    expect(client(unverified), describeErrors(client)).toBe(true);
+    expect(
+      client({ ...unverified, logo: { url: '/ui/assets/logo-3f9a1c2e.svg', width: 1, height: 1 } })
+    ).toBe(false);
+    expect(client({ ...unverified, verifiedDomain: cimd.verifiedDomain })).toBe(false);
+  });
+
+  it('refuse a problem document that carries prose', () => {
+    const problem = validator.schema('Problem');
+    const base = {
+      type: 'about:blank',
+      title: 'Gone',
+      status: 410,
+      code: 'interaction_expired',
+      trace_id: 'req-1',
+    };
+    expect(problem(base), describeErrors(problem)).toBe(true);
+    expect(problem({ ...base, title: 'Payload Too Large', status: 413 })).toBe(true);
+    for (const member of ['detail', 'instance', 'errors']) {
+      expect(problem({ ...base, [member]: 'The interaction expired.' }), member).toBe(false);
+    }
+    expect(problem({ ...base, title: '<b>Gone</b>' })).toBe(false);
+  });
+
+  it('refuse a redirect to a scheme a browser would run', () => {
+    const redirect = validator.schema('RedirectResult');
+    expect(redirect({ result: 'redirect', location: 'com.example.app:/callback?code=x' })).toBe(
+      true
+    );
+    for (const location of ['javascript:alert(1)', 'data:text/html,x', 'JavaScript:alert(1)']) {
+      expect(redirect({ result: 'redirect', location }), location).toBe(false);
+    }
+  });
+});

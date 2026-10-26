@@ -95,7 +95,7 @@ describe('the published Interaction API contract files', () => {
       expect(surface.format, surface.name).toBe(
         surface.path === OPENAPI_PATH ? 'openapi' : 'json-schema'
       );
-      if (surface.format === 'json-schema') expect(surface.role, surface.name).toBe('output');
+      if (surface.format === 'json-schema') expect(surface.role, surface.name).toBe('both');
     }
   });
 });

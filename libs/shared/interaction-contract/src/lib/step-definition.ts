@@ -51,7 +51,10 @@ export interface StepDefinition {
 
 /** One example of each part of a step. */
 export interface StepExample {
-  /** The step object as a step read returns it, as the current step. */
+  /**
+   * The step as the example's step read offers it: its name, its params and,
+   * when the example shows a refused answer, the error.
+   */
   readonly step: { readonly type: string; readonly params: unknown; readonly error?: string };
   /** The answer fields, without the envelope's `type` and `csrf`. */
   readonly answer: Readonly<Record<string, unknown>>;

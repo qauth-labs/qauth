@@ -9,25 +9,43 @@
   "type": "object",
   "properties": {
     "type": {
-      "const": "urn:qauth:ia:device_code:v1-rc.0"
+      "const": "urn:qauth:ia:device_code:v1-rc.0",
+      "description": "The step name."
     },
     "params": {
       "$ref": "#/$defs/params"
     },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
     "error": {
       "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
     }
   },
   "required": [
     "type",
-    "params"
+    "params",
+    "answer",
+    "personal",
+    "amr"
   ],
   "examples": [
     {
       "type": "urn:qauth:ia:device_code:v1-rc.0",
       "params": {
         "length": 8
-      }
+      },
+      "answer": {
+        "user_code": "wdjb-mjht"
+      },
+      "personal": {},
+      "amr": []
     }
   ],
   "$defs": {
@@ -44,6 +62,11 @@
       },
       "required": [
         "length"
+      ],
+      "examples": [
+        {
+          "length": 8
+        }
       ]
     },
     "answer": {
@@ -82,6 +105,10 @@
       "description": "Why the last answer was refused. A closed set."
     },
     "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
       "const": [],
       "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
     }

@@ -27,6 +27,8 @@ export interface CallInit {
 export interface OperationInfo {
   readonly method: string;
   readonly path: string;
+  /** The pattern each path parameter must match, from the document. */
+  readonly pathPatterns: Readonly<Record<string, string>>;
   readonly flowCookie: boolean;
   readonly csrf: boolean;
   /** Every status the document declares for it. */
@@ -68,12 +70,26 @@ export class UnexpectedStatusError extends Error {
   }
 }
 
-/** Replace each `{name}` of `path` with its encoded parameter. */
-export function expandPath(path: string, params: object): string {
+/**
+ * Replace each `{name}` of `path` with its parameter, which must match the
+ * pattern the document gives it. The id comes from the page's own URL, which
+ * anyone can link to: a value such as `..` or `../answer` would otherwise send
+ * the request, and what it carries, to another path of the origin.
+ */
+export function expandPath(
+  path: string,
+  params: object,
+  patterns: Readonly<Record<string, string>>
+): string {
   return path.replace(/\{([^}]+)\}/g, (_match, name: string) => {
     const value = (params as Record<string, unknown>)[name];
-    if (typeof value !== 'string' || value === '') {
-      throw new TypeError(`the path parameter ${name} is missing`);
+    const pattern = patterns[name];
+    if (
+      typeof value !== 'string' ||
+      pattern === undefined ||
+      !new RegExp(pattern, 'u').test(value)
+    ) {
+      throw new TypeError(`the path parameter ${name} is missing or malformed`);
     }
     return encodeURIComponent(value);
   });
@@ -91,7 +107,7 @@ export async function callOperation<O extends OperationShape>(
   init?: CallInit
 ): Promise<OperationResult<O>> {
   const send = options.fetch ?? fetch;
-  const url = `${options.baseUrl ?? ''}${expandPath(operation.path, pathParams)}`;
+  const url = `${options.baseUrl ?? ''}${expandPath(operation.path, pathParams, operation.pathPatterns)}`;
   const response = await send(url, {
     method: operation.method,
     // Same-origin by design: the flow cookie travels only to the realm origin.

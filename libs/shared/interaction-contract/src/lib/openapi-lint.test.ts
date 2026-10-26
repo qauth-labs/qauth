@@ -114,9 +114,7 @@ describe('the Interaction API OpenAPI document', () => {
 
   it('maps each discriminator value to the variant whose constant it is', () => {
     const unions = Object.entries(components).filter(([, schema]) => 'discriminator' in schema);
-    expect(unions.map(([name]) => name).sort()).toEqual(
-      ['AnswerRequest', 'AnswerResult', 'PersonalData', 'Step'].sort()
-    );
+    expect(unions.map(([name]) => name).sort()).toEqual(['AnswerRequest', 'AnswerResult']);
     for (const [name, schema] of unions) {
       const { propertyName, mapping } = schema['discriminator'] as {
         propertyName: string;

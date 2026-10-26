@@ -264,7 +264,7 @@ export const webauthnCreate = defineStep({
     },
     ['user', 'excludeCredentials']
   ),
-  answer: closedObject({ webauthn_response: webauthnResponse(65536, 'attestation') }, []),
+  answer: closedObject({ webauthn_response: webauthnResponse(16384, 'attestation') }, []),
   errors: ['invalid_credentials'],
   amr: [],
   example: {
@@ -315,7 +315,7 @@ export const totpSetup = defineStep({
   transports: ['interaction'],
   summary: 'Sets up an authenticator app.',
   description:
-    'TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data, read once with the flow cookie; it is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.',
+    'TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data: readable with the flow cookie while this step is current, and never after. It is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.',
   params: object(
     {
       algorithm: closedEnum(['SHA1'], 'The HMAC algorithm.'),
@@ -368,7 +368,7 @@ export const recoveryCodes = defineStep({
   transports: ['interaction'],
   summary: 'Shows a new set of recovery codes once.',
   description:
-    'A new recovery-code set: issued at the first enrolment of a second factor, at the registration of a passkey-only account, and when the person regenerates the set (ADR-017 Decision 8). The codes are personal data, readable with the flow cookie only while this step is current, and never shown again. The answer confirms the person saved them.',
+    'A new recovery-code set: issued at the first enrolment of a second factor, at the registration of a passkey-only account, and when the person regenerates the set (ADR-017 Decision 8). The codes are personal data: readable with the flow cookie while this step is current, and never after. The answer confirms the person saved them.',
   params: object(
     {
       count: { type: 'integer', enum: [10], description: 'How many codes the set holds.' },

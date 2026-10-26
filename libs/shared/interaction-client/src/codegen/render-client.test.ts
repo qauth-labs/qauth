@@ -73,13 +73,30 @@ describe('the generator', () => {
         'x'
       ).replace(/\s+/g, ' ')
     ).toBe('{ a: boolean; }');
+    expect(typeOf({ not: {}, description: 'Never sent.' }, 'x')).toBe('never');
+    expect(
+      typeOf(
+        {
+          type: 'object',
+          properties: { kind: { type: 'string' } },
+          allOf: [{ if: { properties: { kind: { const: 'a' } } }, then: { required: ['kind'] } }],
+        },
+        'x'
+      ).replace(/\s+/g, ' ')
+    ).toBe('{ kind?: string; }');
   });
 
   it('refuses what it cannot type, instead of widening it to unknown', () => {
     expect(() => typeOf({ type: 'string', maxLenght: 3 }, 'x')).toThrow(
       /does not know the keyword/
     );
-    expect(() => typeOf({ allOf: [] }, 'x')).toThrow(/does not know the keyword allOf/);
+    expect(() => typeOf({ allOf: [] }, 'x')).toThrow(/only read as the rules of an object/);
+    expect(() =>
+      typeOf(
+        { type: 'object', properties: {}, allOf: [{ properties: { a: { type: 'string' } } }] },
+        'x'
+      )
+    ).toThrow(/a rule may hold only if\/then\/else/);
     expect(() => typeOf({ $ref: 'other.json#/x' }, 'x')).toThrow(/unsupported reference/);
     expect(() => typeOf({}, 'x')).toThrow(/cannot type/);
   });

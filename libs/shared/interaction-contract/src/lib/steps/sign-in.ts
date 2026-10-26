@@ -27,7 +27,7 @@ export const identifier = defineStep({
   transports: ['interaction', 'fipa'],
   summary: 'Asks who is signing in.',
   description:
-    'Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4).',
+    'Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4). Offered as an alternative of a later step, it is the account switch ("Not you?", "Use another account"): answering it ends the interaction and starts a new one for the same authorization request, and the result is a redirect to the ceremony app’s page of the new interaction. Nothing proved for the first account carries over (#592).',
   params: EMPTY_OBJECT,
   personal: EMPTY_OBJECT,
   answer: closedObject({ login_hint: loginHint }, ['login_hint']),
@@ -72,7 +72,7 @@ export const password = defineStep({
     error: 'invalid_credentials',
     answer: { password: 'correct horse battery staple x' },
     personal: { identifier: 'alice@example.com' },
-    alternatives: ['webauthn_get', 'password_reset', 'recovery_code'],
+    alternatives: ['identifier', 'webauthn_get', 'password_reset', 'recovery_code'],
     next: { redirect: EXAMPLE_REDIRECT },
   },
 });
@@ -101,11 +101,12 @@ export const captcha = defineStep({
       ),
       object(
         {
-          provider: {
+          provider: { const: 'hosted', description: 'A hosted provider the operator named.' },
+          name: {
             type: 'string',
+            minLength: 1,
             maxLength: 32,
             pattern: '^[a-z][a-z0-9_-]{0,31}$',
-            not: { const: 'pow' },
             description: 'The name the operator gave the hosted provider.',
           },
           site_key: {
@@ -116,7 +117,7 @@ export const captcha = defineStep({
             description: 'The provider’s public site key.',
           },
         },
-        ['provider', 'site_key']
+        ['provider', 'name', 'site_key']
       ),
     ],
   },
@@ -127,7 +128,9 @@ export const captcha = defineStep({
         type: 'string',
         minLength: 1,
         maxLength: 4096,
-        description: 'The solution, or the provider’s token.',
+        pattern: '^[!-~]+$',
+        description:
+          'The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes.',
       },
     },
     ['captcha_token']
@@ -165,7 +168,7 @@ export const webauthnGet = defineStep({
     ['challenge', 'rpId', 'userVerification']
   ),
   personal: identifierPersonal,
-  answer: closedObject({ webauthn_response: webauthnResponse(16384, 'assertion') }, [
+  answer: closedObject({ webauthn_response: webauthnResponse(8192, 'assertion') }, [
     'webauthn_response',
   ]),
   errors: ['invalid_credentials'],
@@ -258,7 +261,7 @@ export const selectAccount = defineStep({
   transports: ['interaction'],
   summary: 'Asks which signed-in account to continue with.',
   description:
-    'The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. "Use another account" answers the `identifier` step, offered beside this one, which starts a new interaction for the same authorization request; nothing proved for one account carries over to another (#592). Needs JavaScript, to read the list.',
+    'The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. "Use another account" answers the `identifier` step, offered beside this one: that starts a new interaction for the same authorization request, and the result is a redirect to its page (#592). Needs JavaScript, to read the list.',
   params: EMPTY_OBJECT,
   personal: object(
     {

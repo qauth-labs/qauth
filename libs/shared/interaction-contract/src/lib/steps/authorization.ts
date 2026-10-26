@@ -3,6 +3,7 @@ import {
   closedEnum,
   closedObject,
   dateTime,
+  declared,
   displayText,
   EMPTY_OBJECT,
   object,
@@ -75,7 +76,12 @@ export const consent = defineStep({
           'Where the tokens may be used: the resource indicators (RFC 8707) of the request.',
         minItems: 0,
         maxItems: 16,
-        items: absoluteUri(2048, 'One resource indicator.'),
+        items: declared(
+          absoluteUri(
+            2048,
+            'One resource indicator, as the request named it. The request chose it, so the screen marks it as asked for by the app.'
+          )
+        ),
       },
       remember_default: {
         type: 'boolean',
@@ -169,7 +175,7 @@ export const deviceConfirm = defineStep({
   transports: ['interaction'],
   summary: 'Asks the person to confirm the device in front of them.',
   description:
-    'The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. Works without JavaScript, without the device details.',
+    'The explicit confirmation of a device authorization, always asked, also after `verification_uri_complete` (ADR-020 §3). The screen warns that nobody else should have given the person the code, and shows where the request came from: the requesting device’s approximate location, network and user agent, which are personal data, and its start time. The consent step always follows, even for a client that may skip consent elsewhere. The device details come with the personal data, so this step needs JavaScript: a page shows them before it offers `confirm`.',
   params: object(
     {
       user_code: {

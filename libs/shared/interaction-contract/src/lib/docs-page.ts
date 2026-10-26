@@ -55,11 +55,15 @@ function operationRows(document: OpenApiDocument): string[] {
   return rows;
 }
 
+/** The members of an object schema, or of each variant of a `oneOf`, as code. */
 const fieldList = (schema: unknown): string => {
-  const properties = Object.keys(
-    ((schema as { properties?: Record<string, unknown> }).properties ?? {}) as object
-  );
-  return properties.length === 0 ? '—' : properties.map(code).join(', ');
+  const { properties, oneOf } = schema as {
+    properties?: Record<string, unknown>;
+    oneOf?: unknown[];
+  };
+  if (Array.isArray(oneOf)) return oneOf.map(fieldList).join(', or ');
+  const names = Object.keys(properties ?? {});
+  return names.length === 0 ? '—' : names.map(code).join(', ');
 };
 
 function stepRow(step: StepDefinition): string {
@@ -75,8 +79,10 @@ function stepSection(step: StepDefinition): string {
     `### ${step.name}`,
     `${code(step.urn)} — ${step.summary}`,
     step.description,
-    `- Params: ${fieldList(step.params)}`,
-    `- Schema: [${stepSchemaFile(step)}](${CONTRACT_SITE_PATH}${stepSchemaFile(step)})`,
+    [
+      `- Params: ${fieldList(step.params)}`,
+      `- Schema: [${stepSchemaFile(step)}](${CONTRACT_SITE_PATH}${stepSchemaFile(step)})`,
+    ].join('\n'),
   ].join('\n\n');
 }
 
@@ -118,7 +124,7 @@ An answer is ${code('application/json')} or a plain HTML form post (${code('appl
 A form post gets the same as a ${code('303 See Other')}. Anything the API refuses is an **error**: a problem document (below).`,
     `## Steps
 
-Each step is named ${code(`urn:qauth:ia:<name>:${INTERACTION_API_VERSION}`)}. Its params are what any reader of the interaction id may see; its personal data needs the flow cookie. The params and answer fields keep the step grammar's names on both transports, which is why they are ${code('snake_case')} while the envelope is ${code('camelCase')}.
+Each step is named ${code(`urn:qauth:ia:<name>:${INTERACTION_API_VERSION}`)}. A step read names the current step (${code('step')}), the other steps the engine accepts next (${code('alternatives')}), their params keyed by step name (${code('params')}) and, after a refused answer, the reason (${code('error')}): the shape of the FiPA endpoint's answer, so a new step is a new name and a new member, not a break. A step's params are what any reader of the interaction id may see; its personal data needs the flow cookie. Each step's schema file holds the whole step as one record (params, answer, personal data, errors and ${code('amr')}) with its example, which the implementation reuses as a test vector. The params and answer fields keep the step grammar's names on both transports, which is why they are ${code('snake_case')} while the envelope is ${code('camelCase')}.
 
 | Step | Transports | Answer fields | Errors | ${code('amr')} | Personal data |
 | ---- | ---------- | ------------- | ------ | ----- | ------------- |
