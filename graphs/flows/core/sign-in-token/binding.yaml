@@ -1,0 +1,140 @@
+# core.sign-in-token bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file
+# yet: delurio's replay drives a browser today, and `request` below is the request template QAuth asks of its replay
+# over HTTP (method, path, headers, a JSON body, and values saved from earlier responses). The shared server binding
+# (#565) gives the server's address, the realm's hosts and how a replay reaches the database; this file adds the server
+# settings this flow needs, the accounts and their seed, the request and the scenarios. What each state answers is its
+# `response` in flow.yaml.
+#
+# - A scenario's `request` is merged over the event's template; a field or a header set to null is left out.
+# - Before each walk the replay empties the cache, then runs the scenario's `setup`: the rate-limit and failed-login
+#   counters of the replay's address are shared by every walk, and a walk must not inherit another's.
+# - The accounts, their seed and the server settings are core.sign-in's: the two routes share one failed-login counter
+#   and one gate.
+schema: delurio-graph/0
+kind: binding
+flow: core.sign-in-token
+extends: ../../../bindings/server.binding.yaml # written by #565
+
+server:
+  # QAuth's settings for every replay of this flow, over the shared binding's. Each is set explicitly, the defaults
+  # included, so that a changed default cannot change what the replay proves. A scenario's `server` is merged over
+  # this one, and the replay starts a server of its own for a scenario that changes it.
+  env:
+    REQUIRE_VERIFIED_ACCOUNT: 'true' # the default: unset or blank also mean true. Its deprecated name,
+    # REQUIRE_EMAIL_VERIFIED, stays unset: the boot fails when the two names disagree.
+    FAILED_LOGIN_TRACKING_ENABLED: 'true'
+    FAILED_LOGIN_MAX_ATTEMPTS: '3'
+    FAILED_LOGIN_WINDOW: '900'
+    FAILED_LOGIN_LOCKOUT_DURATION: '900'
+    RATE_LIMIT_ENABLED: 'true'
+    # Above FAILED_LOGIN_MAX_ATTEMPTS. With the defaults (5 and 5) the request after the fifth counted failure from
+    # one address meets the login limit first, so a lockout is never seen from that address.
+    LOGIN_RATE_LIMIT: '10'
+    LOGIN_RATE_WINDOW: '900'
+  resetBeforeEachWalk: [cache]
+
+seed:
+  # the accounts below, in the realm of the shared binding's default host
+  - run: [psql, '{databaseUrl}', -v, ON_ERROR_STOP=1, --file, ../../../fixtures/users.sql]
+
+data:
+  # The password of every account in graphs/fixtures/users.sql: a throwaway, for replays only.
+  password: replay-sign-in-throwaway-2026
+
+accounts:
+  # graphs/fixtures/users.sql creates each in the default realm, with data.password
+  verified: { email: verified@sign-in.example } # enabled, address confirmed
+  unverified: { email: unverified@sign-in.example } # enabled, address not confirmed
+  disabled: { email: disabled@sign-in.example } # disabled, address confirmed
+  disabledUnverified: { email: disabled-unverified@sign-in.example } # disabled, address not confirmed
+  lockout: { email: lockout@sign-in.example } # enabled, address confirmed; the lockout scenario locks it
+  unknown: { email: nobody@sign-in.example } # no account has this address
+
+events:
+  LOGIN:
+    # the flow's one request
+    - request:
+        method: POST
+        path: /auth/login
+        json: { email: '{account.email}', password: '{password}' }
+        follow: false
+
+scenarios:
+  # The main story first, then one scenario for each exit and each guard of flow.yaml, in the order the server checks
+  # them.
+
+  verifiedUser:
+    # a verified user with the right password: the main story
+    given: { gate: open, account: verified, password: right, requireVerified: true }
+    as: verified
+
+  unverifiedUser:
+    # unverifiedUnderTheGate: the right password of an account whose address is not confirmed
+    given: { gate: open, account: unverified, password: right, requireVerified: true }
+    as: unverified
+
+  unverifiedUserWithoutTheGate:
+    # the same account on a server with REQUIRE_VERIFIED_ACCOUNT=false: it gets its tokens
+    given: { gate: open, account: unverified, password: right, requireVerified: false }
+    as: unverified
+    server: { env: { REQUIRE_VERIFIED_ACCOUNT: 'false' } }
+
+  disabledUser:
+    # userDisabled: the right password of a disabled account
+    given: { gate: open, account: disabled, password: right, requireVerified: true }
+    as: disabled
+
+  disabledUnverifiedUser:
+    # unverifiedUnderTheGate, before userDisabled: the gate reads the credential before the users row
+    given: { gate: open, account: disabledUnverified, password: right, requireVerified: true }
+    as: disabledUnverified
+
+  unknownIdentifier:
+    # noCredential: an address with no account
+    given: { gate: open, account: unknown, password: right, requireVerified: true }
+    as: unknown
+
+  wrongPassword:
+    # wrongPassword: a verified account and another password
+    given: { gate: open, account: verified, password: wrong, requireVerified: true }
+    as: verified
+    request: { json: { password: not-the-password } }
+
+  pastTheLockoutThreshold:
+    # lockedOut: FAILED_LOGIN_MAX_ATTEMPTS wrong passwords, then the right one
+    given: { gate: lockedOut, account: verified, password: right, requireVerified: true }
+    as: lockout
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: not-the-password }
+          # counted, then refused with 401; the third arms the lockout
+        repeat: '{server.env.FAILED_LOGIN_MAX_ATTEMPTS}'
+
+  invalidBody:
+    # inputInvalid: an email that is not an address
+    given: { gate: invalidInput, account: verified, password: right, requireVerified: true }
+    as: verified
+    request: { json: { email: not-an-address } }
+
+  unknownHost:
+    # hostUnknown
+    given: { gate: unknownHost, account: verified, password: right, requireVerified: true }
+    as: verified
+    request: { headers: { Host: sign-in-token.unknown-host.invalid } }
+
+  overLoginLimit:
+    # rateLimited: the address has sent LOGIN_RATE_LIMIT sign-in requests in this window already
+    given: { gate: rateLimited, account: verified, password: right, requireVerified: true }
+    as: verified
+    setup:
+      - request: { method: POST, path: /auth/login, json: {} }
+        # counted, then refused with 400
+        repeat: '{server.env.LOGIN_RATE_LIMIT}'
+
+  # A replay over HTTP cannot make a store fail; apps/auth-server/src/app/routes/auth/login.test.ts reaches this exit
+  # with a failing repository.
+  storeFailure:
+    given: { gate: open, account: verified, password: right, requireVerified: true }
+    skip: the replay cannot make the database, the key store or the event store fail
