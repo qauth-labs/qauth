@@ -9,7 +9,7 @@
  */
 
 import type { BuiltServerItemId, ExperimentalItem } from '@qauth-labs/shared-stability';
-import { isReservedAdminScope } from '@qauth-labs/shared-validation';
+import { isReservedQauthScope } from '@qauth-labs/shared-validation';
 
 import {
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
@@ -43,7 +43,7 @@ export interface DiscoveryMetadataInput {
   issuer: string;
   /**
    * Supported scopes list; defaults to {@link DEFAULT_SCOPES_SUPPORTED}. A
-   * scope with the reserved `admin:` prefix is never advertised (#507).
+   * scope in the reserved `qauth:` namespace is never advertised (#507).
    */
   scopesSupported?: readonly string[];
   /**
@@ -225,13 +225,13 @@ export function buildAuthorizationServerMetadata(
     token_endpoint_auth_signing_alg_values_supported: [...ASSERTION_SIGNING_ALG_VALUES_SUPPORTED],
     introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
     revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-    // The admin scopes are never advertised (#507, ADR-019 Decision 7): they
-    // belong to the admin API, whose clients the operator provisions, and a
-    // client that discovers them from here would only ask for what it can
-    // never be granted. Any scope with the reserved `admin:` prefix is dropped,
+    // QAuth's own scopes are never advertised (#507, ADR-019 Decision 7): the
+    // admin API's belong to clients the operator provisions, and a client that
+    // discovers them from here would only ask for what it can never be
+    // granted. Any scope in the reserved `qauth:` namespace is dropped,
     // whatever list the caller passes.
     scopes_supported: Array.from(input.scopesSupported ?? DEFAULT_SCOPES_SUPPORTED).filter(
-      (scope) => !isReservedAdminScope(scope)
+      (scope) => !isReservedQauthScope(scope)
     ),
     // Public subject identifiers — no pairwise salts today.
     subject_types_supported: ['public'],

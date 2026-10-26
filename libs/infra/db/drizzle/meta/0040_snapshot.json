@@ -1,5 +1,5 @@
 {
-  "id": "0d72efe8-5876-41be-b90c-d4cc274f5c4b",
+  "id": "47679e5a-79e5-4983-99b8-4380d89913c2",
   "prevId": "208854b1-e04b-4969-9970-b8081e6512cb",
   "version": "7",
   "dialect": "postgresql",
@@ -1594,9 +1594,9 @@
           "name": "realms_sso_idle_timeout_positive",
           "value": "\"realms\".\"sso_idle_timeout\" IS NULL OR \"realms\".\"sso_idle_timeout\" > 0"
         },
-        "realms_dynamic_registration_scopes_not_admin": {
-          "name": "realms_dynamic_registration_scopes_not_admin",
-          "value": "NOT jsonb_path_exists(\"realms\".\"dynamic_registration_allowed_scopes\", '$[*] ? (@ like_regex \"^[aA][dD][mM][iI][nN]:\")')"
+        "realms_dynamic_registration_scopes_not_qauth": {
+          "name": "realms_dynamic_registration_scopes_not_qauth",
+          "value": "NOT jsonb_path_exists(\"realms\".\"dynamic_registration_allowed_scopes\", '$[*] ? (@ like_regex \"^[qQ][aA][uU][tT][hH]:\")')"
         }
       },
       "isRLSEnabled": false

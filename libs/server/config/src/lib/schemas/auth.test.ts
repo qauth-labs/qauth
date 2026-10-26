@@ -198,7 +198,7 @@ describe('authEnvSchema MAX_CLIENTS_PER_DEVELOPER', () => {
 
 /**
  * DEFAULT_DYNAMIC_REGISTRATION_SCOPES seeds a realm's dynamic registration
- * allowlist, which may never hold a scope with the reserved `admin:` prefix
+ * allowlist, which may never hold a scope in the reserved `qauth:` namespace
  * (#507, ADR-019 Decision 7).
  */
 describe('authEnvSchema DEFAULT_DYNAMIC_REGISTRATION_SCOPES', () => {
@@ -214,26 +214,28 @@ describe('authEnvSchema DEFAULT_DYNAMIC_REGISTRATION_SCOPES', () => {
     expect(parse('openid, mcp:read  mcp:write')).toEqual(['openid', 'mcp:read', 'mcp:write']);
   });
 
-  it('accepts scopes that only contain "admin"', () => {
-    expect(parse('openid agent:admin example:admin administrator')).toEqual([
+  // Other servers' scopes that look administrative are ordinary scopes.
+  it('accepts admin: scopes and scopes that only contain "qauth"', () => {
+    expect(parse('openid admin:read admin:org example:qauth qauthx:read')).toEqual([
       'openid',
-      'agent:admin',
-      'example:admin',
-      'administrator',
+      'admin:read',
+      'admin:org',
+      'example:qauth',
+      'qauthx:read',
     ]);
   });
 
   it.each([
-    'openid admin:read',
-    'admin:write',
-    'openid,admin:security',
-    'ADMIN:read',
-    'admin:custom',
+    'openid qauth:admin:read',
+    'qauth:admin:write',
+    'openid,qauth:admin:security',
+    'QAUTH:admin:read',
+    'qauth:custom',
   ])('refuses the boot for %j, naming the reserved scope', (raw) => {
     const result = authEnvSchema.safeParse({ DEFAULT_DYNAMIC_REGISTRATION_SCOPES: raw });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.message).toMatch(
-      /^DEFAULT_DYNAMIC_REGISTRATION_SCOPES lists "[^"]+": the "admin:" prefix is reserved for the admin API/
+      /^DEFAULT_DYNAMIC_REGISTRATION_SCOPES lists "[^"]+": the "qauth:" scope namespace is reserved/
     );
   });
 });

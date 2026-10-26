@@ -10,6 +10,7 @@ import {
 import {
   BUILT_IN_ROLE_NAMES,
   BUILT_IN_ROLES,
+  builtInRoleNameOf,
   builtInRolesOf,
   effectivePermissions,
   isBuiltInRoleName,
@@ -98,10 +99,39 @@ describe('built-in roles (#507)', () => {
 
   it('reserve their names', () => {
     expect(isBuiltInRoleName('viewer')).toBe(true);
+    expect(isBuiltInRoleName('editor')).toBe(true);
     expect(isBuiltInRoleName('security-admin')).toBe(true);
-    expect(isBuiltInRoleName('Viewer')).toBe(false);
     expect(isBuiltInRoleName('auditor')).toBe(false);
   });
+
+  // A custom role named like a built-in one would read as it in the console.
+  it.each([
+    ['Viewer', 'viewer'],
+    ['EDITOR', 'editor'],
+    ['  viewer  ', 'viewer'],
+    ['Security-Admin', 'security-admin'],
+    ['security admin', 'security-admin'],
+    ['security_admin', 'security-admin'],
+    ['security\u2011admin', 'security-admin'],
+    ['security\u2014admin', 'security-admin'],
+    ['security \u2212 admin', 'security-admin'],
+    ['\uff56\uff49\uff45\uff57\uff45\uff52', 'viewer'],
+    ['vi\u0308ewer', 'viewer'],
+    ['VI\u0307EWER', 'viewer'],
+    ['edi\u200btor', 'editor'],
+    ['secur\u00adity-admin', 'security-admin'],
+  ])('reserve %j, which reads as %s', (name, builtIn) => {
+    expect(builtInRoleNameOf(name)).toBe(builtIn);
+    expect(isBuiltInRoleName(name)).toBe(true);
+  });
+
+  it.each(['auditor', 'viewers', 'security-admins', 'securityadmin', 'admin', '', '-'])(
+    'leave %j to custom roles',
+    (name) => {
+      expect(builtInRoleNameOf(name)).toBeUndefined();
+      expect(isBuiltInRoleName(name)).toBe(false);
+    }
+  );
 });
 
 describe('validateCustomRole (#507)', () => {
@@ -134,7 +164,7 @@ describe('validateCustomRole (#507)', () => {
     });
   });
 
-  it.each([['Realms.read'], ['realms.read '], ['admin:read'], ['realms'], ['']])(
+  it.each([['Realms.read'], ['realms.read '], ['qauth:admin:read'], ['realms'], ['']])(
     'refuses %j: ids match exactly',
     (id) => {
       expect(validateCustomRole([id])).toMatchObject({ valid: false, unknownIds: [id] });
@@ -175,23 +205,23 @@ describe('validateCustomRole (#507)', () => {
 describe('effectivePermissions (#507)', () => {
   const all = BUILT_IN_ROLES['security-admin'].permissionIds;
 
-  it('keeps the read permissions for admin:read', () => {
-    expect([...effectivePermissions(all, 'admin:read')]).toEqual(
+  it('keeps the read permissions for qauth:admin:read', () => {
+    expect([...effectivePermissions(all, 'qauth:admin:read')]).toEqual(
       BUILT_IN_ROLES.viewer.permissionIds
     );
   });
 
   // Acceptance criterion of #507: the three scopes are independent.
-  it('admin:write does not satisfy a read permission', () => {
-    expect(effectivePermissions(['realms.read'], 'admin:write').size).toBe(0);
-    expect([...effectivePermissions(all, 'admin:write')]).toEqual(['realms.policies.write']);
+  it('qauth:admin:write does not satisfy a read permission', () => {
+    expect(effectivePermissions(['realms.read'], 'qauth:admin:write').size).toBe(0);
+    expect([...effectivePermissions(all, 'qauth:admin:write')]).toEqual(['realms.policies.write']);
   });
 
-  it('admin:security satisfies neither a read nor a write permission', () => {
+  it('qauth:admin:security satisfies neither a read nor a write permission', () => {
     expect(
-      effectivePermissions(['realms.read', 'realms.policies.write'], 'admin:security').size
+      effectivePermissions(['realms.read', 'realms.policies.write'], 'qauth:admin:security').size
     ).toBe(0);
-    expect([...effectivePermissions(all, ['admin:security'])]).toEqual([
+    expect([...effectivePermissions(all, ['qauth:admin:security'])]).toEqual([
       'realms.policies.security',
       'approvals.approve',
     ]);
@@ -201,16 +231,16 @@ describe('effectivePermissions (#507)', () => {
     const needed = ['realms.policies.write', 'realms.policies.security'];
     const hasAll = (scopes: string) =>
       needed.every((id) => effectivePermissions(all, scopes).has(id));
-    expect(hasAll('admin:write')).toBe(false);
-    expect(hasAll('admin:security')).toBe(false);
-    expect(hasAll('admin:write admin:security')).toBe(true);
+    expect(hasAll('qauth:admin:write')).toBe(false);
+    expect(hasAll('qauth:admin:security')).toBe(false);
+    expect(hasAll('qauth:admin:write qauth:admin:security')).toBe(true);
   });
 
   it('grants nothing a role does not hold, whatever the scopes', () => {
     expect([
       ...effectivePermissions(
         BUILT_IN_ROLES.viewer.permissionIds,
-        'admin:read admin:write admin:security'
+        'qauth:admin:read qauth:admin:write qauth:admin:security'
       ),
     ]).toEqual(BUILT_IN_ROLES.viewer.permissionIds);
   });
@@ -225,24 +255,27 @@ describe('effectivePermissions (#507)', () => {
         retiredIn: 'v0.3.0',
       }),
     ]);
-    expect(effectivePermissions(['widgets.list'], 'admin:read', registry).size).toBe(0);
-    expect(effectivePermissions(['realms.delete', 'Realms.read'], 'admin:read').size).toBe(0);
+    expect(effectivePermissions(['widgets.list'], 'qauth:admin:read', registry).size).toBe(0);
+    expect(effectivePermissions(['realms.delete', 'Realms.read'], 'qauth:admin:read').size).toBe(0);
     expect(
-      effectivePermissions(all, 'Admin:read ADMIN:SECURITY admin:Write agent:admin').size
+      effectivePermissions(
+        all,
+        'QAuth:admin:read qauth:ADMIN:SECURITY qauth:admin:Write admin:read admin:security agent:admin'
+      ).size
     ).toBe(0);
     expect(effectivePermissions(all, '').size).toBe(0);
   });
 
   it('refuses a string where the list of role permissions belongs', () => {
-    expect(() => effectivePermissions('realms.read' as unknown as string[], 'admin:read')).toThrow(
-      TypeError
-    );
+    expect(() =>
+      effectivePermissions('realms.read' as unknown as string[], 'qauth:admin:read')
+    ).toThrow(TypeError);
   });
 });
 
 /**
  * The property of #507's first acceptance criterion: a token with only
- * `admin:write` never gets a security-class permission, for any role.
+ * `qauth:admin:write` never gets a security-class permission, for any role.
  *
  * The repository has no property-testing library, and the property needs
  * none: for the real catalog every role (every subset of its ids, plus ids it
@@ -250,7 +283,7 @@ describe('effectivePermissions (#507)', () => {
  * grow into, seeded random catalogs and roles are generated. A failure prints
  * the seed and the case.
  */
-describe('property: admin:write alone never reaches a security permission (#507)', () => {
+describe('property: qauth:admin:write alone never reaches a security permission (#507)', () => {
   /** mulberry32: a small, seeded generator, so a failing case reproduces. */
   function generator(seed: number) {
     let state = seed >>> 0;
@@ -268,38 +301,39 @@ describe('property: admin:write alone never reaches a security permission (#507)
     };
   }
 
-  /** Scopes that may sit beside `admin:write` without being `admin:security`. */
+  /** Scopes that may sit beside `qauth:admin:write` without being `qauth:admin:security`. */
   const COMPANION_SCOPES = [
     'openid',
     'profile',
     'offline_access',
     'agent:admin',
     'agent:exec',
-    'Admin:security',
-    'ADMIN:SECURITY',
-    'admin:securit',
-    'admin:Security',
+    'QAuth:admin:security',
+    'QAUTH:ADMIN:SECURITY',
+    'qauth:admin:securit',
+    'qauth:admin:Security',
+    'admin:security',
     'security',
-    'admin:',
-    'admin:admin',
+    'qauth:admin:',
+    'qauth:admin:admin',
   ];
 
-  /** Every token whose only admin scope is `admin:write`, as a list and as a claim. */
+  /** Every token whose only admin scope is `qauth:admin:write`, as a list and as a claim. */
   function writeOnlyTokens(
     random: ReturnType<typeof generator>,
     count: number
   ): (string | string[])[] {
-    const tokens: (string | string[])[] = [['admin:write'], 'admin:write'];
+    const tokens: (string | string[])[] = [['qauth:admin:write'], 'qauth:admin:write'];
     for (let i = 0; i < count; i++) {
-      const scopes = ['admin:write'];
+      const scopes = ['qauth:admin:write'];
       const extra = random.int(5);
       for (let j = 0; j < extra; j++) scopes.push(random.pick(COMPANION_SCOPES));
       scopes.sort(() => random.next() - 0.5);
       tokens.push(random.next() < 0.5 ? scopes : scopes.join(' '));
     }
     // In a list, an entry with white space is one scope that only looks like
-    // `admin:security`; joined into a claim it would be the real one.
-    tokens.push(['admin:write', 'admin:security ', ' admin:security']);
+    // `qauth:admin:security`; joined into a claim it would be the real one.
+    tokens.push(['qauth:admin:write', 'qauth:admin:security ', ' qauth:admin:security']);
     return tokens;
   }
 
@@ -323,6 +357,37 @@ describe('property: admin:write alone never reaches a security permission (#507)
       );
   }
 
+  /** Up to this many ids every subset is a role (4,096 of them); past it, roles are sampled. */
+  const EXHAUSTIVE_UNIVERSE_MAX = 12;
+  /** How many roles a sample holds once the universe outgrows enumeration. */
+  const SAMPLED_ROLES = 4096;
+
+  /**
+   * The roles over `universe` the property is checked for: every subset while
+   * there are at most {@link EXHAUSTIVE_UNIVERSE_MAX} ids, so the catalog can
+   * grow without the test growing as 2^n; then the whole universe, each
+   * built-in role and seeded random subsets.
+   */
+  function rolesOver(
+    universe: readonly string[],
+    random: ReturnType<typeof generator>,
+    registry: PermissionRegistry
+  ): string[][] {
+    if (universe.length <= EXHAUSTIVE_UNIVERSE_MAX) {
+      const roles: string[][] = [];
+      for (let mask = 0; mask < 1 << universe.length; mask++) {
+        roles.push(universe.filter((_, bit) => (mask & (1 << bit)) !== 0));
+      }
+      return roles;
+    }
+    const roles: string[][] = [
+      [...universe],
+      ...Object.values(builtInRolesOf(registry)).map((role) => [...role.permissionIds]),
+    ];
+    while (roles.length < SAMPLED_ROLES) roles.push(universe.filter(() => random.next() < 0.5));
+    return roles;
+  }
+
   it('holds for every role over the real catalog', () => {
     const random = generator(507);
     const tokens = writeOnlyTokens(random, 40);
@@ -332,22 +397,36 @@ describe('property: admin:write alone never reaches a security permission (#507)
       'realms.delete',
       'Realms.policies.security',
       'approvals.approve ',
-      'admin:security',
+      'qauth:admin:security',
     ];
-    const universe = [...catalog, ...strays];
-    expect(universe.length).toBeLessThanOrEqual(16);
-    let checked = 0;
+    const roles = rolesOver([...catalog, ...strays], random, PERMISSION_REGISTRY);
     const reached: string[] = [];
-    for (let mask = 0; mask < 1 << universe.length; mask++) {
-      const role = universe.filter((_, bit) => (mask & (1 << bit)) !== 0);
+    for (const role of roles) {
       for (const token of tokens) {
         reached.push(...securityReached(PERMISSION_REGISTRY, role, token, 'real catalog'));
-        checked++;
       }
     }
     expect(reached).toEqual([]);
     // The security-admin role, with every security permission, is among them.
-    expect(checked).toBe((1 << universe.length) * tokens.length);
+    const securityAdmin = BUILT_IN_ROLES['security-admin'].permissionIds;
+    expect(roles.some((role) => securityAdmin.every((id) => role.includes(id)))).toBe(true);
+  });
+
+  it('samples the roles of a catalog too large to enumerate, the widest role included', () => {
+    const permissions = Array.from({ length: 20 }, (_, i) =>
+      definePermission({
+        id: `widgets.action${i}`,
+        class: PERMISSION_CLASSES[i % 3],
+        resource: 'widgets',
+        description: `Permission ${i}.`,
+      })
+    );
+    const registry = createPermissionRegistry(permissions);
+    const universe = ids(registry.all);
+    const roles = rolesOver(universe, generator(1), registry);
+    expect(roles).toHaveLength(SAMPLED_ROLES);
+    expect(roles[0]).toEqual(universe);
+    expect(roles).toContainEqual([...builtInRolesOf(registry)['security-admin'].permissionIds]);
   });
 
   it('holds for seeded random catalogs and roles', () => {
@@ -388,10 +467,10 @@ describe('property: admin:write alone never reaches a security permission (#507)
     expect(reached).toEqual([]);
   });
 
-  it('would catch a broken intersection: the same roles do reach security with admin:security', () => {
+  it('would catch a broken intersection: the same roles do reach security with qauth:admin:security', () => {
     const reached = effectivePermissions(
       BUILT_IN_ROLES['security-admin'].permissionIds,
-      'admin:write admin:security'
+      'qauth:admin:write qauth:admin:security'
     );
     expect([...reached].some((id) => PERMISSION_REGISTRY.get(id)?.class === 'security')).toBe(true);
   });

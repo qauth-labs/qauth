@@ -260,7 +260,7 @@ describe('the API conventions check — fixture document (#506)', () => {
     });
 
     it('MUTATION: a permission that is not a permission id', () => {
-      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = 'admin:read')))).toEqual([
+      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = 'qauth:admin:read')))).toEqual([
         'permission',
       ]);
       expect(rulesOf(mutated((d) => (GET(d)['x-qauth-permission'] = [])))).toEqual(['permission']);

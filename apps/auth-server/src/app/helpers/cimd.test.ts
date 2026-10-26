@@ -291,25 +291,17 @@ describe('toCimdClientInsert — never operator-provisioned (ANT-2026-O8U3P920)'
   });
 });
 
-describe('toCimdClientInsert — the reserved admin: scopes (#507)', () => {
+describe('toCimdClientInsert — scopes in the reserved qauth: namespace (#507)', () => {
+  // The document's scope is never stored, so a qauth: scope there is ignored
+  // like any other: the client resolves, and holds no scope from it.
   it.each([
-    'openid admin:read',
-    'admin:write',
-    'profile admin:security',
-    'ADMIN:read',
-    'admin:other',
-  ])('refuses a document whose scope is %j', (scope) => {
+    'openid qauth:admin:read',
+    'qauth:admin:write',
+    'profile qauth:admin:security',
+    'QAUTH:admin:read',
+    'admin:org admin:read',
+  ])('materialises a document whose scope is %j, with no scope', (scope) => {
     const doc = cimdDocumentSchema.parse(validDoc({ scope }));
-    expect(() => toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel')).toThrow(
-      expect.objectContaining({
-        name: 'InvalidClientError',
-        errorDescription: 'CIMD document requests a reserved admin: scope',
-      })
-    );
-  });
-
-  it('materialises a document whose scopes only contain "admin", with no scope', () => {
-    const doc = cimdDocumentSchema.parse(validDoc({ scope: 'openid agent:admin example:admin' }));
     expect(toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel').scopes).toEqual([]);
   });
 });

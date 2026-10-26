@@ -16,9 +16,10 @@ export type OperationStability = 'stable' | 'experimental';
 
 /**
  * What an admin, account or developer API operation does, for authorization
- * (ADR-019 Decision 7, #506). On the admin API the class names the scope it
- * needs: `admin:read`, `admin:write` or `admin:security`. `security` is used on
- * the admin API only.
+ * (ADR-019 Decision 7, #506). On the admin API it is the strictest class among
+ * the operation's permissions (`x-qauth-permission`), and each permission
+ * needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or
+ * `qauth:admin:security`. `security` is used on the admin API only.
  */
 export type OperationClass = 'read' | 'write' | 'security';
 

@@ -643,22 +643,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Expand-only; the index build holds back delivery writes while it runs.
 
 - **Admin scopes, the admin permission catalog and the built-in admin roles**
-  ([#507], ADR-019 Decision 7). The admin API's scopes are `admin:read`,
-  `admin:write` and `admin:security`, one per permission class, and no scope
-  implies another. A permission registry (`definePermission`) gives each
-  permission id exactly one class; a security permission never shares an id
-  with a write permission. The built-in roles `viewer`, `editor` and
-  `security-admin` follow the catalog by class and cannot be edited.
+  ([#507], ADR-019 Decision 7). The admin API's scopes are `qauth:admin:read`,
+  `qauth:admin:write` and `qauth:admin:security`, one per permission class, and
+  no scope implies another. A permission registry (`definePermission`) gives
+  each permission id exactly one class; a security permission never shares an
+  id with a write permission. The built-in roles `viewer`, `editor` and
+  `security-admin` follow the catalog by class and cannot be edited, and a
+  custom role may not take a name that reads as one of theirs (compared after
+  folding case, white space, dashes and compatibility forms).
   `effectivePermissions` keeps a role's permission only when the token carries
   its class's scope, and `validateCustomRole` refuses an unknown or retired id.
   The catalog starts with `realms.read`, `realms.export`, `realms.import.plan`,
   `realms.policies.write`, `realms.policies.security`, `approvals.read` and
-  `approvals.approve`. A permission id, once published, is never renamed or
-  reused; a removed permission is retired and keeps its id. The docs site's new
-  **Admin permissions** page (`reference/admin-permissions`) is generated from
-  the registry, and the API conventions check refuses an admin operation whose
-  `x-qauth-permission` names a permission the catalog cannot grant. No admin
-  API route reads the catalog yet.
+  `approvals.approve`. A removed permission is retired and keeps its id; like
+  every QAuth-defined identifier, the ids are promised from 1.0.0 on (ADR-018
+  §5). The docs site's new **Admin permissions** page
+  (`reference/admin-permissions`) is generated from the registry, and so is a
+  new stable surface, `apps/docs-site/public/schemas/admin-permissions.json`
+  (`auth-server:admin-permissions-export`): the stable-surface check reports a
+  removed permission or a changed class as a break. The API conventions check
+  refuses an admin operation whose `x-qauth-permission` names a permission the
+  catalog cannot grant, or whose `x-qauth-class` is not the strictest class
+  among them. No admin API route reads the catalog yet.
 
 ### Changed
 
@@ -761,28 +767,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public API, and a test keeps it in step with both entry points. A new
   `scope:sdk` boundary rule lets an SDK library import no workspace library.
   Behaviour is unchanged.
-- **BREAKING (clients that register `admin:` scopes)**: every scope that starts
-  with `admin:`, in any case, is reserved for the admin API ([#507]).
-  `POST /oauth/register` now refuses a request that asks for one with
-  `invalid_client_metadata` in `error` (RFC 7591 §3.2.2), where before it
-  dropped any scope outside the realm's allowlist; a Client ID Metadata
-  Document whose `scope` holds one resolves to no client (the authorization
-  endpoint answers `invalid_request`, the token endpoint `invalid_client`);
-  discovery never lists one in `scopes_supported`; the developer API
-  (`POST /api/clients`, and `PATCH /api/clients/{id}` when it changes the
-  scopes) refuses one with the 400 `invalid_client_metadata` problem document
-  ([#513]); and the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it
-  names one. Migration 0040 removes such entries from every realm's
-  `dynamic_registration_allowed_scopes`, keeping the others in their order,
-  then adds the CHECK `realms_dynamic_registration_scopes_not_admin`; the
-  realms repository refuses the same with `400`. Clients that already hold such
-  a scope keep it.
+- **BREAKING (operators with scopes in the `qauth:` namespace)**: every scope
+  that starts with `qauth:`, in any case, is QAuth's own ([#507]); the admin
+  API's scopes live there. Other servers' `admin:` scopes, such as `admin:org`,
+  are ordinary scopes. A realm's dynamic registration allowlist cannot hold a
+  `qauth:` scope: the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it
+  names one, and the realms repository refuses one with `400`. So dynamic
+  registration drops one like any scope outside the allowlist and registers the
+  client with the rest; a Client ID Metadata Document's `scope` is never stored,
+  so one there is ignored; the developer API (`POST /api/clients`,
+  `PATCH /api/clients/{id}`) refuses one as a scope the realm does not allow,
+  with the 400 `invalid_client_metadata` problem document ([#513]); discovery
+  never lists one in `scopes_supported`; and the seed manifest refuses one in a
+  `cimd_clients` entry's `scopes`. Migration 0040 removes such entries from
+  every realm's `dynamic_registration_allowed_scopes`, keeping the others in
+  their order, then adds the CHECK
+  `realms_dynamic_registration_scopes_not_qauth`. An empty allowlist is filled
+  from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` at the next registration, so where
+  the removal would leave a list empty, or the value is not a list, the
+  migration stops before changing anything and names the realms. Clients that
+  already hold such a scope keep it.
 
-  **Action for operators**: none unless an application scope of yours starts
-  with `admin:`. Such a scope can no longer be registered by a client or a
-  developer: rename it, or provision its clients through the seed manifest.
-  Remove it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` before the upgrade, or
-  the new release does not boot.
+  **Action for operators**: none unless a scope of yours starts with `qauth:`.
+  Rename it. Remove it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` before the
+  upgrade, or the new release does not boot. If migration 0040 stops, set each
+  realm it names to the list of scopes dynamic registration should allow, as
+  its hint shows, and run the migrations again.
+
+- `PATCH /api/clients/{id}` checks only the scopes it adds against the realm's
+  allowlist ([#507]). A client keeps a scope the realm no longer allows, or one
+  an operator gave it, while its owner renames it or sends its scopes back
+  unchanged; before, such a request was refused.
 
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
   a person or a client did as events in the event store ([#458], ADR-019

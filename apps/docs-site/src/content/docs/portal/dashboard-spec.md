@@ -128,14 +128,14 @@ likely way this dashboard misleads someone is by rendering a failure as a zero.
 
 **Shipped foundation.** `GET /api/clients` already returns each client's **effective** environment
 — the stricter of the client's own column and its realm's ceiling — resolved through
-`resolveEnvironmentPolicy` (`apps/auth-server/src/app/routes/clients/index.ts:359`) and projected
-by `toClientResponse` (`apps/auth-server/src/app/routes/clients/index.ts:96`).
+`resolveEnvironmentPolicy` (`apps/auth-server/src/app/routes/clients/index.ts:427`) and projected
+by `toClientResponse` (`apps/auth-server/src/app/routes/clients/index.ts:109`).
 
 **Decision — count in the browser from the existing list response, do not add a counts endpoint.**
 The clients list is already fetched for `/clients`; a developer's client count is small; and a
 server-side counting endpoint would need its own filtering and caching story for a number that is
 `array.filter(...).length`. The honest limit: this is `O(clients)` in one response body, and
-`GET /api/clients` has no pagination today (`apps/auth-server/src/app/routes/clients/index.ts:345`
+`GET /api/clients` has no pagination today (`apps/auth-server/src/app/routes/clients/index.ts:413`
 lists every row for the developer). **If `GET /api/clients` ever gains pagination, these counters
 must move server-side in the same change** — a paginated list would silently make them count only
 the first page.
@@ -199,7 +199,7 @@ universal rendering rules are written for a single surface; here is how they app
   section, keys are newest-first with revoked keys last.
 
 **The scale ceiling is real, not hypothetical.** `GET /api/clients` is unpaginated — it returns
-every row for the developer (`apps/auth-server/src/app/routes/clients/index.ts:345`) — so n is
+every row for the developer (`apps/auth-server/src/app/routes/clients/index.ts:413`) — so n is
 unbounded by anything except how many clients someone has made.
 
 **Decision — the design inverts at 25 clients.** Above that, `/api-keys` stops fanning out, renders
@@ -296,7 +296,7 @@ already returns the resolved policy. That is **half true, and the half that is f
 load-bearing.** The route resolves the full ten-field `EnvironmentPolicy`
 (`apps/auth-server/src/app/helpers/environment-policy.ts:106`), but `toClientResponse` projects
 exactly two of its fields — `environment` and `staticApiKeysAllowed`
-(`apps/auth-server/src/app/routes/clients/index.ts:109`) — and `clientSchema` carries only those two
+(`apps/auth-server/src/app/routes/clients/index.ts:123`) — and `clientSchema` carries only those two
 (`apps/auth-server/src/app/schemas/clients.ts:40` and
 `apps/auth-server/src/app/schemas/clients.ts:48`). Token TTL tier, PKCE enforcement,
 loopback-redirect tolerance, rate-limit tier, agent step-up and the consent-screen CSP relaxation
@@ -333,7 +333,7 @@ and `loopbackRedirectPermitted` (a server-computed answer, see the same section)
 `regenerateSecretResponseSchema` (`apps/auth-server/src/app/schemas/clients.ts:177`) both
 `.extend()` `clientSchema`, so both grow the new fields automatically. That is correct rather than
 accidental: both are served through `toClientResponse`
-(`apps/auth-server/src/app/routes/clients/index.ts:491` and `:694`), so the data is already there
+(`apps/auth-server/src/app/routes/clients/index.ts:579` and `:817`), so the data is already there
 and a client created or rotated through those paths gets the same policy view as one fetched later.
 Name them in the pull request anyway — a schema that changes by inheritance is the kind of thing a
 reviewer should be told about rather than discover.
@@ -406,15 +406,15 @@ an implementer to reach for — and it would give the card two conflicting PKCE 
 
 The claim that matters is that **`requirePkce` is never read as an enforcement gate anywhere in
 `apps/auth-server`.** Every reference to it is a write, the response projection
-(`apps/auth-server/src/app/routes/clients/index.ts:108`), or a comment; no branch anywhere consults
+(`apps/auth-server/src/app/routes/clients/index.ts:122`), or a comment; no branch anywhere consults
 it. A stored, exposed, unenforced flag must not be presented as a security control.
 
 Do **not** reach instead for the weaker-sounding but tempting "and anyway it is always `true`" — it
 is not. The developer-facing write paths do set it `true`
-(`apps/auth-server/src/app/routes/clients/index.ts:461`, dynamic registration at
-`apps/auth-server/src/app/routes/oauth/register.ts:127`, CIMD at
-`apps/auth-server/src/app/helpers/cimd.ts:273`, and the column default at
-`libs/infra/db/src/lib/schema/core.ts:149`), but `getOrCreateSystemClient` creates the internal
+(`apps/auth-server/src/app/routes/clients/index.ts:539`, dynamic registration at
+`apps/auth-server/src/app/routes/oauth/register.ts:168`, CIMD at
+`apps/auth-server/src/app/helpers/cimd.ts:461`, and the column default at
+`libs/infra/db/src/lib/schema/core.ts:410`), but `getOrCreateSystemClient` creates the internal
 system client with `requirePkce: false`
 (`apps/auth-server/src/app/helpers/oauth-client.ts:31`), reached from first-party login
 (`apps/auth-server/src/app/routes/auth/login.ts:170`) and the authorize route
@@ -490,21 +490,21 @@ from what the developer set.** A realm pinned to `production` overrides a client
 your realm's ceiling" — prevents it, shown only when the effective value is stricter than the
 client's declared value. That comparison needs the declared value, which the response does not
 carry; **so the widened `policy` object also carries `declaredEnvironment`**, the raw
-`oauth_clients.environment` column (`libs/infra/db/src/lib/schema/core.ts:228`), read-only.
+`oauth_clients.environment` column (`libs/infra/db/src/lib/schema/core.ts:523`), read-only.
 
 ## Surface C — agent visibility
 
 **Shipped semantics.** Two columns, two very different trust levels:
 
-- `isAgent` (`libs/infra/db/src/lib/schema/core.ts:184`) is **self-asserted, unverified client
+- `isAgent` (`libs/infra/db/src/lib/schema/core.ts:479`) is **self-asserted, unverified client
   input**. It arrives in the client's own dynamic-registration body or its own CIMD metadata
   document. The schema comment says so in as many words
-  (`libs/infra/db/src/lib/schema/core.ts:174`), and the fail-closed accessor `isAgentClient`
+  (`libs/infra/db/src/lib/schema/core.ts:469`), and the fail-closed accessor `isAgentClient`
   (`apps/auth-server/src/app/helpers/client-resolution.ts:94`) exists so nothing reads the column
   directly.
-- `maxAgentMode` (`libs/infra/db/src/lib/schema/core.ts:201`) is **operator-set server state**. It
+- `maxAgentMode` (`libs/infra/db/src/lib/schema/core.ts:496`) is **operator-set server state**. It
   is not part of any registration request; a client cannot raise its own cap
-  (`libs/infra/db/src/lib/schema/core.ts:192`).
+  (`libs/infra/db/src/lib/schema/core.ts:487`).
 
 A reserved `agent:*` scope is granted only when **both** hold: the client is classified as an agent
 **and** its cap covers the requested mode. `findExceedingAgentScopes`
@@ -520,7 +520,7 @@ defaulting to a mode (`apps/auth-server/src/app/helpers/scope-modes.ts:76`). Cap
 ### The gap this surface actually has
 
 As with Surface B: neither column is in the client response. `toClientResponse`
-(`apps/auth-server/src/app/routes/clients/index.ts:96`) does not project them and `clientSchema`
+(`apps/auth-server/src/app/routes/clients/index.ts:109`) does not project them and `clientSchema`
 does not declare them (`apps/auth-server/src/app/schemas/clients.ts:20`). **Surface C is not
 read-only-in-the-UI-only; it needs the same response widening as Surface B.**
 
@@ -598,19 +598,19 @@ either way, so nesting buys nothing and costs the main use case.
 
 **Decision — mounted the same way `/api/clients` is**, from a `routes/audit/` directory whose entry
 file exports `autoPrefix = '/api/audit'`, mirroring
-`apps/auth-server/src/app/routes/clients/index.ts:72`. Route paths stay resource-relative (`/` and
+`apps/auth-server/src/app/routes/clients/index.ts:85`. Route paths stay resource-relative (`/` and
 `/metrics`).
 
 #### Authorization
 
 `preHandler: fastify.requireJwt`, exactly as the list-clients route does
-(`apps/auth-server/src/app/routes/clients/index.ts:319`), with `security: [{ bearerAuth: [] }]` in
+(`apps/auth-server/src/app/routes/clients/index.ts:358`), with `security: [{ bearerAuth: [] }]` in
 the schema. `request.jwtPayload.sub` is the developer's `users.id`.
 
 Ownership is the same rule the management API already enforces — scope by
-`oauth_clients.developer_id` (`libs/infra/db/src/lib/schema/core.ts:161`), the rule
+`oauth_clients.developer_id` (`libs/infra/db/src/lib/schema/core.ts:456`), the rule
 `resolveOwnedClient` applies per-client
-(`apps/auth-server/src/app/routes/clients/index.ts:156`). For a collection it becomes a join
+(`apps/auth-server/src/app/routes/clients/index.ts:170`). For a collection it becomes a join
 predicate rather than a per-row check:
 
 > `audit_logs.oauth_client_id IN (SELECT id FROM oauth_clients WHERE developer_id = :sub)`
@@ -620,7 +620,7 @@ is the operator-tier boundary the repository's existing methods use, and it woul
 developer's rows in a single-realm deployment.
 
 **Decision — a non-UUID `sub` short-circuits to an empty list**, mirroring
-`apps/auth-server/src/app/routes/clients/index.ts:341`. A `client_credentials` token's `sub` is an
+`apps/auth-server/src/app/routes/clients/index.ts:383`. A `client_credentials` token's `sub` is an
 opaque `client_id`, not a UUID; querying Postgres with it raises `22P02` and surfaces as a 500.
 
 **The empty case is a first-class requirement, not a fallback.** A developer with no clients gets
@@ -723,7 +723,7 @@ All optional, all `AND`-combined.
 
 **Decision — `clientId` is the row UUID, not the public `client_id` string.** Every other
 per-client path in this API takes the UUID — `clientIdParamsSchema` is `z.object({ id: z.uuid() })`
-on the client routes (`apps/auth-server/src/app/routes/clients/index.ts:120`) and
+on the client routes (`apps/auth-server/src/app/routes/clients/index.ts:134`) and
 `z.object({ clientId: z.uuid() })` on the API-key routes
 (`apps/auth-server/src/app/routes/clients/api-keys.ts:47`). The two identifiers are easy to confuse;
 consistency with the existing surface is the tiebreaker. The response carries both so the UI never
@@ -889,8 +889,8 @@ behind a flag that is off by default.
 
 **A fourth structural gap, found while enumerating: dynamically registered clients are invisible to
 this feed entirely.** Both `POST /oauth/register`
-(`apps/auth-server/src/app/routes/oauth/register.ts:129`) and CIMD registration
-(`apps/auth-server/src/app/helpers/cimd.ts:390`) create clients with `developerId: null`. The
+(`apps/auth-server/src/app/routes/oauth/register.ts:177`) and CIMD registration
+(`apps/auth-server/src/app/helpers/cimd.ts:468`) create clients with `developerId: null`. The
 ownership predicate is `oauth_clients.developer_id = :sub`, so **no** row belonging to a DCR or CIMD
 client can ever match it — not just `oauth.client.registered`, but every token exchange and
 authorize event those clients generate. A developer whose clients were all registered dynamically
@@ -940,8 +940,8 @@ structural causes and their code anchors.
    (`libs/infra/db/src/lib/schema/audit.ts:30`), so deleting a client detaches its entire audit
    history from the ownership predicate.
 4. **Every row belonging to a dynamically registered or CIMD client**, because those clients carry
-   `developerId: null` (`apps/auth-server/src/app/routes/oauth/register.ts:129`,
-   `apps/auth-server/src/app/helpers/cimd.ts:275`) and the ownership predicate is
+   `developerId: null` (`apps/auth-server/src/app/routes/oauth/register.ts:177`,
+   `apps/auth-server/src/app/helpers/cimd.ts:468`) and the ownership predicate is
    `developer_id = :sub`.
 
 **Decision — gap 4 gets its own empty state, not the generic one.** A developer whose clients were
@@ -1081,7 +1081,7 @@ implementer from wiring the allowlist in twice and quietly zeroing a tile.
 **Decision — cache for 60 seconds in Redis, keyed by `developerId` and window.** Redis, not
 in-process memory, for the same reason the Prometheus registry was rejected: a per-process cache
 gives different replicas different answers. `fastify.redis` is already available and the
-set-with-TTL pattern is established (`apps/auth-server/src/app/helpers/cimd.ts:313`). Sixty seconds
+set-with-TTL pattern is established (`apps/auth-server/src/app/helpers/cimd.ts:513`). Sixty seconds
 bounds the worst case to one aggregate query per developer per minute while staying visibly fresh
 for a surface that is a trend indicator, not a monitor.
 
@@ -1089,7 +1089,7 @@ for a surface that is a trend indicator, not a monitor.
 
 `POST /api/clients` sets the precedent that an expensive authenticated handler gets its own per-route
 budget rather than riding the global default
-(`apps/auth-server/src/app/routes/clients/index.ts:386`, capped per-IP because create runs an
+(`apps/auth-server/src/app/routes/clients/index.ts:457`, capped per-IP because create runs an
 argon2id hash). These two reads are the most expensive in this API for a different reason — an
 uncached keyset scan and an aggregate, both over a table with no pruning — so they need budgets too,
 but keyed differently.

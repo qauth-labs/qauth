@@ -256,7 +256,7 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
   } else if (operationClass === 'security' && family !== 'admin') {
     report(
       'class',
-      'x-qauth-class "security" belongs to the admin API, where it means admin:security; account and developer operations are read or write'
+      'x-qauth-class "security" belongs to the admin API, where it means qauth:admin:security; account and developer operations are read or write'
     );
   }
 
@@ -287,7 +287,7 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
       }
     }
     // The class is the strictest class among the permissions: a security
-    // operation that named only a write permission would let `admin:write`
+    // operation that named only a write permission would let `qauth:admin:write`
     // reach it, and a write operation that named a security permission would
     // escape the effects and two-admin rules (ADR-019 Decision 7).
     const strictest = OPERATION_CLASSES.filter((candidate) => classes.has(candidate)).at(-1);

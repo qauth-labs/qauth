@@ -1,6 +1,12 @@
 import type { AdminPermission, PermissionRegistry } from './admin-permissions';
+import { ADMIN_PERMISSIONS_SURFACE_PATH } from './admin-permissions-surface';
 import type { BuiltInRole, BuiltInRoleName } from './admin-roles';
-import { ADMIN_SCOPES, PERMISSION_CLASSES, type PermissionClass } from './admin-scopes';
+import {
+  ADMIN_SCOPES,
+  PERMISSION_CLASSES,
+  type PermissionClass,
+  QAUTH_SCOPE_NAMESPACE,
+} from './admin-scopes';
 
 /**
  * The docs page `reference/admin-permissions.md`, rendered from the permission
@@ -116,21 +122,23 @@ The admin API is to authorize each request by scope and by role
 A role grants permissions. The token's scopes decide which classes of those permissions this
 token may use. This page lists the scopes, every permission and the built-in roles, and states
 the rule the admin API will enforce. No admin API route reads the catalog yet, so the rule
-protects nothing today; the admin scopes are already reserved, as listed below. The page is
+protects nothing today; the \`qauth:\` scope namespace is already reserved, as listed below. The page is
 generated from the registry in \`${REGISTRY_PATH}\`.
 
 ## Scopes
 
 ${scopeTable()}
 
-- The three scopes are independent. No scope implies another: \`admin:write\` does not satisfy a
-  read permission, and \`admin:security\` satisfies neither a read nor a write permission.
+- The three scopes are independent. No scope implies another: \`${ADMIN_SCOPES.write}\` does not
+  satisfy a read permission, and \`${ADMIN_SCOPES.security}\` satisfies neither a read nor a write
+  permission.
 - A request that needs a write permission and a security permission needs both scopes.
 - Scopes are matched exactly and case-sensitively (RFC 6749 §3.3).
-- Every scope that starts with \`admin:\`, in any case, is reserved for the admin API. Dynamic
-  registration and the developer API refuse one with \`invalid_client_metadata\`, a Client ID
-  Metadata Document that asks for one is refused, a realm's dynamic registration allowlist
-  cannot hold one, and discovery never lists one.
+- Every scope in the \`${QAUTH_SCOPE_NAMESPACE}\` namespace, in any case, is QAuth's. A realm's dynamic
+  registration allowlist cannot hold one, so dynamic registration drops one like any other scope
+  outside the allowlist, and the developer API refuses one with \`invalid_client_metadata\`. A
+  Client ID Metadata Document's \`scope\` is never stored, so one there is ignored. Discovery
+  never lists one. Other servers' scopes such as \`admin:org\` are ordinary scopes.
 
 ## How a request is authorized
 
@@ -140,7 +148,7 @@ hold:
 1. one of the caller's admin roles grants it, and
 2. the token carries the scope of its class.
 
-So a token with only \`admin:write\` never uses a security permission, whatever role the caller
+So a token with only \`${ADMIN_SCOPES.write}\` never uses a security permission, whatever role the caller
 holds. An admin API operation names the permission it needs in its \`x-qauth-permission\`
 extension ([API conventions](/reference/api-conventions/#openapi)). An operation whose request
 decides whether it is a security operation, such as a policy patch, names a write permission and
@@ -152,7 +160,7 @@ ${permissionTable(registry.active)}
 
 A permission has exactly one class. A permission that performs a security operation has an id of
 its own and the class \`security\`; it never shares an id with a write permission, so no custom
-role reaches a security operation through \`admin:write\`.
+role reaches a security operation through \`${ADMIN_SCOPES.write}\`.
 
 ## Built-in roles
 
@@ -171,13 +179,18 @@ ${retiredSection(retired)}
 
 ## Stability
 
-The permission ids are part of the admin API's contract
-([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)), because custom roles store
-them.
+The permission ids will be part of the admin API's contract, because custom roles store them.
+Like every QAuth-defined identifier, they are promised from 1.0.0 on
+([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)); until then a release may still
+rename one, and says so in its changelog. From 1.0.0:
 
-- An id, once published, is never renamed and never reused for another meaning.
+- An id is never renamed and never reused for another meaning.
 - A permission that is no longer needed is retired, not removed: it is listed under
   [Retired permissions](#retired-permissions), it grants nothing, and its id stays taken.
 - A release may add permissions. A new permission joins the built-in roles of its class.
+
+The stable-surface check compares the catalog's JSON Schema
+(\`${ADMIN_PERMISSIONS_SURFACE_PATH}\`) with the latest release: a removed permission, or one whose
+class changed, is a break it reports.
 `;
 }

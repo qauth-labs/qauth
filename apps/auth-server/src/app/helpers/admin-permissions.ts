@@ -7,19 +7,23 @@
  * it carries that class's scope (`admin-scopes.ts`, `effectivePermissions` in
  * `admin-roles.ts`).
  *
- * STABLE CONTRACT. The ids are published on the docs site's
- * `reference/admin-permissions.md`, which is generated from this registry
- * (`admin-permissions-page.ts`), and custom roles store them. An id, once
- * published, is never renamed and never reused for another meaning. A
+ * CONTRACT. The ids are published on the docs site's
+ * `reference/admin-permissions.md`, generated from this registry
+ * (`admin-permissions-page.ts`), and as a stable surface,
+ * `apps/docs-site/public/schemas/admin-permissions.json`
+ * (`admin-permissions-surface.ts`), and custom roles store them. Like every
+ * QAuth-defined identifier they are promised from 1.0.0 on (ADR-018 §5): from
+ * then an id is never renamed and never reused for another meaning. A
  * permission that is no longer needed is RETIRED, not removed: its entry stays
  * with `retiredIn`, so its id stays taken, no role grants it any more and the
- * page lists it as retired.
+ * page lists it as retired. The stable-surface check reports a removed
+ * permission or a changed class against the latest release.
  *
  * SECURITY PERMISSIONS. An operation that ADR-019 Decision 7 defines as a
  * security operation ("defined by effect") needs a permission of class
  * `security`, with an id of its own. A security permission never shares an id
  * with a write permission, so no custom role reaches a security operation
- * through `admin:write`. An operation whose request decides whether it is a
+ * through `qauth:admin:write`. An operation whose request decides whether it is a
  * security operation, such as a policy patch, names a write permission and a
  * security permission (`realms.policies.write`, `realms.policies.security`),
  * and a request that touches both needs both, and so both scopes.
@@ -93,7 +97,7 @@ function assertPermission(permission: AdminPermission): void {
   }
   // An id that ends in a class name says that class. `realms.policies.security`
   // declared as `write` would read as a security permission on the page and in
-  // the role editor while `admin:write` reached it.
+  // the role editor while `qauth:admin:write` reached it.
   const action = id.slice(id.lastIndexOf('.') + 1);
   if ((PERMISSION_CLASSES as readonly string[]).includes(action) && action !== permission.class) {
     throw new PermissionDefinitionError(

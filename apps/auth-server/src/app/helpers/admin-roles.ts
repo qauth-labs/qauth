@@ -8,7 +8,7 @@
  *   - the classes the token's scopes allow (`admin-scopes.ts`).
  *
  * {@link effectivePermissions} computes it. A permission is effective only
- * when its class's scope is in the token, so a token with only `admin:write`
+ * when its class's scope is in the token, so a token with only `qauth:admin:write`
  * never uses a security permission, whatever role the caller holds.
  *
  * BUILT-IN ROLES are defined here, in code, by class: `viewer` holds every
@@ -80,9 +80,51 @@ export function builtInRolesOf(
 export const BUILT_IN_ROLES: Readonly<Record<BuiltInRoleName, BuiltInRole>> =
   builtInRolesOf(PERMISSION_REGISTRY);
 
-/** Whether `name` is the name of a built-in role, which a custom role may not take. */
-export function isBuiltInRoleName(name: string): name is BuiltInRoleName {
-  return (BUILT_IN_ROLE_NAMES as readonly string[]).includes(name);
+/**
+ * Characters a name may carry that show nothing: the soft hyphen, the zero
+ * width space, joiners and marks, the word joiner and the byte order mark.
+ */
+const INVISIBLE = /[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/gu;
+
+/** Runs of white space, underscores and the dashes that read as a hyphen. */
+const SEPARATORS = /[\s_\-\u2010-\u2015\u2043\u2212\ufe58\ufe63\uff0d]+/gu;
+
+/**
+ * `name` folded the way a reader compares role names: compatibility forms
+ * made plain (NFKC, so fullwidth letters become ASCII), lower case, accents
+ * dropped, invisible characters removed, and every run of white space,
+ * underscores and dash look-alikes made one hyphen, trimmed at both ends.
+ */
+function foldRoleName(name: string): string {
+  return name
+    .normalize('NFKC')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(INVISIBLE, '')
+    .replace(SEPARATORS, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * The built-in role `name` reads as, or `undefined`. Folded with
+ * {@link foldRoleName}, so `Viewer`, ` security admin ` and `security‑admin`
+ * (a non-breaking hyphen) all name a built-in role. Look-alike letters of other
+ * scripts are not folded; the custom-role name grammar (#510) keeps names ASCII.
+ */
+export function builtInRoleNameOf(name: string): BuiltInRoleName | undefined {
+  if (typeof name !== 'string') return undefined;
+  const folded = foldRoleName(name);
+  return BUILT_IN_ROLE_NAMES.find((builtIn) => builtIn === folded);
+}
+
+/**
+ * Whether `name` reads as the name of a built-in role, which a custom role may
+ * therefore not take: compared after {@link builtInRoleNameOf}'s folding, not
+ * byte for byte.
+ */
+export function isBuiltInRoleName(name: string): boolean {
+  return builtInRoleNameOf(name) !== undefined;
 }
 
 /** The outcome of {@link validateCustomRole}. */
@@ -104,7 +146,7 @@ export type CustomRoleValidation =
  * Check the permission ids of a custom role. Refuses an id the catalog does
  * not know and the id of a retired permission; accepts any set of grantable
  * permissions, security permissions included, since a token still needs
- * `admin:security` to use one.
+ * `qauth:admin:security` to use one.
  */
 export function validateCustomRole(
   permissionIds: readonly string[],

@@ -10,7 +10,7 @@ import {
   eventRetentionProblems,
   InvalidRealmHostError,
   normaliseRealmHost,
-  reservedAdminScopesIn,
+  reservedQauthScopesIn,
   resolveRpId,
   rpIdCoversHost,
 } from '@qauth-labs/shared-validation';
@@ -329,20 +329,21 @@ function assertSsoLimits(data: {
 }
 
 /**
- * Refuse a dynamic registration allowlist that holds a scope with the reserved
- * `admin:` prefix, in any case (#507, ADR-019 Decision 7): the admin API's
- * scopes are never obtained through dynamic registration. The CHECK
- * `realms_dynamic_registration_scopes_not_admin` refuses the same.
+ * Refuse a dynamic registration allowlist that holds a scope in the reserved
+ * `qauth:` namespace, in any case (#507, ADR-019 Decision 7): QAuth's own
+ * scopes, the admin API's among them, are never obtained through dynamic
+ * registration. The CHECK `realms_dynamic_registration_scopes_not_qauth`
+ * refuses the same.
  */
 function assertDynamicRegistrationScopes(data: {
   dynamicRegistrationAllowedScopes?: readonly string[];
 }): void {
   const scopes = data.dynamicRegistrationAllowedScopes;
   if (scopes === undefined) return;
-  const reserved = reservedAdminScopesIn(scopes.filter((scope) => typeof scope === 'string'));
+  const reserved = reservedQauthScopesIn(scopes.filter((scope) => typeof scope === 'string'));
   if (reserved.length > 0) {
     throw new BadRequestError(
-      `Realm dynamic_registration_allowed_scopes must not hold a scope starting with "admin:", which is reserved for the admin API: ${reserved.join(', ')}`
+      `Realm dynamic_registration_allowed_scopes must not hold a scope in the "qauth:" namespace, which is reserved for QAuth's own scopes: ${reserved.join(', ')}`
     );
   }
 }

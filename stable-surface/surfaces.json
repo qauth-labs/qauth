@@ -33,6 +33,15 @@
       "maximalOf": "openapi"
     },
     {
+      "name": "admin-permissions",
+      "description": "The admin permission catalog: every permission id, retired ones included, with its class (ADR-019 Decision 7, #507). Custom roles store the ids, so a removed permission or a changed class is a break; a new or retired permission is not.",
+      "format": "json-schema",
+      "role": "output",
+      "generator": "pnpm exec nx run auth-server:admin-permissions-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/admin-permissions.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-envelope",
       "description": "The envelope every QAuth event carries, of any type (ADR-018 §5, #456). Compared as both: QAuth emits it, and the events it stored under an earlier release must still match it.",
       "format": "json-schema",

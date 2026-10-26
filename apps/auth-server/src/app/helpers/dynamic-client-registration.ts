@@ -1,5 +1,5 @@
 import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
-import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
+import { isReservedQauthScope } from '@qauth-labs/shared-validation';
 
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
@@ -185,7 +185,7 @@ export interface NormalizedRegistrationRequest {
  * Validate + normalize an incoming RFC 7591 request against realm policy.
  *
  * - Caps requested scopes to the realm's `dynamic_registration_allowed_scopes`,
- *   and refuses a scope with the reserved `admin:` prefix (#507).
+ *   and always drops a scope in the reserved `qauth:` namespace (#507).
  * - Enforces grant_type / response_type consistency (authorization_code
  *   requires the `code` response type).
  * - Requires redirect_uris for any user-involving grant.
@@ -247,26 +247,21 @@ export function validateAndNormalize(
   // scopes and register the permitted subset (empty allowlist → no scopes).
   // De-dupe while preserving request order.
   //
-  // The one exception is a scope with the reserved `admin:` prefix (#507,
-  // ADR-019 Decision 7), in any case. It refuses the whole request instead of
-  // being dropped: an admin scope is never obtained through open
-  // registration, and a client that asks for one is told so rather than
-  // registered without it. The realm allowlist cannot hold one either
-  // (`realms_dynamic_registration_scopes_not_admin`), so the refusal holds even
-  // where that list was edited by hand.
+  // A scope in QAuth's reserved `qauth:` namespace (#507, ADR-019 Decision 7),
+  // such as an admin API scope, is dropped like any other scope outside the
+  // allowlist: an MCP client that echoes `scopes_supported` still registers.
+  // The allowlist cannot hold one (`realms_dynamic_registration_scopes_not_qauth`),
+  // and the namespace is left out here too, so no list the realm resolves,
+  // the environment's seed included, grants one through open registration.
   let scopes: string[] = [];
   const scopeString = body.scope;
   if (scopeString && scopeString.trim().length > 0) {
     const requested = scopeString.split(/\s+/).filter((s) => s.length > 0);
-    if (reservedAdminScopesIn(requested).length > 0) {
-      // No double quote in the text: RFC 6749 §5.2 leaves it out of
-      // `error_description`, and the error handler would blank it.
-      rejectRegistration(
-        'invalid_client_metadata',
-        'scopes starting with admin: are reserved for the admin API and cannot be registered'
-      );
-    }
-    scopes = [...new Set(requested.filter((s) => realmAllowedScopes.includes(s)))];
+    scopes = [
+      ...new Set(
+        requested.filter((s) => realmAllowedScopes.includes(s) && !isReservedQauthScope(s))
+      ),
+    ];
   }
 
   // Auth method gating.

@@ -192,21 +192,16 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['scopes_supported']).toEqual(['openid', 'custom:read']);
   });
 
-  // #507: the admin scopes are reserved for the admin API and never advertised.
-  it('never advertises an admin scope, whatever list it is given', () => {
-    expect(DEFAULT_SCOPES_SUPPORTED.filter((scope) => scope.startsWith('admin:'))).toEqual([]);
+  // #507: QAuth's own scopes (the qauth: namespace) are never advertised;
+  // other servers' admin: scopes are ordinary scopes.
+  it('never advertises a scope in the qauth: namespace, whatever list it is given', () => {
+    expect(DEFAULT_SCOPES_SUPPORTED.filter((scope) => scope.startsWith('qauth:'))).toEqual([]);
     const input = {
       issuer: ISSUER,
-      scopesSupported: [
-        'openid',
-        ...ADMIN_SCOPE_LIST,
-        'Admin:other',
-        'agent:admin',
-        'example:admin',
-      ],
+      scopesSupported: ['openid', ...ADMIN_SCOPE_LIST, 'QAuth:other', 'admin:org', 'agent:admin'],
     };
     for (const meta of [buildAuthorizationServerMetadata(input), buildOpenIdConfiguration(input)]) {
-      expect(meta['scopes_supported']).toEqual(['openid', 'agent:admin', 'example:admin']);
+      expect(meta['scopes_supported']).toEqual(['openid', 'admin:org', 'agent:admin']);
     }
   });
 

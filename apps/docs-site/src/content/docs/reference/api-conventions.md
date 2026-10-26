@@ -32,11 +32,11 @@ endpoint answers it.
 - Each token carries one audience, and a family accepts only its own. The audience identifiers
   carry a version, as ADR-018 §5 requires for every QAuth-defined identifier, and it is the same
   release candidate as the path's.
-- The admin API's scopes are `admin:read`, `admin:write` and `admin:security`, intersected with
-  the caller's admin roles. The [admin permissions](/reference/admin-permissions/) page lists
-  them with every permission and the built-in roles. The account and developer families define
-  no scopes here: their guards check the audience and the subject. A route that needs a scope
-  adds it in its own change.
+- The admin API's scopes are `qauth:admin:read`, `qauth:admin:write` and `qauth:admin:security`,
+  in QAuth's reserved `qauth:` scope namespace, intersected with the caller's admin roles. The
+  [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
+  built-in roles. The account and developer families define no scopes here: their guards check the
+  audience and the subject. A route that needs a scope adds it in its own change.
 
 No route is served under these prefixes yet. The developer routes at `/api/clients` and
 `/api/consents` and the account routes at `/consents` move under them, and their old paths are then
@@ -205,16 +205,22 @@ answers by design in `x-qauth-errors`, and the document adds 421, 429 and 500, w
 of a realm may answer (`/health` only 429), each referencing `Problem`, or `OAuthError` on an OAuth
 protocol endpoint.
 
-| Extension            | Values                             | Meaning                                                                                                                                                                                                   |
-| -------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API the class names the scope it needs: `admin:read`, `admin:write` or `admin:security`. `security` is used on the admin API only.                                  |
-| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both. |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                           |
-| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                           |
-| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                            |
+| Extension            | Values                             | Meaning                                                                                                                                                                                                                                                              |
+| -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
+| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                                                                                      |
+| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
+| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
 
 On the admin API every id in `x-qauth-permission` is a permission of the
-[admin catalog](/reference/admin-permissions/), and not a retired one.
+[admin catalog](/reference/admin-permissions/), and not a retired one, and `x-qauth-class` is the
+strictest class among them (`read` < `write` < `security`). With one permission the operation
+needs that class's scope. With a list, the request decides which scopes it needs: a policy patch
+that changes only a write field needs `qauth:admin:write`, one that changes a security field needs
+`qauth:admin:security`, and one that changes both needs both. The class still names the strictest
+case, so a security operation never hides behind a write class and always carries its effects and
+the two-admin marker.
 
 A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
 
@@ -293,7 +299,8 @@ their old paths are listed here.
 
 - `apps/auth-server/src/app/api-conventions/openapi-conventions.ts` checks every operation under a
   family prefix: the `operationId`, the security requirement, the five extensions (an admin
-  operation's permissions come from the admin catalog), the names, the id and time formats,
+  operation's permissions come from the admin catalog, and its class is the strictest class among
+  them), the names, the id and time formats,
   closed request objects, the problem schema on error responses, cursor paging, Merge Patch
   bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
   over `stable-surface/openapi.json` and `apps/docs-site/public/openapi.json`. CI's stable-surface

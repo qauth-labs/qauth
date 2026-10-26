@@ -1,52 +1,58 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isReservedAdminScope,
-  RESERVED_ADMIN_SCOPE_PREFIX,
-  reservedAdminScopesIn,
+  isReservedQauthScope,
+  QAUTH_SCOPE_NAMESPACE,
+  reservedQauthScopesIn,
 } from './reserved-scopes';
 
-describe('the reserved admin: scope prefix (#507)', () => {
-  it('is admin:', () => {
-    expect(RESERVED_ADMIN_SCOPE_PREFIX).toBe('admin:');
+describe('the reserved qauth: scope namespace (#507)', () => {
+  it('is qauth:', () => {
+    expect(QAUTH_SCOPE_NAMESPACE).toBe('qauth:');
   });
 
-  it.each(['admin:read', 'admin:write', 'admin:security', 'admin:', 'admin:anything.else'])(
-    'reserves %s',
-    (scope) => {
-      expect(isReservedAdminScope(scope)).toBe(true);
-    }
-  );
+  it.each([
+    'qauth:admin:read',
+    'qauth:admin:write',
+    'qauth:admin:security',
+    'qauth:',
+    'qauth:anything.else',
+  ])('reserves %s', (scope) => {
+    expect(isReservedQauthScope(scope)).toBe(true);
+  });
 
-  it.each(['Admin:read', 'ADMIN:SECURITY', 'aDmIn:write'])(
-    'reserves %s, whatever the case of the prefix',
+  it.each(['QAuth:admin:read', 'QAUTH:ADMIN:SECURITY', 'qAuTh:admin:write'])(
+    'reserves %s, whatever the case of the namespace',
     (scope) => {
-      expect(isReservedAdminScope(scope)).toBe(true);
+      expect(isReservedQauthScope(scope)).toBe(true);
     }
   );
 
   it.each([
-    'admin',
-    'administrator',
-    'admins:read',
+    // Other servers' scopes that look administrative are ordinary scopes.
+    'admin:read',
+    'admin:org',
+    'Admin:Security',
+    'qauth',
+    'qauthx:read',
+    'q:auth:read',
     'agent:admin',
-    'example:admin',
-    'realm:admin:read',
-    ' admin:read',
+    'example:qauth:read',
+    ' qauth:admin:read',
     'openid',
     '',
-    // Not ASCII, so no scope (RFC 6749 §3.3), and not folded onto ASCII.
-    'ADM\u0130N:read',
-    'adm\u0131n:read',
+    // Not ASCII, so no scope (RFC 6749 §3.3), and not folded onto ASCII: a
+    // Cyrillic a, and fullwidth letters that only NFKC would make ASCII.
+    'qаuth:admin:read',
+    'ｑａｕｔｈ:admin:read',
   ])('leaves %j alone', (scope) => {
-    expect(isReservedAdminScope(scope)).toBe(false);
+    expect(isReservedQauthScope(scope)).toBe(false);
   });
 
   it('picks the reserved entries out of a list, in order', () => {
-    expect(reservedAdminScopesIn(['openid', 'admin:write', 'profile', 'ADMIN:read'])).toEqual([
-      'admin:write',
-      'ADMIN:read',
-    ]);
-    expect(reservedAdminScopesIn(new Set(['openid', 'email']))).toEqual([]);
+    expect(
+      reservedQauthScopesIn(['openid', 'qauth:admin:write', 'admin:org', 'QAUTH:admin:read'])
+    ).toEqual(['qauth:admin:write', 'QAUTH:admin:read']);
+    expect(reservedQauthScopesIn(new Set(['openid', 'admin:read']))).toEqual([]);
   });
 });

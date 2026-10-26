@@ -17,12 +17,14 @@
         "{workspaceRoot}/apps/docs-site/public/openapi.json",
         "{workspaceRoot}/apps/docs-site/src/content/docs/reference/api-conventions.md",
         "{workspaceRoot}/apps/docs-site/src/content/docs/reference/admin-permissions.md",
+        "{workspaceRoot}/apps/docs-site/public/schemas/admin-permissions.json",
+        "{workspaceRoot}/stable-surface/surfaces.json",
         "{workspaceRoot}/.oxlintrc.json",
         "{workspaceRoot}/.oxfmtrc.json",
         "{workspaceRoot}/apps/wire-suite/src/fixtures/experimental.ts"
       ],
       "metadata": {
-        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The API conventions tests (#506) read three files outside it: openapi-conventions.test.ts checks stable-surface/openapi.json and apps/docs-site/public/openapi.json, and problem.test.ts compares the code table of apps/docs-site/src/content/docs/reference/api-conventions.md with PROBLEM_CODES. The realm-by-host lint guard test (default-realm-rule.test.ts, #487) lints samples with blocks of `.oxlintrc.json`, so that file and Oxlint itself (and TypeScript, which reads the configuration's comments) are inputs too. experimental-surface.test.ts (#477) generates apps/wire-suite/src/fixtures/experimental.ts from apps/docs-site/public/openapi.json and formats it with Oxfmt and `.oxfmtrc.json`, so the generated file, the formatter and its configuration are inputs as well. admin-permissions-page.test.ts (#507) generates apps/docs-site/src/content/docs/reference/admin-permissions.md from the admin permission registry the same way (`pnpm nx test auth-server -- -u` rewrites it), so that page is an input too. Without them a change to one of those files would replay a cached pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `oxlint`, `typescript` and `oxfmt` added to the external dependencies."
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files. The API conventions tests (#506) read three files outside it: openapi-conventions.test.ts checks stable-surface/openapi.json and apps/docs-site/public/openapi.json, and problem.test.ts compares the code table of apps/docs-site/src/content/docs/reference/api-conventions.md with PROBLEM_CODES. The realm-by-host lint guard test (default-realm-rule.test.ts, #487) lints samples with blocks of `.oxlintrc.json`, so that file and Oxlint itself (and TypeScript, which reads the configuration's comments) are inputs too. experimental-surface.test.ts (#477) generates apps/wire-suite/src/fixtures/experimental.ts from apps/docs-site/public/openapi.json and formats it with Oxfmt and `.oxfmtrc.json`, so the generated file, the formatter and its configuration are inputs as well. admin-permissions-page.test.ts (#507) generates apps/docs-site/src/content/docs/reference/admin-permissions.md from the admin permission registry the same way (`pnpm nx test auth-server -- -u` rewrites it), so that page is an input too, and admin-permissions-surface.test.ts compares apps/docs-site/public/schemas/admin-permissions.json, which `auth-server:admin-permissions-export` writes, with the registry and checks that stable-surface/surfaces.json registers it. Without them a change to one of those files would replay a cached pass. Setting `inputs` replaces the inferred array, so the first six entries are the inferred defaults re-declared, with `oxlint`, `typescript` and `oxfmt` added to the external dependencies."
       }
     },
     "test-integration": {
@@ -134,6 +136,14 @@
         "cwd": "apps/auth-server"
       },
       "description": "Boot the real app (no Postgres/Redis required, no listening port) twice: under default flags to write stable-surface/openapi.json, and under the maximal flag surface to write apps/docs-site/public/openapi.json"
+    },
+    "admin-permissions-export": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/admin-permissions-export.ts",
+        "cwd": "apps/auth-server"
+      },
+      "description": "Write apps/docs-site/public/schemas/admin-permissions.json, the admin permission catalog as a JSON Schema (#507), from the registry in src/app/helpers/admin-permissions.ts. The stable-surface check runs it, fails on drift, and reports a removed permission or a changed class as a break against the latest release."
     },
     "serve": {
       "continuous": true,

@@ -137,8 +137,8 @@ export const realms = pgTable(
      * `/oauth/register` endpoint: any scope outside this list is dropped from
      * the registration. Admin-level scopes (e.g. `example:admin`) and
      * tenant-scoped grants (e.g. `tenant-a:*`) MUST NOT appear here, and a
-     * scope with the reserved `admin:` prefix cannot: the CHECK
-     * `realms_dynamic_registration_scopes_not_admin` refuses it (#507).
+     * scope in QAuth's reserved `qauth:` namespace cannot: the CHECK
+     * `realms_dynamic_registration_scopes_not_qauth` refuses it (#507).
      */
     dynamicRegistrationAllowedScopes: jsonb('dynamic_registration_allowed_scopes')
       .notNull()
@@ -250,16 +250,16 @@ export const realms = pgTable(
       'realms_sso_idle_timeout_positive',
       sql`${t.ssoIdleTimeout} IS NULL OR ${t.ssoIdleTimeout} > 0`
     ),
-    // The `admin:` scope prefix is reserved for the admin API (#507, ADR-019
-    // Decision 7), whatever the case of its ASCII letters, so the dynamic
-    // registration allowlist cannot hold one, whoever writes the row. The
-    // class spells the case out instead of a case-insensitive flag, so the
-    // match does not depend on the database's locale. `isReservedAdminScope`
-    // (shared-validation) is the same rule, and the realms repository refuses
-    // the same before the row is written.
+    // The `qauth:` scope namespace is QAuth's own, the admin API's scopes
+    // among them (#507, ADR-019 Decision 7), whatever the case of its ASCII
+    // letters, so the dynamic registration allowlist cannot hold one, whoever
+    // writes the row. The class spells the case out instead of a
+    // case-insensitive flag, so the match does not depend on the database's
+    // locale. `isReservedQauthScope` (shared-validation) is the same rule, and
+    // the realms repository refuses the same before the row is written.
     check(
-      'realms_dynamic_registration_scopes_not_admin',
-      sql`NOT jsonb_path_exists(${t.dynamicRegistrationAllowedScopes}, '$[*] ? (@ like_regex "^[aA][dD][mM][iI][nN]:")')`
+      'realms_dynamic_registration_scopes_not_qauth',
+      sql`NOT jsonb_path_exists(${t.dynamicRegistrationAllowedScopes}, '$[*] ? (@ like_regex "^[qQ][aA][uU][tT][hH]:")')`
     ),
   ]
 );

@@ -8,7 +8,7 @@ import {
   NotFoundError,
 } from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
-import { reservedAdminScopesIn } from '@qauth-labs/shared-validation';
+import { isReservedQauthScope } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -284,19 +284,16 @@ async function resolveRealmAllowedScopes(
  * as `/oauth/register` answers it; #513). Empty allowlist means no custom
  * scopes are permitted.
  *
- * A scope with the reserved `admin:` prefix is refused whatever the allowlist
- * says (#507), with the same code, as dynamic registration refuses it: the
- * allowlist cannot hold one, but this list may come from the environment when
- * the realm's seed write failed.
+ * A scope in QAuth's reserved `qauth:` namespace (#507) is never in the
+ * allowlist, so it gets the same refusal as any other scope the realm does not
+ * allow. The allowlist cannot hold one, and the namespace is left out of it
+ * here too, since the list may come from the environment when the realm's
+ * seed write failed.
  */
 function assertScopesAllowed(requested: string[], realmAllowedScopes: string[]): void {
-  const reserved = reservedAdminScopesIn(requested);
-  if (reserved.length > 0) {
-    throw new InvalidClientMetadataError(
-      `scope not permitted: ${reserved.join(' ')} (the admin: prefix is reserved for the admin API)`
-    );
-  }
-  const disallowed = requested.filter((s) => !realmAllowedScopes.includes(s));
+  const disallowed = requested.filter(
+    (s) => !realmAllowedScopes.includes(s) || isReservedQauthScope(s)
+  );
   if (disallowed.length > 0) {
     throw new InvalidClientMetadataError(`scope not permitted: ${disallowed.join(' ')}`);
   }
@@ -663,12 +660,18 @@ export default async function (fastify: FastifyInstance) {
         redirectUris,
       });
 
-      // Cap newly requested scopes against the client's realm policy, the same
-      // allowlist dynamic registration enforces — a developer must not widen
-      // scopes via PATCH beyond what the realm permits.
+      // Cap the scopes this update ADDS against the client's realm policy, the
+      // same allowlist dynamic registration enforces — a developer must not
+      // widen scopes via PATCH beyond what the realm permits. A scope the
+      // client already holds is not checked again, so a client keeps one the
+      // realm no longer allows (or an operator gave it) while its owner
+      // renames it or edits another field and sends its scopes back.
       if (scopes !== undefined) {
-        const allowedScopes = await resolveRealmAllowedScopes(fastify, existing.realmId);
-        assertScopesAllowed(scopes, allowedScopes);
+        const added = scopes.filter((scope) => !existing.scopes.includes(scope));
+        if (added.length > 0) {
+          const allowedScopes = await resolveRealmAllowedScopes(fastify, existing.realmId);
+          assertScopesAllowed(added, allowedScopes);
+        }
       }
 
       // An operator's `provisioned_by_operator` vouches for the redirect URIs

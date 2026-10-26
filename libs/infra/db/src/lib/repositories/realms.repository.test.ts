@@ -149,36 +149,38 @@ describe('createRealmsRepository — sso_max_lifespan (#552)', () => {
 });
 
 describe('createRealmsRepository — dynamic registration allowlist (#507)', () => {
-  it.each([['openid', 'admin:read'], ['admin:security'], ['openid', 'Admin:Write']])(
-    'refuses %j before the database sees it',
-    async (...scopes) => {
-      const { db, queries } = createRecordingDb();
-      const realms = createRealmsRepository(db);
-      const id = '0192e000-0000-7000-8000-000000000001';
-      const message =
-        /^Realm dynamic_registration_allowed_scopes must not hold a scope starting with "admin:"/;
+  it.each([
+    ['openid', 'qauth:admin:read'],
+    ['qauth:admin:security'],
+    ['openid', 'QAuth:Admin:Write'],
+  ])('refuses %j before the database sees it', async (...scopes) => {
+    const { db, queries } = createRecordingDb();
+    const realms = createRealmsRepository(db);
+    const id = '0192e000-0000-7000-8000-000000000001';
+    const message =
+      /^Realm dynamic_registration_allowed_scopes must not hold a scope in the "qauth:" namespace/;
 
-      await expect(realms.update(id, { dynamicRegistrationAllowedScopes: scopes })).rejects.toThrow(
-        BadRequestError
-      );
-      await expect(
-        realms.create({ name: 'admin', dynamicRegistrationAllowedScopes: scopes })
-      ).rejects.toThrow(message);
-      await expect(
-        realms.createWithPrimaryHost(
-          {
-            name: 'admin',
-            issuer: 'https://admin.example.com',
-            dynamicRegistrationAllowedScopes: scopes,
-          },
-          'admin.example.com'
-        )
-      ).rejects.toThrow(message);
-      expect(queries).toEqual([]);
-    }
-  );
+    await expect(realms.update(id, { dynamicRegistrationAllowedScopes: scopes })).rejects.toThrow(
+      BadRequestError
+    );
+    await expect(
+      realms.create({ name: 'admin', dynamicRegistrationAllowedScopes: scopes })
+    ).rejects.toThrow(message);
+    await expect(
+      realms.createWithPrimaryHost(
+        {
+          name: 'admin',
+          issuer: 'https://admin.example.com',
+          dynamicRegistrationAllowedScopes: scopes,
+        },
+        'admin.example.com'
+      )
+    ).rejects.toThrow(message);
+    expect(queries).toEqual([]);
+  });
 
-  it('accepts scopes that only contain "admin"', async () => {
+  // Other servers' admin: scopes are ordinary scopes.
+  it('accepts admin: scopes and scopes that only contain "qauth"', async () => {
     const { db, queries } = createRecordingDb();
     const realms = createRealmsRepository(db);
     const id = '0192e000-0000-7000-8000-000000000001';
@@ -186,7 +188,7 @@ describe('createRealmsRepository — dynamic registration allowlist (#507)', () 
     // It passes the check and reaches the database, which has no such realm here.
     await expect(
       realms.update(id, {
-        dynamicRegistrationAllowedScopes: ['openid', 'agent:admin', 'example:admin'],
+        dynamicRegistrationAllowedScopes: ['openid', 'admin:read', 'admin:org', 'example:qauth'],
       })
     ).rejects.toThrow('not found');
     expect(queries).toHaveLength(1);

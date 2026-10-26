@@ -4,7 +4,11 @@
  * Kept apart from the script so the validation can be tested without running
  * it, like `client-suspension.ts`.
  */
-import { InvalidWebAuthnOriginError, normaliseWebAuthnOrigin } from '@qauth-labs/shared-validation';
+import {
+  InvalidWebAuthnOriginError,
+  isReservedQauthScope,
+  normaliseWebAuthnOrigin,
+} from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import {
@@ -157,8 +161,20 @@ export const cimdClientSpecSchema = z
       message: 'client_id must be a CIMD client_id: an https URL with a path and no fragment',
     }),
     // Required, so an entry always states the grant. An empty list grants
-    // nothing, which is how an operator withdraws one.
-    scopes: z.array(z.string().min(1)),
+    // nothing, which is how an operator withdraws one. No scope in QAuth's own
+    // `qauth:` namespace (#507, ADR-019 Decision 7): a CIMD client is a
+    // self-described public client, and the admin API's scopes are reached
+    // only through admin grants (#510), never through this file's grant to a
+    // document anyone can host.
+    scopes: z.array(
+      z
+        .string()
+        .min(1)
+        .refine((scope) => !isReservedQauthScope(scope), {
+          error: (issue) =>
+            `"${String(issue.input)}" is in the "qauth:" scope namespace, which is reserved for QAuth's own scopes: a CIMD client is never granted one`,
+        })
+    ),
     audience: z.array(z.string().min(1)).nullable().optional(),
   })
   .strict();

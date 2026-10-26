@@ -117,9 +117,9 @@ describe('the admin permissions page (#507)', () => {
 
   it('lists the three scopes', () => {
     expect(tableRows(sectionOf(page, 'Scopes')).map(([scope]) => scope)).toEqual([
-      '`admin:read`',
-      '`admin:write`',
-      '`admin:security`',
+      '`qauth:admin:read`',
+      '`qauth:admin:write`',
+      '`qauth:admin:security`',
     ]);
   });
 
@@ -128,8 +128,11 @@ describe('the admin permissions page (#507)', () => {
   // stays taken and the page keeps it, and its class never changes, or every
   // stored custom role that lists it would reach it with another scope. The
   // committed page is read before `-u` rewrites it, so the run that
-  // regenerates the page fails too; a later run reads the rewritten page,
-  // which is why the page's diff is the change a reviewer checks.
+  // regenerates the page fails too. A second `-u` run reads the rewritten page
+  // and passes, so this is only the first line: the stable-surface check
+  // compares `admin-permissions.json` (admin-permissions-surface.ts) with the
+  // latest release, and a removal or a class change there is a break no
+  // regeneration hides.
   it('still registers every permission the committed page publishes, with its class', () => {
     const published = [
       ...tableRows(sectionOf(COMMITTED_PAGE, 'Permissions')),
@@ -153,6 +156,13 @@ describe('the admin permissions page (#507)', () => {
       'No admin API route reads the catalog yet, so the rule protects nothing today'
     );
     expect(page).not.toMatch(/The admin API authorizes/);
+  });
+
+  // ADR-018 §5: no QAuth-defined identifier is promised before 1.0.0.
+  it('promises the ids from 1.0.0 on, not from their first publication', () => {
+    const stability = sectionOf(page, 'Stability').replace(/\s+/g, ' ');
+    expect(stability).toContain('they are promised from 1.0.0 on');
+    expect(stability).not.toMatch(/once published/);
   });
 
   it('says that no permission has been retired yet', () => {
