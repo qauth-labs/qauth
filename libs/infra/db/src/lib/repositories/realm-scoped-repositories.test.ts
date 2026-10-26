@@ -190,7 +190,7 @@ const CALLS: readonly RealmScopedCall[] = [
   ['oauthConsents.revoke', (db) => createOAuthConsentsRepository(db).revoke(REALM_ID, ID)],
   [
     'oauthConsents.upsertGrant',
-    (db) => createOAuthConsentsRepository(db).upsertGrant(ID, OTHER_ID, REALM_ID, ['a'], [], db),
+    (db) => createOAuthConsentsRepository(db).upsertGrant(REALM_ID, ID, OTHER_ID, ['a'], [], db),
   ],
   [
     'apiKeys.findByPrefix',

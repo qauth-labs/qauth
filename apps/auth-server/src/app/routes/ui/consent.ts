@@ -851,9 +851,9 @@ export default async function (fastify: FastifyInstance) {
       // under a stored consent, the row the user can list and revoke.
       if (body.allow_forever === '1') {
         await fastify.repositories.oauthConsents.upsertGrant(
+          realm.id,
           session.userId,
           client.id,
-          realm.id,
           scopes,
           resources
         );

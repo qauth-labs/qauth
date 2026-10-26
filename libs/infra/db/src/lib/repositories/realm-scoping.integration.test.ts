@@ -84,9 +84,9 @@ describe('realm scoping of id lookups (real Postgres, #489)', () => {
       credentialData: { password_hash: 'argon2-hash', email_verified: false },
     });
     const consent = await createOAuthConsentsRepository(db()).upsertGrant(
+      realm.id,
       user.id,
       client.id,
-      realm.id,
       ['read']
     );
     const apiKey = await createApiKeysRepository(db()).create({

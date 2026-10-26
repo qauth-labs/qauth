@@ -233,9 +233,9 @@ describe('an id from another realm is an unknown id (#489)', () => {
 
     const alice = await registerPasswordAccount(app, ALICE);
     const consent = await app.repositories.oauthConsents.upsertGrant(
+      realmA.id,
       alice,
       clientA.id,
-      realmA.id,
       SCOPES
     );
     const jarA = await signInWithPassword(app, ALICE);

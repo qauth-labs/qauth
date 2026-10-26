@@ -748,7 +748,7 @@ describe('repository integration (real Postgres)', () => {
       const client = await seedClient(realm.id);
       const consents = createOAuthConsentsRepository(db().database.db);
 
-      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const grant = await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo']);
       const revoked = await consents.revoke(realm.id, grant.id);
       expect(revoked.revokedAt).toBeTypeOf('number');
 
@@ -769,8 +769,8 @@ describe('repository integration (real Postgres)', () => {
       const client = await seedClient(realm.id);
       const consents = createOAuthConsentsRepository(db().database.db);
 
-      await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
-      const merged = await consents.upsertGrant(user.id, client.id, realm.id, ['write:foo']);
+      await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo']);
+      const merged = await consents.upsertGrant(realm.id, user.id, client.id, ['write:foo']);
 
       // Union, sorted — a narrower follow-up grant never removes prior scopes.
       expect(merged.scopes).toEqual(['read:foo', 'write:foo']);
@@ -787,11 +787,11 @@ describe('repository integration (real Postgres)', () => {
       const consents = createOAuthConsentsRepository(db().database.db);
       const [a, b] = ['https://a.example/mcp', 'https://b.example/mcp'];
 
-      const first = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo'], [a]);
+      const first = await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo'], [a]);
       expect(first.resourceScopes).toEqual({ [a]: ['read:foo'] });
 
-      await consents.upsertGrant(user.id, client.id, realm.id, ['write:foo'], [a, b]);
-      const merged = await consents.upsertGrant(user.id, client.id, realm.id, ['email']);
+      await consents.upsertGrant(realm.id, user.id, client.id, ['write:foo'], [a, b]);
+      const merged = await consents.upsertGrant(realm.id, user.id, client.id, ['email']);
 
       expect(merged.scopes).toEqual(['email', 'read:foo', 'write:foo']);
       expect(merged.resourceScopes).toEqual({
@@ -806,7 +806,7 @@ describe('repository integration (real Postgres)', () => {
       const client = await seedClient(realm.id);
       const consents = createOAuthConsentsRepository(db().database.db);
 
-      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const grant = await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo']);
       expect(grant.resourceScopes).toEqual({});
     });
 
@@ -816,12 +816,12 @@ describe('repository integration (real Postgres)', () => {
       const client = await seedClient(realm.id);
       const consents = createOAuthConsentsRepository(db().database.db);
 
-      const first = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const first = await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo']);
       await consents.revoke(realm.id, first.id);
 
       // The partial unique index is `WHERE revoked_at IS NULL`, so granting
       // again does not collide with the revoked row.
-      const second = await consents.upsertGrant(user.id, client.id, realm.id, ['write:foo']);
+      const second = await consents.upsertGrant(realm.id, user.id, client.id, ['write:foo']);
       expect(second.id).not.toBe(first.id);
       expect(second.scopes).toEqual(['write:foo']);
 
@@ -842,7 +842,7 @@ describe('repository integration (real Postgres)', () => {
       const user = await seedUser(realm.id);
       const client = await seedClient(realm.id);
       const consents = createOAuthConsentsRepository(db().database.db);
-      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const grant = await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo']);
 
       let locked: Promise<unknown> | undefined;
       await db().database.db.transaction(async (tx) => {
@@ -864,7 +864,7 @@ describe('repository integration (real Postgres)', () => {
       const client = await seedClient(realm.id);
       const consents = createOAuthConsentsRepository(db().database.db);
       const codes = createAuthorizationCodesRepository(db().database.db);
-      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const grant = await consents.upsertGrant(realm.id, user.id, client.id, ['read:foo']);
 
       let revoked = false;
       let revocation: Promise<unknown> | undefined;

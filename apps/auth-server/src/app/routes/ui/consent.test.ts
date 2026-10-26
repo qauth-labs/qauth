@@ -584,9 +584,9 @@ describe('UI /ui/consent POST — allow/deny', () => {
     );
 
     expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'realm-1',
       'user-1',
       'client-uuid-1',
-      'realm-1',
       ['email'],
       []
     );
@@ -631,9 +631,9 @@ describe('UI /ui/consent POST — allow/deny', () => {
       'app-123'
     );
     expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'realm-2',
       'user-1',
       'client-uuid-1',
-      'realm-2',
       ['email'],
       []
     );
@@ -683,9 +683,9 @@ describe('UI /ui/consent POST — allow/deny', () => {
     // The remembered grant records the audience the user approved, so
     // /oauth/authorize can tell it from one they never saw.
     expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'realm-1',
       'user-1',
       'client-uuid-1',
-      'realm-1',
       ['email'],
       ['https://api.example.com/v1']
     );

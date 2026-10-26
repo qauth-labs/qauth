@@ -358,7 +358,7 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
         // granted so the code-mint checks below drive the real path.
         const holder = 'holder@example.com';
         const userId = await linkedAccount(app, unchecked, holder);
-        await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+        await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
 
         // (1) The control: a live bit authenticates.
         const good = await signInWithWallet(app, live, holder);
@@ -512,9 +512,9 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
         await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
           const userId = await linkedAccount(app, unchecked, 'outage@example.com');
           await app.repositories.oauthConsents.upsertGrant(
+            ids.realmId,
             userId,
             ids.clientId,
-            ids.realmId,
             SCOPES
           );
           const outcome = await signInWithWallet(app, wallet, 'outage@example.com');

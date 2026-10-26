@@ -116,9 +116,9 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
     },
 
     async upsertGrant(
+      realmId: string,
       userId: string,
       oauthClientId: string,
-      realmId: string,
       scopes: string[],
       resources: readonly string[] = [],
       tx?: DbClient

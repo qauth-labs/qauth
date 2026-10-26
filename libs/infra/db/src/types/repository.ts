@@ -502,9 +502,9 @@ export interface OAuthConsentsRepository {
    * for.
    */
   upsertGrant(
+    realmId: string,
     userId: string,
     oauthClientId: string,
-    realmId: string,
     scopes: string[],
     resources?: readonly string[],
     tx?: DbClient
