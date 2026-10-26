@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-26'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -279,7 +279,7 @@ protocol endpoint.
 | -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
 | `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                                                                                      |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                              |
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
 
@@ -291,6 +291,14 @@ that changes only a write field needs `qauth:admin:write`, one that changes a se
 `qauth:admin:security`, and one that changes both needs both. The class still names the strictest
 case, so a security operation never hides behind a write class and always carries its effects and
 the two-admin marker.
+
+Every admin operation is defined once, in the admin operation registry
+([Security operations](/reference/security-operations/)), with its class, effects and permissions.
+The document's `operationId` must name a registered operation, and its `x-qauth-class`,
+`x-qauth-permission` and `x-qauth-effects` must be the registry's; the conventions check fails
+otherwise. A route of the admin listener names its operation in its route config (`operation`) and
+takes these members from the registry (`operationSchemaExtensions`), and the listener refuses to
+boot a route that names no registered operation or whose members differ.
 
 A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
 
