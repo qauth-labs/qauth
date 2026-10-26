@@ -127,6 +127,26 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
+### The developer portal's token: the new audience is accepted first
+
+The developer portal's token moves to the developer API's audience,
+`urn:qauth:aud:developer:v1-rc.0`, in two releases, expand then contract
+(ADR-018 §5; [#509](https://github.com/qauth-labs/qauth/issues/509),
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)):
+
+- **v0.2 accepts it.** `/api/clients`, `/api/consents`, `/auth/logout`, the
+  Bearer path of `/oauth/authorize` and userinfo accept a system-client token
+  whose `aud` is the developer audience, beside today's token, whose `aud` is
+  the system client's id. Nothing mints the new token yet: `POST /auth/login`
+  still mints today's, and the system client's row is not changed.
+- **A later release mints it** ([#524](https://github.com/qauth-labs/qauth/issues/524)).
+  Every v0.2 node accepts the tokens such a node mints.
+
+The upgrade to v0.2 is safe to roll: a node of the previous release accepts
+every portal token a v0.2 node mints, because it is the same token. There is no
+migration and nothing to run. Upgrade every node to v0.2 before the release
+that mints the new token, so no node that refuses it is left.
+
 ### Refresh tokens pause while migration 0038 runs
 
 Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records

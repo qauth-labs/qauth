@@ -199,6 +199,12 @@ address is at most 254 characters.
 }
 ```
 
+The access token is issued to the system client, and its `aud` is the system
+client's id. The routes that take this token also accept one whose `aud` is the
+developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, which a later
+release mints (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
+
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
 The `401` is the same for an unknown address, a wrong password, a disabled
 account and, with `REQUIRE_VERIFIED_ACCOUNT` on (the default), an account whose

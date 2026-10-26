@@ -352,6 +352,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
   machine token is rejected per RFC 9700).
 - `resource` must fall within the client's configured `audience` (or defaults to
   the `client_id`); it sets the token `aud`.
+- An audience in the reserved `urn:qauth:aud:` namespace, such as the developer
+  API's `urn:qauth:aud:developer:v1-rc.0`, is issued only to a client whose
+  `audience` lists it, on every grant; any other client gets `invalid_target`.
+  See [API conventions](/reference/api-conventions/#issuing-a-family-audience).
 - Provision such clients with the seed script (it lets you set `scopes` and
   `audience` explicitly) — see the
   [MCP Quickstart, Option B](/integrate/mcp-quickstart/#option-b--verify-the-handshake-with-curl-no-browser).
@@ -774,6 +778,14 @@ administrative, such as `admin:org`, are ordinary scopes. The three admin
 scopes and what they allow are on the
 [admin permissions](/reference/admin-permissions/) page.
 
+QAuth's API audiences, the `urn:qauth:aud:` namespace in any case, follow the
+same rule: self-registration never obtains one. Registration ignores one in an
+`audience` or `resource` member and registers the client with the rest, as it
+ignores every other value there, and a CIMD document that names one resolves
+with that value ignored. Only a client an operator set up receives such an
+audience (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
+
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).
 
@@ -822,7 +834,7 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 | `invalid_grant`           | Bad, expired or already-redeemed code, wrong or missing `redirect_uri`, bad PKCE verifier, or invalid/replayed refresh token.                                                                                            |
 | `unauthorized_client`     | Client not allowed to use this grant.                                                                                                                                                                                    |
 | `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                                                                                                               |
-| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                                                                                                                  |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience, or a QAuth API audience (`urn:qauth:aud:`) the client's `audience` does not list.                                                                                |
 | `unsupported_grant_type`  | A `grant_type` the token endpoint does not serve; a missing one is `invalid_request`.                                                                                                                                    |
 | `invalid_client_metadata` | Dynamic registration: a metadata value is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                    |
 | `invalid_redirect_uri`    | Dynamic registration: a redirect URI is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                      |

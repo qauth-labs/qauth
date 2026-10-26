@@ -347,6 +347,89 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
   });
 
+  describe('a QAuth API audience (#509)', () => {
+    const ADMIN_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+
+    async function issue(client: Record<string, unknown>, resource?: string[]) {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'client-uuid-family',
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: ['client_credentials'],
+        scopes: ['read:foo'],
+        ...client,
+      });
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+      if (!ctx.handler) throw new Error('Handler missing');
+      const request = {
+        body: {
+          grant_type: 'client_credentials',
+          client_id: client['clientId'],
+          client_secret: 'secret',
+          scope: 'read:foo',
+          ...(resource ? { resource } : {}),
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      };
+      const result = ctx.handler(request, createReply());
+      return { fastify, result };
+    }
+
+    it('maps the resource value to the audience of a client that lists it', async () => {
+      const { fastify, result } = await issue(
+        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
+        [ADMIN_AUDIENCE]
+      );
+      await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: ADMIN_AUDIENCE })
+      );
+    });
+
+    it('never falls back to a client id in the reserved namespace', async () => {
+      const { fastify, result } = await issue({ clientId: ADMIN_AUDIENCE, audience: null });
+      await expect(result).rejects.toThrow(InvalidTargetError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    // No user consents to client_credentials: the client's default audience
+    // stands, a listed family audience included (#509).
+    it("keeps a listed family audience in the client's default audience", async () => {
+      const { fastify, result } = await issue({
+        clientId: 'family-client',
+        audience: [ADMIN_AUDIENCE, 'https://api.example.com'],
+      });
+      await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: [ADMIN_AUDIENCE, 'https://api.example.com'] })
+      );
+    });
+
+    // A self-registered client lists no reserved audience, whatever its row
+    // holds: the allowlist check lets the resource through, the gate refuses.
+    it.each([
+      ['a dynamically registered client', { metadata: { registrationType: 'dynamic' } }],
+      ['a CIMD client', { metadata: { registrationType: 'cimd' } }],
+    ])('refuses it to %s whose row lists it', async (_label, origin) => {
+      const { fastify, result } = await issue(
+        { clientId: 'self-registered', audience: [ADMIN_AUDIENCE], ...origin },
+        [ADMIN_AUDIENCE]
+      );
+      await expect(result).rejects.toThrow(InvalidTargetError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        expect.objectContaining({
+          error: 'invalid_target',
+          reason: 'reserved_audience_not_listed',
+        }),
+      ]);
+    });
+  });
+
   it('authenticates the client in the realm of the request, and records the token there (#487)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
@@ -2755,6 +2838,88 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     ).rejects.toThrow(InvalidTargetError);
   });
 
+  describe('a QAuth API audience (#509)', () => {
+    const ACCOUNT_AUDIENCE = 'urn:qauth:aud:account:v1-rc.0';
+
+    it('is refused with invalid_target when the code binds one the client does not list', async () => {
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
+        ...authCode,
+        resource: [ACCOUNT_AUDIENCE],
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await expect(ctx.handler(baseRequest(), createReply())).rejects.toThrow(InvalidTargetError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+      // Not spent, like a `resource` outside the binding: the client may redeem
+      // the code again with a `resource` that names no such audience.
+      expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+    });
+
+    it('is the token audience when the client lists it', async () => {
+      const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+      client.audience = ['https://api.example.com', ACCOUNT_AUDIENCE];
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
+        ...authCode,
+        resource: [ACCOUNT_AUDIENCE],
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(baseRequest(), createReply());
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
+      );
+    });
+
+    // #509: a family audience reaches a user's token only when a `resource`
+    // named it, so the consent the user gave covers it.
+    it("is left out of the client's default audience when the code binds no resource", async () => {
+      const { fastify, ctx, client } = setupAuthCodeStub();
+      client.audience = ['https://api.example.com', ACCOUNT_AUDIENCE];
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(baseRequest(), createReply());
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: 'https://api.example.com' })
+      );
+    });
+
+    it('falls back to the client id when the family audience is all the client lists', async () => {
+      const { fastify, ctx, client } = setupAuthCodeStub();
+      client.audience = [ACCOUNT_AUDIENCE];
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(baseRequest(), createReply());
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: client.clientId })
+      );
+    });
+
+    it('is matched exactly: another spelling of a listed audience is still refused', async () => {
+      const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+      client.audience = [ACCOUNT_AUDIENCE];
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
+        ...authCode,
+        resource: ['URN:qauth:aud:account:v1-rc.0'],
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await expect(ctx.handler(baseRequest(), createReply())).rejects.toThrow(InvalidTargetError);
+    });
+  });
+
   it('authenticates a public client (token_endpoint_auth_method=none) by client_id alone', async () => {
     // PKCE-capable public client — OAuth 2.1 §4.1.3. No client_secret sent;
     // PKCE code_verifier + client_id is sufficient to bind the code to the
@@ -3602,6 +3767,61 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     ).rejects.toThrow(InvalidTargetError);
   });
 
+  it('refuses a QAuth API audience the client no longer lists, before rotating (#509)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, resource: ['urn:qauth:aud:developer:v1-rc.0'] });
+
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await expect(ctx.handler(refreshRequest(), createReply())).rejects.toThrow(InvalidTargetError);
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('leaves a listed QAuth API audience out of the default when the family binds no resource (#509)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      audience: ['urn:qauth:aud:account:v1-rc.0', 'https://api.example.com'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await ctx.handler(refreshRequest(), createReply());
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: 'https://api.example.com' })
+    );
+  });
+
+  it('issues a listed QAuth API audience the family binds (#509)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      audience: ['urn:qauth:aud:account:v1-rc.0'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, resource: ['urn:qauth:aud:account:v1-rc.0'] });
+
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await ctx.handler(refreshRequest(), createReply());
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: 'urn:qauth:aud:account:v1-rc.0' })
+    );
+  });
+
   it('honours scope down-scoping when a subset is requested', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -4197,6 +4417,31 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({ aud: 'https://api.example.com/v1' })
     );
+  });
+
+  describe('a QAuth API audience (#509)', () => {
+    const ACCOUNT_AUDIENCE = 'urn:qauth:aud:account:v1-rc.0';
+
+    it('is not passed on to an agent that does not list it', async () => {
+      const { fastify, ctx } = setupExchangeStub({ subjectAud: ACCOUNT_AUDIENCE });
+      for (const request of [
+        exchangeRequest({ audience: [ACCOUNT_AUDIENCE] }),
+        // Kept verbatim from the subject token when the request names none.
+        exchangeRequest(),
+      ]) {
+        await expect(invoke(fastify, ctx, request)).rejects.toThrow(InvalidTargetError);
+      }
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('is passed on to an agent that lists it', async () => {
+      const { fastify, ctx, client } = setupExchangeStub({ subjectAud: ACCOUNT_AUDIENCE });
+      client.audience = [ACCOUNT_AUDIENCE] as never;
+      await invoke(fastify, ctx, exchangeRequest({ audience: [ACCOUNT_AUDIENCE] }));
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
+      );
+    });
   });
 
   it('rejects a resource/audience outside the subject token audience (invalid_target)', async () => {
@@ -4924,6 +5169,46 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
         reason: 'id_jag_target_not_allowed',
       },
       expect.objectContaining({ clientId: EMA_CLIENT_ID, actor: 'client' })
+    );
+  });
+
+  it('redeems an assertion for a QAuth API audience only for a client that lists it (#509)', async () => {
+    // The ID-JAG targets name what an assertion may be redeemed for; a QAuth
+    // API audience is issued only to a client whose `audience` lists it too.
+    const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const unlisted = setupConsumeStub({ idJagTargets: [DEVELOPER_AUDIENCE] });
+    await expect(
+      invoke(
+        unlisted.fastify,
+        unlisted.ctx,
+        bearerRequest(await signIdJag(idpKey, { resource: DEVELOPER_AUDIENCE }))
+      )
+    ).rejects.toBeInstanceOf(InvalidTargetError);
+    expect(unlisted.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: JWT_BEARER_GRANT,
+        error: 'invalid_target',
+        reason: 'reserved_audience_not_listed',
+      },
+      expect.objectContaining({ clientId: EMA_CLIENT_ID })
+    );
+
+    const listed = setupConsumeStub({
+      idJagTargets: [DEVELOPER_AUDIENCE],
+      audience: [DEVELOPER_AUDIENCE],
+    });
+    await invoke(
+      listed.fastify,
+      listed.ctx,
+      bearerRequest(await signIdJag(idpKey, { resource: DEVELOPER_AUDIENCE }))
+    );
+    expect(listed.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: DEVELOPER_AUDIENCE })
     );
   });
 

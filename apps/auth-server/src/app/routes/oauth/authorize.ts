@@ -1,5 +1,6 @@
 import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
 import { JWTInvalidError, UnauthorizedClientError } from '@qauth-labs/shared-errors';
+import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -9,7 +10,11 @@ import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
-import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
+import {
+  findExceedingAgentScopesForClient,
+  resolveAudience,
+  unlistedReservedAudiences,
+} from '../../helpers/client-auth';
 import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
 import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
@@ -17,7 +22,6 @@ import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { assertManagementToken } from '../../helpers/management-token';
-import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import {
   buildRedirectUrl,
   isAllowedRedirectUriScheme,
@@ -340,16 +344,15 @@ export default async function (fastify: FastifyInstance) {
     } else {
       // bearer path
       try {
-        const systemClient = await getOrCreateSystemClient(realm.id, fastify);
         const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
-          audience: resolveAudience(systemClient),
           // RFC 9700 mix-up defence: only accept a token this AS issued.
           issuer: fastify.jwtUtils.getIssuer(),
         });
-        // Audience alone does not prove this is the first-party login token:
-        // any code whose bound `resource` resolves to the system audience
-        // mints a user token that passes the check above. Pin `client_id`
-        // (and refuse delegated tokens) exactly as the management API does.
+        // Only the first-party login token: the system client's `client_id`,
+        // its audience (or, for a token minted before #509, its `client_id`
+        // as audience) and no delegation, exactly as the management API pins
+        // them. Audience alone would not do: any code whose bound `resource`
+        // resolves to the system audience mints a user token that carries it.
         await assertManagementToken(fastify, realm, payload);
         // RFC 9449 §7.2 (#480): this path reads a Bearer token, and a
         // DPoP-bound token is never one.
@@ -431,6 +434,49 @@ export default async function (fastify: FastifyInstance) {
     // unknown key `?resource` to Fastify's parser (stripped, never validated)
     // but `resource` to that one, which put an arbitrary string into `aud`.
     const resources = query.resource ?? [];
+
+    // RFC 8707 §2 (#509): a QAuth API audience (`urn:qauth:aud:`) is issued
+    // only to a client whose `audience` lists it, so a request naming one the
+    // client does not list is refused here with `invalid_target`, before a
+    // consent screen offers what the token endpoint would refuse. The token
+    // endpoint checks again: this one is for the user, that one is the gate.
+    if (unlistedReservedAudiences(client, resources).length > 0) {
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_target', reason: 'reserved_audience_not_listed' },
+        userEvent
+      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'invalid_target',
+        error_description: 'a QAuth API audience is issued only to a client that lists it',
+        state: state ?? undefined,
+        iss,
+      });
+    }
+
+    // The legacy Bearer path (#509) authenticates the user from the developer
+    // portal's token, with no sign-in and no consent screen. It must never
+    // turn that token into a token for an API family: a request on it that
+    // names a QAuth API audience, or a client whose default audience holds
+    // one, is refused. #524 retires the path.
+    if (
+      !browserSession &&
+      [...resources, ...[resolveAudience(client)].flat()].some(isReservedAudience)
+    ) {
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'access_denied', reason: 'bearer_path_reserved_audience' },
+        userEvent
+      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'access_denied',
+        error_description: 'a QAuth API audience is not issued on the Bearer path',
+        state: state ?? undefined,
+        iss,
+      });
+    }
 
     // ADR-007 §2 (#185): step-up on the legacy Bearer path. The Bearer path
     // authenticates the user from an existing access token and CANNOT run an

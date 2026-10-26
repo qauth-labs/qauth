@@ -410,6 +410,53 @@ describe('UI /ui/consent GET — rendering', () => {
     });
   });
 
+  it('refuses a QAuth API audience the client does not list, and binds nothing (#509)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-509' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['urn:qauth:aud:admin:v1-rc.0'] },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('error=invalid_target');
+    expect(state.body).toBeUndefined();
+    expect((await sessions.sideRecord(session)).consentResources).toEqual({});
+  });
+
+  it('shows a QAuth API audience the client lists (#509)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-509-listed' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      audience: ['urn:qauth:aud:account:v1-rc.0'],
+    });
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['urn:qauth:aud:account:v1-rc.0'] },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.body as string).toContain(
+      'Tokens will be valid for:</strong> urn:qauth:aud:account:v1-rc.0'
+    );
+  });
+
   it('keeps naming the client default audience when the request has no resource', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);

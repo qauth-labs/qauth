@@ -963,10 +963,33 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     });
   });
 
-  it('accepts the developer portal token from /auth/login (`aud` = `client_id` = system)', async () => {
+  it('accepts the developer portal token from /auth/login before #509 (`aud` = `client_id` = system)', async () => {
     const { run } = await callWith({ clientId: 'system', aud: 'system', scope: undefined });
 
     await expect(run()).resolves.toEqual({ sub: 'user-1' });
+  });
+
+  it('accepts the developer portal token from /auth/login, with the developer audience (#509)', async () => {
+    const { run } = await callWith({
+      clientId: 'system',
+      aud: 'urn:qauth:aud:developer:v1-rc.0',
+      scope: undefined,
+    });
+
+    await expect(run()).resolves.toEqual({ sub: 'user-1' });
+  });
+
+  it.each(['urn:qauth:aud:developer:v1-rc.0', 'urn:qauth:aud:account:v1-rc.0'])(
+    'refuses an API family token (%s) issued to any client but the system client',
+    async (aud) => {
+      const { run } = await callWith({ clientId: 'client-1', aud });
+      await expect(run()).rejects.toThrow(JWTInvalidError);
+    }
+  );
+
+  it('refuses a system client token for another family', async () => {
+    const { run } = await callWith({ clientId: 'system', aud: 'urn:qauth:aud:account:v1-rc.0' });
+    await expect(run()).rejects.toThrow(JWTInvalidError);
   });
 
   it('accepts a token whose audience lists the userinfo endpoint beside a resource server', async () => {

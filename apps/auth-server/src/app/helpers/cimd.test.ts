@@ -279,6 +279,38 @@ describe('toCimdClientInsert — agent classification (ADR-007 §2)', () => {
   });
 });
 
+// #509: one rule for QAuth's reserved namespaces (ADR-019, amended
+// 2026-10-26). A document's `audience` and `resource` are never stored, so a
+// `urn:qauth:aud:` value there is ignored, as a `qauth:` scope in its `scope`
+// is; the document still resolves.
+describe('toCimdClientInsert — the reserved urn:qauth:aud: namespace (#509)', () => {
+  it.each([
+    ['audience', 'urn:qauth:aud:developer:v1-rc.0'],
+    ['audience', ['https://api.example.com', 'urn:qauth:aud:admin:v1-rc.0']],
+    ['resource', 'URN:QAUTH:AUD:account:v1-rc.0'],
+    ['resource', ['urn:qauth:aud:other']],
+  ])('ignores a document whose %s names %j, and grants nothing for it', (member, value) => {
+    const doc = cimdDocumentSchema.parse(validDoc({ [member]: value }));
+    expect(doc).not.toHaveProperty(member);
+    const insert = toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel');
+    expect(insert).not.toHaveProperty('audience');
+    expect(insert.scopes).toEqual([]);
+  });
+
+  it('resolves such a document through the cache too', async () => {
+    const fastify = fastifyStub();
+    ssrfSafeGet.mockResolvedValue(
+      ok(validDoc({ resource: 'urn:qauth:aud:developer:v1-rc.0' }), {
+        'cache-control': 'max-age=600',
+      })
+    );
+    await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    const cached = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(() => toCimdClientInsert('realm-1', CLIENT_ID, cached, 'sentinel')).not.toThrow();
+  });
+});
+
 describe('toCimdClientInsert — never operator-provisioned (ANT-2026-O8U3P920)', () => {
   it('pins provisionedByOperator to false, whatever the document says', () => {
     // The document's host chose the redirect URIs, so a CIMD client never

@@ -160,6 +160,57 @@ describe('assertManagementToken', () => {
       JWTInvalidError
     );
   });
+
+  // #509, expand then contract (ADR-018 §5): the developer API's audience is
+  // accepted on a portal token now, while the system client keeps no audience
+  // and the portal token keeps `aud = client_id`; #524 starts minting it.
+  describe('the developer audience on a system-client token (#509)', () => {
+    const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
+
+    it('accepts it while the system client lists no audience, beside the client id', async () => {
+      expect(systemClient.audience).toBeNull();
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
+      ).resolves.toBeUndefined();
+      await expect(assertManagementToken(fastify, REALM, portalClaims())).resolves.toBeUndefined();
+    });
+
+    it('accepts it where the legacy token is accepted, for a sign-out too', async () => {
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }), {
+          requireActiveUser: false,
+        })
+      ).resolves.toBeUndefined();
+    });
+
+    it('accepts it beside an audience an operator configured on the system client', async () => {
+      systemClient.audience = ['https://portal.example.com'];
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
+      ).resolves.toBeUndefined();
+    });
+
+    it('keeps the client id and delegation pins on either audience', async () => {
+      for (const aud of [DEVELOPER_AUDIENCE, 'system']) {
+        await expect(
+          assertManagementToken(fastify, REALM, portalClaims({ aud, clientId: 'third-party-app' }))
+        ).rejects.toThrow(JWTInvalidError);
+        await expect(
+          assertManagementToken(fastify, REALM, portalClaims({ aud, act: { sub: 'agent' } }))
+        ).rejects.toThrow(JWTInvalidError);
+      }
+    });
+
+    it('refuses another family audience', async () => {
+      await expect(
+        assertManagementToken(
+          fastify,
+          REALM,
+          portalClaims({ aud: 'urn:qauth:aud:account:v1-rc.0' })
+        )
+      ).rejects.toThrow(JWTInvalidError);
+    });
+  });
 });
 
 describe('createRequireManagementJwt', () => {

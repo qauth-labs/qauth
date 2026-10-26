@@ -100,6 +100,31 @@ describe('manifestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it.each(['urn:qauth:aud:developer:v1-rc.0', 'URN:QAUTH:AUD:account:v1-rc.0'])(
+    'refuses a CIMD entry granting the reserved audience %s (#509)',
+    (audience) => {
+      const result = manifestSchema.safeParse({
+        realm: 'master',
+        cimd_clients: [{ ...cimdClient, audience: ['https://mcp.example.com/mcp', audience] }],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]).toMatchObject({
+        path: ['cimd_clients', 0, 'audience', 1],
+        message: expect.stringContaining(
+          `"${audience}" is in the "urn:qauth:aud:" audience namespace`
+        ),
+      });
+    }
+  );
+
+  it('lets a provisioned client list a reserved audience (#509)', () => {
+    const accountConsole = { ...machineClient, audience: ['urn:qauth:aud:account:v1-rc.0'] };
+    expect(manifestSchema.parse({ realm: 'master', clients: [accountConsole] })).toEqual({
+      realm: 'master',
+      clients: [accountConsole],
+    });
+  });
+
   it('requires a CIMD entry to state its scopes', () => {
     const withoutScopes = { client_id: cimdClient.client_id, audience: cimdClient.audience };
     expect(

@@ -666,6 +666,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catalog cannot grant, or whose `x-qauth-class` is not the strictest class
   among them. No admin API route reads the catalog yet.
 
+- **One audience per API family, and a token guard for each** ([#509], ADR-019
+  Decision 7). The admin, account and developer APIs have the audiences
+  `urn:qauth:aud:admin:v1-rc.0`, `urn:qauth:aud:account:v1-rc.0` and
+  `urn:qauth:aud:developer:v1-rc.0`, and `requireFamilyToken(family, options)`
+  guards a family route: it requires `typ: at+jwt` whatever
+  `requireAccessTokenTyp` says, an `iss` its `IssuerResolver` hook accepts (by
+  default only `JWT_ISSUER`), `sub`, `exp` and a non-empty `jti`, an `aud`
+  holding exactly the family's audience, and, on the developer family, no
+  `act` claim. Its required `subjects` option names the subjects a route
+  admits, and the guard resolves the subject in the realm of the request
+  (ADR-019 Decision 1): a user of that realm who is enabled, or for a
+  `client_credentials` token a client of that realm that is enabled and not
+  suspended, so a user's token is refused in every other realm. It answers a
+  problem document, as every family route does ([#513]): a request with no
+  token gets 401 `unauthorized` with a challenge that names no error, a refused
+  token 401 `invalid_access_token` (or `access_token_expired`) with the RFC 6750
+  `invalid_token` challenge, and a token that lacks a route's scope 403
+  `forbidden` with the `insufficient_scope` challenge, whose `scope` names the
+  scopes. `ForbiddenError`'s `requiredScope` takes a list for that, joined with
+  spaces in the challenge. No route uses the guards yet; the developer and
+  account routes move under their prefixes in [#524]. The token endpoint issues
+  an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
+  `audience` lists it, on every grant (`invalid_target` otherwise, at
+  `/oauth/authorize` and `/ui/consent` too); a code refused this way is not
+  spent. A client resolved from a Client ID Metadata Document or registered at
+  `/oauth/register` lists none, whatever its row holds. On a user's grant
+  (authorization code and refresh token) a family audience is issued only when a
+  `resource` names it, so a client's default audience leaves it out there. The
+  Bearer path of `/oauth/authorize` refuses `access_denied` when the request or
+  the client's default audience holds one, and a family audience never makes a
+  client authoritative at introspection. Self-registration never obtains one,
+  by the rule the reserved `qauth:` scopes follow: dynamic registration and a
+  Client ID Metadata Document ignore it in `audience` or `resource` metadata,
+  and the seed manifest refuses it in a `cimd_clients` entry's `audience`. The
+  JWT plugin's new `verifyRequestAccessToken(request, policy)` runs
+  `requireJwt`'s checks under a route's issuer rule and `typ` requirement.
+
 ### Changed
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
@@ -755,6 +792,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Action for clients**: branch on `code` and the status of a problem document,
   or on `error` and the status of an OAuth body, never on `title`, `detail` or
   `error_description`. The developer portal ships updated with this release.
+
+- **The developer portal's token: the developer audience is accepted** ([#509]).
+  `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
+  `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
+  the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, beside
+  today's token, whose `aud` is the system client's id. Nothing mints it in
+  this release: `/auth/login` still mints today's token and the system client's
+  row is left as it is. [#524] mints it. Expand, then contract (ADR-018 §5): a
+  node of the previous release accepts every portal token this release mints,
+  so the upgrade is safe to roll. See **Upgrades** (`operate/upgrades`).
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
@@ -1229,7 +1276,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
 [#507]: https://github.com/qauth-labs/qauth/issues/507
+[#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513
+[#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552

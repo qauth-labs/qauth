@@ -36,7 +36,77 @@ endpoint answers it.
   in QAuth's reserved `qauth:` scope namespace, intersected with the caller's admin roles. The
   [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
   built-in roles. The account and developer families define no scopes here: their guards check the
-  audience and the subject. A route that needs a scope adds it in its own change.
+  token's audience, and that its subject is an active user or client of the request's realm
+  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change.
+
+### Family tokens
+
+Every family route is guarded by `requireFamilyToken(family, options)` in
+`apps/auth-server/src/app/helpers/family-token.ts`. A token passes when:
+
+- its signature verifies and it has not expired or been revoked, as on every bearer-protected
+  route;
+- its protected header carries `typ: at+jwt` (RFC 9068 §2.1), whatever
+  `requireAccessTokenTyp` is set to;
+- its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
+  accepts only the deployment's issuer, `JWT_ISSUER`;
+- it carries `sub`, `exp` and `jti`, with `sub` and `jti` non-empty strings;
+- its `aud` holds exactly one value, the family's audience. A token with several audiences is
+  refused even when one of them is the family's;
+- on the developer family, it carries no `act` claim: a delegated token (RFC 8693) never manages a
+  developer's clients;
+- its subject is one the route admits (the required `subjects` option: `user`, `client` or both)
+  and is active in the realm of the request (ADR-019 Decision 1). A `client_credentials` token,
+  whose `sub` is its own `client_id`, must name a client of that realm that is enabled and not
+  suspended; any other token must name a user of that realm who is enabled;
+- it carries every scope the route lists.
+
+A family audience and the deployment's issuer read the same in every realm, and an access token
+names no realm, so the subject decides which realm a token belongs to. A user's token is therefore
+refused in every realm but the user's. A `client_id` names a client per realm, so a token of a
+`client_id` that names an enabled client in two realms passes in both, until each realm has its
+own issuer.
+
+A request that presents no token is refused with 401 `unauthorized` and a challenge that names no
+error, `WWW-Authenticate: Bearer realm="OAuth"`. A token that fails, its subject included, is
+refused with 401 and `WWW-Authenticate: Bearer error="invalid_token"` (`invalid_access_token`, or
+`access_token_expired`). A token that lacks a scope is refused with 403 `forbidden` and
+`WWW-Authenticate: Bearer error="insufficient_scope"`, whose `scope` names the scopes the route
+needs, as on every route a wider token would let through. All three follow RFC 6750 §3.1, and the
+body is a problem document with the code named in parentheses. A request under the `DPoP` scheme
+gets a `DPoP` challenge instead (RFC 9449 §7.1). A family route therefore lists 401 in its
+`x-qauth-errors`, and 403 when it requires a scope.
+
+What a route does for its subject beyond that, such as reading the user's row again or checking a
+role, is its own.
+
+### Issuing a family audience
+
+- A client gets a family audience only when an operator lists it in the client's `audience`. The
+  client names it with the RFC 8707 `resource` parameter, at `/oauth/authorize` and at
+  `/oauth/token`, and the token's `aud` is that value. A client that does not list it is refused
+  with `invalid_target`, on every grant and before any consent screen. A client resolved from a
+  Client ID Metadata Document or registered at `/oauth/register` lists none, whatever its row
+  holds.
+- On a user's grant (authorization code and refresh token) a family audience is issued only when a
+  `resource` names it, in the request or bound to the code, so the consent the user gave covers
+  it: a client's default audience leaves it out. A `client_credentials` token keeps the client's
+  default.
+- The legacy Bearer path of `/oauth/authorize` never issues one: a request on it that names a
+  family audience, or a client whose default audience holds one, is refused with `access_denied`.
+- A family audience never makes a client authoritative at introspection: QAuth is the only
+  resource server for it, so a client introspects a family token only when the token is its own.
+- `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case, by the rule the
+  reserved `qauth:` scopes follow: self-registration never obtains one. Dynamic registration and a
+  Client ID Metadata Document ignore it in an `audience` or `resource` member, and register or
+  resolve the client with the rest; neither stores those members. The seed manifest refuses it in
+  a `cimd_clients` entry, the one place it would be stored. The rule is `isReservedAudience` in
+  `@qauth-labs/shared-validation`.
+- The developer portal's token keeps the system client's id as its audience in this release.
+  `/api/clients`, `/api/consents`, `/auth/logout` and the Bearer path of `/oauth/authorize`
+  (`assertManagementToken`), and userinfo, accept a system-client token with the developer
+  audience too, and #524 starts minting it. Expand, then contract (ADR-018 §5): every node accepts the
+  token before any node mints it.
 
 No route is served under these prefixes yet. The developer routes at `/api/clients` and
 `/api/consents` and the account routes at `/consents` move under them, and their old paths are then
