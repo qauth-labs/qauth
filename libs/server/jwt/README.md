@@ -1,17 +1,23 @@
 # JWT Service Library
 
-JWT (JSON Web Token) service library for QAuth with EdDSA signing, key management, and refresh token generation. This library provides secure token generation and verification using Ed25519 algorithm.
+JWT (JSON Web Token) service library for QAuth with token signing and verification, key import, JWKS export, and refresh token generation. Access tokens are signed with EdDSA (Ed25519). ID tokens are signed with EdDSA or RS256. Signing and verification go through [`@qauth-labs/core-crypto`](../../core/crypto/README.md).
 
 ## Overview
 
 The `@qauth-labs/server-jwt` library provides:
 
-- **JWT Signing & Verification** - EdDSA (Ed25519) based JWT operations
-- **Key Management** - EdDSA key pair generation and import/export utilities
+- **JWT Signing & Verification** - EdDSA (Ed25519) access tokens, EdDSA or RS256 ID tokens
+- **Key Management** - Ed25519 key pair generation, Ed25519 and RS256 PEM import, public key export
+- **JWKS export** - public JWKs for Ed25519 (`OKP`), RS256 (`RSA`) and ML-DSA-65 (`AKP`) keys
+- **DPoP binding** - the `cnf.jkt` claim of RFC 9449 and the `DPoP` authorization scheme
 - **Refresh Token Generation** - Secure refresh token generation with SHA-256 hashing
 - **Hybrid post-quantum signing** - detached-parallel ML-DSA-65 + Ed25519 ([ADR-005](../../../docs/adr/005-pqc-hybrid-signing.md)), off by default
 - **Type-Safe API** - Full TypeScript support with proper error handling
 - **Custom Error Types** - Domain-specific errors for JWT operations
+
+## Where the keys come from
+
+This library takes imported keys as arguments and reads no configuration. In the auth-server, [`@qauth-labs/fastify-plugin-jwt`](../../fastify/plugins/jwt/README.md) imports them from the `JWT_*` key variables. At boot the auth-server also imports those keys into the default realm's encrypted key store. Tokens are still signed with the variables until token signing moves onto the store (#491). See [Keys](https://docs.qauth.dev/operate/keys/) for generating each key.
 
 ## Installation
 
@@ -42,6 +48,7 @@ const { privateKey, publicKey } = await generateEdDSAKeyPair();
 const token = await signAccessToken(
   {
     sub: 'user-123',
+    clientId: 'client-abc',
     email: 'user@example.com',
     email_verified: true,
   },
@@ -90,21 +97,31 @@ const { privateKey: extractablePrivate, publicKey: extractablePublic } =
 #### Import Existing Keys
 
 ```typescript
-import { importPrivateKey, importPublicKey } from '@qauth-labs/server-jwt';
+import {
+  derivePublicKeyPemFromPrivate,
+  importPrivateKey,
+  importPublicKey,
+  importRs256PrivateKey,
+  importRs256PublicKey,
+} from '@qauth-labs/server-jwt';
 
-// Import private key from PEM format (PKCS#8)
+// Import an Ed25519 private key from PEM format (PKCS#8)
 const privateKey = await importPrivateKey(
   `-----BEGIN PRIVATE KEY-----
 ...
 -----END PRIVATE KEY-----`
 );
 
-// Import public key from PEM format (SPKI)
+// Import an Ed25519 public key from PEM format (SPKI)
 const publicKey = await importPublicKey(
   `-----BEGIN PUBLIC KEY-----
 ...
 -----END PUBLIC KEY-----`
 );
+
+// RS256 keys have their own importers; rs256PrivatePem is a PKCS#8 PEM string
+const rs256PrivateKey = await importRs256PrivateKey(rs256PrivatePem);
+const rs256PublicKey = await importRs256PublicKey(derivePublicKeyPemFromPrivate(rs256PrivatePem));
 ```
 
 ### Refresh Token Generation
@@ -148,6 +165,7 @@ const { privateKey, publicKey } = await generateEdDSAKeyPair();
 const accessToken = await signAccessToken(
   {
     sub: 'user-123',
+    clientId: 'client-abc',
     email: 'user@example.com',
     email_verified: true,
   },
@@ -158,12 +176,7 @@ const accessToken = await signAccessToken(
 
 const { token: refreshToken, tokenHash } = generateRefreshToken();
 
-// Store refreshTokenHash in database
-await db.insert(refreshTokens).values({
-  userId: 'user-123',
-  tokenHash,
-  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-});
+// Store tokenHash, never the plain token, with the refresh token record
 
 // Verify access token
 try {
@@ -184,14 +197,19 @@ try {
 
 #### `signAccessToken(payload, privateKey, issuer, expiresIn): Promise<string>`
 
-Signs an access token with the given payload.
+Signs an access token with the given payload. The protected header carries `typ: at+jwt` (RFC 9068). The payload also gets a fresh `jti`, `client_id` and `token_use: 'access'`.
 
 **Parameters:**
 
 - `payload: SignAccessTokenPayload` - Token payload containing:
-  - `sub: string` - Subject (user ID)
-  - `email: string` - User email
-  - `email_verified: boolean` - Email verification status
+  - `sub: string` - Subject (user ID, or the client ID for client_credentials)
+  - `clientId: string` - OAuth client identifier, stamped as `client_id`
+  - `email?: string` - User email, only under the `email` scope
+  - `email_verified?: boolean` - Email verification status, present when `email` is
+  - `scope?: string` - Space-separated granted scopes
+  - `aud?: string | string[]` - Audience; defaults to `clientId`
+  - `act?: ActClaim` - RFC 8693 actor claim, only on delegated tokens
+  - `cnf?: { jkt: string }` - RFC 9449 key thumbprint, only on DPoP-bound tokens
 - `privateKey: KeyLike` - EdDSA private key for signing
 - `issuer: string` - JWT issuer (iss claim)
 - `expiresIn: number` - Expiration time in seconds
@@ -202,28 +220,46 @@ Signs an access token with the given payload.
 
 ```typescript
 const token = await signAccessToken(
-  { sub: 'user-123', email: 'user@example.com', email_verified: true },
+  { sub: 'user-123', clientId: 'client-abc', email: 'user@example.com', email_verified: true },
   privateKey,
   'https://auth.example.com',
   900
 );
 ```
 
-#### `verifyAccessToken(token, publicKey): Promise<JWTPayload>`
+#### `signIdToken(payload, privateKey, issuer, expiresIn, alg?, kid?): Promise<string>`
 
-Verifies and decodes an access token.
+Signs an OIDC ID token with `typ: JWT` and `token_use: 'id'`.
+
+**Parameters:**
+
+- `payload: SignIdTokenPayload` - `sub`, `audience` (the client ID), and optional `email`, `email_verified`, `name`, `nonce`, `authTime`, `acr`
+- `privateKey: KeyLike` - EdDSA or RS256 private key, matching `alg`
+- `issuer: string` - JWT issuer (iss claim)
+- `expiresIn: number` - Expiration time in seconds
+- `alg?: 'EdDSA' | 'RS256'` - Signature algorithm (default: `'EdDSA'`)
+- `kid?: string` - Key ID for the protected header, omitted when empty
+
+`authTime` is in epoch milliseconds and becomes `auth_time` in seconds. An empty `acr` is left out.
+
+#### `verifyAccessToken(token, publicKey, options?): Promise<JWTPayload>`
+
+Verifies and decodes an access token. The algorithm is pinned to `EdDSA`. A signed `typ` other than `at+jwt` is always refused.
 
 **Parameters:**
 
 - `token: string` - JWT token string to verify
 - `publicKey: KeyLike` - EdDSA public key for verification
+- `options.issuer?: string` - Required `iss` value
+- `options.audience?: string | string[]` - Required `aud` value
+- `options.requireTyp?: boolean` - Also refuse a token without `typ` (default: `false`)
 
 **Returns:** Promise resolving to decoded JWT payload
 
 **Throws:**
 
 - `JWTExpiredError` - If the token has expired
-- `JWTInvalidError` - If the token is invalid (malformed, wrong signature, etc.)
+- `JWTInvalidError` - If the token is invalid (malformed, wrong signature, wrong `typ`, malformed claims, etc.)
 
 **Example:**
 
@@ -257,7 +293,7 @@ const { privateKey, publicKey } = await generateEdDSAKeyPair();
 
 #### `importPrivateKey(pem): Promise<KeyLike>`
 
-Imports a private key from PEM format (PKCS#8).
+Imports an Ed25519 private key from PEM format (PKCS#8). The key is not extractable.
 
 **Parameters:**
 
@@ -277,7 +313,7 @@ const privateKey = await importPrivateKey(
 
 #### `importPublicKey(pem): Promise<KeyLike>`
 
-Imports a public key from PEM format (SPKI).
+Imports an Ed25519 public key from PEM format (SPKI).
 
 **Parameters:**
 
@@ -294,6 +330,42 @@ const publicKey = await importPublicKey(
 -----END PUBLIC KEY-----`
 );
 ```
+
+#### `importRs256PrivateKey(pem)` / `importRs256PublicKey(pem): Promise<KeyLike>`
+
+Import an RS256 private key (PKCS#8 PEM) or public key (SPKI PEM). Only `signIdToken` signs with RS256.
+
+#### `derivePublicKeyPemFromPrivate(privatePem): string`
+
+Derives the SPKI public key PEM from a PKCS#8 private key PEM with `node:crypto`. It works for RSA and Ed25519 keys.
+
+#### `exportPublicKeyPem(key): Promise<string>`
+
+Exports a key as SPKI PEM with `jose`. The key must be extractable, so a key from `importPrivateKey` fails. Use `derivePublicKeyPemFromPrivate` for a PEM private key.
+
+### JWKS
+
+#### `exportPublicJwk(publicKey, kid?): Promise<PublicJwk>` / `exportRs256PublicJwk(publicKey, kid?): Promise<Rs256Jwk>`
+
+Export an Ed25519 key as an `OKP` JWK or an RS256 key as an `RSA` JWK. Both set `use: 'sig'` and `alg`, and add `kid` only when it is not empty. Private members are never published.
+
+#### `assertDistinctJwksKeyIds(keys): void`
+
+Throws when two JWKS entries share a `kid`, or one algorithm has two entries without one.
+
+### Authorization header
+
+#### `extractJWTFromHeader(authHeader): string | null`
+
+Returns the token of an `Authorization: Bearer <token>` header, or `null`.
+
+#### `extractAccessTokenCredential(authHeader, { allowDpop? }): AccessTokenCredential | null`
+
+Returns `{ scheme, token }` for a `Bearer` header. With `allowDpop: true` it also accepts the `DPoP` scheme of RFC 9449.
+
+#### `decodeJwtUnsafe(token)`
+
+Decodes a token without verifying it, for an expired token at logout or for logging. Throws `JWTInvalidError` when the token is malformed or has no string `sub`.
 
 ### Refresh Token Generator
 
@@ -361,28 +433,44 @@ alongside it, never inside the compact string — so classical verifiers are
 unaffected. See the
 [verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).
 
+Hybrid signing also needs `SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65` and an
+ML-DSA-65 seed in `JWT_MLDSA_PRIVATE_KEY`. Without both, the configuration
+refuses to start. See
+[the ML-DSA-65 seed](https://docs.qauth.dev/operate/keys/#ml-dsa-65-seed--only-with-hybrid-signing).
+Each hybrid function takes `backend` or `options` with
+`enabledSignatureAlgorithms`. It refuses to sign or verify ML-DSA-65 when that
+list lacks it.
+
 #### `signHybridAccessToken(payload, keys, issuer, expiresIn, backend): Promise<HybridSignedToken>`
 
 Signs an access token with both algorithms. Returns the compact Ed25519 JWS plus
-the detached PQC signature; the caller decides how to deliver the latter
-(introspection by default, per `PQC_TOKEN_DELIVERY`).
+the detached PQC signature; the caller decides how to deliver the latter. The
+auth-server delivers it by reference (`PQC_TOKEN_DELIVERY=reference`, the
+default). It stores the signature under the token's `jti`, and introspection
+returns it as `pqc_signature`.
 
-#### `signHybridIdToken(...): Promise<HybridSignedToken>`
+#### `signHybridIdToken(payload, keys, issuer, expiresIn, backend): Promise<HybridSignedToken>`
 
-The ID-token equivalent.
+The ID-token equivalent. The auth-server does not call it: ID tokens stay
+classical.
 
 #### `verifyHybridAccessToken(hybrid, keys, options): Promise<Record<string, unknown>>`
 
-Verifies both signatures over the identical signing input. `options.requirePqc`
-decides whether a missing or invalid PQC component is fatal — set it `true` to
-refuse a token that only carries the classical signature.
+Verifies both signatures over the identical signing input. `options` takes
+`enabledSignatureAlgorithms`, `requirePqc`, and optional `issuer` and
+`audience`. A token whose signed header carries `pqc_alg` needs a valid
+ML-DSA-65 signature, whatever `requirePqc` says. `requirePqc: true` also refuses
+a token whose signed header makes no PQC claim. Failures throw
+`CryptoVerificationError` from `@qauth-labs/core-crypto`, not the JWT errors.
 
-#### `exportMlDsaPublicJwk(...)` / `selectJwksKey(...)`
+#### `exportMlDsaPublicJwk(publicKey, kid?): AkpJwk` / `selectJwksKey(keys, { kid?, alg }): PublishedJwk | undefined`
 
 Publish the ML-DSA public key as an `AKP` JWK alongside the Ed25519 `OKP` entry,
-and select the right key when verifying against a mixed JWKS. The `AKP` entry
-appears as soon as an ML-DSA key is configured, independently of whether hybrid
-issuance is on.
+and select the right key when verifying against a mixed JWKS. `selectJwksKey`
+matches on both `kid` and `alg`, and returns `undefined` unless exactly one
+entry matches. The JWT plugin publishes the `AKP` entry whenever it is given an
+ML-DSA-65 seed. The auth-server passes the seed only when
+`HYBRID_SIGNING_ENABLED` is on.
 
 ## Types
 
@@ -392,9 +480,14 @@ Payload structure for signing access tokens.
 
 ```typescript
 interface SignAccessTokenPayload {
-  sub: string; // Subject (user ID)
-  email: string; // User email
-  email_verified: boolean; // Email verification status
+  sub: string; // Subject (user ID, or client ID for client_credentials)
+  email?: string; // User email (only under the `email` scope)
+  email_verified?: boolean; // Email verification status (present when `email` is)
+  clientId: string; // OAuth client identifier
+  scope?: string; // Space-separated granted scopes
+  aud?: string | string[]; // Audience; falls back to `clientId`
+  act?: ActClaim; // RFC 8693 actor, only on delegated tokens
+  cnf?: ConfirmationClaim; // RFC 9449 `{ jkt }`, only on DPoP-bound tokens
 }
 ```
 
@@ -407,6 +500,8 @@ interface JWTPayload extends SignAccessTokenPayload {
   iat?: number; // Issued at (timestamp)
   exp?: number; // Expiration time (timestamp)
   iss?: string; // Issuer
+  jti?: string; // Unique token ID, used for revocation
+  token_use?: string; // 'access' on access tokens
 }
 ```
 
@@ -506,12 +601,16 @@ pnpm nx typecheck server-jwt
 
 ## Dependencies
 
-- `jose`: JWT operations with EdDSA support
+- `@qauth-labs/core-crypto`: signing, verification, key generation and import, hybrid ML-DSA-65 signing
+- `jose`: unverified decoding, SPKI export and JWK export
+- `zod`: claim-shape validation of verified access tokens
 - `@qauth-labs/shared-errors`: Custom error types for JWT operations
 
 ## Related Libraries
 
-- [`@qauth-labs/server-config`](../config/README.md): JWT configuration schema (`jwtEnvSchema`)
+- [`@qauth-labs/core-crypto`](../../core/crypto/README.md): the signing abstraction this library calls
+- [`@qauth-labs/fastify-plugin-jwt`](../../fastify/plugins/jwt/README.md): the Fastify plugin that wires this library into the auth-server
+- [`@qauth-labs/server-config`](../config/README.md): JWT and signing configuration schemas (`jwtEnvSchema`, `cryptoEnvSchema`)
 - [`@qauth-labs/shared-errors`](../../shared/errors/README.md): JWT error types (`JWTExpiredError`, `JWTInvalidError`)
 
 ## License
