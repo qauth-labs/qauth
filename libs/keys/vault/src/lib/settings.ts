@@ -121,19 +121,22 @@ function setting(env: KekEnv, variable: string): string | undefined {
   return value ? value : undefined;
 }
 
-/** `value` as an `https://` origin, or an error naming what is wrong with it. */
+/**
+ * `value` as an `https://` origin, or an error naming what is wrong with it.
+ * The value is never put in the error: a query or a user name could hold a
+ * credential.
+ */
 function vaultOrigin(value: string): string {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     throw new InvalidConfigurationError(
-      `${ADDR_VARIABLE} must be the https:// address of the Vault server, for example ${EXAMPLE_ADDR}. See this error's "details" for the value.`,
-      { variable: ADDR_VARIABLE, value }
+      `${ADDR_VARIABLE} must be the https:// address of the Vault server, for example ${EXAMPLE_ADDR}.`,
+      { variable: ADDR_VARIABLE }
     );
   }
   if (url.username !== '' || url.password !== '') {
-    // The value is left out: it holds credentials.
     throw new InvalidConfigurationError(
       `${ADDR_VARIABLE} must not hold a user name or password. Vault credentials come from ${TOKEN_FILE_VARIABLE} or ${SECRET_ID_FILE_VARIABLE} only.`,
       { variable: ADDR_VARIABLE }
@@ -141,14 +144,14 @@ function vaultOrigin(value: string): string {
   }
   if (url.protocol !== 'https:') {
     throw new InvalidConfigurationError(
-      `${ADDR_VARIABLE} must use https://: every Vault call carries a token and a data key. See this error's "details" for the value.`,
-      { variable: ADDR_VARIABLE, value }
+      `${ADDR_VARIABLE} must use https://: every Vault call carries a token and a data key. See this error's "details" for the scheme it has.`,
+      { variable: ADDR_VARIABLE, scheme: url.protocol.replace(/:$/, '') }
     );
   }
   if ((url.pathname !== '/' && url.pathname !== '') || url.search !== '' || url.hash !== '') {
     throw new InvalidConfigurationError(
-      `${ADDR_VARIABLE} must be the server's origin only, such as ${EXAMPLE_ADDR}, with no path, query or fragment. See this error's "details" for the value.`,
-      { variable: ADDR_VARIABLE, value }
+      `${ADDR_VARIABLE} must be the server's origin only, such as ${EXAMPLE_ADDR}, with no path, query or fragment.`,
+      { variable: ADDR_VARIABLE }
     );
   }
   return url.origin;

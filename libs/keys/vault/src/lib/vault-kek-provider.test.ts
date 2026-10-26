@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { inspect } from 'node:util';
 
 import { isKeyCustodyError, type KeyCustodyErrorCode } from '@qauth-labs/server-keys';
@@ -204,6 +205,35 @@ describe('wrap', () => {
     await provider.wrap(randomBytes(32), { ...AAD, kid: 'kid-2' });
 
     expect(transitRequests(double, 'keys')).toHaveLength(1);
+  });
+
+  it('checks the key again once the check is 15 minutes old, and refuses a key recreated without derivation', async () => {
+    const { double, clock, provider } = setup();
+    await provider.wrap(randomBytes(32), AAD);
+
+    await clock.advanceBy(14 * 60_000);
+    await provider.wrap(randomBytes(32), AAD);
+    expect(transitRequests(double, 'keys')).toHaveLength(1);
+
+    double.deleteKey(DOUBLE_KEY);
+    double.createKey(DOUBLE_KEY, { derived: false });
+    await clock.advanceBy(60_000);
+    const error = await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+    expect(String((error as Error).cause)).toMatch(/is not derived/);
+    expect(transitRequests(double, 'keys')).toHaveLength(2);
+  });
+
+  it.each([
+    ['exportable', { exportable: true }],
+    ['allow_plaintext_backup', { allowPlaintextBackup: true }],
+  ])('refuses a key that can leave Vault (%s)', async (_what, config) => {
+    const { double, provider } = setup();
+    double.configureKey(DOUBLE_KEY, config);
+
+    const error = await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+
+    expect(String((error as Error).cause)).toMatch(/can leave Vault/);
+    expect(transitRequests(double, 'encrypt')).toEqual([]);
   });
 
   it('refuses a Transit key that is not derived, before sending any data key', async () => {
@@ -461,7 +491,7 @@ describe('Vault failures', () => {
         }),
       },
       1,
-      'KEK_UNAVAILABLE',
+      'KEK_ACCESS_DENIED',
       1,
     ],
     ['a redirect to another node', { status: 307, errors: [] }, 1, 'KEK_UNAVAILABLE', 1],
@@ -562,6 +592,44 @@ describe('a refused token', () => {
     const logins = double.requests.filter((request) => request.path === 'auth/approle/login');
     expect(logins).toHaveLength(2);
     expect(transitRequests(double, 'decrypt').at(-1)?.token).not.toBe(first);
+  });
+
+  it('keeps a token its policy refused, so a denied path never mints new AppRole tokens', async () => {
+    const clock = createManualClock(START);
+    const double = createVaultDouble(clock);
+    double.createKey(DOUBLE_KEY);
+    const { roleId, secretId } = double.createAppRole({
+      tokenTtlMs: 3_600_000,
+      tokenMaxTtlMs: 86_400_000,
+      policy: {
+        [`transit/keys/${DOUBLE_KEY}`]: ['read'],
+        [`transit/encrypt/${DOUBLE_KEY}`]: ['update'],
+      },
+    });
+    const provider = doubleProvider(double, {
+      env: { KEK_VAULT_ROLE_ID: roleId, KEK_VAULT_SECRET_ID_FILE: files.write(secretId) },
+      clock,
+    });
+
+    for (let call = 0; call < 5; call++) {
+      await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+    }
+
+    expect(double.requests.filter((request) => request.path === 'auth/approle/login')).toHaveLength(
+      1
+    );
+    expect(transitRequests(double, 'decrypt')).toHaveLength(5);
+  });
+
+  it('refuses a token file rewritten with a value that cannot be a token, as an operator fault', async () => {
+    const { double, provider, token, tokenPath } = setup();
+    await provider.wrap(randomBytes(32), AAD);
+    double.revokeToken(token);
+    writeFileSync(tokenPath, Buffer.from('hvs.\u0000broken', 'utf16le'));
+
+    const error = await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+
+    expect(String((error as Error).cause)).toMatch(/printable ASCII/);
   });
 
   it('fails closed with KEK_ACCESS_DENIED for a revoked token in a token file, on wrap, unwrap and health', async () => {

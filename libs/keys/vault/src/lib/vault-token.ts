@@ -23,10 +23,12 @@ import { SYSTEM_CLOCK, type VaultClient, type VaultClock } from './vault-client'
  * lasts. A token that has expired anyway, say after the process was
  * suspended, is replaced by a login at its next use.
  *
- * Refusal: when Vault refuses a token (403), the caller reports it with
- * {@link TokenSession.refused} and tries once more; the session then logs in
- * again. A revoked token in a token file is refused again, and the call fails
- * with `KEK_ACCESS_DENIED`: nothing falls back to another credential.
+ * Refusal: when Vault refuses a call (403), the caller reports it with
+ * {@link TokenSession.refused}. A token that still works was refused by its
+ * policy: it is kept and the call fails. A token Vault no longer accepts is
+ * dropped and the call is tried once more, after a new login. A revoked token
+ * in a token file is refused again, and the call fails with
+ * `KEK_ACCESS_DENIED`: nothing falls back to another credential.
  *
  * Tokens and secret IDs live only in this module's closures. They are never
  * logged, never put in an error and never returned from the provider.
@@ -51,8 +53,16 @@ export interface VaultCredentials {
 export interface TokenSession {
   /** A token that has not expired, logging in when there is none. */
   token(): Promise<string>;
-  /** Vault refused `token`: drop it, so the next {@link token} logs in again. */
-  refused(token: string): void;
+  /**
+   * Vault refused a call made with `token` (403). Ask Vault whether the token
+   * itself still works (`auth/token/lookup-self`): when it does, the policy
+   * refused the call and the token is kept, so a denied path never mints new
+   * tokens; when it does not, the token is dropped and the next {@link token}
+   * logs in again.
+   *
+   * @returns whether the call is worth one more try with {@link token}
+   */
+  refused(token: string): Promise<boolean>;
   /** Stop renewing and drop the token. */
   close(): void;
 }
@@ -100,7 +110,16 @@ export function tokenFileCredentials(path: string, variable: string): VaultCrede
       if (seconds === undefined || typeof data?.['renewable'] !== 'boolean') {
         throw new VaultAnswerError('token-lookup-self', 'has no ttl or renewable flag');
       }
-      return { token, ttlMs: seconds * 1000, renewable: data['renewable'] };
+      // Vault reports the TTL in whole seconds, so a token in its last second
+      // reads `ttl: 0`, as one that never expires does. Only the latter has no
+      // expiry time; the former is held as expiring now.
+      const expireTime = data['expire_time'];
+      const neverExpires = seconds === 0 && (expireTime === null || expireTime === undefined);
+      return {
+        token,
+        ttlMs: neverExpires ? 0 : Math.max(seconds * 1000, 1),
+        renewable: data['renewable'],
+      };
     },
   });
 }
@@ -303,10 +322,24 @@ export function createTokenSession(options: TokenSessionOptions): TokenSession {
       return (await login()).token;
     },
 
-    refused(token: string): void {
-      if (held?.token !== token) return;
-      held = undefined;
-      clearTimer();
+    async refused(token: string): Promise<boolean> {
+      // Another call replaced the token already: try again with the new one.
+      if (held?.token !== token) return true;
+      try {
+        await client.send('token-lookup-self', {
+          method: 'GET',
+          path: 'auth/token/lookup-self',
+          token,
+        });
+        return false;
+      } catch (error) {
+        if (!(error instanceof VaultHttpError) || error.status !== 403) return false;
+      }
+      if (held?.token === token) {
+        held = undefined;
+        clearTimer();
+      }
+      return true;
     },
 
     close(): void {

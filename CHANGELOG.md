@@ -132,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sends data keys to Transit `encrypt` and `decrypt` with the key's associated
   data as the Transit `context`. Signing stays local. The key must be created
   with `derived=true`: Vault ignores the context of a key that is not derived,
-  so the provider refuses one. `kekRef` is the key's path and version
+  so the provider refuses one, and one that can be exported. `kekRef` is the key's path and version
   (`vault:transit/keys/qauth-kek#v2`), so a Transit key rotation shows which
   rows to re-wrap. Settings are `KEK_VAULT_ADDR` (`https` only),
   `KEK_VAULT_TRANSIT_KEY`, and optionally `KEK_VAULT_TRANSIT_MOUNT`,

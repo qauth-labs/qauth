@@ -70,9 +70,11 @@ export function readSecretFile(
         path,
       });
     }
-    if (/\s/.test(text)) {
+    // Vault tokens and secret IDs are printable ASCII; anything else could not
+    // be sent in a header and would fail every call as if Vault were down.
+    if (!/^[\x21-\x7e]+$/.test(text)) {
       throw new InvalidConfigurationError(
-        `The file ${variable} names must hold one value with no spaces or line breaks inside it.`,
+        `The file ${variable} names must hold one value of printable ASCII characters, with no spaces or line breaks inside it.`,
         { variable, path }
       );
     }

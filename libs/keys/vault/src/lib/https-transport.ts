@@ -141,9 +141,15 @@ export function createHttpsTransport(options: HttpsTransportOptions): VaultTrans
             chunks.push(chunk);
           });
           response.on('end', () =>
-            settle(() =>
-              resolve({ status: response.statusCode ?? 0, body: parseJson(Buffer.concat(chunks)) })
-            )
+            settle(() => {
+              // A decrypt answer holds a data key in base64: zero the raw bytes
+              // once parsed. The parsed string cannot be zeroed.
+              const bytes = Buffer.concat(chunks);
+              const body = parseJson(bytes);
+              bytes.fill(0);
+              for (const chunk of chunks) chunk.fill(0);
+              resolve({ status: response.statusCode ?? 0, body });
+            })
           );
           response.on('error', (error) => settle(() => reject(error)));
         }

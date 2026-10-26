@@ -26,8 +26,8 @@ import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
  * - Vault refuses the caller or the key cannot be used: 403 (a token that is
  *   revoked, expired or lacks the policy), a failed AppRole login, a key that
  *   does not exist or is not a derived encryption key, a token or secret ID
- *   file that cannot be read: {@link KekAccessDeniedError}. An operator has
- *   to act.
+ *   file that cannot be read, a TLS certificate the client does not trust:
+ *   {@link KekAccessDeniedError}. An operator has to act.
  * - Everything else, a sealed or unreachable Vault, throttling and timeouts
  *   once the retries are spent, an answer that is not what Vault sends:
  *   {@link KekUnavailableError}. The same call may succeed later.
@@ -115,6 +115,29 @@ export class VaultKeyRefusedError extends Error {
   }
 }
 
+/**
+ * Node's codes for a TLS certificate the client refused: untrusted, expired,
+ * revoked or for another host. An operator has to act, so these are access
+ * refusals, not outages.
+ */
+const TLS_VERIFICATION_CODES: ReadonlySet<string> = new Set([
+  'CERT_CHAIN_TOO_LONG',
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'CERT_REJECTED',
+  'CERT_REVOKED',
+  'CERT_SIGNATURE_FAILURE',
+  'CERT_UNTRUSTED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'HOSTNAME_MISMATCH',
+  'INVALID_CA',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+]);
+
 /** Statuses after which the same call may succeed: precondition (eventual consistency), throttling, server faults. */
 export function isRetryableStatus(status: number): boolean {
   return status === 412 || status === 429 || (status >= 500 && status !== 501);
@@ -147,6 +170,13 @@ export function toKeyCustodyError(error: unknown, kekRef?: string): KeyCustodyEr
     return new KekAccessDeniedError({ cause: error });
   }
   if (error instanceof VaultKeyRefusedError || error instanceof InvalidConfigurationError) {
+    return new KekAccessDeniedError({ cause: error });
+  }
+  if (
+    error instanceof VaultTransportError &&
+    error.code !== undefined &&
+    TLS_VERIFICATION_CODES.has(error.code)
+  ) {
     return new KekAccessDeniedError({ cause: error });
   }
   return new KekUnavailableError({ cause: error });

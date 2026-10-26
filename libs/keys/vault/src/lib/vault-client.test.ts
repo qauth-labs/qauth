@@ -127,6 +127,49 @@ describe('the Vault client', () => {
     expect((error as Error).message).toBe('Vault could not be reached for encrypt (ETIMEDOUT)');
   });
 
+  it.each([
+    ['a timeout', nodeError('ETIMEDOUT')],
+    ['a reset connection', nodeError('ECONNRESET')],
+    ['a server fault', { status: 500, body: undefined }],
+    ['a precondition failure', { status: 412, body: undefined }],
+  ])(
+    'does not repeat an AppRole login after %s, since Vault may have served it',
+    async (_what, answer) => {
+      const { transport } = scripted([answer]);
+
+      await failure(
+        createVaultClient({ transport }).send('approle-login', {
+          method: 'POST',
+          path: 'auth/approle/login',
+          body: { role_id: 'r', secret_id: 's' },
+        })
+      );
+
+      expect(transport).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    ['a refused connection', nodeError('ECONNREFUSED')],
+    ['a name that did not resolve', nodeError('EAI_AGAIN')],
+    ['a sealed Vault', { status: 503, body: undefined }],
+    ['throttling', { status: 429, body: undefined }],
+  ])('repeats an AppRole login after %s, which Vault did not serve', async (_what, answer) => {
+    const clock = createManualClock(0);
+    const { transport } = scripted([answer]);
+    const client = createVaultClient({ transport, clock });
+
+    const call = client.send('approle-login', {
+      method: 'POST',
+      path: 'auth/approle/login',
+      body: {},
+    });
+    await clock.advanceBy(10_000);
+
+    expect(await call).toEqual({ status: 200, body: {} });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
   it('does not retry a TLS verification failure', async () => {
     const { transport } = scripted([nodeError('UNABLE_TO_VERIFY_LEAF_SIGNATURE')]);
 

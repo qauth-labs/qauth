@@ -127,6 +127,16 @@ describe('the Vault settings', () => {
   });
 
   it.each([
+    'https://vault.internal:8200/?token=hvs.leaked-in-query',
+    'http://vault.internal:8200/hvs.leaked-in-query',
+    'vault internal hvs.leaked-in-query',
+  ])('never echoes the address it refuses: %s', (address) => {
+    const error = refusal({ ...BASE, KEK_VAULT_ADDR: address });
+
+    expect(JSON.stringify(error) + error.message).not.toContain('leaked-in-query');
+  });
+
+  it.each([
     ['KEK_VAULT_TOKEN', 'KEK_VAULT_TOKEN_FILE'],
     ['KEK_VAULT_SECRET_ID', 'KEK_VAULT_SECRET_ID_FILE'],
   ])('refuses a credential in %s, pointing to %s, without its value', (variable, instead) => {
@@ -170,6 +180,9 @@ describe('the Vault settings', () => {
     const twoLines = refusal({ ...BASE, KEK_VAULT_TOKEN_FILE: files.write('hvs.one\nhvs.two') });
     expect(twoLines.message).toMatch(/must hold one value/);
     expect(JSON.stringify(twoLines)).not.toContain('hvs.one');
+    const notAscii = refusal({ ...BASE, KEK_VAULT_TOKEN_FILE: files.write('hvs.caf\u00e9-token') });
+    expect(notAscii.message).toMatch(/printable ASCII/);
+    expect(JSON.stringify(notAscii)).not.toContain('caf');
     expect(refusal({ ...BASE, KEK_VAULT_TOKEN_FILE: dir }).message).toMatch(/regular file/);
   });
 

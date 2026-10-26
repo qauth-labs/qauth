@@ -60,9 +60,10 @@ vault write -f transit/keys/qauth-kek type=aes256-gcm96 derived=true
 scope, `kid` and algorithm) as the Transit `context`, and a derived key encrypts each context under
 its own key, so a wrapped data key copied to another realm or key does not open. Vault ignores the
 context of a key that is not derived, without an error, which would drop that binding; the
-provider reads the key's settings before its first wrap or unwrap and refuses such a key with
-`KEK_ACCESS_DENIED`. `chacha20-poly1305` is accepted too. Never create the key with
-`exportable=true` or `allow_plaintext_backup=true`: either lets the KEK leave Vault.
+provider reads the key's settings before its first wrap or unwrap, and again every 15 minutes
+while it is used, and refuses such a key with `KEK_ACCESS_DENIED`. `chacha20-poly1305` is accepted
+too. A key with `exportable=true` or `allow_plaintext_backup=true` is refused the same way: either
+lets the KEK leave Vault.
 
 Choose the provider and the key before the first boot that stores keys. A row wrapped under one
 KEK opens only under that KEK: a deployment that changes `KEK_VAULT_TRANSIT_KEY`, the mount or the
@@ -128,8 +129,9 @@ vault policy write qauth-signer qauth-signer.hcl
 ```
 
 - **No `create`.** Transit's `encrypt` creates a missing key when the policy grants `create` on
-  its path. Without it, a mistyped `KEK_VAULT_TRANSIT_KEY` fails with `KEK_ACCESS_DENIED`
-  instead of wrapping under a new key that is not derived.
+  its path. The provider never needs that: it reads the key's settings first and refuses a
+  missing key with `KEK_ACCESS_DENIED`. Leaving `create` out keeps the signer's token from
+  making keys at all.
 - The role needs nothing else: no `transit/rewrap`, `transit/datakey`, `transit/export`,
   `transit/backup`, `transit/keys/<name>/rotate` or `transit/keys/<name>/config`. Rotating and
   configuring the key is an operator's task, under another identity.
@@ -150,8 +152,9 @@ is written inside that namespace (`vault policy write -namespace=team-a ...`) wi
 login and asks Vault for its TTL (`auth/token/lookup-self`). Once two thirds of the TTL have
 passed it renews the token (`auth/token/renew-self`), in the background, so an idle signer keeps a
 valid token. When a renewal no longer extends the token, because it reached its maximum TTL, the
-provider reads the file again: a Vault Agent with a file sink, or an orchestrator, should write a
-fresh token there before the old one expires. A token that does not expire is never renewed.
+provider reads the file once more; after that it reads it again only when the token is about to
+expire, or after Vault refuses it. A Vault Agent with a file sink, or an orchestrator, should write
+a fresh token there before the old one expires. A token that does not expire is never renewed.
 
 ```console
 vault token create -policy=qauth-signer -period=24h -orphan
@@ -172,16 +175,19 @@ vault write -f -field=secret_id auth/approle/role/qauth-signer/secret-id > /run/
 
 The provider logs in with the role ID and the secret ID, read from `KEK_VAULT_SECRET_ID_FILE` at
 each login, renews the token as above, and logs in again before the token reaches its maximum TTL.
-The secret ID is used for every login, so it must allow more than one use (`secret_id_num_uses=0`
-or a large number) and outlive the signer process, or be rewritten in the file before it expires.
-Bind it to the signer's addresses with `secret_id_bound_cidrs` where you can.
+The secret ID is used for every login, so it must allow unlimited uses (`secret_id_num_uses=0`)
+and outlive the signer process, or be rewritten in the file before it expires. A login whose
+answer was lost is not sent again, so it does not spend uses, but a limited secret ID still runs
+out. Bind it to the signer's addresses with `secret_id_bound_cidrs` where you can.
 
 ### Refused tokens
 
-When Vault refuses a call with 403, the provider logs in again once and repeats the call. With
-AppRole that replaces a revoked token. A revoked token in a token file is refused again: the call
-fails with `KEK_ACCESS_DENIED`, nothing falls back to another credential, and the operation that
-needed the key fails closed. A boot step that has to wrap a key, such as importing a key variable
+When Vault refuses a call with 403, the provider asks Vault whether the token still works
+(`auth/token/lookup-self`). If it does, the policy refused the call: the token is kept and the call
+fails with `KEK_ACCESS_DENIED`, so a path the policy denies never mints new tokens. If it does not,
+the provider logs in again once and repeats the call. With AppRole that replaces a revoked token. A
+revoked token in a token file is refused again: the call fails with `KEK_ACCESS_DENIED`, nothing
+falls back to another credential, and the operation that needed the key fails closed. A boot step that has to wrap a key, such as importing a key variable
 the store does not hold yet, stops the boot.
 
 Tokens and secret IDs are never logged and never appear in an error or in `health()`. Errors carry
@@ -190,7 +196,9 @@ the HTTP status, the Vault operation and Vault's own messages.
 ## TLS
 
 Every call goes to `KEK_VAULT_ADDR` over HTTPS, with certificate and host name checks that cannot
-be turned off. Set `KEK_VAULT_CA_CERT_FILE` when a private CA signs Vault's certificate. Redirects
+be turned off. Set `KEK_VAULT_CA_CERT_FILE` when a private CA signs Vault's certificate. A
+certificate the provider does not trust (another CA, expired, or for another host name) fails the
+call with `KEK_ACCESS_DENIED` and is not retried. Redirects
 are not followed, because a request carries the token: a standby node that redirects instead of
 forwarding fails the attempt. The address is an operator setting, never user input, so the egress
 client that guards user-supplied URLs is not involved.
@@ -200,7 +208,10 @@ client that guards user-supplied URLs is not involved.
 Every Vault call is tried at most 3 times, with exponential backoff and jitter. A request that gets
 no answer within 5 s, connecting included, counts as a failed attempt, so one call gives up within
 about 16 s. Connection failures, timeouts, `412`, `429` and server faults (a sealed Vault answers
-`503`) are retried; a refusal is not.
+`503`) are retried; a refusal is not. An AppRole login is repeated only when Vault cannot have
+served it: a connection that never opened, `429` or `503`. A wrap makes up to three calls (the key
+check, `encrypt`, `decrypt`), plus a login, so against a Vault that stops answering one wrap can
+take about a minute before it fails.
 
 During a Vault outage:
 
@@ -215,8 +226,8 @@ During a Vault outage:
 - **Token renewal is tried again** while the token lasts. A token that expires during the outage
   is replaced by a login when Vault answers again (AppRole, or a token file that was rewritten).
 
-`KEK_ACCESS_DENIED` means an operator has to act: the policy, the token or secret ID, or the key
-(missing, or not derived). `KEY_DECRYPTION_FAILED` is a row that does not belong to that key and
+`KEK_ACCESS_DENIED` means an operator has to act: the policy, the token or secret ID, the key
+(missing, not derived, or exportable), or Vault's TLS certificate. `KEY_DECRYPTION_FAILED` is a row that does not belong to that key and
 context; it is never retried.
 
 ## Installing

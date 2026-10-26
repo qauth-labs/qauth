@@ -294,13 +294,39 @@ describe('the token session', () => {
     });
     await session.token();
 
-    session.refused('hvs.some-other-token');
-    await session.token();
+    // Another token: the caller may retry with the one held, which is kept.
+    expect(await session.refused('hvs.some-other-token')).toBe(true);
+    expect(await session.token()).toBe(login.token);
     expect(paths(double, 'auth/token/lookup-self')).toHaveLength(1);
 
-    session.refused(login.token);
-    await session.token();
+    // A token Vault still accepts: the policy refused the call, nothing changes.
+    expect(await session.refused(login.token)).toBe(false);
+    expect(await session.token()).toBe(login.token);
     expect(paths(double, 'auth/token/lookup-self')).toHaveLength(2);
+
+    // A token Vault no longer accepts: dropped, and the next use logs in again.
+    double.revokeToken(login.token);
+    expect(await session.refused(login.token)).toBe(true);
+    const next = double.createToken({ ttlMs: HOUR, policy: signerPolicy(DOUBLE_KEY) });
+    files.rewrite(login.path, next);
+    expect(await session.token()).toBe(next);
     session.close();
+  });
+
+  it('holds a token from a file in its last second as expiring, not as one that never expires', async () => {
+    const answers: Array<Record<string, unknown>> = [
+      { ttl: 0, renewable: false, expire_time: '2026-10-26T00:00:01Z' },
+      { ttl: 0, renewable: false, expire_time: null },
+    ];
+    const client = {
+      send: vi.fn(async () => ({ status: 200, body: { data: answers.shift() } })),
+    };
+    const credentials = tokenFileCredentials(
+      files.write('hvs.last-second'),
+      'KEK_VAULT_TOKEN_FILE'
+    );
+
+    expect((await credentials.login(client)).ttlMs).toBe(1);
+    expect((await credentials.login(client)).ttlMs).toBe(0);
   });
 });

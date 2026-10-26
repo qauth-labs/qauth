@@ -45,6 +45,8 @@ const DEFAULT_POLICY: DoublePolicy = {
 interface DoubleKey {
   readonly derived: boolean;
   readonly type: string;
+  exportable: boolean;
+  allowPlaintextBackup: boolean;
   readonly versions: Map<number, Buffer>;
   latest: number;
   minDecryptionVersion: number;
@@ -106,6 +108,13 @@ export interface VaultDouble {
   /** Add a key version; new encryptions use it. */
   rotateKey(name: string, mount?: string): number;
   setMinDecryptionVersion(name: string, version: number, mount?: string): void;
+  /** Change a key's export settings, as `<mount>/keys/<name>/config` does. */
+  configureKey(
+    name: string,
+    config: { exportable?: boolean; allowPlaintextBackup?: boolean }
+  ): void;
+  /** Delete a key, as Vault does once `deletion_allowed` is set. */
+  deleteKey(name: string, mount?: string): void;
   createToken(options: DoubleTokenOptions): string;
   revokeToken(token: string): void;
   /** The token's expiry in epoch ms, `null` when it never expires, `undefined` when unknown. */
@@ -206,6 +215,8 @@ export function createVaultDouble(
     const key: DoubleKey = {
       derived,
       type,
+      exportable: false,
+      allowPlaintextBackup: false,
       versions: new Map([[1, randomBytes(32)]]),
       latest: 1,
       minDecryptionVersion: 1,
@@ -354,6 +365,8 @@ export function createVaultDouble(
               min_decryption_version: key.minDecryptionVersion,
               supports_encryption: true,
               supports_decryption: true,
+              exportable: key.exportable,
+              allow_plaintext_backup: key.allowPlaintextBackup,
             },
           },
         };
@@ -463,6 +476,19 @@ export function createVaultDouble(
       const key = keyOf(mount, name);
       if (key === undefined) throw new Error(`No key ${mount}/${name}`);
       key.minDecryptionVersion = version;
+    },
+
+    configureKey(name, config) {
+      const key = keyOf('transit', name);
+      if (key === undefined) throw new Error(`No key transit/${name}`);
+      if (config.exportable !== undefined) key.exportable = config.exportable;
+      if (config.allowPlaintextBackup !== undefined) {
+        key.allowPlaintextBackup = config.allowPlaintextBackup;
+      }
+    },
+
+    deleteKey(name, mount = 'transit') {
+      keys.delete(`${mount}/${name}`);
     },
 
     createToken: newToken,

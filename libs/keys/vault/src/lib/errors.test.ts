@@ -81,6 +81,30 @@ describe('how a failed Vault call maps onto the key-custody errors', () => {
       'KEK_UNAVAILABLE',
     ],
     [
+      'an untrusted certificate',
+      new VaultTransportError(
+        'encrypt',
+        Object.assign(new Error('x'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' })
+      ),
+      'KEK_ACCESS_DENIED',
+    ],
+    [
+      'an expired certificate',
+      new VaultTransportError(
+        'decrypt',
+        Object.assign(new Error('x'), { code: 'CERT_HAS_EXPIRED' })
+      ),
+      'KEK_ACCESS_DENIED',
+    ],
+    [
+      'a certificate for another host',
+      new VaultTransportError(
+        'decrypt',
+        Object.assign(new Error('x'), { code: 'ERR_TLS_CERT_ALTNAME_INVALID' })
+      ),
+      'KEK_ACCESS_DENIED',
+    ],
+    [
       'an answer without its fields',
       new VaultAnswerError('encrypt', 'has no data'),
       'KEK_UNAVAILABLE',

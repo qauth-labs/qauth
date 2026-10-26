@@ -33,17 +33,33 @@ export const VAULT_MAX_ATTEMPTS = 3;
 /** The backoff before the second attempt, in ms; it doubles for each attempt after. */
 export const VAULT_BACKOFF_MS = 200;
 
-/** Node error codes after which the same request may succeed. A TLS verification failure is not one. */
-const RETRYABLE_CODES: ReadonlySet<string> = new Set([
+/** Node error codes that mean the request never reached Vault: no connection was made. */
+const UNSENT_CODES: ReadonlySet<string> = new Set([
   'ECONNREFUSED',
-  'ECONNRESET',
-  'EPIPE',
-  'ETIMEDOUT',
   'EHOSTUNREACH',
   'ENETUNREACH',
   'ENOTFOUND',
   'EAI_AGAIN',
 ]);
+
+/**
+ * Node error codes after which the same request may succeed. A TLS
+ * verification failure is not one.
+ */
+const RETRYABLE_CODES: ReadonlySet<string> = new Set([
+  ...UNSENT_CODES,
+  'ECONNRESET',
+  'EPIPE',
+  'ETIMEDOUT',
+]);
+
+/**
+ * Calls that are not repeated once Vault may have served them. Each AppRole
+ * login uses one use of the secret ID and creates a token, so a login whose
+ * answer was lost is not sent again: only a connection that never opened, and
+ * a 429 or 503 (Vault served nothing), are retried.
+ */
+const NOT_IDEMPOTENT: ReadonlySet<VaultOperation> = new Set(['approle-login']);
 
 /** A call the client makes. */
 export interface VaultCall {
@@ -59,7 +75,8 @@ export interface VaultCall {
 export interface VaultClient {
   /**
    * Send one call, retrying a connection failure, a timeout, throttling and a
-   * server fault up to {@link VAULT_MAX_ATTEMPTS} attempts in all.
+   * server fault up to {@link VAULT_MAX_ATTEMPTS} attempts in all. An AppRole
+   * login is retried only when Vault cannot have served it.
    *
    * @returns Vault's answer to a call it served (200 or 204)
    * @throws VaultHttpError for any other status
@@ -78,9 +95,13 @@ export interface VaultClientOptions {
   readonly random?: () => number;
 }
 
-function retryableTransportError(error: unknown): boolean {
+function retryableTransportError(error: unknown, idempotent: boolean): boolean {
   const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-  return code !== undefined && RETRYABLE_CODES.has(code);
+  return code !== undefined && (idempotent ? RETRYABLE_CODES : UNSENT_CODES).has(code);
+}
+
+function retryableAnswer(status: number, idempotent: boolean): boolean {
+  return idempotent ? isRetryableStatus(status) : status === 429 || status === 503;
 }
 
 /** The Vault client over `transport`. */
@@ -109,19 +130,20 @@ export function createVaultClient(options: VaultClientOptions): VaultClient {
         ...(call.body !== undefined ? { body: JSON.stringify(call.body) } : {}),
       };
 
+      const idempotent = !NOT_IDEMPOTENT.has(operation);
       for (let attempt = 1; ; attempt++) {
         let response: VaultHttpResponse;
         try {
           response = await options.transport(request);
         } catch (error) {
-          if (attempt < VAULT_MAX_ATTEMPTS && retryableTransportError(error)) {
+          if (attempt < VAULT_MAX_ATTEMPTS && retryableTransportError(error, idempotent)) {
             await backoff(attempt);
             continue;
           }
           throw new VaultTransportError(operation, error);
         }
         if (response.status === 200 || response.status === 204) return response;
-        if (attempt < VAULT_MAX_ATTEMPTS && isRetryableStatus(response.status)) {
+        if (attempt < VAULT_MAX_ATTEMPTS && retryableAnswer(response.status, idempotent)) {
           await backoff(attempt);
           continue;
         }

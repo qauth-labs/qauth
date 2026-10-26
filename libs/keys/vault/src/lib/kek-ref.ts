@@ -12,6 +12,12 @@
  * version. The version is also the one part of Vault's ciphertext the stored
  * bytes leave out (`transit.ts`).
  *
+ * The Vault address is deliberately not part of it: a performance replica or
+ * a disaster-recovery secondary serves the same key under another address,
+ * and the rows must keep opening after a failover. So two unrelated clusters
+ * with the same namespace, mount and key name give the same `kekRef`; a row
+ * from the wrong one fails to decrypt (`KEY_DECRYPTION_FAILED`).
+ *
  * Both parts are identifiers, not secrets: safe to store and to log.
  */
 

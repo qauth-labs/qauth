@@ -35,6 +35,7 @@ import {
 import { formatCiphertext, parseCiphertext, transitContextOf } from './transit';
 import {
   createVaultClient,
+  SYSTEM_CLOCK,
   type VaultCall,
   type VaultClient,
   type VaultClock,
@@ -56,7 +57,16 @@ export interface VaultKekProviderOptions {
   readonly keyName: string;
   /** The namespace, which `kekRef` names; the client sends it. */
   readonly namespace: string | undefined;
+  /** The clock the key check ages on. Defaults to the process clock. */
+  readonly clock?: VaultClock;
 }
+
+/**
+ * How long a passed key check holds, in ms. The key's type and `derived` never
+ * change, but the key can be deleted and created again under the same name,
+ * and `exportable` can be switched on later.
+ */
+export const KEY_CHECK_MAX_AGE_MS = 15 * 60_000;
 
 /**
  * The Transit key types the provider accepts: AEAD ciphers with a 256-bit key
@@ -105,11 +115,13 @@ function healthReason(error: unknown): string {
  * The Vault Transit KEK provider (ADR-019 Decision 9, #578): the KEK is a
  * Transit key in Vault, and it never leaves Vault.
  *
- * - Before its first wrap or unwrap, the provider reads the key's settings
- *   (`<mount>/keys/<name>`) and refuses a key that is not `derived`, not an
- *   AES-256-GCM or ChaCha20-Poly1305 key, or that cannot both encrypt and
- *   decrypt. Vault ignores the `context` of a key that is not derived, so
- *   such a key would open a wrapped data key under any associated data.
+ * - Before its first wrap or unwrap, and again once
+ *   {@link KEY_CHECK_MAX_AGE_MS} has passed, the provider reads the key's
+ *   settings (`<mount>/keys/<name>`) and refuses a key that is not `derived`,
+ *   not an AES-256-GCM or ChaCha20-Poly1305 key, that cannot both encrypt and
+ *   decrypt, or that can leave Vault (`exportable`, `allow_plaintext_backup`).
+ *   Vault ignores the `context` of a key that is not derived, so such a key
+ *   would open a wrapped data key under any associated data.
  * - `wrap` sends the data key to `<mount>/encrypt/<name>` with the key's
  *   associated data as the `context` (`transit.ts`), then decrypts the result
  *   once, which proves that this token can open what it stores before
@@ -133,16 +145,17 @@ function healthReason(error: unknown): string {
  */
 export function createVaultKekProvider(options: VaultKekProviderOptions): KekProvider {
   const { client, session, transitMount, keyName } = options;
+  const clock = options.clock ?? SYSTEM_CLOCK;
   const keyPath = transitKeyPath(options.namespace, transitMount, keyName);
 
-  /** One Vault call with the session's token; a refused token is replaced once. */
+  /** One Vault call with the session's token; a token Vault no longer accepts is replaced once. */
   async function call(operation: VaultOperation, request: Omit<VaultCall, 'token'>) {
     const token = await session.token();
     try {
       return await client.send(operation, { ...request, token });
     } catch (error) {
       if (!(error instanceof VaultHttpError) || error.status !== 403) throw error;
-      session.refused(token);
+      if (!(await session.refused(token))) throw error;
     }
     return client.send(operation, { ...request, token: await session.token() });
   }
@@ -176,17 +189,29 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
         `The Transit key ${keyPath} must support both encryption and decryption.`
       );
     }
+    if (data['exportable'] === true || data['allow_plaintext_backup'] === true) {
+      throw new VaultKeyRefusedError(
+        `The Transit key ${keyPath} can leave Vault (exportable or allow_plaintext_backup): a KEK must not.`
+      );
+    }
   }
 
-  // Checked once per provider: neither `derived` nor `type` can change once a
-  // key exists. A failed check is tried again at the next call.
-  let keyChecked: Promise<void> | undefined;
+  // A passed check holds for KEY_CHECK_MAX_AGE_MS; calls meanwhile share it.
+  // A failed check is tried again at the next call.
+  let keyChecked: { readonly at: number; readonly done: Promise<void> } | undefined;
   function ensureKey(): Promise<void> {
-    keyChecked ??= checkKey().catch((error: unknown) => {
-      keyChecked = undefined;
-      throw error;
-    });
-    return keyChecked;
+    const now = clock.now();
+    if (keyChecked === undefined || now - keyChecked.at >= KEY_CHECK_MAX_AGE_MS) {
+      const entry = {
+        at: now,
+        done: checkKey().catch((error: unknown) => {
+          if (keyChecked === entry) keyChecked = undefined;
+          throw error;
+        }),
+      };
+      keyChecked = entry;
+    }
+    return keyChecked.done;
   }
 
   /** Decrypt `bytes` of key version `version` under `context`: a data key the caller owns. */
@@ -226,7 +251,10 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
         await call('encrypt', {
           method: 'POST',
           path: `${transitMount}/encrypt/${keyName}`,
-          body: { plaintext: Buffer.from(dek).toString('base64'), context },
+          body: {
+            plaintext: Buffer.from(dek.buffer, dek.byteOffset, dek.byteLength).toString('base64'),
+            context,
+          },
         })
       );
       const ciphertext = parseCiphertext(data['ciphertext']);
@@ -351,5 +379,6 @@ export function createKekProviderWith(
     transitMount: settings.transitMount,
     keyName: settings.keyName,
     namespace: settings.namespace,
+    ...(dependencies.clock !== undefined ? { clock: dependencies.clock } : {}),
   });
 }
