@@ -1,6 +1,7 @@
 # The hand-written overlay of RefreshToken, the refresh_tokens table. The entity and its fields are generated from
 # the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the examples and the internal actions
-# the flows invoke. The token flow (#609) adds rotate and revokeFamily.
+# the flows invoke: core.sign-in-token creates a token and core.logout revokes them. The token flow (#609) adds rotate
+# and revokeFamily.
 schema: delurio-graph/0
 kind: domain
 id: qauth
@@ -59,3 +60,24 @@ actions:
       - >-
         it holds the user's token lock exclusive in its transaction, so a rotation in flight commits first and is
         swept, and one that starts after it fails
+
+  RefreshToken.create:
+    # internal: invoked by core.sign-in-token, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:59
+    body:
+      type: object
+      required: [userId, oauthClientId, tokenHash, familyId, familyCreatedAt, expiresAt]
+      properties:
+        userId: { type: string, format: uuid }
+        oauthClientId: { type: string, format: uuid } # core.sign-in-token passes the system client's
+        tokenHash: { type: string, pattern: '^[0-9a-f]{64}$' } # SHA-256 of the token, never the token itself
+        familyId: { type: string, format: uuid } # core.sign-in-token starts a new family with a random (v4) UUID
+        familyCreatedAt: { type: integer }
+        familySessionExpiresAt: { type: [integer, 'null'] } # core.sign-in-token passes null: no browser session
+        expiresAt: { type: integer }
+        scopes: { type: array, items: { type: string } } # core.sign-in-token passes none
+    result: { returns: RefreshToken }
+    sideEffects:
+      - >-
+        a new active RefreshToken; core.sign-in-token gives it the refresh lifespan from now, capped at the end of its
+        family when the realm sets sso_max_lifespan
