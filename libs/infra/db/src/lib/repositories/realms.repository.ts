@@ -13,7 +13,7 @@ import {
   resolveRpId,
   rpIdCoversHost,
 } from '@qauth-labs/shared-validation';
-import { and, eq, InferInsertModel, InferSelectModel, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, InferInsertModel, InferSelectModel, isNull, ne, sql } from 'drizzle-orm';
 
 import type { DbTransaction } from '../../types';
 import { DbClient } from '../db';
@@ -102,6 +102,17 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * NULL, is the caller's to refuse.
    */
   findByHost(host: string, tx?: DbClient): Promise<RealmWithHost | undefined>;
+
+  /**
+   * Whether one of `values` is the issuer of a realm other than `realmId`:
+   * an access token whose `aud` names one may have been minted in that realm
+   * (#410). Exact match: issuers are stored without a trailing slash.
+   */
+  anotherRealmHasIssuer(
+    realmId: string,
+    values: readonly string[],
+    tx?: DbClient
+  ): Promise<boolean>;
 
   /**
    * Create a realm and its primary host in one transaction.
@@ -436,6 +447,21 @@ export function createRealmsRepository(
         .where(eq(realmHosts.host, normalised))
         .limit(1);
       return row;
+    },
+
+    async anotherRealmHasIssuer(
+      realmId: string,
+      values: readonly string[],
+      tx?: DbClient
+    ): Promise<boolean> {
+      if (values.length === 0) return false;
+      const invoker = tx ?? defaultDb;
+      const [row] = await invoker
+        .select({ id: realms.id })
+        .from(realms)
+        .where(and(inArray(realms.issuer, [...values]), ne(realms.id, realmId)))
+        .limit(1);
+      return row !== undefined;
     },
 
     async createWithPrimaryHost(

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryStore, type MemoryStore } from '../testing/memory-store';
 import {
   DEFAULT_DELIVERY_SETTINGS,
+  DELIVERY_HOLD_INTERVAL_MS,
   type DeliveryRole,
   type DeliveryRoleOptions,
   resolveDeliverySettings,
@@ -82,6 +83,7 @@ function route(
 const signer: DeliverySigner = {
   signWebhook: async () => 'v1,signature',
   signEventToken: async () => 'header.payload.signature',
+  decrypt: async () => new Uint8Array(),
 };
 
 function logger() {
@@ -261,6 +263,39 @@ describe('startDeliveryRole', () => {
     });
   });
 
+  it('spends no attempt on a delivery the route holds, and delivers it once the hold ends', async () => {
+    let holding = true;
+    let held!: ReturnType<typeof route>;
+    const { clock, store, attempts } = await setup(
+      (clock) => {
+        held = route(clock, [{ id: 'paused', realmId: REALM }], () =>
+          holding ? { ok: false, hold: true } : { ok: true, statusCode: 202 }
+        );
+        return [held];
+      },
+      { settings: { maxAttempts: 2 } }
+    );
+    store.append(envelope());
+    await clock.advanceBy(POLL);
+    await vi.waitFor(() => expect(held.calls).toHaveLength(1));
+    // More holds than the delivery has attempts, one hold interval apart.
+    for (let calls = 2; calls <= 5; calls += 1) {
+      await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+      await vi.waitFor(() => expect(held.calls).toHaveLength(calls));
+    }
+    const at = held.calls.map((call) => call.at);
+    expect(at.slice(1).every((time, i) => time - at[i] >= DELIVERY_HOLD_INTERVAL_MS)).toBe(true);
+    expect(held.calls.map((call) => call.delivery.attempt)).toEqual([1, 1, 1, 1, 1]);
+    expect(store.rows[0]).toMatchObject({ status: 'pending', attempt: 0, lastErrorClass: null });
+    expect(attempts).toEqual([]);
+
+    holding = false;
+    await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+    await vi.waitFor(() => expect(store.rows[0].status).toBe('delivered'));
+    expect(store.rows[0].attempt).toBe(1);
+    expect(attempts.map((attempt) => attempt.result)).toEqual(['delivered']);
+  });
+
   it.each([
     ['throws', () => Promise.reject(new Error('boom'))],
     ['returns no outcome', () => Promise.resolve(undefined as unknown as DeliveryOutcome)],
@@ -366,12 +401,39 @@ describe('startDeliveryRole', () => {
     );
   });
 
+  it('gives a destination with a subject list only the events about those subjects', async () => {
+    const { clock, store } = await setup((clock) => [
+      route(clock, [
+        { id: 'user-a', realmId: REALM, subjects: [{ type: 'user', id: 'a' }] },
+        { id: 'nobody', realmId: REALM, subjects: [] },
+        { id: 'anyone', realmId: REALM },
+      ]),
+    ]);
+    const aboutA = { ...envelope(), subject: { type: 'user', id: 'a' } } as EventEnvelope;
+    const aboutB = { ...envelope(), subject: { type: 'user', id: 'b' } } as EventEnvelope;
+    const aboutNone = envelope();
+    store.append(aboutA);
+    store.append(aboutB);
+    store.append(aboutNone);
+    await clock.advanceBy(POLL);
+    await vi.waitFor(() => expect(store.rows).toHaveLength(4));
+    const rowsOf = (id: string) =>
+      store.rows
+        .filter((row) => row.destinationId === id)
+        .map((row) => row.eventId)
+        .sort();
+    expect(rowsOf('user-a')).toEqual([aboutA.id]);
+    expect(rowsOf('nobody')).toEqual([]);
+    expect(rowsOf('anyone')).toEqual([aboutA.id, aboutB.id, aboutNone.id].sort());
+  });
+
   it('leaves out a malformed destination and says so once', async () => {
     const { clock, store, log } = await setup((clock) => [
       route(clock, [
         { id: 'ok', realmId: REALM },
         { id: '', realmId: REALM },
         { id: 'bad-realm', realmId: 'not-a-uuid' },
+        { id: 'bad-subjects', realmId: REALM, subjects: [{ type: 'user' }] as never },
       ]),
     ]);
     store.append(envelope());
@@ -382,7 +444,7 @@ describe('startDeliveryRole', () => {
       ([, message]) =>
         message === 'a delivery route listed a malformed destination; it receives nothing'
     );
-    expect(malformed).toHaveLength(2);
+    expect(malformed).toHaveLength(3);
   });
 
   it('fails an event the store cannot read, without calling the route', async () => {

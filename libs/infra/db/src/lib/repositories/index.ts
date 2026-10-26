@@ -17,6 +17,7 @@ export * from './realm-keys.repository';
 export * from './realms.repository';
 export * from './refresh-tokens.repository';
 export * from './sessions.repository';
+export * from './ssf-streams.repository';
 export * from './user-attributes.repository';
 export * from './user-credentials.repository';
 export * from './users.repository';

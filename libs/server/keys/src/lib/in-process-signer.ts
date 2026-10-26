@@ -795,9 +795,13 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
 
     async decrypt(caller: SignerCaller, request: DecryptRequest): Promise<Buffer> {
       const fields = readRequest(request, REQUEST_FIELDS.decrypt);
-      authorize(caller, 'decrypt');
-      const realmId = resolveRealmId(fields['realmId']);
       const context = resolveDataContext(fields['context']);
+      // A role may be limited to contexts with given prefixes (the delivery
+      // role's destination secrets). The context is not echoed in the refusal.
+      if (!isSignerCallAllowed(caller, 'decrypt', context)) {
+        throw new SignerAccessDeniedError(isSignerCaller(caller) ? caller : undefined, 'decrypt');
+      }
+      const realmId = resolveRealmId(fields['realmId']);
       const envelope = parseDataEnvelope(fields['ciphertext']);
 
       const usable = (key: SignerKeyRecord) =>
