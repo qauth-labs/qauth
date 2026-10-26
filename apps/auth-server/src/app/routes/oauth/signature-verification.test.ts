@@ -54,7 +54,7 @@ import userinfoRoute from './userinfo';
 const ISSUER = 'https://auth.test.example.com';
 const CLIENT_ID = 'sig-test-client';
 const USER_ID = '019dbc24-7a2d-724d-bf26-1923f21f2234';
-const REALM = testRealm({ id: 'realm-1' });
+const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
 
 /** Generate a fresh extractable Ed25519 key pair as PEM strings. */
 function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {

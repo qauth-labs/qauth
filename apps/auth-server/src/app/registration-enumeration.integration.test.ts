@@ -11,6 +11,7 @@ import {
   extractCsrfToken,
   generateJwtPem,
   type PemKeyPair,
+  REQUIRED_TEST_ENVIRONMENT,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
@@ -36,6 +37,8 @@ import {
  */
 
 const REALM = 'master';
+/** Where the mailed links point: the default realm's issuer (#490). */
+const MAIL_LINK = { baseUrl: REQUIRED_TEST_ENVIRONMENT['JWT_ISSUER'] };
 const VICTIM = 'victim@example.test';
 const VICTIM_PASSWORD = 'Victims-Own-Long-Passphrase-77!';
 const FREE = 'nobody-here@example.test';
@@ -153,7 +156,9 @@ describe('registration does not reveal whether an address is registered (real co
     const sent = vi.spyOn(app.emailService, 'sendVerificationEmail');
     try {
       expect((await register(app, VICTIM, VICTIM_PASSWORD)).statusCode).toBe(202);
-      await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(VICTIM, expect.any(String)));
+      await vi.waitFor(() =>
+        expect(sent).toHaveBeenCalledWith(VICTIM, expect.any(String), MAIL_LINK)
+      );
       const token = sent.mock.calls.at(-1)?.[1];
       const verified = await app.inject({
         method: 'POST',
@@ -231,7 +236,9 @@ describe('registration does not reveal whether an address is registered (real co
       const again = await register(app, FREE, 'Another-Long-Passphrase-31!');
 
       expect(again.statusCode).toBe(202);
-      await vi.waitFor(() => expect(links).toHaveBeenCalledWith(FREE, expect.any(String)));
+      await vi.waitFor(() =>
+        expect(links).toHaveBeenCalledWith(FREE, expect.any(String), MAIL_LINK)
+      );
       const realm = await app.repositories.realms.findByName(REALM);
       if (!realm) throw new Error('no realm');
       const credential = await app.repositories.userCredentials.findByRealmProviderSub(

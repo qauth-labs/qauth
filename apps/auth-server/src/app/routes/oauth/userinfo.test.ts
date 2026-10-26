@@ -9,6 +9,7 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import errorHandler, { type ErrorFormat } from '../../plugins/error-handler';
 import userinfoRoute from './userinfo';
@@ -40,6 +41,27 @@ vi.mock('../../../config/env', () => ({
 }));
 
 const ISSUER = 'http://localhost:3000';
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
+
+type Handler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+
+/** One wrapper per handler, so GET and POST still share one handler reference. */
+const realmWrappers = new WeakMap<Handler, Handler>();
+
+/** A request keeps the realm it names; any other gets {@link REALM}. */
+function withRequestRealm(handler: Handler): Handler {
+  let wrapped = realmWrappers.get(handler);
+  if (wrapped === undefined) {
+    wrapped = (request, reply) => {
+      request.realm ??= REALM;
+      return handler(request, reply);
+    };
+    realmWrappers.set(handler, wrapped);
+  }
+  return wrapped;
+}
 const USERINFO_URL = `${ISSUER}/oauth/userinfo`;
 /**
  * The audience of a token from a client's own code flow with no `resource`:
@@ -96,7 +118,7 @@ function createFastifyStub() {
           opts: TestContext['options'],
           handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
         ) => {
-          ctx.handler = handler;
+          ctx.handler = withRequestRealm(handler);
           ctx.options = opts;
           return route;
         },
@@ -105,7 +127,7 @@ function createFastifyStub() {
           opts: TestContext['postOptions'],
           handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
         ) => {
-          ctx.postHandler = handler;
+          ctx.postHandler = withRequestRealm(handler);
           ctx.postOptions = opts;
           return route;
         },
@@ -889,7 +911,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
  * the token it was handed (`docs/security/threat-model.md`, RFC 8707).
  */
 describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () => {
-  async function callWith(jwtPayload: Record<string, unknown>) {
+  async function callWith(jwtPayload: Record<string, unknown>, realm = REALM) {
     const { fastify, ctx } = createFastifyStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: 'user-1',
@@ -904,6 +926,7 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
       jwtPayload: { sub: 'user-1', scope: 'openid email', ...jwtPayload },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+      realm,
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
     return { fastify, run: () => handler(request, reply) };
@@ -1008,6 +1031,20 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     });
 
     await expect(run()).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it("takes the userinfo URL from the request realm's issuer, not JWT_ISSUER (#490)", async () => {
+    const realmB = testRealm({ id: 'realm-b', issuer: 'https://b.example.com' });
+
+    const accepted = await callWith(
+      { clientId: 'client-1', aud: 'https://b.example.com/oauth/userinfo' },
+      realmB
+    );
+    await expect(accepted.run()).resolves.toMatchObject({ sub: 'user-1' });
+
+    const refused = await callWith({ clientId: 'client-1', aud: USERINFO_URL }, realmB);
+    await expect(refused.run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(refused.fastify);
   });
 
   it('refuses the userinfo URL of another issuer', async () => {

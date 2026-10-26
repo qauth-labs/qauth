@@ -46,6 +46,7 @@ vi.mock('../../../config/env', () => ({
   env: { CIMD_ENABLED: false },
 }));
 
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { authorizeQuerySchema } from '../../schemas/oauth';
 import wellKnownRoutes from '../well-known';
 
@@ -103,6 +104,8 @@ async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance>
         }
       : {}),
   });
+  // The realm resolver's decoration (#486): discovery is the request realm's.
+  supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: ISSUER }));
   await app.register(wellKnownRoutes);
   await app.ready();
 

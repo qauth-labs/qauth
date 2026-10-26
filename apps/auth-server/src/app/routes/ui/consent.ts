@@ -31,7 +31,6 @@ import {
   isLoopbackRedirect,
   redirectHost,
 } from '../../helpers/consent';
-import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
@@ -44,6 +43,7 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
@@ -391,8 +391,9 @@ export default async function (fastify: FastifyInstance) {
       // advertise, echoed as `iss` on every authorization response this route
       // emits. The consent screen terminates the authorization request on both
       // Allow and Deny, so its redirects are authorization responses too and
-      // carry the mix-up defence exactly like /oauth/authorize's.
-      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+      // carry the mix-up defence exactly like /oauth/authorize's. The issuer
+      // is the request realm's, from its row (ADR-019 Decision 1, #490).
+      const iss = realmIssuer(requestRealm(request));
 
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {
@@ -625,8 +626,9 @@ export default async function (fastify: FastifyInstance) {
       // advertise, echoed as `iss` on every authorization response this route
       // emits. The consent screen terminates the authorization request on both
       // Allow and Deny, so its redirects are authorization responses too and
-      // carry the mix-up defence exactly like /oauth/authorize's.
-      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+      // carry the mix-up defence exactly like /oauth/authorize's. The issuer
+      // is the request realm's, from its row (ADR-019 Decision 1, #490).
+      const iss = realmIssuer(requestRealm(request));
 
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {

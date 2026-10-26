@@ -972,6 +972,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the database. The failed-login and rate-limit counters start from zero
   after the upgrade, as their Redis keys now carry the realm id.
 
+- **BREAKING (deployments whose `EMAIL_BASE_URL` is not `JWT_ISSUER`)**: the
+  link in a verification mail starts at the issuer of the account's realm
+  ([#490], ADR-019 Decisions 1 and 6), `<issuer>/auth/verify?token=…`, never at
+  `EMAIL_BASE_URL`. For the default realm that issuer is `JWT_ISSUER` without a
+  trailing slash, so a deployment that set `EMAIL_BASE_URL` to another base sees
+  its links move, and the boot logs a warning saying so. With the shipped
+  defaults the two are equal and the link is unchanged.
+  - Opening the link does not verify an address yet: the auth server serves
+    `/auth/verify` only as `POST`, so the `GET` a mail client sends gets `404`,
+    as it did before with the shipped defaults. Only an operator's own page or
+    proxy that answered `GET /auth/verify` on the `EMAIL_BASE_URL` host made
+    the old link work, and such a deployment loses it. The `GET` landing page
+    on the auth server comes in a separate change.
+  - `EMAIL_BASE_URL` is optional and no longer read. It is still accepted, and
+    the boot warns when it is set to another base than `JWT_ISSUER`.
+  - The verification token of such a link is censored in every log line, the
+    request line and the unknown-route line included.
+  - The mail library's `sendVerificationEmail` takes the link base with each
+    mail instead of from its configuration.
+
+- **Every URL comes from the realm row** ([#490], ADR-019 Decision 1). The
+  issuer and endpoint URLs in discovery and in the SSF transmitter metadata,
+  the RFC 9207 `iss` of an authorization response, the userinfo audience, the
+  client-assertion audience, both sides of ID-JAG, the wallet `response_uri`,
+  `request_uri` and same-device return URI, the link in a verification mail and
+  the base a DPoP proof's `htu` is checked against are built on the issuer of
+  the realm the request's host named. After boot nothing reads `JWT_ISSUER`,
+  `EMAIL_BASE_URL` or the `Host` header to build a URL. A lint rule refuses
+  reading the request's authority outside the realm resolver, through type
+  assertions too: `request.host`, `.hostname`, `.port`, `.protocol` and
+  `.rawHeaders`, the `Host`, `:authority` and `Forwarded` headers,
+  `X-Forwarded-*` and a socket's `encrypted`. A deployment with one realm sees
+  the same URLs as before, mail links aside (above).
+
+  The issuer pins of introspection, revocation, logout, the token-exchange
+  subject token, the Bearer path of `/oauth/authorize` and the API family
+  guards (`requireFamilyToken`) name the realm's token issuer: `JWT_ISSUER` as
+  written for the realm whose issuer it is, the realm's own issuer for any other
+  realm.
+
+  No route creates a second realm yet. Until tokens are signed per realm
+  ([#491]), every token carries `JWT_ISSUER`, so a second realm:
+  - names its own issuer in discovery, `iss`, mail links and wallet URLs, and a
+    DPoP proof sent to it must name its own endpoint URL;
+  - refuses its own tokens: introspection reports them inactive,
+    `/oauth/revoke` answers `200` without denylisting them, `/auth/logout`
+    answers `401` so the user's sessions stay, and the token-exchange subject
+    token, the Bearer path of `/oauth/authorize` and the family guards refuse
+    them;
+  - has its tokens accepted by the default realm, whose issuer they name:
+    introspection there reports them active and revocation there denylists
+    them, when their `client_id` also names a client of the default realm.
+
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
   session service ([#469]): one `sessions` row with the realm, the user,
@@ -1275,6 +1328,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#490]: https://github.com/qauth-labs/qauth/issues/490
+[#491]: https://github.com/qauth-labs/qauth/issues/491
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513

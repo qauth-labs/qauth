@@ -6,7 +6,8 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
-import { requestRealm } from '../../helpers/request-realm';
+import { realmTokenIssuer } from '../../helpers/realm-url';
+import { type RealmRow, requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { revokeJti } from '../../helpers/token-revocation';
 import { emitUserEvent, failureData } from '../../helpers/user-events';
@@ -95,14 +96,14 @@ export default async function (fastify: FastifyInstance) {
       // first (refresh token by default); if the token is not found as that type
       // we still attempt the other. Either way the response is an empty 200.
       if (token_type_hint === 'access_token') {
-        const revoked = await tryRevokeAccessToken(fastify, client.clientId, token);
+        const revoked = await tryRevokeAccessToken(fastify, realm, client.clientId, token);
         if (!revoked) {
           await tryRevokeRefreshToken(fastify, client.id, token);
         }
       } else {
         const revoked = await tryRevokeRefreshToken(fastify, client.id, token);
         if (!revoked) {
-          await tryRevokeAccessToken(fastify, client.clientId, token);
+          await tryRevokeAccessToken(fastify, realm, client.clientId, token);
         }
       }
 
@@ -153,13 +154,15 @@ async function tryRevokeRefreshToken(
  */
 async function tryRevokeAccessToken(
   fastify: FastifyInstance,
+  realm: RealmRow,
   clientId: string,
   token: string
 ): Promise<boolean> {
   let payload;
   try {
+    // RFC 9700 mix-up defence: only a token this realm issued (#490).
     payload = await fastify.jwtUtils.verifyAccessToken(token, {
-      issuer: fastify.jwtUtils.getIssuer(),
+      issuer: realmTokenIssuer(fastify, realm),
     });
   } catch {
     // Invalid/expired/foreign-issuer token — nothing to revoke.

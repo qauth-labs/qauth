@@ -2217,7 +2217,8 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
 });
 
 describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)', () => {
-  // The issuer this suite's makeFastify() advertises via jwtUtils.getIssuer().
+  // The issuer of the realm this suite's requests are resolved to (REALM), and
+  // the one makeFastify()'s jwtUtils.getIssuer() signs tokens with.
   const RAW_ISSUER = 'https://auth.example.com';
 
   /**
@@ -2245,16 +2246,15 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     consent?: Record<string, unknown> | null;
     /** Present a Bearer token instead of a cookie; `false` makes verification fail. */
     bearer?: 'valid' | 'invalid';
-    /** Override the configured issuer to prove `iss` tracks it verbatim. */
-    issuer?: string;
+    /**
+     * The issuer of the request's realm, to prove `iss` tracks the realm row
+     * verbatim (#490). The JWT plugin keeps `RAW_ISSUER`.
+     */
+    realmIssuer?: string;
   }
 
   async function run(opts: RunOptions = {}) {
     const { fastify, ctx, sessions } = makeFastify();
-    if (opts.issuer !== undefined) {
-      (fastify.jwtUtils as unknown as { getIssuer: () => string }).getIssuer = () =>
-        opts.issuer as string;
-    }
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       opts.client ?? CLIENT
@@ -2298,6 +2298,9 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
         url: `/oauth/authorize?response_type=code&client_id=${query.client_id}&scope=${encodeURIComponent(String(query.scope))}`,
         headers,
         ip: '127.0.0.1',
+        ...(opts.realmIssuer === undefined
+          ? {}
+          : { realm: testRealm({ id: REALM.id, issuer: opts.realmIssuer }) }),
       },
       reply
     );
@@ -2385,15 +2388,33 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
   });
 
-  it('emits `iss` VERBATIM — a trailing-slash/mixed-case issuer matches discovery byte for byte', async () => {
+  it('emits `iss` VERBATIM — a mixed-case issuer with a port and a path matches discovery byte for byte', async () => {
     // Guards the acceptance criterion directly: whatever shaping discovery
     // applies (trailing-slash strip and nothing else), the redirect applies the
     // same. `new URL(...)` would have lower-cased the host and dropped :443.
-    const RAW = 'https://Auth.EXAMPLE.com:8443/idp/';
-    const { state } = await run({ issuer: RAW });
+    // The realm row holds the issuer without a trailing slash (a CHECK refuses
+    // one), the form discovery publishes.
+    const RAW = 'https://Auth.EXAMPLE.com:8443/idp';
+    const { state } = await run({ realmIssuer: RAW });
     expect(state.redirected).toContain('code=');
-    expect(discoveryIssuer(RAW)).toBe('https://Auth.EXAMPLE.com:8443/idp');
+    expect(discoveryIssuer(RAW)).toBe(RAW);
     expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW));
+  });
+
+  it("emits the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const { state } = await run({ realmIssuer: 'https://b.example.com' });
+    expect(state.redirected).toContain('code=');
+    expect(issOf(state.redirected)).toBe('https://b.example.com');
+  });
+
+  it("pins a Bearer token to the request realm's issuer (ADR-019 Decision 1, #490)", async () => {
+    const { fastify, state } = await run({ bearer: 'valid', realmIssuer: 'https://b.example.com' });
+    // The audience is assertManagementToken's to check (#509), so the
+    // verification pins only the issuer.
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('bearer.token', {
+      issuer: 'https://b.example.com',
+    });
+    expect(issOf(state.redirected)).toBe('https://b.example.com');
   });
 
   it('does NOT attach `iss` to internal /ui redirects (they are not authorization responses)', async () => {

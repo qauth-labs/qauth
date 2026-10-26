@@ -4,6 +4,9 @@ import type { EmailService } from '../types';
 import { createEmailService } from './email-service';
 import { MockEmailProvider } from './providers/mock.provider';
 
+/** Where the verification links of these mails point: the realm's issuer. */
+const LINK = { baseUrl: 'https://auth.example.com' };
+
 describe('createEmailService', () => {
   it('should create an email service', () => {
     const provider = new MockEmailProvider();
@@ -15,7 +18,6 @@ describe('createEmailService', () => {
     const provider = new MockEmailProvider();
     const service = createEmailService(provider, {
       defaultFrom: 'noreply@example.com',
-      baseUrl: 'https://example.com',
     });
     expect(service).toHaveProperty('sendVerificationEmail');
   });
@@ -32,13 +34,13 @@ describe('EmailService', () => {
 
   describe('sendVerificationEmail', () => {
     it('should send a verification email', async () => {
-      const result = await service.sendVerificationEmail('user@example.com', 'token123');
+      const result = await service.sendVerificationEmail('user@example.com', 'token123', LINK);
       expect(result.success).toBe(true);
       expect(result.messageId).toBeDefined();
     });
 
     it('should include token in email', async () => {
-      await service.sendVerificationEmail('user@example.com', 'token123');
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK);
 
       const sentEmails = mockProvider.getSentEmails();
       expect(sentEmails).toHaveLength(1);
@@ -48,14 +50,14 @@ describe('EmailService', () => {
     });
 
     it('should use default subject if not provided', async () => {
-      await service.sendVerificationEmail('user@example.com', 'token123');
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK);
 
       const sentEmails = mockProvider.getSentEmails();
       expect(sentEmails[0]?.subject).toBe('Verify your email address');
     });
 
     it('should use custom subject if provided', async () => {
-      await service.sendVerificationEmail('user@example.com', 'token123', {
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK, {
         subject: 'Custom Subject',
       });
 
@@ -63,23 +65,25 @@ describe('EmailService', () => {
       expect(sentEmails[0]?.subject).toBe('Custom Subject');
     });
 
-    it('should include verification URL when baseUrl is configured', async () => {
-      const customProvider = new MockEmailProvider();
-      const customService = createEmailService(customProvider, {
-        baseUrl: 'https://example.com',
-      });
-      await customService.sendVerificationEmail('user@example.com', 'token123');
-
-      const sentEmails = customProvider.getSentEmails();
-      expect(sentEmails[0]?.text).toContain('https://example.com/auth/verify?token=token123');
-      expect(sentEmails[0]?.html).toContain('https://example.com/auth/verify?token=token123');
-    });
-
-    it('should include token in text when baseUrl is not configured', async () => {
-      await service.sendVerificationEmail('user@example.com', 'token123');
+    it('should include the verification URL on the base the mail is given', async () => {
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK);
 
       const sentEmails = mockProvider.getSentEmails();
-      expect(sentEmails[0]?.text).toContain('#token=token123');
+      expect(sentEmails[0]?.text).toContain('https://auth.example.com/auth/verify?token=token123');
+      expect(sentEmails[0]?.html).toContain('https://auth.example.com/auth/verify?token=token123');
+    });
+
+    it('should link each mail to its own base, as realms on one server need (#490)', async () => {
+      await service.sendVerificationEmail('a@example.com', 'token-a', LINK);
+      await service.sendVerificationEmail('b@example.com', 'token-b', {
+        baseUrl: 'https://b.example.com',
+      });
+
+      const [first, second] = mockProvider.getSentEmails();
+      expect(first?.text).toContain('https://auth.example.com/auth/verify?token=token-a');
+      expect(second?.text).toContain('https://b.example.com/auth/verify?token=token-b');
+      expect(second?.text).not.toContain('auth.example.com');
+      expect(second?.html).not.toContain('auth.example.com');
     });
 
     it('should use defaultFrom from config', async () => {
@@ -87,7 +91,7 @@ describe('EmailService', () => {
       const customService = createEmailService(customProvider, {
         defaultFrom: 'noreply@example.com',
       });
-      await customService.sendVerificationEmail('user@example.com', 'token123');
+      await customService.sendVerificationEmail('user@example.com', 'token123', LINK);
 
       const sentEmails = customProvider.getSentEmails();
       expect(sentEmails[0]?.from).toBe('noreply@example.com');
@@ -98,7 +102,7 @@ describe('EmailService', () => {
       const customService = createEmailService(customProvider, {
         defaultFrom: 'noreply@example.com',
       });
-      await customService.sendVerificationEmail('user@example.com', 'token123', {
+      await customService.sendVerificationEmail('user@example.com', 'token123', LINK, {
         from: 'custom@example.com',
       });
 
@@ -107,7 +111,7 @@ describe('EmailService', () => {
     });
 
     it('should use custom text if provided', async () => {
-      await service.sendVerificationEmail('user@example.com', 'token123', {
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK, {
         text: 'Custom text',
       });
 
@@ -116,7 +120,7 @@ describe('EmailService', () => {
     });
 
     it('should use custom html if provided', async () => {
-      await service.sendVerificationEmail('user@example.com', 'token123', {
+      await service.sendVerificationEmail('user@example.com', 'token123', LINK, {
         html: '<p>Custom HTML</p>',
       });
 
@@ -126,7 +130,7 @@ describe('EmailService', () => {
 
     describe('expiry copy (#334)', () => {
       it('should state 24 hours when no expiry is configured', async () => {
-        await service.sendVerificationEmail('user@example.com', 'token123');
+        await service.sendVerificationEmail('user@example.com', 'token123', LINK);
 
         const sentEmails = mockProvider.getSentEmails();
         expect(sentEmails[0]?.text).toContain('expire in 24 hours');
@@ -138,7 +142,7 @@ describe('EmailService', () => {
         const customService = createEmailService(customProvider, {
           verificationTokenExpiry: 3600,
         });
-        await customService.sendVerificationEmail('user@example.com', 'token123');
+        await customService.sendVerificationEmail('user@example.com', 'token123', LINK);
 
         const sentEmails = customProvider.getSentEmails();
         expect(sentEmails[0]?.text).toContain('expire in 1 hour');
@@ -152,7 +156,7 @@ describe('EmailService', () => {
         const customService = createEmailService(customProvider, {
           verificationTokenExpiry: 86400,
         });
-        await customService.sendVerificationEmail('user@example.com', 'token123');
+        await customService.sendVerificationEmail('user@example.com', 'token123', LINK);
 
         const sentEmails = customProvider.getSentEmails();
         expect(sentEmails[0]?.text).toContain('expire in 24 hours');
@@ -163,7 +167,7 @@ describe('EmailService', () => {
         const customService = createEmailService(customProvider, {
           verificationTokenExpiry: 5400,
         });
-        await customService.sendVerificationEmail('user@example.com', 'token123');
+        await customService.sendVerificationEmail('user@example.com', 'token123', LINK);
 
         const sentEmails = customProvider.getSentEmails();
         expect(sentEmails[0]?.text).toContain('expire in 1 hour and 30 minutes');
@@ -174,7 +178,7 @@ describe('EmailService', () => {
         const customService = createEmailService(customProvider, {
           verificationTokenExpiry: 259200,
         });
-        await customService.sendVerificationEmail('user@example.com', 'token123');
+        await customService.sendVerificationEmail('user@example.com', 'token123', LINK);
 
         const sentEmails = customProvider.getSentEmails();
         expect(sentEmails[0]?.text).toContain('expire in 3 days');
@@ -197,9 +201,7 @@ describe('EmailService', () => {
 
     it('carries no link, so nothing in it can act on the account', async () => {
       const customProvider = new MockEmailProvider();
-      const customService = createEmailService(customProvider, {
-        baseUrl: 'https://example.com',
-      });
+      const customService = createEmailService(customProvider);
       await customService.sendAccountExistsEmail('owner@example.com');
 
       const sent = customProvider.getSentEmails();

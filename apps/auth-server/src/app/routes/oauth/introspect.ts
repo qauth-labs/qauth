@@ -13,6 +13,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getPqcSignature } from '../../helpers/hybrid-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmTokenIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
@@ -144,10 +145,11 @@ export default async function (fastify: FastifyInstance) {
         let payload;
         try {
           // RFC 9700 mix-up defence: pin the issuer so a token minted by a
-          // different AS (even one sharing our signing key) is reported
-          // inactive rather than introspected as ours.
+          // different AS (even one sharing our signing key), or for another
+          // realm's issuer (#490), is reported inactive rather than
+          // introspected as ours.
           payload = await fastify.jwtUtils.verifyAccessToken(token, {
-            issuer: fastify.jwtUtils.getIssuer(),
+            issuer: realmTokenIssuer(fastify, realm),
           });
         } catch (error) {
           if (error instanceof JWTExpiredError || error instanceof JWTInvalidError) {

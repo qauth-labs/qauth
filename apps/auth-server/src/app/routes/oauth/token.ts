@@ -52,6 +52,7 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
 import {
   refreshFamilyEnd,
   refreshFamilyEnded,
@@ -268,7 +269,7 @@ export default async function (fastify: FastifyInstance) {
         try {
           client = await authenticateClientRequest(
             fastify,
-            realm.id,
+            realm,
             request as FastifyRequest,
             body,
             {
@@ -1652,8 +1653,9 @@ async function handleTokenExchange(
   // token minted by a different AS — even one sharing our signing key — fails
   // verification here. Only QAuth's signing key + issuer verifies, so success
   // establishes provenance; an unverifiable / expired / foreign-issuer token is
-  // "unacceptable" → invalid_request.
-  const expectedIssuer = fastify.jwtUtils.getIssuer();
+  // "unacceptable" → invalid_request. The issuer is the one the request realm's
+  // tokens carry (#490), so a token naming another realm's issuer fails too.
+  const expectedIssuer = realmTokenIssuer(fastify, requestRealm(request));
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
     subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token, {
@@ -2088,10 +2090,7 @@ async function mintIdJagForExchange(args: {
   // The consume side refuses a self-issued assertion too; refusing here keeps the
   // pair from ever forming a loop, and keeps a misconfigured allowlist from
   // handing a client a way around the delegation path's audience narrowing.
-  if (
-    resolveIssuerIdentifier(targetAuthorizationServer) ===
-    resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())
-  ) {
+  if (resolveIssuerIdentifier(targetAuthorizationServer) === realmIssuer(requestRealm(request))) {
     await emitFailure('invalid_target', 'id_jag_audience_is_self');
     throw new InvalidTargetError('an ID-JAG cannot be minted for this authorization server');
   }
@@ -2129,7 +2128,7 @@ async function mintIdJagForExchange(args: {
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
-  const minted = await mintIdJag(fastify, {
+  const minted = await mintIdJag(requestRealm(request), {
     subject: user.id,
     audience: targetAuthorizationServer,
     resource: targetResource,
@@ -2243,7 +2242,7 @@ async function handleJwtBearer(
   // once and being refused a step later.
   let assertion: ValidatedIdJag;
   try {
-    assertion = await validateIdJagAssertion(fastify, {
+    assertion = await validateIdJagAssertion(fastify, requestRealm(request), {
       assertion: body.assertion,
       expectedClientId: client.clientId,
     });

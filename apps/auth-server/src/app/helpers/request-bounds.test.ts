@@ -4,6 +4,7 @@ import { Writable } from 'node:stream';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { serializeRequestForLog } from '../../config/logger';
 import {
   answerClientError,
   answerFrameworkError,
@@ -109,6 +110,24 @@ describe('answerUnknownRouteBeforeBody', () => {
     expect(notFound?.['msg']).toBe(
       'Route GET:/ui/wallet-login/returns?response_code=[Redacted]&x=1 not found'
     );
+  });
+
+  it('logs a GET of a mailed verification link without its token (#490)', async () => {
+    const { stream, lines } = capturedLog();
+    // With the app's `req` serializer, so Fastify's request line is checked too.
+    app = Fastify({
+      logger: { level: 'info', stream, serializers: { req: serializeRequestForLog } },
+    });
+    app.addHook('onRequest', answerUnknownRouteBeforeBody);
+    const token = 'f0'.repeat(32);
+
+    await app.inject({ method: 'GET', url: `/auth/verify?token=${token}` });
+
+    const notFound = lines.find((line) => String(line['msg']).endsWith('not found'));
+    expect(notFound?.['msg']).toBe('Route GET:/auth/verify?token=[Redacted] not found');
+    const incoming = lines.find((line) => line['msg'] === 'incoming request');
+    expect(incoming?.['req']).toMatchObject({ url: '/auth/verify?token=[Redacted]' });
+    expect(JSON.stringify(lines)).not.toContain(token);
   });
 
   it('echoes the request id in the header the server reads it from (trace_id)', async () => {

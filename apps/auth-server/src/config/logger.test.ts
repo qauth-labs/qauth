@@ -223,8 +223,22 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists response_code as the one bearer value that rides in a query string', () => {
-    expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual(['response_code']);
+  it('lists the bearer values that ride in a query string: response_code and token', () => {
+    expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual(['response_code', 'token']);
+  });
+
+  it('censors the verification token of a mailed link (#490)', () => {
+    const token = 'a1'.repeat(32);
+    expect(redactLoggedUrl(`/auth/verify?token=${token}`)).toBe(
+      `/auth/verify?token=${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl(`/auth/verify?lang=en&%74oken=${token}&x=1`)).toBe(
+      `/auth/verify?lang=en&%74oken=${LOG_REDACT_CENSOR}&x=1`
+    );
+    // Only the parameter named `token`, not one that ends or starts with it.
+    for (const url of ['/r?id_token_hint=abc', '/r?token_type_hint=refresh_token']) {
+      expect(redactLoggedUrl(url)).toBe(url);
+    }
   });
 
   it('censors the value and keeps the rest of the URL byte-for-byte', () => {
