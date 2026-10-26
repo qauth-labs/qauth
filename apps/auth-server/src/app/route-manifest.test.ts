@@ -201,6 +201,30 @@ describe('the route manifest (#495)', () => {
     expect(new Set(listed).size).toBe(listed.length);
   });
 
+  it('keeps the order the folder autoload registered, which the OpenAPI paths follow', () => {
+    // The files of a directory, alphabetically, then its subdirectories.
+    const autoloadOrder = (dir: string, prefix: string): string[] => {
+      const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+      const files = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+        .filter((entry) => !/\.(test|spec)\.ts$/.test(entry.name))
+        .filter((entry) => /^export default /m.test(readFileSync(join(dir, entry.name), 'utf8')))
+        .map((entry) =>
+          entry.name === 'index.ts' ? prefix.slice(0, -1) : prefix + entry.name.replace(/\.ts$/, '')
+        );
+      if (files.includes(prefix.slice(0, -1))) return files;
+      return [
+        ...files,
+        ...entries
+          .filter((entry) => entry.isDirectory())
+          .flatMap((entry) => autoloadOrder(join(dir, entry.name), `${prefix}${entry.name}/`)),
+      ];
+    };
+    expect(ROUTE_MANIFEST.map((entry) => entry.module)).toEqual(autoloadOrder(ROUTES_DIR, ''));
+  });
+
   it('gives every module at least one role, and only known roles', () => {
     for (const entry of ROUTE_MANIFEST) {
       expect(entry.roles.length, entry.module).toBeGreaterThan(0);
