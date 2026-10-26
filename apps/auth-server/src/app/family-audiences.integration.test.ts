@@ -7,6 +7,7 @@ import {
   bootAuthServer,
   type BootedAuthServer,
   decodeJwtClaims,
+  E2E_PASSWORD,
   E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
@@ -529,7 +530,7 @@ describe('one audience per API family and a guard for each (#509, real container
       const response = await app().inject({
         method: 'POST',
         url: '/auth/login',
-        payload: { email, password: 'Correct-Horse-Battery-Staple-42!' },
+        payload: { email, password: E2E_PASSWORD },
       });
       expect(response.statusCode).toBe(200);
       return { userId, token: response.json<{ access_token: string }>().access_token };
