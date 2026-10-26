@@ -78,8 +78,20 @@ interface CompiledEntry {
   readonly realms: ReadonlySet<string>;
 }
 
-/** The compiled entries of every allowlist {@link parseEgressAllowlist} made. */
-const compiled = new WeakMap<EgressAllowlist, readonly CompiledEntry[]>();
+/**
+ * Where an allowlist {@link parseEgressAllowlist} made keeps its compiled
+ * entries: a non-enumerable property under a registry symbol, so that a copy
+ * of this library loaded twice (a test runner that resets its module
+ * registry) still reads a list the other copy parsed.
+ */
+const COMPILED = Symbol.for('@qauth-labs/server-egress/allowlist');
+
+/** The compiled entries of a parsed allowlist, or `undefined` for anything else. */
+function compiledEntries(allowlist: unknown): readonly CompiledEntry[] | undefined {
+  if (typeof allowlist !== 'object' || allowlist === null) return undefined;
+  const entries: unknown = Reflect.get(allowlist, COMPILED);
+  return Array.isArray(entries) ? (entries as readonly CompiledEntry[]) : undefined;
+}
 
 const MAX_ENTRIES = 1000;
 const MAX_REALMS_PER_ENTRY = 100;
@@ -211,7 +223,7 @@ export function parseEgressAllowlist(
   }
 
   const entries: EgressAllowlistEntry[] = [];
-  const compiledEntries: CompiledEntry[] = [];
+  const compiledList: CompiledEntry[] = [];
   raw.forEach((item: unknown, index) => {
     const at = `${what}: entries[${index}]`;
     if (!isRecord(item)) {
@@ -248,12 +260,12 @@ export function parseEgressAllowlist(
         ...(note === undefined ? {} : { note }),
       })
     );
-    compiledEntries.push(Object.freeze({ host, range, realms: new Set(realms) }));
+    compiledList.push(Object.freeze({ host, range, realms: new Set(realms) }));
   });
 
-  const allowlist: EgressAllowlist = Object.freeze({ entries: Object.freeze(entries) });
-  compiled.set(allowlist, Object.freeze(compiledEntries));
-  return allowlist;
+  const allowlist: EgressAllowlist = { entries: Object.freeze(entries) };
+  Object.defineProperty(allowlist, COMPILED, { value: Object.freeze(compiledList) });
+  return Object.freeze(allowlist);
 }
 
 /** The allowlist of a deployment that names none: every non-public address is refused. */
@@ -285,11 +297,7 @@ export function loadEgressAllowlist(path: string): EgressAllowlist {
 
 /** Whether `allowlist` came from {@link parseEgressAllowlist}. */
 export function isEgressAllowlist(allowlist: unknown): allowlist is EgressAllowlist {
-  return (
-    typeof allowlist === 'object' &&
-    allowlist !== null &&
-    compiled.has(allowlist as EgressAllowlist)
-  );
+  return compiledEntries(allowlist) !== undefined;
 }
 
 /** Whether an IP literal lies in `range`, an IPv4-mapped one judged as its IPv4 address too. */
@@ -312,7 +320,7 @@ export function allowlistPermit(
   allowlist: EgressAllowlist,
   realm: string
 ): AddressPermit | undefined {
-  const entries = (compiled.get(allowlist) ?? []).filter((entry) => entry.realms.has(realm));
+  const entries = (compiledEntries(allowlist) ?? []).filter((entry) => entry.realms.has(realm));
   if (entries.length === 0) return undefined;
   return (hostname, address) =>
     entries.some(
