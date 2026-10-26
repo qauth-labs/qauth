@@ -94,10 +94,11 @@ KEK=...
 > `KEK`, and refuses to start without one. See
 > [the key store](/operate/keys/#the-key-store).
 
-> **Set `JWT_PUBLIC_KEY` explicitly.** `.env.docker.example` marks it optional,
-> but omitting it currently fails EdDSA key setup at boot — see the
-> [Keys guide](/operate/keys/#the-eddsa-public-key-is-not-actually-optional-359)
-> before you skip it.
+> **The JWT keys are optional.** Tokens are signed with the realm's keys in
+> the key store. Set `JWT_PRIVATE_KEY` to keep the key a deployment already
+> signs with; leave it unset and the first boot generates the keys.
+> `JWT_PUBLIC_KEY` is derived from the private key when unset. See
+> [the key store](/operate/keys/#the-key-store).
 
 ### 3. Start Services
 
@@ -385,8 +386,8 @@ See `.env.docker.example` for all available variables. Key variables:
 | Variable                       | Required | Description                                                                                                                                                      |
 | ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DB_PASSWORD`                  | Yes      | PostgreSQL password                                                                                                                                              |
-| `JWT_PRIVATE_KEY`              | Yes      | EdDSA private key (PEM format)                                                                                                                                   |
-| `JWT_PUBLIC_KEY`               | Yes      | EdDSA public key (PEM format)                                                                                                                                    |
+| `JWT_PRIVATE_KEY`              | No       | EdDSA private key (PEM format), imported into the realm key store; unset, the first boot generates the signing keys                                              |
+| `JWT_PUBLIC_KEY`               | No       | EdDSA public key (PEM format); derived from the private key when unset                                                                                           |
 | `KEK`                          | Yes      | Key-encryption key, the base64 of 32 random bytes; wraps every key in the realm key store (or `KEK_PATH`, a file holding it, mounted into the container)         |
 | `JWT_ISSUER`                   | No       | JWT issuer URL (default: http://localhost:3000). At first boot it becomes the default realm's permanent issuer; a later boot with another value refuses to start |
 | `DEFAULT_REALM_ENDPOINT_HOSTS` | No       | Names server-side callers reach the auth-server by (default: `auth-server`, the developer portal's)                                                              |
@@ -403,10 +404,6 @@ See `.env.docker.example` for all available variables. Key variables:
 > `smtp` at a real server or a local mail catcher. For a throwaway local trial
 > only, `REQUIRE_VERIFIED_ACCOUNT=false` in `.env` lets unverified accounts sign
 > in, and gives that answer back.
-
-`JWT_PUBLIC_KEY` is listed as **Yes** here, not because the schema requires
-it, but because omitting it fails at boot today — see the
-[Keys guide](/operate/keys/#the-eddsa-public-key-is-not-actually-optional-359).
 
 #### Developer Portal
 

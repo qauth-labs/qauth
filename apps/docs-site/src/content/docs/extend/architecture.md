@@ -407,8 +407,10 @@ nothing else.
 
 This is the subtle one, and the most common place to get the mental model wrong.
 
-`CRYPTO_CAPABILITIES` is a module-level constant at `apps/auth-server/src/app/app.ts:49`, computed
-when `app.ts` is first imported, before `app()` runs. `deriveCryptoCapabilities`,
+The capabilities are derived twice in `apps/auth-server/src/app/app.ts` (`cryptoCapabilities`):
+while `app()` registers the plugins, with the EdDSA key the key boot step guarantees, and again in
+an `onReady` hook after that step, from the token keys the default realm's key store holds (#491).
+`deriveCryptoCapabilities`,
 `apps/auth-server/src/app/crypto-capabilities.ts:61`, **never throws**. It answers a question; the
 answer is then read by the gate in step 3 above. Calling it a boot assertion is shorthand — the
 refusal lives in `configured-providers.ts`, and this function is what makes that refusal correct.
@@ -424,8 +426,8 @@ JSDoc:
 
 | Entry                | Value   | Why                                                                                                                                                                                                                      |
 | -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `EdDSA`              | `true`  | The env schema requires an EdDSA key and refuses to parse without one, so any deployment reaching this function has one                                                                                                  |
-| `RS256`              | derived | `true` only when a non-blank `JWT_RS256_PRIVATE_KEY` is configured — optional, and absent by default (`apps/auth-server/src/app/crypto-capabilities.ts:70`)                                                              |
+| `EdDSA`              | derived | `true` when the default realm's key store holds an active EdDSA `token_signing` key, which the key boot step guarantees or refuses to start                                                                              |
+| `RS256`              | derived | `true` only when the default realm's key store holds an active RS256 `token_signing` key: a fresh deployment's, an imported `JWT_RS256_PRIVATE_KEY` or one `auth-server:keys:create` made                                |
 | `ES256`              | `false` | The crypto layer _can_ compute an ES256 signature. What is missing is provisioning: no env var, no schema field, no JWKS entry, no code path (`apps/auth-server/src/app/crypto-capabilities.ts:79`)                      |
 | `responseEncryption` | `false` | The JWE primitives exist and nothing in the workspace calls them — no `direct_post.jwt` response mode, no published encryption JWK, no intake route to decrypt at (`apps/auth-server/src/app/crypto-capabilities.ts:95`) |
 

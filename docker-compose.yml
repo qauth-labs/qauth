@@ -95,8 +95,9 @@ services:
       KEK_PREVIOUS: ${KEK_PREVIOUS:-}
       KEK_PREVIOUS_PATH: ${KEK_PREVIOUS_PATH:-}
 
-      # JWT (from .env file)
-      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+      # JWT (from .env file). The key is optional: the realm key store holds
+      # the signing keys, and imports this one at the first boot.
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
       JWT_ISSUER: ${JWT_ISSUER:-http://localhost:3000}
       ACCESS_TOKEN_LIFESPAN: ${ACCESS_TOKEN_LIFESPAN:-900}
