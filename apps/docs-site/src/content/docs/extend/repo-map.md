@@ -123,6 +123,16 @@ A KEK adapter (`type:kek-adapter`) reaches only the key library and the core and
 no project may depend on one: `KEK_PROVIDER=<name>` imports `@qauth-labs/keys-<name>` by name at run
 time, so the auth server and its image ship without it.
 
+### Outbound calls go through the egress client
+
+Server code makes its outbound HTTP calls through the SSRF-safe egress client (`fastify.egress`,
+ADR-019 Decision 8), which checks every destination. A block in `.oxlintrc.json` (the egress guard,
+`qauth/no-direct-network` from `tools/oxlint/qauth-plugin.mjs`) refuses the global `fetch` and
+`request`/`get` of `node:http` and `node:https` in the auth server, the migration runner and the
+core, shared, infra, server and fastify libraries. Its exceptions are `libs/server/egress` itself,
+tests and their fixtures, and the wallet status-list fetcher, which has not moved yet; the KMS
+adapters under `libs/keys/` are outside it.
+
 ### Why `scope:core` and `scope:shared` are strict leaves
 
 Both are declared `onlyDependOnLibsWithTags: []`, and the comment at `.oxlintrc.json:164`

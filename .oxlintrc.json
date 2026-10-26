@@ -468,6 +468,46 @@
       }
     },
 
+    // Egress guard (ADR-019 Decision 8, #481). Every outbound call that
+    // configuration or a request causes goes through the egress client
+    // (`fastify.egress`), which checks the destination: `https` only, public
+    // addresses unless the deployment allowlist opens one for an operator- or
+    // admin-set destination, pinned connections, checked redirects, caps.
+    // `qauth/no-direct-network` refuses the ways around it in server code: the
+    // global `fetch`, and `request`/`get` of `node:http` and `node:https`.
+    //
+    // `excludeFiles`: the egress library itself; tests and their fixtures, which
+    // stand up and call local servers; and the wallet status-list fetcher,
+    // whose operator URI-prefix allowlist predates the egress client and which
+    // moves onto it separately. The signer's KMS adapters (`libs/keys/*`) talk
+    // to their vendor's SDK and are outside `files`. The operator's OpenTelemetry
+    // export goes through the SDK's exporter, outside the egress client by
+    // ADR-019's amendment of 2026-10-24. apps/auth-server/src/app/egress-rule.test.ts
+    // lints samples with this block.
+    {
+      "files": [
+        "apps/auth-server/**",
+        "apps/migration-runner/**",
+        "libs/core/**",
+        "libs/fastify/**",
+        "libs/infra/**",
+        "libs/server/**",
+        "libs/shared/**"
+      ],
+      "excludeFiles": [
+        "libs/server/egress/**",
+        "**/*.test.ts",
+        "**/*.spec.ts",
+        "**/src/testing/**",
+        "**/test/**",
+        "libs/shared/testing/**",
+        "libs/server/federation/src/status/status-list-fetch.ts"
+      ],
+      "rules": {
+        "qauth/no-direct-network": "error"
+      }
+    },
+
     // Oxlint 1.88's `no-unused-private-class-members` does not count a
     // `#field in value` brand check as a use, so it reports `#validated`,
     // which `ValidatedIssuer.isValidated` reads exactly that way. ESLint
