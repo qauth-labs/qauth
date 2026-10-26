@@ -738,7 +738,12 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       resolveDeveloperId.mockResolvedValueOnce(DEVELOPER);
 
       await expect(register(fastify, ctx)).rejects.toThrow(ForbiddenError);
-      expect(fastify.repositories.oauthClients.countByDeveloper).toHaveBeenCalledWith(DEVELOPER);
+      // Counted in the request's realm (#489): the developer's clients of
+      // another realm are not this realm's maximum.
+      expect(fastify.repositories.oauthClients.countByDeveloper).toHaveBeenCalledWith(
+        'realm-1',
+        DEVELOPER
+      );
       expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
       expect(state.createdClients).toHaveLength(0);
     });

@@ -135,17 +135,17 @@ function makeFastify() {
         findActive,
         // The locked re-read in the code-insert transaction sees what the
         // first read saw, unless a test says otherwise.
-        findActiveForShare: vi.fn((userId: string, oauthClientId: string) =>
-          findActive(userId, oauthClientId)
+        findActiveForShare: vi.fn((realmId: string, userId: string, oauthClientId: string) =>
+          findActive(realmId, userId, oauthClientId)
         ),
       },
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
       },
       // Both the session path and the Bearer fallback accept only a user who is
-      // still enabled; the Bearer fallback, only a user of the request's realm.
+      // still enabled, looked up in the request's realm (#489).
       users: {
-        findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })),
+        findById: vi.fn(async (realmId: string, id: string) => ({ id, enabled: true, realmId })),
       },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
@@ -288,7 +288,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0];
     expect(tx).toEqual({ tx: true });
+    // Both consent reads are in the request's realm (#489).
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      REALM.id,
+      'user-1',
+      CLIENT.id
+    );
     expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledWith(
+      REALM.id,
       'user-1',
       CLIENT.id,
       tx
@@ -348,6 +355,13 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
       'realm-tenant',
       CLIENT.clientId
+    );
+    // So are the session's user and its consent (#489).
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('realm-tenant', 'user-1');
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      'realm-tenant',
+      'user-1',
+      CLIENT.id
     );
     expect(emitUserEventMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -1649,6 +1663,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      REALM.id,
       BEARER_USER,
       DANGEROUS_CLIENT.id
     );
@@ -1921,7 +1936,8 @@ describe('GET /oauth/authorize — disabled user', () => {
     );
 
     expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(BEARER_USER);
+    // Looked up in the request's realm (#489).
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, BEARER_USER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
