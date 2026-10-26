@@ -65,8 +65,9 @@ export interface SsfDeliveryRouteOptions {
 
 /**
  * The error codes a receiver answers a pushed SET with (RFC 8935 §2.4, SSF
- * 1.0 §8.1.4.1). Each becomes the error class `set_<code>`; another code is
- * `set_rejected`.
+ * 1.0 §8.1.4.1). Each becomes the error class `set_<code>`. A `400` without
+ * one of them, such as a proxy's error page, says nothing about the SET: it
+ * is `http_status`, retried like any other status.
  */
 const SET_ERROR_CODES = new Set([
   'invalid_request',
@@ -89,6 +90,21 @@ const DEFAULT_PUSH_LIMITS: Partial<EgressLimits> = {
   maxRedirects: 0,
   maxResponseBytes: 64 * 1024,
 };
+
+/** The error classes a receiver reads as `destination_unreachable`: see {@link receiverErrorClass}. */
+const UNREACHABLE_ERROR_CLASSES = new Set(['destination_blocked', 'network']);
+
+/**
+ * The error class a receiver reads on its stream status (`GET /ssf/status`).
+ * An endpoint QAuth refused to reach (`destination_blocked`) and one it could
+ * not reach (`network`) both read `destination_unreachable`: told apart, they
+ * would show a receiver which names resolve to private addresses from QAuth,
+ * which the check at registration does not tell either. The delivery history,
+ * the logs and the metrics keep the class as recorded.
+ */
+export function receiverErrorClass(errorClass: string): string {
+  return UNREACHABLE_ERROR_CLASSES.has(errorClass) ? 'destination_unreachable' : errorClass;
+}
 
 /** A refusal no retry changes: the delivery ends `failed` at once. */
 const refused = (errorClass: string): DeliveryOutcome => ({ ok: false, errorClass, retry: false });
@@ -124,13 +140,15 @@ function setErrorCode(body: Buffer): string | undefined {
  *   the egress client, which checks the endpoint's addresses again at every
  *   attempt, with the receiver's `Authorization` header when it gave one,
  *   decrypted for the attempt. No redirect is followed.
- * - **Outcomes.** A `2xx` delivers. A `400` is the receiver refusing the SET:
- *   final, unless its `err` says something the receiver may fix
- *   (`invalid_key`, `authentication_failed`, `access_denied`). Any other
- *   status, a timeout or a network failure is retried on the delivery role's
- *   schedule. A paused stream's events are held, retried until the stream is
- *   enabled or their attempts run out. A disabled, deleted or inactive
- *   stream's deliveries end at once.
+ * - **Outcomes.** A `2xx` delivers. A `400` with a known RFC 8935 `err` is
+ *   the receiver refusing the SET: final, unless the `err` says something
+ *   the receiver may fix (`invalid_key`, `authentication_failed`,
+ *   `access_denied`). Any other status, a `400` without a known `err`
+ *   included, a timeout or a network failure is retried on the delivery role's
+ *   schedule. A paused stream's events are held: the delivery role asks
+ *   again every 30 seconds without spending an attempt, and sends them once
+ *   the stream is enabled. A disabled, deleted or inactive stream's
+ *   deliveries end at once.
  */
 export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): DeliveryRoute {
   const definitions = options.eventTypes ?? EVENT_TYPES;
@@ -170,8 +188,9 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
       }
       if (!stream.active) return refused('stream_inactive');
       if (stream.status === 'disabled') return refused('stream_disabled');
-      // SSF 1.0 §8.1.2: a paused stream's events are held, not sent.
-      if (stream.status === 'paused') return { ok: false, errorClass: 'stream_paused' };
+      // SSF 1.0 §8.1.2: a paused stream's events are held, not sent, and go
+      // out once it is enabled. A hold spends no attempt, however long.
+      if (stream.status === 'paused') return { ok: false, hold: true };
 
       const claims = claimsFor(event, stream);
       if (claims === undefined) return refused('event_not_offered');
@@ -221,13 +240,13 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
       }
 
       if (status >= 200 && status < 300) return { ok: true, statusCode: status };
-      if (status === 400) {
-        const code = setErrorCode(body);
+      const code = status === 400 ? setErrorCode(body) : undefined;
+      if (code !== undefined) {
         return {
           ok: false,
           statusCode: status,
-          errorClass: code === undefined ? 'set_rejected' : `set_${code}`,
-          retry: code !== undefined && RETRIED_SET_ERRORS.has(code),
+          errorClass: `set_${code}`,
+          retry: RETRIED_SET_ERRORS.has(code),
         };
       }
       return { ok: false, statusCode: status, errorClass: 'http_status' };

@@ -138,6 +138,10 @@ function checkTime(value: number, what: string): number {
 }
 
 function checkOutcome(outcome: EventDeliveryAttemptRecord): void {
+  if (outcome.result === 'hold') {
+    checkTime(outcome.nextAttemptAt, 'nextAttemptAt');
+    return;
+  }
   const code = outcome.statusCode;
   if (code !== undefined && (!Number.isInteger(code) || code < 100 || code > 599)) {
     throw new TypeError('eventDeliveries.record: a status code must be an integer from 100 to 599');
@@ -621,6 +625,20 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
     async record(claim, outcome, now): Promise<boolean> {
       checkTime(now, 'now');
       checkOutcome(outcome);
+      if (outcome.result === 'hold') {
+        // No attempt was made: give back the one the claim counted, and keep
+        // the last failure as it was.
+        const held = await db
+          .update(eventDeliveries)
+          .set({
+            attemptCount: sql`${eventDeliveries.attemptCount} - 1`,
+            lockedUntil: null,
+            nextAttemptAt: outcome.nextAttemptAt,
+            updatedAt: now,
+          })
+          .where(claimed(claim));
+        return (held.rowCount ?? 0) > 0;
+      }
       const done = outcome.result !== 'retry';
       const result = await db
         .update(eventDeliveries)

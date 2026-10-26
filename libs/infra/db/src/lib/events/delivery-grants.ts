@@ -13,10 +13,14 @@ import { quoteRoleName, type TablePrivilege } from '../role-grants';
  *   event, by the retention job (#536), through the foreign key.
  * - `event_delivery_positions`: every row privilege, since the fan-out
  *   forgets the position of a realm that has no destination of a kind left.
- * - `ssf_streams` and `ssf_stream_subjects`: `SELECT`, for the Shared
- *   Signals Framework route (#410) to list its streams and read the one it
- *   delivers to, the encrypted `authorization_header` included. The role asks
- *   the signer to decrypt that value; it holds no key.
+ * - `ssf_streams`: `SELECT`, for the Shared Signals Framework route (#410)
+ *   to list its streams and read the one it delivers to, the encrypted
+ *   `authorization_header` included. The role asks the signer to decrypt
+ *   that value; it holds no key.
+ * - `ssf_stream_subjects`: `SELECT` on the event subject each subject stands
+ *   for (`EVENT_DELIVERY_COLUMNS`), which the fan-out filters on. Not the
+ *   subject as the receiver sent it, which may be an email address or a
+ *   phone number.
  * - `realms` and `oauth_clients`: `SELECT` on the columns that say whether a
  *   stream may receive events (`EVENT_DELIVERY_COLUMNS`): the realm's SSF
  *   switch, and whether its receiver is enabled, not suspended and still
@@ -34,13 +38,13 @@ export const EVENT_DELIVERY_GRANTS: Readonly<Record<string, readonly TablePrivil
     event_deliveries: Object.freeze(['SELECT', 'INSERT', 'UPDATE'] as const),
     event_delivery_positions: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE'] as const),
     ssf_streams: Object.freeze(['SELECT'] as const),
-    ssf_stream_subjects: Object.freeze(['SELECT'] as const),
   });
 
 /** The columns the delivery role may read of tables it reads only in part, by table. */
 export const EVENT_DELIVERY_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   realms: Object.freeze(['id', 'ssf_transmitter_enabled']),
   oauth_clients: Object.freeze(['id', 'enabled', 'suspended', 'scopes']),
+  ssf_stream_subjects: Object.freeze(['stream_id', 'event_subject_type', 'event_subject_id']),
 });
 
 /**

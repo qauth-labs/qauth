@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
 
 import type {
   Database,
@@ -133,9 +133,11 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
       return db.transaction(async (tx) => {
         // The stream's row lock makes the count and the insert one step, so
         // two adds at once cannot both pass a stream that has one place left.
-        await tx.execute(
+        // No row: the stream was deleted since the caller found it.
+        const { rows: locked } = await tx.execute(
           sql`select 1 from ${ssfStreams} where ${ssfStreams.id} = ${streamId} for update`
         );
+        if (locked.length === 0) return 'missing';
         const [{ count }] = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(ssfStreamSubjects)
@@ -249,7 +251,7 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
       return row === undefined ? undefined : { ...row.stream, active: row.active };
     },
 
-    async deliveryStatus(streamId): Promise<SsfStreamDeliveryStatus> {
+    async deliveryStatus(streamId, now): Promise<SsfStreamDeliveryStatus> {
       if (!isUuid(streamId)) return { pending: 0 };
       const ofStream = and(
         eq(eventDeliveries.destinationKind, SSF_DELIVERY_KIND),
@@ -270,7 +272,16 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
           nextAttemptAt: eventDeliveries.nextAttemptAt,
         })
         .from(eventDeliveries)
-        .where(and(ofStream, sql`${eventDeliveries.lastErrorClass} is not null`))
+        .where(
+          and(
+            ofStream,
+            sql`${eventDeliveries.lastErrorClass} is not null`,
+            // A row an attempt is running on shows the claim, not a failure:
+            // its count includes the running attempt and its times are the
+            // lease's.
+            or(isNull(eventDeliveries.lockedUntil), lte(eventDeliveries.lockedUntil, now))
+          )
+        )
         .orderBy(sql`${eventDeliveries.updatedAt} desc`, sql`${eventDeliveries.id} desc`)
         .limit(1);
       if (failure === undefined || failure.errorClass === null) return { pending };

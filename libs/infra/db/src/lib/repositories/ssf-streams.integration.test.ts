@@ -192,6 +192,18 @@ describe('SSF streams integration (real Postgres)', () => {
     expect(await streams.removeSubject(stream.id, subject(1).subjectKey)).toBe(false);
   });
 
+  it('answers missing, not a foreign key error, for a stream deleted since it was found', async () => {
+    const { stream, key } = await streamOf();
+    expect(await streams.remove(key)).toBe(true);
+    expect(
+      await streams.addSubject(
+        stream.id,
+        { subjectKey: 'gone', subject: { format: 'opaque' }, eventSubject: null, verified: true },
+        3
+      )
+    ).toBe('missing');
+  });
+
   it('lists only the streams the route may deliver to, with their placed subjects', async () => {
     const enabled = await streamOf();
     const paused = await streamOf();
@@ -276,9 +288,9 @@ describe('SSF streams integration (real Postgres)', () => {
 
   it('reports the pending deliveries and the latest failed attempt', async () => {
     const { realmId, stream } = await streamOf();
-    expect(await streams.deliveryStatus(stream.id)).toEqual({ pending: 0 });
+    expect(await streams.deliveryStatus(stream.id, NOW)).toEqual({ pending: 0 });
     const { eventId } = await verify(realmId, stream.id);
-    expect(await streams.deliveryStatus(stream.id)).toEqual({ pending: 1 });
+    expect(await streams.deliveryStatus(stream.id, NOW)).toEqual({ pending: 1 });
 
     const pick = {
       picks: [{ kind: SSF_DELIVERY_KIND, id: stream.id, limit: 1 }],
@@ -291,7 +303,7 @@ describe('SSF streams integration (real Postgres)', () => {
       { result: 'retry', nextAttemptAt: NOW + 30_000, statusCode: 503, errorClass: 'http_status' },
       NOW + 1
     );
-    expect(await streams.deliveryStatus(stream.id)).toEqual({
+    expect(await streams.deliveryStatus(stream.id, NOW + 1)).toEqual({
       pending: 1,
       lastFailure: {
         eventId,
@@ -304,13 +316,22 @@ describe('SSF streams integration (real Postgres)', () => {
       },
     });
 
+    // While the next attempt runs, the row shows its claim, not a failure: it
+    // is left out, rather than shown with the running attempt counted and the
+    // lease's times.
     const [second] = await queue.claim({ ...pick, now: NOW + 30_000 });
+    expect(await streams.deliveryStatus(stream.id, NOW + 30_000)).toEqual({ pending: 1 });
+    // A lease that ran out (its worker died) shows again.
+    expect(
+      (await streams.deliveryStatus(stream.id, NOW + 30_000 + 60_000)).lastFailure
+    ).toMatchObject({ attempts: 2, errorClass: 'http_status' });
+
     await queue.record(
       second,
       { result: 'failed', statusCode: 503, errorClass: 'http_status' },
       NOW + 30_001
     );
-    expect(await streams.deliveryStatus(stream.id)).toEqual({
+    expect(await streams.deliveryStatus(stream.id, NOW + 30_001)).toEqual({
       pending: 0,
       lastFailure: {
         eventId,
@@ -374,7 +395,24 @@ describe('SSF streams integration (real Postgres)', () => {
 
     it('lists the streams and reads the one it delivers to, and writes none', async () => {
       const { stream, key } = await streamOf();
-      expect((await deliveryStreams.listDestinations()).map((row) => row.id)).toEqual([stream.id]);
+      await streams.addSubject(
+        stream.id,
+        {
+          subjectKey: 'user',
+          subject: { format: 'email', email: 'someone@example.com' },
+          eventSubject: { type: 'user', id: 'u1' },
+          verified: true,
+        },
+        10
+      );
+      expect(await deliveryStreams.listDestinations()).toEqual([
+        expect.objectContaining({ id: stream.id, subjects: [{ type: 'user', id: 'u1' }] }),
+      ]);
+      // The subject as the receiver sent it, an email address say, is not the
+      // role's to read: only the event subject it stands for.
+      await expect(
+        delivery?.query(`SELECT subject FROM ssf_stream_subjects`)
+      ).rejects.toMatchObject({ code: '42501' });
       expect(await deliveryStreams.findForDelivery(stream.id)).toMatchObject({
         id: stream.id,
         active: true,

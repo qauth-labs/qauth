@@ -56,8 +56,8 @@ export interface NewSsfStreamSubject {
   readonly verified: boolean;
 }
 
-/** What {@link SsfStreamsRepository.addSubject} did. */
-export type SsfAddSubjectResult = 'added' | 'present' | 'full';
+/** What {@link SsfStreamsRepository.addSubject} did; `missing` when the stream is gone. */
+export type SsfAddSubjectResult = 'added' | 'present' | 'full' | 'missing';
 
 /** A stream the delivery route serves, as it lists it for the fan-out. */
 export interface SsfStreamDestination {
@@ -129,7 +129,8 @@ export interface SsfStreamsRepository {
   ): Promise<SsfStream | undefined>;
   /**
    * Add a subject. `present` when the stream has it already; `full` when the
-   * stream holds `maxSubjects` and this one is new.
+   * stream holds `maxSubjects` and this one is new; `missing` when the stream
+   * no longer exists, such as one its receiver deleted meanwhile.
    */
   addSubject(
     streamId: string,
@@ -148,8 +149,12 @@ export interface SsfStreamsRepository {
   listDestinations(): Promise<SsfStreamDestination[]>;
   /** One stream for a delivery attempt, whatever its status, or `undefined`. */
   findForDelivery(streamId: string): Promise<SsfStreamForDelivery | undefined>;
-  /** The stream's pending deliveries and its latest failed attempt. */
-  deliveryStatus(streamId: string): Promise<SsfStreamDeliveryStatus>;
+  /**
+   * The stream's pending deliveries and its latest failed attempt. A row an
+   * attempt is running on at `now` (epoch milliseconds) is left out of the
+   * latest failure until its outcome is recorded.
+   */
+  deliveryStatus(streamId: string, now: number): Promise<SsfStreamDeliveryStatus>;
   /**
    * Write the delivery of an event addressed to one stream, such as its
    * verification event, in the transaction that wrote the event: it then

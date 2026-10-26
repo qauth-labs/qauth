@@ -49,10 +49,9 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
 
 /**
  * The preHandler of the stream management routes (SSF 1.0 §8.1): the
- * request's receiver, or a refusal.
+ * request's receiver, or a refusal. The routes' own `onRequest` hook has
+ * already answered 404 for a realm that does not run the transmitter.
  *
- * - The realm must run the transmitter; otherwise the routes answer 404, as
- *   if they did not exist.
  * - `requireJwt` checks the access token: signature, `typ`, issuer,
  *   revocation and, with DPoP on, its proof.
  * - The token is a client's own (`client_credentials`): `sub` is its
@@ -62,9 +61,17 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
  *   a token without it is a 403 (RFC 6750 §3.1, `insufficient_scope`).
  * - Its `aud` names the realm's issuer, the transmitter: a token minted for
  *   another resource, which that resource holds, cannot manage streams.
- * - The client exists in this realm and is enabled and not suspended.
+ * - Its `aud` names no other realm's issuer. An access token names no realm
+ *   and a `client_id` is unique only within one, so a token minted in
+ *   another realm, for a client of the same `client_id` whose audience lists
+ *   this realm's issuer too, would otherwise pass. Per-realm `iss` (#491)
+ *   will pin a token to its realm further.
+ * - The client exists in this realm, is enabled and not suspended, and still
+ *   holds the `ssf:stream` scope, as deliveries require: a receiver whose
+ *   scope was taken away stops managing its stream at once, not when its
+ *   token expires.
  *
- * Every other refusal after the first is a 401 with an `invalid_token`
+ * Every refusal but the scope's 403 is a 401 with an `invalid_token`
  * challenge, as RFC 6750 §3.1 prescribes for a token not valid for the
  * resource.
  */
@@ -72,7 +79,6 @@ export function createRequireSsfReceiver(
   fastify: FastifyInstance
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
   return async function requireSsfReceiver(request, reply) {
-    if (!realmRunsTransmitter(request)) throw new SsfNotFoundError();
     await fastify.requireJwt(request, reply);
     const claims = request.jwtPayload;
     if (!claims) throw new JWTInvalidError('Missing JWT payload');
@@ -89,11 +95,19 @@ export function createRequireSsfReceiver(
     if (realm.issuer === null || !audiences.includes(realm.issuer)) {
       throw new JWTInvalidError('Access token audience is not this transmitter');
     }
+    if (await fastify.repositories.realms.anotherRealmHasIssuer(realm.id, audiences)) {
+      throw new JWTInvalidError('Access token audience names another realm');
+    }
     const client = await fastify.repositories.oauthClients.findByClientId(
       realm.id,
       claims.clientId
     );
-    if (!client || !client.enabled || client.suspended) {
+    if (
+      !client ||
+      !client.enabled ||
+      client.suspended ||
+      !client.scopes.includes(SSF_STREAM_SCOPE)
+    ) {
       throw new JWTInvalidError('Access token client is not an active receiver of this realm');
     }
     request.ssfReceiver = { realm, client };

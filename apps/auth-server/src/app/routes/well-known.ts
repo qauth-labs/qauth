@@ -46,16 +46,25 @@ export default async function (fastify: FastifyInstance) {
    * verifies each SET with a key from here. The realm JWKS of the signer will
    * hold them whatever the switch once tokens move onto it (#491); until
    * then they join only where SSF is on, so a default deployment's JWKS is
-   * unchanged.
+   * unchanged. When they cannot be read, the JWKS still serves the token
+   * keys: a SET key fault must not stop access tokens from verifying.
    */
   async function setVerificationKeys(request: FastifyRequest) {
     if (!realmRunsTransmitter(request) || !fastify.hasDecorator('signer')) return [];
-    const keys = await fastify.signer.getVerificationKeys(
-      'api',
-      requestRealm(request).id,
-      'event_signing'
-    );
-    return keys.map((key) => key.publicJwk);
+    try {
+      const keys = await fastify.signer.getVerificationKeys(
+        'api',
+        requestRealm(request).id,
+        'event_signing'
+      );
+      return keys.map((key) => key.publicJwk);
+    } catch (error) {
+      request.log.error(
+        { err: error },
+        'the SET verification keys could not be read; the JWKS serves the token keys alone'
+      );
+      return [];
+    }
   }
 
   const buildInput = () => ({

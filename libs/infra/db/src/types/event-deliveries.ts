@@ -129,7 +129,11 @@ export interface ClaimedEventDelivery extends EventDeliveryClaimRef {
   readonly event: EventEnvelope | null;
 }
 
-/** How an attempt ended, as {@link EventDeliveriesRepository.record} stores it. */
+/**
+ * How an attempt ended, as {@link EventDeliveriesRepository.record} stores it.
+ * `hold` is no attempt: the destination holds its events for now, such as a
+ * paused SSF stream.
+ */
 export type EventDeliveryAttemptRecord =
   | { readonly result: 'delivered'; readonly statusCode?: number }
   | {
@@ -139,7 +143,12 @@ export type EventDeliveryAttemptRecord =
       readonly statusCode?: number;
       readonly errorClass: string;
     }
-  | { readonly result: 'failed'; readonly statusCode?: number; readonly errorClass: string };
+  | { readonly result: 'failed'; readonly statusCode?: number; readonly errorClass: string }
+  | {
+      readonly result: 'hold';
+      /** When the row is due again, in epoch milliseconds. */
+      readonly nextAttemptAt: number;
+    };
 
 /**
  * The delivery queue of the delivery role (ADR-019 Decision 8, issue #460).
@@ -182,7 +191,9 @@ export interface EventDeliveriesRepository {
   claim(request: EventDeliveryClaimRequest): Promise<ClaimedEventDelivery[]>;
 
   /**
-   * Store how a claimed attempt ended.
+   * Store how a claimed attempt ended. A `hold` gives back the attempt the
+   * claim counted, so holds never use up `maxAttempts`, and keeps the last
+   * status code and error class as they were.
    *
    * @returns `false` when the claim no longer holds the row (its lease ran
    *   out and another claim took it, or it was released): nothing is written.

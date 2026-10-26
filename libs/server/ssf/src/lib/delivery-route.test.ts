@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SSF_VERIFICATION_EVENT } from './constants';
 import {
   createSsfDeliveryRoute,
+  receiverErrorClass,
   type SsfDeliveryStream,
   type SsfStreamSource,
 } from './delivery-route';
@@ -158,9 +159,14 @@ describe('createSsfDeliveryRoute', () => {
       { status: 400, body: '{"err":"invalid_key"}' },
       { ok: false, statusCode: 400, errorClass: 'set_invalid_key', retry: true },
     ],
+    // A 400 without a known `err` says nothing about the SET: retried.
     [
       { status: 400, body: 'not json' },
-      { ok: false, statusCode: 400, errorClass: 'set_rejected', retry: false },
+      { ok: false, statusCode: 400, errorClass: 'http_status' },
+    ],
+    [
+      { status: 400, body: '{"err":"something_else"}' },
+      { ok: false, statusCode: 400, errorClass: 'http_status' },
     ],
     [
       egressError('address', 'blocked'),
@@ -188,11 +194,11 @@ describe('createSsfDeliveryRoute', () => {
     expect(signer.signEventToken).not.toHaveBeenCalled();
   });
 
-  it('holds the events of a paused stream: retried, nothing sent', async () => {
+  it('holds the events of a paused stream: no attempt spent, nothing sent', async () => {
     const { route, requests, context } = setup({ stream: stream({ status: 'paused' }) });
     expect(await route.deliver(delivery, verification(), context)).toEqual({
       ok: false,
-      errorClass: 'stream_paused',
+      hold: true,
     });
     expect(requests).toEqual([]);
   });
@@ -209,6 +215,14 @@ describe('createSsfDeliveryRoute', () => {
       errorClass: 'event_not_offered',
     });
     expect(requests).toEqual([]);
+  });
+
+  it('shows a receiver one class for an endpoint refused and one not reached', () => {
+    expect(receiverErrorClass('destination_blocked')).toBe('destination_unreachable');
+    expect(receiverErrorClass('network')).toBe('destination_unreachable');
+    for (const kept of ['http_status', 'timeout', 'set_invalid_key', 'attempt_interrupted']) {
+      expect(receiverErrorClass(kept)).toBe(kept);
+    }
   });
 
   it('lets an unexpected failure through as a thrown error', async () => {

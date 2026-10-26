@@ -139,6 +139,16 @@ export type DeliveryOutcome =
        * no longer exists: the delivery ends `failed` at once. Retried by default.
        */
       readonly retry?: boolean;
+    }
+  | {
+      readonly ok: false;
+      /**
+       * The destination holds its events for now, such as a paused SSF stream
+       * (SSF 1.0 §8.1.2), and nothing was sent. The attempt does not count
+       * toward `maxAttempts` and records no failure; the delivery comes due
+       * again after `DELIVERY_HOLD_INTERVAL_MS`.
+       */
+      readonly hold: true;
     };
 
 /**
@@ -175,7 +185,11 @@ export interface ClaimedDelivery extends Delivery {
   readonly event: EventEnvelope | null;
 }
 
-/** How an attempt ended, as the store records it. */
+/**
+ * How an attempt ended, as the store records it. `hold` is no attempt: the
+ * store gives back the attempt the claim counted, keeps the last failure as
+ * it was, and makes the delivery due again at `nextAttemptAt`.
+ */
 export type DeliveryAttemptRecord =
   | { readonly result: 'delivered'; readonly statusCode?: number }
   | {
@@ -184,7 +198,8 @@ export type DeliveryAttemptRecord =
       readonly statusCode?: number;
       readonly errorClass: string;
     }
-  | { readonly result: 'failed'; readonly statusCode?: number; readonly errorClass: string };
+  | { readonly result: 'failed'; readonly statusCode?: number; readonly errorClass: string }
+  | { readonly result: 'hold'; readonly nextAttemptAt: number };
 
 /**
  * Where the role keeps its work: the delivery queue. In QAuth it is

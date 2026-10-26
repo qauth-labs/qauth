@@ -3995,7 +3995,7 @@
         "tags": [
           "Shared Signals"
         ],
-        "description": "Read the stream’s status (SSF 1.0 §8.1.2.1). `delivery_status`, QAuth’s extension, reports the deliveries still pending and the latest failed attempt from the delivery history.",
+        "description": "Read the stream’s status (SSF 1.0 §8.1.2.1). `delivery_status`, QAuth’s extension, reports the deliveries still pending and the latest failed attempt from the delivery history. An endpoint QAuth refused to reach and one it could not reach both read `destination_unreachable`.",
         "parameters": [
           {
             "schema": {
@@ -4110,7 +4110,7 @@
         "tags": [
           "Shared Signals"
         ],
-        "description": "Set the stream’s status (SSF 1.0 §8.1.2.2): `enabled`, `paused` (events are held and sent once it is enabled again, until their attempts run out) or `disabled` (nothing is held).",
+        "description": "Set the stream’s status (SSF 1.0 §8.1.2.2): `enabled`, `paused` (events are held, however long, without spending attempts, and sent within 30 seconds of it being enabled again) or `disabled` (nothing is held).",
         "requestBody": {
           "required": true,
           "content": {

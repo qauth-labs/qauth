@@ -465,7 +465,8 @@ Experimental, off by default. With `SSF_TRANSMITTER_ENABLED=true`, a realm whose
 [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
 transmitter: receivers create a stream and QAuth pushes Security Event Tokens
 (RFC 8417) to it (RFC 8935). With the switch off none of these routes exists;
-for a realm whose own switch is off they answer `404`.
+for a realm whose own switch is off they answer the `404` of a route that does
+not exist, before the request is validated.
 [SSF transmitter](/operate/ssf-transmitter/) covers setting one up.
 
 | Endpoint                               | Purpose                                                                     |
@@ -481,12 +482,16 @@ for a realm whose own switch is off they answer `404`.
 | `POST /ssf/verify`                     | Ask for a verification event: `204`; `429` within 10 seconds of the last.   |
 
 Every stream management route takes the receiver's own access token (`client_credentials`)
-carrying the `ssf:stream` scope, with the realm's issuer in `aud`. A receiver
-reaches only its own stream; another `stream_id` answers `404`. Delivery is push
-only. `default_subjects` is `NONE`: a stream receives events only about the
-subjects its receiver added, and its verification events. Until the event
-mapping of #540 lands, `events_supported` is empty and verification events are
-the only ones sent.
+carrying the `ssf:stream` scope, with the realm's issuer in `aud` and no other
+realm's issuer. The client must still hold `ssf:stream`. A receiver reaches only
+its own stream; another `stream_id`, or a stream deleted meanwhile, answers
+`404`. The verification interval is per receiver. A paused stream holds its
+events without spending attempts and sends them within 30 seconds of being
+enabled. In `delivery_status`, an endpoint refused or not reached reads
+`destination_unreachable`. Delivery is push only. `default_subjects` is `NONE`:
+a stream receives events only about the subjects its receiver added, and its
+verification events. Until the event mapping of #540 lands, `events_supported`
+is empty and verification events are the only ones sent.
 
 ---
 

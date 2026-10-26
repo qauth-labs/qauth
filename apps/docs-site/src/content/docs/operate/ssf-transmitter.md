@@ -3,7 +3,7 @@ title: SSF transmitter
 description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
 sidebar:
   order: 11
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-26'
 ---
 
 QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
@@ -23,8 +23,8 @@ Two switches, both off by default:
    serves no `/.well-known/ssf-configuration`, keeps its JWKS as it was and writes no SSF
    delivery.
 2. Each realm's: `realms.ssf_transmitter_enabled`. A realm whose switch is off answers `404` on the
-   metadata and on every `/ssf/` route, and its streams receive nothing. No API sets it yet; set it
-   on the realm row:
+   metadata and on every `/ssf/` route, as for a route that does not exist, and its streams receive
+   nothing. No API sets it yet; set it on the realm row:
 
 ```sql
 UPDATE realms SET ssf_transmitter_enabled = true WHERE name = 'master';
@@ -60,11 +60,14 @@ A receiver is an OAuth client of the realm. It authenticates with its own access
 `client_credentials` grant, and the token must:
 
 - carry the `ssf:stream` scope (a token without it gets `403`);
-- name the realm's issuer in `aud`, so a token minted for another resource cannot manage streams.
+- name the realm's issuer in `aud`, so a token minted for another resource cannot manage streams;
+- name no other realm's issuer in `aud`. A `client_id` is unique only within a realm, so such a
+  token may come from a client of the same name in that realm. It gets `401`.
 
 Give `ssf:stream` only to clients you trust with the realm's security events: a receiver may add
 any user or client of the realm as a subject. Taking the scope away, disabling or suspending the
-client, or deleting it stops its deliveries; deleting the client deletes its stream.
+client, or deleting it stops its deliveries, and its token stops working on `/ssf/` at once, not
+when it expires; deleting the client deletes its stream.
 
 Create the client with `client_credentials`, the `ssf:stream` scope and the realm's issuer as its
 audience, for example as an entry of the seed manifest's `clients`:
@@ -157,7 +160,8 @@ delivery role POSTs a SET to the stream's endpoint with `Content-Type: applicati
 
 The header names the signing key (`kid`) and `typ: secevent+jwt`. The `jti` is the event's id,
 and a retry sends the same SET, so the receiver drops a duplicate by its `jti`. A second
-verification request within 10 seconds (`min_verification_interval`) answers `429`.
+verification request from the same receiver within 10 seconds (`min_verification_interval`)
+answers `429`, even for a stream it deleted and created again.
 
 ## Watch deliveries
 
@@ -186,24 +190,38 @@ verification request within 10 seconds (`min_verification_interval`) answers `42
 A push is delivered when the receiver answers `2xx`. Any other answer, a timeout or a network
 failure is retried on the delivery role's schedule (`EVENT_DELIVERY_*`), except a `400` with an
 RFC 8935 `err` that says the SET itself is wrong (`invalid_request`, `invalid_issuer`,
-`invalid_audience`, `invalid_state`), which ends the delivery. Attempts are counted in
+`invalid_audience`, `invalid_state`), which ends the delivery. A `400` without a known `err`,
+such as a proxy's error page, is retried. Attempts are counted in
 `qauth_events_delivery_attempts_total{kind="ssf"}` (see [observability](/operate/observability/)).
 
-`POST /ssf/status` sets the status. `paused` holds the stream's events and sends them once it is
-`enabled` again, until their attempts run out; `disabled` holds nothing. Deleting the stream ends
-its pending deliveries without sending them.
+`error` is the class of the failed attempt. An endpoint QAuth refused to reach (a private
+address) and one it could not reach both read `destination_unreachable`, so the status does not
+tell a receiver which names resolve to private addresses. The delivery history and the server's
+log keep the exact class (`destination_blocked` or `network`).
+
+`POST /ssf/status` sets the status. `paused` holds the stream's events, however long the pause.
+Holding spends no attempt and records no failure: the delivery role looks at a held delivery
+every 30 seconds, and sends it at the first look after the stream is `enabled` again. `disabled`
+holds nothing. Deleting the stream ends its pending deliveries without sending them.
+
+A held delivery is pending, so it holds back [event retention](/operate/observability/) as any
+pending delivery does: no event of the realm from the oldest held one on is deleted. Disable or
+delete a stream rather than leave it paused for good.
 
 ## Turning it off
 
 Turning the realm's switch off stops its deliveries: each pending one ends at its next attempt.
-Turning `SSF_TRANSMITTER_ENABLED` off leaves pending SSF deliveries in the queue, unsent, and they
-hold back the [event retention](/operate/observability/) of their events until the switch is on
-again. Delete the streams first, or turn the realms' switches off and let their deliveries end,
-before turning the deployment's switch off.
+Turning `SSF_TRANSMITTER_ENABLED` off leaves pending SSF deliveries in the queue, unsent. They
+no longer hold back [event retention](/operate/observability/): with the switch off no node
+serves SSF, so retention deletes their events at the realm's retention like any other, and the
+deliveries go with them. A delivery whose event is still there when the switch is on again is
+sent then. Set the switch the same on every node: a node with it off does not count SSF
+deliveries for retention.
 
 ## In a distributed deployment
 
-The delivery role reads the stream tables and the columns that say whether a stream may receive
-events: `eventDeliveryGrantStatements()` in `@qauth-labs/infra-db` grants them. It decrypts a
-receiver's `authorization_header` through the signer as the `delivery` caller, which may decrypt
-but never encrypt; it holds no key.
+The delivery role reads the streams, the event subject each stream subject stands for, and the
+columns that say whether a stream may receive events: `eventDeliveryGrantStatements()` in
+`@qauth-labs/infra-db` grants them. It cannot read a subject as the receiver sent it, which may be
+an email address or a phone number. It decrypts a receiver's `authorization_header` through the
+signer as the `delivery` caller, which may decrypt but never encrypt; it holds no key.

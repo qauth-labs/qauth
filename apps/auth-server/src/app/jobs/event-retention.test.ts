@@ -134,6 +134,24 @@ describe('event-retention (#536)', () => {
     expect(ctx.warn).toHaveBeenCalledTimes(2);
   });
 
+  it('lists a kind no node serves with no destination, so nothing of it holds events back', async () => {
+    const retention = store([]);
+    const definition = createEventRetentionJob({
+      retention: retention as unknown as EventRetentionStore,
+      routes: [{ kind: 'webhook', destinations: async () => [{ id: 'a', realmId: REALM_A }] }],
+      // `webhook` has a route here, so it stays served whatever the list says.
+      unservedKinds: ['ssf', 'webhook'],
+      fallback: FALLBACK,
+    });
+
+    await definition.run(context());
+
+    expect(retention.offeredThrough).toHaveBeenCalledWith(REALM_A, {
+      kinds: ['ssf', 'webhook'],
+      destinations: [{ kind: 'webhook', id: 'a', realmId: REALM_A }],
+    });
+  });
+
   it('leaves a realm another instance holds and goes on with the next', async () => {
     const retention = store([{ status: 'busy' }, done(1)], [REALM_A, REALM_B]);
     const ctx = context();

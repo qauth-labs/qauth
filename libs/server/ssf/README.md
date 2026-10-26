@@ -21,7 +21,9 @@ share. It holds no key and opens no connection of its own.
   `@qauth-labs/server-event-delivery`. It lists every stream it may deliver to with the event types
   and subjects it takes, signs each SET through the delivery role's signer handle
   (`event_signing`), and POSTs it through the egress client, which checks the endpoint's addresses
-  again at every attempt.
+  again at every attempt. A paused stream's deliveries are held, spending no attempt. A `400` ends
+  a delivery only with a known RFC 8935 `err`. `receiverErrorClass` gives the coarser class a
+  receiver reads on its stream status.
 
 Which QAuth event types a stream can receive comes from the registry's `ssf` slot
 (`ssfEventsSupported`, `eventTypesFor`). EVT-11 (#540) fills it; until then a stream receives its

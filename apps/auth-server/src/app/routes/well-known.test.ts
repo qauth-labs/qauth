@@ -281,6 +281,45 @@ describe('GET /.well-known/jwks.json', () => {
       await app.close();
     }
   });
+
+  it('serves the token keys alone, and logs why, when the SET keys cannot be read (#410)', async () => {
+    const lines: Array<{ msg: string }> = [];
+    const app = Fastify({
+      logger: {
+        level: 'error',
+        stream: { write: (line: string) => void lines.push(JSON.parse(line) as { msg: string }) },
+      },
+    });
+    const jwks = { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'x', alg: 'EdDSA', kid: 'token' }] };
+    app.decorate('jwtUtils', {
+      getIssuer: () => ISSUER,
+      getJwks: async () => jwks,
+      getIdTokenSigningAlgValuesSupported: () => ['EdDSA'],
+    } as unknown as never);
+    // A realm that runs the SSF transmitter, whose signer cannot read its keys.
+    app.decorate('ssf', {} as never);
+    app.decorate('signer', {
+      getVerificationKeys: async () => {
+        throw new Error('the key store is down');
+      },
+    } as unknown as never);
+    app.decorateRequest('realm', null);
+    app.addHook('onRequest', async (request) => {
+      request.realm = { id: 'realm-id', issuer: ISSUER, ssfTransmitterEnabled: true } as never;
+    });
+    await app.register(wellKnownRoutes);
+    await app.ready();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(jwks);
+      expect(lines.map((line) => line.msg)).toEqual([
+        'the SET verification keys could not be read; the JWKS serves the token keys alone',
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 /**

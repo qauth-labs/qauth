@@ -8,6 +8,7 @@ import {
   checkDelivery,
   eventSubjectOf,
   keptDescription,
+  receiverErrorClass,
   removeSubjectRequestSchema,
   SSF_MIN_VERIFICATION_INTERVAL,
   SSF_STREAM_SUBJECTS_MAX,
@@ -31,6 +32,7 @@ import { z } from 'zod';
 import { REDIS_KEYS } from '../../constants/redis-keys';
 import {
   createRequireSsfReceiver,
+  realmRunsTransmitter,
   SsfNotFoundError,
   type SsfReceiver,
   ssfReceiverOf,
@@ -53,7 +55,8 @@ import { emitUserEvent } from '../../helpers/user-events';
  *   POST   /ssf/verify            — ask for a verification event (204)
  *
  * Registered only while SSF_TRANSMITTER_ENABLED is on; a realm whose own
- * switch is off answers 404. A receiver is an OAuth client with the
+ * switch is off answers the 404 of a route that does not exist, before the
+ * request is validated. A receiver is an OAuth client with the
  * `ssf:stream` scope, authenticating with its own access token (see
  * `helpers/ssf-receiver.ts`). It reaches only its own stream: another
  * receiver's `stream_id` answers 404.
@@ -106,6 +109,15 @@ export default async function (fastify: FastifyInstance) {
   const requireSsfReceiver = createRequireSsfReceiver(fastify);
   const streams = fastify.repositories.ssfStreams;
   const routes = fastify.withTypeProvider<ZodTypeProvider>();
+
+  // A realm that does not run the transmitter answers as if these routes did
+  // not exist: Fastify's own 404, before the body is parsed or validated, so
+  // a malformed request gets no 400 that would give the routes away.
+  fastify.addHook('onRequest', async (request, reply) => {
+    if (realmRunsTransmitter(request)) return;
+    reply.callNotFound();
+    return reply;
+  });
 
   const keyOf = (receiver: SsfReceiver, streamId: string) => ({
     realmId: receiver.realm.id,
@@ -317,7 +329,7 @@ export default async function (fastify: FastifyInstance) {
 
   /** The status document of a stream, with its deliveries beside it. */
   async function statusOf(stream: { id: string; status: string; statusReason: string | null }) {
-    const deliveries = await streams.deliveryStatus(stream.id);
+    const deliveries = await streams.deliveryStatus(stream.id, Date.now());
     const failure = deliveries.lastFailure;
     return {
       stream_id: stream.id,
@@ -332,7 +344,8 @@ export default async function (fastify: FastifyInstance) {
                 event_id: failure.eventId,
                 attempts: failure.attempts,
                 ...(failure.statusCode === null ? {} : { status_code: failure.statusCode }),
-                error: failure.errorClass,
+                // Coarser than what the history keeps: see receiverErrorClass.
+                error: receiverErrorClass(failure.errorClass),
                 time: new Date(failure.at).toISOString(),
                 state: failure.state,
                 ...(failure.nextAttemptAt === undefined
@@ -350,7 +363,7 @@ export default async function (fastify: FastifyInstance) {
       ...common,
       schema: {
         description:
-          'Read the stream’s status (SSF 1.0 §8.1.2.1). `delivery_status`, QAuth’s extension, reports the deliveries still pending and the latest failed attempt from the delivery history.',
+          'Read the stream’s status (SSF 1.0 §8.1.2.1). `delivery_status`, QAuth’s extension, reports the deliveries still pending and the latest failed attempt from the delivery history. An endpoint QAuth refused to reach and one it could not reach both read `destination_unreachable`.',
         tags: TAGS,
         'x-qauth-stability': 'experimental',
         querystring: streamIdQuerySchema,
@@ -371,7 +384,7 @@ export default async function (fastify: FastifyInstance) {
       ...common,
       schema: {
         description:
-          'Set the stream’s status (SSF 1.0 §8.1.2.2): `enabled`, `paused` (events are held and sent once it is enabled again, until their attempts run out) or `disabled` (nothing is held).',
+          'Set the stream’s status (SSF 1.0 §8.1.2.2): `enabled`, `paused` (events are held, however long, without spending attempts, and sent within 30 seconds of it being enabled again) or `disabled` (nothing is held).',
         tags: TAGS,
         'x-qauth-stability': 'experimental',
         body: statusUpdateRequestSchema,
@@ -434,6 +447,8 @@ export default async function (fastify: FastifyInstance) {
         },
         SSF_STREAM_SUBJECTS_MAX
       );
+      // The receiver deleted the stream meanwhile.
+      if (added === 'missing') throw new SsfNotFoundError('Stream not found');
       if (added === 'full') {
         throw new BadRequestError(`A stream holds at most ${SSF_STREAM_SUBJECTS_MAX} subjects`);
       }
@@ -485,7 +500,9 @@ export default async function (fastify: FastifyInstance) {
       if (state !== undefined && scanValues(state).length > 0) {
         throw new BadRequestError('state must not be shaped like a token or a key');
       }
-      const limitKey = REDIS_KEYS.SSF_VERIFICATION(receiver.realm.id, stream.id);
+      // Per receiver, not per stream: deleting the stream and creating
+      // another does not reset the interval.
+      const limitKey = REDIS_KEYS.SSF_VERIFICATION(receiver.realm.id, receiver.client.id);
       const allowed = await fastify.redis.set(
         limitKey,
         '1',
@@ -522,8 +539,9 @@ export default async function (fastify: FastifyInstance) {
             eventId,
             now: Date.now(),
           });
-          if (!enqueued)
-            throw new Error('ssf: the verification event was not queued for its stream');
+          // The only stream the row could be for is gone: the receiver
+          // deleted it meanwhile. The event is rolled back with the request.
+          if (!enqueued) throw new SsfNotFoundError('Stream not found');
         })
         .catch(release);
       reply.code(204);

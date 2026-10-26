@@ -40,7 +40,11 @@ import {
  * retried and the status shows it; a private endpoint is refused at
  * registration and at delivery; with the switch off there is no route, no
  * metadata and no delivery row; a stream in one realm never gets another
- * realm's events.
+ * realm's events. And the review fixes of #865: a paused stream's events are
+ * held without spending attempts; a realm switched off answers as if the
+ * routes did not exist; a token of another realm, or of a client whose scope
+ * was taken away, manages no stream; the verification interval outlives a
+ * recreated stream; and a stream deleted while a request on it runs is a 404.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -67,6 +71,8 @@ vi.mock('../../../../libs/server/egress/src/lib/transport', async (importOrigina
 const ISSUER = 'https://auth.example.com';
 const HOST_B = 'beta.example.com';
 const ISSUER_B = `https://${HOST_B}`;
+const HOST_C = 'gamma.example.com';
+const ISSUER_C = `https://${HOST_C}`;
 const PUSH = 'urn:ietf:rfc:8935';
 const VERIFICATION = 'https://schemas.openid.net/secevent/ssf/event-type/verification';
 const VERIFICATION_EVENT_TYPE = 'urn:qauth:event:ssf.stream.verification_requested:v1-rc.0';
@@ -165,9 +171,14 @@ describe('the SSF transmitter (real containers)', () => {
   async function newReceiver(
     app: FastifyInstance,
     realmId: string,
-    options: { audience?: string; host?: string; scopes?: string[] } = {}
+    options: {
+      audience?: string | string[];
+      host?: string;
+      scopes?: string[];
+      clientId?: string;
+    } = {}
   ): Promise<Receiver> {
-    const clientId = `receiver-${randomUUID()}`;
+    const clientId = options.clientId ?? `receiver-${randomUUID()}`;
     const secret = `secret-${randomUUID()}`;
     const scopes = options.scopes ?? ['ssf:stream'];
     const client = await app.repositories.oauthClients.create({
@@ -179,7 +190,7 @@ describe('the SSF transmitter (real containers)', () => {
       redirectUris: [],
       scopes,
       grantTypes: ['client_credentials'],
-      audience: [options.audience ?? ISSUER],
+      audience: [options.audience ?? ISSUER].flat(),
       enabled: true,
       requirePkce: false,
     });
@@ -525,15 +536,21 @@ describe('the SSF transmitter (real containers)', () => {
       const verify = await call(app, who, 'POST', '/ssf/verify', { stream_id: streamId });
       expect(verify.statusCode, verify.body).toBe(204);
 
+      // The receiver reads one class for a refused and an unreachable
+      // endpoint; the delivery history keeps which it was.
       await vi.waitFor(
         async () => {
           const status = await call(app, who, 'GET', `/ssf/status?stream_id=${streamId}`);
           expect(status.json()).toMatchObject({
-            delivery_status: { last_failure: { error: 'destination_blocked' } },
+            delivery_status: { last_failure: { error: 'destination_unreachable' } },
           });
         },
         { timeout: 15_000, interval: 100 }
       );
+      const [eventId] = await verificationEventIds(app, streamId);
+      expect((await app.repositories.eventDeliveries.listForEvent(eventId))[0]).toMatchObject({
+        lastErrorClass: 'destination_blocked',
+      });
       expect(internal.requests).toEqual([]);
       expect(otherReceiver.requests).toEqual([]);
     });
@@ -611,6 +628,36 @@ describe('the SSF transmitter (real containers)', () => {
       expect(response.statusCode).toBe(401);
       expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
       expect((await app.inject({ method: 'GET', url: '/ssf/stream' })).statusCode).toBe(401);
+
+      // A receiver whose scope is taken away stops at once, not when its
+      // token expires, as its deliveries do.
+      const who = await newReceiver(app, realmId);
+      expect((await call(app, who, 'GET', '/ssf/stream')).statusCode).toBe(200);
+      await app.dbPool.query(`UPDATE oauth_clients SET scopes = '["reports:read"]' WHERE id = $1`, [
+        who.id,
+      ]);
+      const scopeGone = await call(app, who, 'GET', '/ssf/stream');
+      expect(scopeGone.statusCode).toBe(401);
+      expect(scopeGone.headers['www-authenticate']).toMatch(/error="invalid_token"/);
+    });
+
+    it('refuses a token minted in another realm, even for a client of the same client_id there', async () => {
+      const app = await boot(on);
+      const realmA = await setRealmSwitch(app, E2E_REALM_NAME, true);
+      const { realm } = await app.repositories.realms.createWithPrimaryHost(
+        { name: `gamma-${randomUUID()}`, issuer: ISSUER_C, enabled: true },
+        HOST_C
+      );
+      const realmC = await setRealmSwitch(app, realm.name, true);
+      // Realm A's client lists C's issuer in its audience too, and C has a
+      // receiver with the same client_id.
+      const clientId = `shared-${randomUUID()}`;
+      const inA = await newReceiver(app, realmA, { clientId, audience: [ISSUER, ISSUER_C] });
+      await newReceiver(app, realmC, { clientId, audience: ISSUER_C, host: HOST_C });
+
+      const response = await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_C);
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
     });
 
     it('updates, replaces, pauses and deletes a stream as SSF 1.0 §8.1 says', async () => {
@@ -694,6 +741,136 @@ describe('the SSF transmitter (real containers)', () => {
         404
       );
       expect((await call(app, who, 'GET', '/ssf/stream')).json()).toEqual([]);
+    });
+
+    it('holds a paused stream’s events without spending attempts, and sends them once it is enabled', async () => {
+      const app = await boot(on);
+      const realmId = await setRealmSwitch(app, E2E_REALM_NAME, true);
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const paused = await call(app, who, 'POST', '/ssf/status', {
+        stream_id: streamId,
+        status: 'paused',
+      });
+      expect(paused.statusCode, paused.body).toBe(200);
+      expect(
+        (await call(app, who, 'POST', '/ssf/verify', { stream_id: streamId })).statusCode
+      ).toBe(204);
+      const [eventId] = await verificationEventIds(app, streamId);
+      const row = async () =>
+        (
+          await app.dbPool.query<{
+            attempt_count: number;
+            last_error_class: string | null;
+            wait: string;
+          }>(
+            `SELECT attempt_count, last_error_class, (next_attempt_at - updated_at)::text AS wait
+               FROM event_deliveries WHERE event_id = $1`,
+            [eventId]
+          )
+        ).rows[0];
+
+      // Looked at and held: the next look is the hold interval away, and the
+      // look spent no attempt and recorded no failure.
+      await vi.waitFor(async () => expect((await row()).wait).toBe('30000'), {
+        timeout: 15_000,
+        interval: 100,
+      });
+      expect(await row()).toMatchObject({ attempt_count: 0, last_error_class: null });
+      expect(receiver.requests).toEqual([]);
+      const status = await call(app, who, 'GET', `/ssf/status?stream_id=${streamId}`);
+      expect(status.json()).toEqual({
+        stream_id: streamId,
+        status: 'paused',
+        delivery_status: { pending: 1 },
+      });
+
+      // Enabled again, it is sent at the next look, which the test brings
+      // forward rather than wait the interval out.
+      await call(app, who, 'POST', '/ssf/status', { stream_id: streamId, status: 'enabled' });
+      await app.dbPool.query(
+        'UPDATE event_deliveries SET next_attempt_at = 0 WHERE event_id = $1',
+        [eventId]
+      );
+      await vi.waitFor(() => expect(receiver.requests).toHaveLength(1), {
+        timeout: 15_000,
+        interval: 100,
+      });
+      await vi.waitFor(
+        async () =>
+          expect((await app.repositories.eventDeliveries.listForEvent(eventId))[0]).toMatchObject({
+            status: 'delivered',
+            attemptCount: 1,
+          }),
+        { timeout: 5000, interval: 100 }
+      );
+    });
+
+    it('answers a realm whose switch is off as if the routes did not exist, before reading the request', async () => {
+      const app = await boot(on);
+      await setRealmSwitch(app, E2E_REALM_NAME, false);
+      const unknown = await app.inject({ method: 'POST', url: '/no-such-route', payload: {} });
+      expect(unknown.statusCode).toBe(404);
+      for (const [method, url] of [
+        ['POST', '/ssf/status'],
+        ['POST', '/ssf/stream'],
+        ['GET', '/ssf/status'],
+      ] as const) {
+        // An empty body would fail validation: the 404 comes first.
+        const response = await app.inject({ method, url, payload: {} });
+        expect(response.statusCode, url).toBe(404);
+        expect(response.json(), url).toEqual({
+          ...unknown.json(),
+          message: `Route ${method}:${url} not found`,
+        });
+      }
+    });
+
+    it('keeps the verification interval when the receiver deletes its stream and creates another', async () => {
+      const app = await boot(on);
+      const realmId = await setRealmSwitch(app, E2E_REALM_NAME, true);
+      const who = await newReceiver(app, realmId);
+      const first = await createStream(app, who);
+      expect((await call(app, who, 'POST', '/ssf/verify', { stream_id: first })).statusCode).toBe(
+        204
+      );
+      expect((await call(app, who, 'DELETE', `/ssf/stream?stream_id=${first}`)).statusCode).toBe(
+        204
+      );
+      const second = await createStream(app, who);
+      const again = await call(app, who, 'POST', '/ssf/verify', { stream_id: second });
+      expect(again.statusCode).toBe(429);
+    });
+
+    it('answers 404, not 500, when the receiver deletes its stream while a request on it runs', async () => {
+      const app = await boot(on);
+      const realmId = await setRealmSwitch(app, E2E_REALM_NAME, true);
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const found = await app.repositories.ssfStreams.find({
+        realmId,
+        receiverClientId: who.id,
+        streamId,
+      });
+      // The request finds the stream; the receiver's DELETE lands before it
+      // writes.
+      expect((await call(app, who, 'DELETE', `/ssf/stream?stream_id=${streamId}`)).statusCode).toBe(
+        204
+      );
+      const find = vi.spyOn(app.repositories.ssfStreams, 'find').mockResolvedValue(found);
+      try {
+        const added = await call(app, who, 'POST', '/ssf/subjects/add', {
+          stream_id: streamId,
+          subject: { format: 'opaque', id: 'late' },
+        });
+        expect(added.statusCode, added.body).toBe(404);
+        const verify = await call(app, who, 'POST', '/ssf/verify', { stream_id: streamId });
+        expect(verify.statusCode, verify.body).toBe(404);
+      } finally {
+        find.mockRestore();
+      }
+      // Nothing was recorded.
+      expect(await verificationEventIds(app, streamId)).toEqual([]);
     });
   });
 });

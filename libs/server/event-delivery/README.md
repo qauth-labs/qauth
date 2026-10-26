@@ -67,6 +67,9 @@ for good after `maxAttempts`.
 - **Retries.** Exponential backoff with jitter (`retry`): 30 seconds, doubling, at most 6 hours,
   less up to 20%, by default; 12 attempts by default. A route marks a refusal no retry can change
   with `retry: false`, and the delivery ends `failed` at once. A failed delivery stays in the queue.
+- **Holds.** A route returns `{ ok: false, hold: true }` when its destination holds its events,
+  such as a paused SSF stream. That is no attempt: it is not counted, records no failure, and the
+  delivery comes due again after 30 seconds (`DELIVERY_HOLD_INTERVAL_MS`), however long the hold.
 - **A failing listing.** When a route's `destinations()` throws, nothing is fanned out that cycle,
   so no destination misses an event because its route could not be asked.
 - **Stopping.** `stop()` claims nothing more, waits for the attempts in flight up to

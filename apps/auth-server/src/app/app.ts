@@ -24,7 +24,7 @@ import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import { signerPlugin } from '@qauth-labs/fastify-plugin-signer';
-import { ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
+import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
@@ -601,12 +601,14 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   // Background jobs (ADR-019 Decision 8): purge-expired, and event retention
   // (#536), which reads the delivery routes' enabled destinations and falls
-  // back to the retention seeds for a realm whose row is gone. The runner
-  // starts on `onReady` and stops on `onClose`, so it needs the database and
-  // metrics plugins above it; it registers no route, so nothing below depends
-  // on its position.
+  // back to the retention seeds for a realm whose row is gone. With the SSF
+  // transmitter off no node serves `ssf`, so an SSF position or delivery left
+  // from when it was on holds no event back. The runner starts on `onReady`
+  // and stops on `onClose`, so it needs the database and metrics plugins
+  // above it; it registers no route, so nothing below depends on its position.
   await fastify.register(jobsPlugin, {
     deliveryRoutes,
+    unservedDeliveryKinds: fastify.ssf === null ? [SSF_DELIVERY_KIND] : [],
     eventRetentionFallback: {
       userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,

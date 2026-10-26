@@ -10,7 +10,8 @@ const routes = fastify.ssf ? [fastify.ssf.deliveryRoute] : [];
 ```
 
 - **Off** (`enabled: false`, the default deployment): `fastify.ssf` is `null`, and the plugin creates
-  no egress client and no route.
+  no egress client and no route. The app then names `ssf` to the retention job as a kind no node
+  serves, so SSF deliveries left from when it was on hold no event back.
 - **On**: `fastify.ssf.deliveryRoute` is the push route of `@qauth-labs/server-ssf` over the
   `ssfStreams` repository and an egress client; the app hands it to the delivery role and the
   retention job. `fastify.ssf.checkEndpoint(url)` checks a stream's `endpoint_url` at registration
