@@ -1,0 +1,712 @@
+# core.consent bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
+# delurio's replay drives a browser today, and `request` below is the request template QAuth asks of its replay over
+# HTTP (method, path, query, form, headers, and values saved from earlier responses), with a cookie jar per walk. The
+# shared server binding (#565) gives the server's address, the realm's hosts, the accounts, the seed (the clients of
+# graphs/fixtures/seed-manifest.json) and how a replay signs in through /ui/login; this file adds the two requests,
+# where the page is read, and the scenarios. What each state answers is its `response` in flow.yaml.
+#
+# - A scenario's `request` is merged over the template of every event its walks send: `query` into the GET's query,
+#   `form` into the POST's form, `headers` into both. A field or a header set to null is left out.
+# - `walks` on a scenario lists the walks its replay sends, each the request events in order (the DONE of a step is the
+#   server's own); the comment at the top of each scenario names the guards of flow.yaml it makes true.
+# - The shared binding runs QAuth with DPOP_ENABLED=true, so that dpop_jkt is read, and with open client registration.
+schema: delurio-graph/0
+kind: binding
+flow: core.consent
+extends: ../../../bindings/server.binding.yaml # written by #565
+
+data:
+  # Every request carries the same PKCE challenge: this flow never redeems the code it mints.
+  pkce:
+    verifier: consent-replay-code-verifier-0123456789-abcdefghij
+    challenge: 8x51Vfs4cyF7pvt6cy2wb7cQVzJwaXb7McUmkqfu4-Y # BASE64URL(SHA-256(verifier)), RFC 7636 §4.2
+
+events:
+  SHOW:
+    # the consent page, with the parameters /oauth/authorize redirects with
+    - request:
+        method: GET
+        path: /ui/consent
+        query:
+          response_type: code
+          client_id: consent-web
+          redirect_uri: https://consent-web.example/callback
+          scope: openid profile
+          state: consent-replay-state
+          nonce: consent-replay-nonce
+          code_challenge: '{pkce.challenge}'
+          code_challenge_method: S256
+        follow: false
+  SUBMIT:
+    # the page's form: the decision, the box, the CSRF value and the authorize parameters again
+    - request:
+        method: POST
+        path: /ui/consent
+        form:
+          decision: allow
+          allow_forever: '1'
+          csrf_token: '{csrfToken}'
+          response_type: code
+          client_id: consent-web
+          redirect_uri: https://consent-web.example/callback
+          scope: openid profile # the scopes the page lists: both are in consent-web's allowlist
+          state: consent-replay-state
+          nonce: consent-replay-nonce
+          code_challenge: '{pkce.challenge}'
+          code_challenge_method: S256
+        follow: false
+
+states:
+  rendered:
+    # where the replay reads the value the POST needs: the hidden field of the page's form
+    save:
+      csrfToken:
+        from: body
+        css: 'form[action="/ui/consent"] input[name="csrf_token"]'
+        attribute: value
+
+scenarios:
+  # The main story first, then one scenario for each guard of flow.yaml, in the order the server checks them.
+
+  approveAndRemember:
+    # a valid session, Allow with "Remember this decision" ticked: the main story
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+
+  approveOnce:
+    # remember is false: Allow with the box cleared, so no consent is saved
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: false
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+    request: { form: { allow_forever: null } }
+
+  unknownHost:
+    # hostUnknown
+    given:
+      gate: unknownHost
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    request: { headers: { Host: consent.unknown-host.invalid } }
+
+  endpointHost:
+    # endpointHost: the shared binding gives the realm an endpoint host beside its primary one
+    given:
+      gate: endpointHost
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    request: { headers: { Host: '{realm.endpointHost}' } }
+
+  overGlobalLimit:
+    # rateLimited, for the GET: the address has sent RATE_LIMIT_MAX requests in this window already
+    given:
+      gate: rateLimited
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW]]
+    setup:
+      - request:
+          method: GET
+          path: /ui/consent
+          # counted, then answered with the login redirect
+        repeat: '{rateLimitMax}' # the shared binding: the server's RATE_LIMIT_MAX
+
+  overAuthorizeLimit:
+    # rateLimited, for the POST: the address has sent AUTHORIZE_RATE_LIMIT consent posts in this window already
+    given:
+      gate: rateLimited
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SUBMIT]]
+    setup:
+      - request:
+          method: POST
+          path: /ui/consent
+          form: {}
+          # counted, then refused with 400
+        repeat: '{authorizeRateLimit}' # the shared binding: the server's AUTHORIZE_RATE_LIMIT
+
+  invalidInput:
+    # inputInvalid: the GET has no code_challenge, the POST no decision
+    given:
+      gate: invalidInput
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    request: { query: { code_challenge: null }, form: { decision: null } }
+
+  noSession:
+    # noSession: the walk never signs in
+    given:
+      gate: noSession
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+
+  staleSession:
+    # staleSession: the cookie of a browser session that /auth/logout has ended since
+    given:
+      gate: staleSession
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+        save: { sessionCookie: 'cookie.__Host-qauth_session' }
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+      - request:
+          method: POST
+          path: /auth/logout
+          headers: { Authorization: 'Bearer {token}' }
+          # ends every browser session of the user
+    request: { headers: { Cookie: '__Host-qauth_session={sessionCookie}' } }
+
+  disabledAccount:
+    # accountDisabled: the user is disabled after signing in
+    given:
+      gate: accountDisabled
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: throwaway # an account the shared binding creates for this walk alone
+    setup:
+      - signIn: browser
+      - run: # no API disables a user
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - "UPDATE users SET enabled = false WHERE id = '{account.sub}'"
+
+  unknownClient:
+    # clientUnusable: client_id names no client of the realm
+    given:
+      gate: open
+      params: unusableClient
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request: # renders consent-web's page, for the CSRF value the POST carries
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request: { query: { client_id: consent-unknown }, form: { client_id: consent-unknown } }
+
+  unregisteredRedirect:
+    # redirectUnregistered: a redirect_uri consent-web did not register
+    given:
+      gate: open
+      params: unregisteredRedirect
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request:
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request:
+      query: { redirect_uri: 'https://consent-web.example/elsewhere' }
+      form: { redirect_uri: 'https://consent-web.example/elsewhere' }
+
+  plainHttpRedirect:
+    # redirectNotPermitted: consent-plain-http registered a plain-http redirect URI to a host that is not loopback
+    given:
+      gate: open
+      params: unpermittedRedirect
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request:
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request:
+      query:
+        client_id: consent-plain-http
+        redirect_uri: 'http://consent-plain-http.example/callback'
+        scope: openid
+      form:
+        client_id: consent-plain-http
+        redirect_uri: 'http://consent-plain-http.example/callback'
+        scope: openid
+
+  malformedDpopJkt:
+    # dpopJktMalformed: DPoP is on and dpop_jkt is no thumbprint
+    given:
+      gate: open
+      params: malformedDpopJkt
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request:
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request: { query: { dpop_jkt: not-a-thumbprint }, form: { dpop_jkt: not-a-thumbprint } }
+
+  agentOverCap:
+    # overAgentCap: consent-agent is capped at readonly, and the request asks for agent:exec. The setup renders a page
+    # within the cap, so the POST carries a live CSRF value and a tampered scope field.
+    given:
+      gate: open
+      params: valid
+      agentScope: overCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request:
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-agent
+            redirect_uri: https://consent-agent.example/callback
+            scope: openid agent:readonly
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request:
+      query:
+        client_id: consent-agent
+        redirect_uri: https://consent-agent.example/callback
+        scope: openid agent:exec
+      form:
+        client_id: consent-agent
+        redirect_uri: https://consent-agent.example/callback
+        scope: openid agent:exec
+
+  selfServiceOverCap:
+    # overAgentCapShown: a client that registered itself asks for an agent scope, which no such client may hold
+    given:
+      gate: open
+      params: valid
+      agentScope: overCapSelfService
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW]]
+    as: user
+    setup:
+      - request:
+          method: POST
+          path: /oauth/register
+          json:
+            client_name: Consent replay self-registered client
+            redirect_uris: ['https://consent-self-registered.example/callback']
+            grant_types: [authorization_code]
+            response_types: [code]
+            token_endpoint_auth_method: none
+        save: { registeredClientId: body.client_id }
+      - signIn: browser
+    request:
+      query:
+        client_id: '{registeredClientId}'
+        redirect_uri: https://consent-self-registered.example/callback
+        scope: openid agent:readonly
+
+  wrongCsrf:
+    # csrfWrong: the form carries a value the session never held
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: wrong
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+    request: { form: { csrf_token: not-the-sessions-value } }
+
+  reusedCsrf:
+    # csrfWrong: a second POST of the same form, whose value the first one burned
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: wrong
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request:
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+      - request: # the first POST of the form: a code is issued and the value is burned
+          method: POST
+          path: /ui/consent
+          form:
+            decision: allow
+            csrf_token: '{csrfToken}'
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+          follow: false
+
+  deny:
+    # denied: the user presses Deny
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: deny
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+    request: { form: { decision: deny } }
+
+  tamperedScope:
+    # scopesDiffer: the page shows openid profile, and the form posts openid profile email
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: otherScopes
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+    request: { form: { scope: openid profile email } }
+
+  unboundClient:
+    # scopesUnbound: the session rendered consent-web's page, and the form names consent-development, whose page it
+    # never rendered
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: unboundScopes
+      stepUp: none
+      allowForever: true
+    walks: [[SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - request:
+          method: GET
+          path: /ui/consent
+          query:
+            response_type: code
+            client_id: consent-web
+            redirect_uri: https://consent-web.example/callback
+            scope: openid profile
+            code_challenge: '{pkce.challenge}'
+            code_challenge_method: S256
+        save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
+    request:
+      form:
+        client_id: consent-development
+        redirect_uri: https://consent-development.example/callback
+        scope: openid
+
+  tamperedResource:
+    # resourcesDiffer: the page names a resource, and the form drops it
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: otherResources
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+    request: { query: { resource: 'https://api.consent.example/' }, form: { resource: null } }
+
+  maxAgeExceeded:
+    # needsFreshLogin: max_age=1 on a sign-in two seconds old
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: maxAgeExceeded
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - run: [sleep, '2']
+    request: { query: { max_age: '1' }, form: { max_age: '1' } }
+
+  promptLoginOnAnOldSignIn:
+    # needsFreshLogin: prompt=login on a sign-in older than the two-minute window
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: promptLogin
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - run: [sleep, '{freshAuthWindowSeconds}'] # the shared binding: STEP_UP_FRESH_AUTH_WINDOW_MS in seconds, plus one
+    request: { query: { prompt: login }, form: { prompt: login } }
+
+  dangerousScopeOnAnOldSignIn:
+    # needsFreshLogin: write:notes for a production client, on a sign-in older than the two-minute window
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: dangerousScope
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - run: [sleep, '{freshAuthWindowSeconds}']
+    request: { query: { scope: openid write:notes }, form: { scope: openid write:notes } }
+
+  developmentClient:
+    # developmentClient: the relaxed style policy on the page, and write:notes on an old sign-in without a step-up
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: development
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: dangerousScope
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - run: # the manifest cannot set an environment; the realm resolver sees the ceiling once its cache expires
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - >-
+            UPDATE oauth_clients SET environment = 'development' WHERE client_id = 'consent-development';
+            UPDATE realms SET max_environment_laxity = 'development' WHERE name = 'master'
+      - signIn: browser
+      - run: [sleep, '{freshAuthWindowSeconds}'] # longer than the realm cache's 30 seconds too
+    teardown:
+      - run:
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - >-
+            UPDATE oauth_clients SET environment = 'production' WHERE client_id = 'consent-development';
+            UPDATE realms SET max_environment_laxity = 'production' WHERE name = 'master'
+    request:
+      query:
+        client_id: consent-development
+        redirect_uri: https://consent-development.example/callback
+        scope: openid write:notes
+      form:
+        client_id: consent-development
+        redirect_uri: https://consent-development.example/callback
+        scope: openid write:notes
+
+  # A replay over HTTP cannot make a store fail, and apps/auth-server/src/app/routes/ui/consent.test.ts does not reach
+  # these exits either: server_error.store is drawn from the code alone.
+  storeFailure:
+    given:
+      gate: open
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    skip: the replay cannot make the cache, the database or the event store fail
