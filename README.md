@@ -64,7 +64,6 @@ the open work.
 - Resource indicators (RFC 8707): each token is bound to its audience.
 - Client registration by Client ID Metadata Document (CIMD). RFC 7591 dynamic
   registration remains as a fallback.
-- DPoP-bound tokens (RFC 9449).
 
 **MCP servers and AI agents**
 
@@ -87,8 +86,8 @@ the open work.
 - Realms: separate tenants, each with its own issuer and hosts.
 - A developer portal for OAuth clients and API keys.
 - Security headers, CSRF protection and `__Host-` cookies.
-- Structured logs, Prometheus `/metrics`, and events exported as OpenTelemetry
-  logs.
+- Structured logs and Prometheus `/metrics`. Events can also go out as
+  OpenTelemetry logs, once `OTEL_EVENTS_ENABLED` is set.
 - Signing keys stored encrypted under a key-encryption key (KEK).
 
 **Behind switches that are off by default**
@@ -98,6 +97,7 @@ the open work.
 | `WALLET_FEDERATION_ENABLED` | Linking a wallet to an account and signing in with it, over OID4VP 1.0 with SD-JWT VC. Tested against a mock wallet so far; the pass against a real wallet is still open. |
 | `HYBRID_SIGNING_ENABLED`    | Hybrid ML-DSA-65 + Ed25519 token signatures and a mixed JWKS. See the [verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).                               |
 | `ID_JAG_ENABLED`            | Enterprise-managed authorization: accepting and minting ID-JAG assertions ([ADR-011](./docs/adr/011-enterprise-managed-authorization.md)).                                |
+| `DPOP_ENABLED`              | DPoP-bound tokens (RFC 9449): the token endpoint binds tokens to the client's key, and `userinfo` accepts them.                                                           |
 
 ## Quick start
 
