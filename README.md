@@ -67,8 +67,8 @@ the open work.
 
 **MCP servers and AI agents**
 
-- The MCP authorization profile: protected-resource metadata (RFC 9728),
-  audience binding and step-up challenges.
+- The MCP authorization profile, revision 2026-07-28: protected-resource
+  metadata (RFC 9728), audience binding and step-up challenges.
   [`@qauth-labs/resource-guard`](./libs/sdk/resource-guard/README.md) handles
   the resource-server side.
 - An agent client type. An agent acts for a user through token exchange

@@ -54,8 +54,8 @@ is "deferred":
   status-list revocation, the claims pipeline and the browser sign-in flow are
   merged, with an E2E suite covering account linking, returning login, the
   refusal to create an account at wallet sign-in (ADR-009 §1, amended
-  2026-10-19) and `acr`. Validated only against a mock wallet so far; the
-  real-wallet interoperability pass (#376) is open.
+  2026-10-19) and `acr`. Validated only against a mock wallet so far. Open:
+  the real-wallet interoperability pass (#376).
 - **`WalletProvider.verify()` throws unconditionally and must keep throwing** —
   a deliberate fail-closed property, not a stub. Never "fix" it. Wallet login
   does **not** use it; it runs on the dedicated `/ui/wallet-login` +
