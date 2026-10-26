@@ -356,6 +356,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const [code, tx] = create.mock.calls[0];
     expect(code).toMatchObject({ sessionId: 'sid-549', userId: 'user-1' });
     expect(recordClient).toHaveBeenCalledExactlyOnceWith(REALM.id, 'sid-549', CLIENT.id, tx);
+    // READ COMMITTED, so the share locks see a revocation that made them wait.
+    expect(fastify.db.transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'read committed',
+    });
     // Recorded first: a session that ended gets no code at all.
     expect(recordClient.mock.invocationCallOrder[0]).toBeLessThan(
       create.mock.invocationCallOrder[0]

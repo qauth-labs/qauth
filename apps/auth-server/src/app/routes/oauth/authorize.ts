@@ -14,6 +14,7 @@ import { env } from '../../../config/env';
 import {
   AUTHORIZATION_CODE_TTL_MS,
   AUTHORIZE_BODY_LIMIT_BYTES,
+  MINT_TRANSACTION,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
@@ -706,7 +707,7 @@ export default async function (fastify: FastifyInstance) {
           { ...userEvent, tx }
         );
         return { code };
-      });
+      }, MINT_TRANSACTION);
     };
 
     const MAX_CREATE_ATTEMPTS = 3;

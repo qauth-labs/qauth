@@ -6,6 +6,15 @@
 export const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
 
 /**
+ * The transaction options of an authorization code's mint (#549): READ
+ * COMMITTED whatever the server's default. The mint re-reads the consent and
+ * the browser session under share locks, and only at that level does a
+ * re-read that waited see the revocation that made it wait; the session's
+ * revocation relies on the same level to see the client the mint recorded.
+ */
+export const MINT_TRANSACTION = { isolationLevel: 'read committed' } as const;
+
+/**
  * Step-up authentication freshness window in milliseconds (ADR-007 §2, #185).
  *
  * When a request triggers a fresh-authentication step-up (`prompt=login` or a

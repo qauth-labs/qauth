@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import {
   AUTHORIZATION_CODE_TTL_MS,
+  MINT_TRANSACTION,
   OAUTH_OPAQUE_PARAM_MAX_LENGTH,
   OAUTH_SCOPE_PARAM_MAX_LENGTH,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
@@ -916,7 +917,7 @@ export default async function (fastify: FastifyInstance) {
               tx
             );
             return candidate;
-          });
+          }, MINT_TRANSACTION);
           sessionEnded = code === null;
           break;
         } catch (err) {
@@ -927,6 +928,12 @@ export default async function (fastify: FastifyInstance) {
       if (sessionEnded) {
         // The session ended under this request: the answer a request arriving
         // after the sign-out gets, the login page and back to authorize.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:authorization.failed:v1-rc.0',
+          { error: 'login_required', reason: 'session_ended_during_authorization' },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         return redirectToLoginWithPendingAuthorization(fastify, reply, authorizeReturnTo());
       }
       if (!code) throw new Error('Unreachable');

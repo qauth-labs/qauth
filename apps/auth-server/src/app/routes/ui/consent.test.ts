@@ -651,6 +651,10 @@ describe('UI /ui/consent POST — allow/deny', () => {
       expect.objectContaining({ sessionId: 'sid-consent' }),
       { tx: true }
     );
+    // READ COMMITTED, so the share lock sees a sign-out that made it wait.
+    expect(fastify.db.transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'read committed',
+    });
     // Recorded first: a session that ended gets no code at all.
     expect(recordClient.mock.invocationCallOrder[0]).toBeLessThan(
       (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
@@ -686,6 +690,13 @@ describe('UI /ui/consent POST — allow/deny', () => {
       'urn:qauth:event:consent.granted:v1-rc.0',
       expect.anything(),
       expect.anything()
+    );
+    // Recorded as /oauth/authorize records it.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'login_required', reason: 'session_ended_during_authorization' },
+      { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' }
     );
   });
 
