@@ -925,6 +925,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the database. The failed-login and rate-limit counters start from zero
   after the upgrade, as their Redis keys now carry the realm id.
 
+- **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
+  Every lookup by an id that a request, a token, a code or a cookie carries
+  now takes the realm of the request's host: users, clients, consents, API
+  keys, credentials, refresh tokens, authorization codes, email verification
+  tokens and a wallet's OID4VP state, encryption `kid` and Response Code. The
+  repository methods take the realm id as a required first argument;
+  refresh tokens, codes and verification tokens, which have no realm column,
+  are found through their client's or credential's realm. A value of another
+  realm gets the answer an unknown value gets, leaves the same events and
+  changes nothing in its own realm:
+  - an authorization code or a refresh token issued in another realm answers
+    `invalid_grant`; presenting the refresh token there, or revoking it, revokes
+    no family;
+  - another realm's access token is `active: false` at introspection and 401
+    at userinfo, and revocation and `/auth/logout` ignore or refuse it: these
+    routes and token exchange check the token's `iss` against the request
+    realm's issuer;
+  - a consent, client or API key id of another realm answers 404 at the
+    management API, and a verification token mailed for another realm's
+    account is an invalid token;
+  - a management token whose user belongs to another realm is now refused as a
+    token for an unknown user is ("Access token subject is not an active
+    user"), no longer with "Access token was not issued in this realm".
+
+  The verification-mail counters of `POST /auth/resend-verification` and
+  `POST /auth/register` (`rate-limit:resend:*`, `last-email-sent:*`) carry the
+  realm id, so an address has an allowance in each realm; they start from zero
+  after the upgrade, and during a rolling upgrade old and new nodes count
+  apart for one window. A deployment with one realm behaves as before. Until
+  tokens are signed per realm ([#491]), every token carries `JWT_ISSUER`: a
+  second realm's host refuses every access token at these routes, its own
+  included, and the default realm tells another realm's token apart only by
+  its user, so a `client_credentials` token of a same-named client in another
+  realm still introspects there.
+
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
   session service ([#469]): one `sessions` row with the realm, the user,
@@ -1150,6 +1185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#489]: https://github.com/qauth-labs/qauth/issues/489
+[#491]: https://github.com/qauth-labs/qauth/issues/491
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#513]: https://github.com/qauth-labs/qauth/issues/513
 [#536]: https://github.com/qauth-labs/qauth/issues/536
