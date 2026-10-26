@@ -1773,6 +1773,62 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect('acr' in idClaims).toBe(false);
   });
 
+  it('puts the code’s browser session in the id_token as sid, and nowhere else (#549)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const sid = '0199f9a1-0000-7000-8000-000000000549';
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid', 'read:foo'],
+      sessionId: sid,
+    });
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      scopes: ['openid', 'read:foo'],
+      revokedAt: null,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(expect.objectContaining({ sid }));
+    // Not on the access token, nor on the refresh row the exchange stores.
+    const [accessClaims] = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0];
+    expect(JSON.stringify(accessClaims)).not.toContain(sid);
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledOnce();
+    const [refreshRow] = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0];
+    expect(JSON.stringify(refreshRow)).not.toContain(sid);
+  });
+
+  it.each([
+    ['no browser session backs it (the legacy Bearer path)', null],
+    ['it predates the session column', undefined],
+  ])('gives the id_token no sid when %s (#549)', async (_label, sessionId) => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      sessionId,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(idClaims['sid']).toBeUndefined();
+  });
+
   it('gates ID-token AND access-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259, ANT-2026-2O0T72HY', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (

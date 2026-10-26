@@ -161,6 +161,11 @@ function makeFastify() {
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
       },
+      // The client registry (#549): the session is live under the code's
+      // transaction unless a test says otherwise.
+      sessions: {
+        recordClient: vi.fn().mockResolvedValue(true),
+      },
       // Both the session path and the Bearer fallback accept only a user who is
       // still enabled; the Bearer fallback, only a user of the request's realm.
       users: {
@@ -331,6 +336,88 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
+  });
+
+  /** A signed-in browser with a consent covering `email`, authorizing `email`. */
+  async function authorizeWithSession(query: Record<string, unknown> = {}) {
+    const { fastify, ctx, sessions } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    const { cookie } = await sessions.signIn({
+      sid: 'sid-549',
+      realmId: REALM.id,
+      userId: 'user-1',
+    });
+    const { reply, state } = createReply();
+    const call = () =>
+      ctx.handler!(
+        {
+          query: { ...BASE_QUERY, ...query },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+    return { fastify, state, call };
+  }
+
+  it('stores the session’s sid on the code and records the client in the code’s transaction (#549)', async () => {
+    const { fastify, state, call } = await authorizeWithSession();
+
+    await call();
+
+    expect(state.redirected).toContain('code=');
+    const create = fastify.repositories.authorizationCodes.create as unknown as Mock;
+    const recordClient = fastify.repositories.sessions.recordClient as unknown as Mock;
+    const [code, tx] = create.mock.calls[0];
+    expect(code).toMatchObject({ sessionId: 'sid-549', userId: 'user-1' });
+    expect(recordClient).toHaveBeenCalledExactlyOnceWith(REALM.id, 'sid-549', CLIENT.id, tx);
+    // READ COMMITTED, so the share locks see a revocation that made them wait.
+    expect(fastify.db.transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'read committed',
+    });
+    // Recorded first: a session that ended gets no code at all.
+    expect(recordClient.mock.invocationCallOrder[0]).toBeLessThan(
+      create.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('issues no code when the session ended under the request, and sends the browser to sign in (#549)', async () => {
+    const { fastify, state, call } = await authorizeWithSession();
+    // A sign-out committed between the cookie's check and the code's
+    // transaction: the share lock finds no live session.
+    (fastify.repositories.sessions.recordClient as unknown as Mock).mockResolvedValue(false);
+
+    await call();
+
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(state.redirected).not.toContain('code=');
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'login_required', reason: 'session_ended_during_authorization' },
+      { realmId: REALM.id, userId: 'user-1', clientId: CLIENT.clientId, actor: 'user' }
+    );
+  });
+
+  it('answers login_required under prompt=none when the session ended under the request (#549)', async () => {
+    const { fastify, state, call } = await authorizeWithSession({ prompt: 'none' });
+    (fastify.repositories.sessions.recordClient as unknown as Mock).mockResolvedValue(false);
+
+    await call();
+
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    const location = new URL(state.redirected as string);
+    expect(location.origin + location.pathname).toBe('https://example.com/cb');
+    expect(location.searchParams.get('error')).toBe('login_required');
+    expect(location.searchParams.get('code')).toBeNull();
   });
 
   it("resolves the client in the request's realm and records that realm (#487)", async () => {
@@ -1727,6 +1814,16 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       BEARER_USER,
       DANGEROUS_CLIENT.id
     );
+  });
+
+  it('gives a Bearer-path code no session and records no client (#549)', async () => {
+    const { fastify, state } = await runBearer('email');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionId: null, userId: BEARER_USER }),
+      expect.anything()
+    );
+    expect(fastify.repositories.sessions.recordClient).not.toHaveBeenCalled();
   });
 
   // The Bearer path cannot show a consent screen, so it must never stand in

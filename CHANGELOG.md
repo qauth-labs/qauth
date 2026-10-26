@@ -510,6 +510,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Postgres reads and last-seen writes. The browser sign-in and the session
   lookup use it ([#488], under Changed).
 
+- **`sid` on ID tokens** ([#549], ADR-019 Decisions 3 and 4). The ID token from
+  the authorization code exchange carries `sid`, the id of the browser session
+  the user signed in with (the `sessions` row the session cookie names), which
+  back-channel logout will name. Migration 0042 adds
+  `authorization_codes.session_id`, a nullable foreign key to `sessions` that a
+  deleted session sets to null. `/oauth/authorize` and the consent form store
+  it on the code and, in the same transaction, record the client in
+  `session_clients`, once per session and client. The sessions repository
+  looks that registry up by session, by user and by client, listing live
+  sessions only, and revoking a session deletes its rows and returns them: the
+  clients back-channel logout will notify. Revoking a session also spends the
+  codes minted under it that are not yet redeemed, so none becomes an ID token
+  naming an ended session; a later redemption of one is refused as a replay
+  that revokes nothing. A code from the legacy Bearer path
+  of `/oauth/authorize` has no browser session and its ID token no `sid`, nor
+  does a code minted before the upgrade. Access tokens, introspection
+  responses, refresh tokens and discovery are unchanged. If a sign-out commits
+  while a code is being minted for that session, no code is issued: the
+  browser goes back to the sign-in page, or the client gets `login_required`
+  under `prompt=none`, and a consent the user asked to remember is not stored
+  either: it commits with the code. The migration is additive; it locks
+  `sessions` and then `authorization_codes` while it runs (see the upgrade
+  guide). During a rolling upgrade the previous release writes codes without a
+  session, and a session it revokes keeps its registry rows, which the lookups
+  skip, and its codes unspent.
+
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
   the default realm's step and under an advisory lock on the realm, the
@@ -1334,6 +1360,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#549]: https://github.com/qauth-labs/qauth/issues/549
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577

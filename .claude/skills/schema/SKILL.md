@@ -117,7 +117,7 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `api_keys`                    | `core.ts`        | Static developer API keys (ADR-008 §6, env-gated)                                                              |
 | `oauth_consents`              | `consents.ts`    | User consent grants; unique per `(user_id, client_id) WHERE revoked_at IS NULL`                                |
 | `email_verification_tokens`   | `tokens.ts`      | Token hash + `credential_id` (NOT NULL → `user_credentials.id`; `user_id` dropped in #230)                     |
-| `authorization_codes`         | `tokens.ts`      | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`, the session end `session_expires_at`       |
+| `authorization_codes`         | `tokens.ts`      | OAuth codes: PKCE (S256) challenge, nonce, `resource`, `session_expires_at`, `session_id` (the ID token `sid`) |
 | `refresh_tokens`              | `tokens.ts`      | Refresh tokens: `family_id`, `family_created_at`, `family_session_expires_at` (RFC 9700 family), `resource`    |
 | `audit_logs`                  | `audit.ts`       | Read-only since #458 (rows copied into `events` by 0031); nothing may write it — `emitUserEvent` instead       |
 | `events`                      | `events.ts`      | Event store: outbox + log (ADR-019 D8); write via `emitUserEvent(request, type, data, { tx })` in auth-server  |
@@ -127,7 +127,7 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `realm_keys`                  | `keys.ts`        | Envelope-encrypted keys per realm and purpose (ADR-019 D9); only `getWrappedForSigner` reads wrapped columns   |
 | `realm_public_keys`           | `keys.ts`        | Public JWK of each published key, `(realm_id, kid)` → `realm_keys`; every role reads it (JWKS, verify)         |
 | `sessions`                    | `sessions.ts`    | Browser sessions (ADR-019 D3), `id` is the `sid`, `(user_id, realm_id)` → `users`; unused until #469           |
-| `session_clients`             | `sessions.ts`    | Clients a session served, PK `(session_id, oauth_client_id)`; cascades from both; for back-channel logout      |
+| `session_clients`             | `sessions.ts`    | Clients a session served, PK `(session_id, oauth_client_id)`; added with each code, deleted on session revoke  |
 | `roles`, `user_roles`         | `roles.ts`       | RBAC (PHASE-5+, **currently unused** by auth-server routes)                                                    |
 
 A realm's `issuer` and its `primary` host in `realm_hosts` are **permanent**
