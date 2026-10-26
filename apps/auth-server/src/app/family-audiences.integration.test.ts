@@ -30,14 +30,17 @@ import { API_FAMILIES, API_FAMILY_AUDIENCES, type ApiFamily } from './api-conven
  * - The 3 by 3 matrix: each family's token works on its own family only.
  * - The token endpoint issues a family audience only to a client that lists
  *   it, mapping the RFC 8707 `resource` value to the audience, on the
- *   client_credentials and the authorization code grants.
- * - `POST /oauth/register` and a Client ID Metadata Document refuse a
- *   `urn:qauth:aud:` audience or resource.
- * - The developer portal's token: `/auth/login` mints it with the developer
- *   audience, and a token minted before #509 (the system client id as
- *   audience) still works at the legacy `/api/clients` path and at userinfo.
- * - A bad token gets the RFC 6750 challenge; a missing scope 403
- *   `insufficient_scope`.
+ *   client_credentials and the authorization code grants; the gate itself
+ *   refuses a self-registered client and a code whose client stopped listing
+ *   it, and a user grant leaves a family audience out of its default.
+ * - `POST /oauth/register` and a Client ID Metadata Document ignore a
+ *   `urn:qauth:aud:` audience or resource, as they ignore a `qauth:` scope.
+ * - The developer portal's token keeps the system client id as audience in
+ *   this release, and a token with the developer audience is accepted where
+ *   it is (expand, then contract: ADR-018 §5).
+ * - The guard resolves the subject in the realm of the request host.
+ * - A bad token gets the RFC 6750 challenge; a missing scope 403 `forbidden`
+ *   with the `insufficient_scope` challenge.
  *
  * Only the network fetch of the metadata document is replaced (`ssrfSafeGet`).
  *
@@ -87,13 +90,19 @@ describe('one audience per API family and a guard for each (#509, real container
         for (const family of API_FAMILIES) {
           scope.get(
             probePath(family),
-            { preHandler: requireFamilyToken(family), config: { surface: 'api' } },
+            {
+              preHandler: requireFamilyToken(family, { subjects: ['user', 'client'] }),
+              config: { surface: 'api' },
+            },
             async (request) => ({ sub: request.jwtPayload?.sub })
           );
           scope.get(
             probePath(family, 'scoped'),
             {
-              preHandler: requireFamilyToken(family, { requiredScopes: ['probe:write'] }),
+              preHandler: requireFamilyToken(family, {
+                subjects: ['user', 'client'],
+                requiredScopes: ['probe:write'],
+              }),
               config: { surface: 'api' },
             },
             async () => ({ ok: true })
@@ -129,9 +138,13 @@ describe('one audience per API family and a guard for each (#509, real container
   }
 
   /** A confidential machine client with the `audience` given. */
-  async function seedMachineClient(clientId: string, audience: string[] | null): Promise<void> {
+  async function seedMachineClient(
+    clientId: string,
+    audience: string[] | null,
+    extra: { realmId?: string; enabled?: boolean; metadata?: Record<string, unknown> } = {}
+  ): Promise<void> {
     await app().repositories.oauthClients.create({
-      realmId: await realmId(),
+      realmId: extra.realmId ?? (await realmId()),
       clientId,
       clientSecretHash: await app().passwordHasher.hashPassword(CLIENT_SECRET),
       tokenEndpointAuthMethod: 'client_secret_post',
@@ -140,7 +153,8 @@ describe('one audience per API family and a guard for each (#509, real container
       grantTypes: ['client_credentials'],
       scopes: [PROBE_SCOPE],
       audience,
-      enabled: true,
+      enabled: extra.enabled ?? true,
+      ...(extra.metadata === undefined ? {} : { metadata: extra.metadata }),
     });
   }
 
@@ -164,12 +178,20 @@ describe('one audience per API family and a guard for each (#509, real container
     });
   }
 
-  function call(path: string, token: string): Promise<LightMyRequestResponse> {
+  function call(path: string, token: string, host?: string): Promise<LightMyRequestResponse> {
     return app().inject({
       method: 'GET',
       url: path,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, ...(host === undefined ? {} : { host }) },
     });
+  }
+
+  /** The `reason` of every `token.request_failed` event, in the order recorded. */
+  async function tokenFailureReasons(): Promise<unknown[]> {
+    const { rows } = await app().dbPool.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM events WHERE type = 'urn:qauth:event:token.request_failed:v1-rc.0' ORDER BY seq`
+    );
+    return rows.map((row) => row.data['reason']);
   }
 
   async function clientCount(clientId?: string): Promise<number> {
@@ -212,13 +234,30 @@ describe('one audience per API family and a guard for each (#509, real container
   });
 
   describe('issuing a family audience', () => {
-    it('refuses invalid_target to a client that does not list it', async () => {
+    it("is refused by a client_credentials client's audience allowlist when it does not list it", async () => {
       await seedMachineClient('plain-machine', ['https://api.example.com']);
       for (const family of API_FAMILIES) {
         const response = await machineToken('plain-machine', API_FAMILY_AUDIENCES[family]);
         expect(response.statusCode).toBe(400);
         expect(response.json()).toMatchObject({ error: 'invalid_target' });
       }
+      // The grant's own allowlist refuses first; the reserved-audience gate
+      // is not what answered.
+      expect(await tokenFailureReasons()).toEqual(
+        API_FAMILIES.map(() => 'resource_outside_client_audience')
+      );
+    });
+
+    it('reaches the reserved-audience gate for a self-registered client whose row lists it', async () => {
+      // Written another way than dynamic registration, which stores no audience:
+      // the allowlist lets the resource through, and the gate refuses it.
+      await seedMachineClient('self-registered', [API_FAMILY_AUDIENCES.admin], {
+        metadata: { registrationType: 'dynamic' },
+      });
+      const response = await machineToken('self-registered', API_FAMILY_AUDIENCES.admin);
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: 'invalid_target' });
+      expect(await tokenFailureReasons()).toEqual(['reserved_audience_not_listed']);
     });
 
     it('binds it through the authorization code flow only for a client that lists it', async () => {
@@ -296,6 +335,95 @@ describe('one audience per API family and a guard for each (#509, real container
       expect((await call(probePath('account'), accessToken)).statusCode).toBe(200);
       expect((await call(probePath('developer'), accessToken)).statusCode).toBe(401);
     });
+
+    it('refuses a code at the gate, unspent, once the client no longer lists it; a code without resource leaves it out', async () => {
+      const email = 'family-gate@example.com';
+      const userId = await registerPasswordAccount(app(), email);
+      const jar = await signInWithPassword(app(), email);
+      const realm = await realmId();
+      const account = API_FAMILY_AUDIENCES.account;
+      const client = await app().repositories.oauthClients.create({
+        realmId: realm,
+        clientId: 'account-console',
+        clientSecretHash: 'unused-public-client',
+        tokenEndpointAuthMethod: 'none',
+        name: 'account-console',
+        redirectUris: [REDIRECT_URI],
+        scopes: ['openid'],
+        grantTypes: ['authorization_code'],
+        audience: [account],
+        enabled: true,
+        requirePkce: true,
+        provisionedByOperator: true,
+      });
+      await app().repositories.oauthConsents.upsertGrant(
+        userId,
+        client.id,
+        realm,
+        ['openid'],
+        [account]
+      );
+      const codeFor = async (resource: string | undefined, challenge: string) => {
+        const response = await app().inject({
+          method: 'GET',
+          url: `/oauth/authorize?${new URLSearchParams({
+            response_type: 'code',
+            client_id: 'account-console',
+            redirect_uri: REDIRECT_URI,
+            scope: 'openid',
+            ...(resource === undefined ? {} : { resource }),
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+            state: 'family-state',
+          })}`,
+          headers: { cookie: jar.header() as string },
+        });
+        expect(response.statusCode).toBe(302);
+        const code = new URL(response.headers['location'] as string).searchParams.get('code');
+        expect(code).not.toBeNull();
+        return code as string;
+      };
+      const redeem = (code: string, verifier: string) =>
+        tokenRequest({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT_URI,
+          client_id: 'account-console',
+          code_verifier: verifier,
+        });
+      const setAudience = (audience: string[] | null) =>
+        app().dbPool.query(`UPDATE oauth_clients SET audience = $1 WHERE id = $2`, [
+          audience === null ? null : JSON.stringify(audience),
+          client.id,
+        ]);
+
+      // The operator takes the family audience off the client between the
+      // authorization and the redemption: the token endpoint's gate refuses.
+      const bound = pkcePair();
+      const code = await codeFor(account, bound.challenge);
+      await setAudience(['https://api.example.com']);
+      const refused = await redeem(code, bound.verifier);
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json()).toMatchObject({ error: 'invalid_target' });
+      expect(await tokenFailureReasons()).toEqual(['reserved_audience_not_listed']);
+
+      // Not spent: listed again, the same code redeems.
+      await setAudience([account]);
+      const redeemed = await redeem(code, bound.verifier);
+      expect(redeemed.statusCode).toBe(200);
+      expect(decodeJwtClaims(redeemed.json<{ access_token: string }>().access_token)).toMatchObject(
+        { aud: account }
+      );
+
+      // A code that binds no resource: the family audience is left out of the
+      // client's default, so the token's `aud` is the client id.
+      const unbound = pkcePair();
+      const plain = await redeem(await codeFor(undefined, unbound.challenge), unbound.verifier);
+      expect(plain.statusCode).toBe(200);
+      expect(decodeJwtClaims(plain.json<{ access_token: string }>().access_token)['aud']).toBe(
+        'account-console'
+      );
+    });
   });
 
   describe('the reserved urn:qauth:aud: namespace', () => {
@@ -311,19 +439,24 @@ describe('one audience per API family and a guard for each (#509, real container
       });
     }
 
+    // One rule for QAuth's reserved namespaces (ADR-019, amended 2026-10-26):
+    // registration drops a `qauth:` scope and ignores a `urn:qauth:aud:`
+    // audience or resource, and registers the client with the rest.
     it.each([
       { audience: API_FAMILY_AUDIENCES.developer },
       { audience: ['https://api.example.com', API_FAMILY_AUDIENCES.admin] },
       { resource: API_FAMILY_AUDIENCES.account },
       { resource: ['URN:QAUTH:AUD:developer:v1-rc.0'] },
-    ])('POST /oauth/register refuses %j and stores nothing', async (metadata) => {
-      const before = await clientCount();
+    ])('POST /oauth/register ignores %j and registers the client', async (metadata) => {
       const response = await register(metadata);
-      expect(response.statusCode).toBe(400);
-      // RFC 7591 §3.2.2: the OAuth error body, with no member QAuth adds.
-      expect(Object.keys(response.json()).sort()).toEqual(['error', 'error_description']);
-      expect(response.json()).toMatchObject({ error: 'invalid_client_metadata' });
-      expect(await clientCount()).toBe(before);
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).not.toHaveProperty('audience');
+      const clientId = response.json<{ client_id: string }>().client_id;
+      const { rows } = await app().dbPool.query<{ audience: unknown }>(
+        'SELECT audience FROM oauth_clients WHERE client_id = $1',
+        [clientId]
+      );
+      expect(rows).toEqual([{ audience: null }]);
     });
 
     it('POST /oauth/register still ignores an ordinary audience', async () => {
@@ -375,15 +508,17 @@ describe('one audience per API family and a guard for each (#509, real container
       { audience: API_FAMILY_AUDIENCES.developer },
       { resource: [API_FAMILY_AUDIENCES.admin] },
     ])(
-      'a Client ID Metadata Document claiming %j is refused, and no client is materialised',
+      'a Client ID Metadata Document naming %j resolves, and the value is ignored',
       async (extra) => {
         serveDocument(extra);
         const response = await authorizeCimd();
-        // A client_id that resolves to no client (#513).
-        expect(response.statusCode).toBe(400);
-        expect(response.json()).toMatchObject({ error: 'invalid_request' });
+        expect(response.statusCode).not.toBe(400);
         expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
-        expect(await clientCount(CIMD_CLIENT_ID)).toBe(0);
+        const { rows } = await app().dbPool.query<{ audience: unknown }>(
+          'SELECT audience FROM oauth_clients WHERE client_id = $1',
+          [CIMD_CLIENT_ID]
+        );
+        expect(rows).toEqual([{ audience: null }]);
       }
     );
   });
@@ -400,51 +535,102 @@ describe('one audience per API family and a guard for each (#509, real container
       return { userId, token: response.json<{ access_token: string }>().access_token };
     }
 
-    it('is minted with the developer audience, and works on the developer family and the legacy path', async () => {
-      const { userId, token } = await signInPortal('portal-new@example.com');
+    async function systemClientAudience(): Promise<unknown> {
+      const { rows } = await app().dbPool.query<{ audience: unknown }>(
+        `SELECT audience FROM oauth_clients WHERE client_id = 'system'`
+      );
+      return rows.map((row) => row.audience);
+    }
+
+    // Expand, then contract (ADR-018 §5): this release does not mint the
+    // developer audience, so a node of the previous release accepts every
+    // portal token this one mints.
+    it('keeps the system client id as audience, and leaves the system client row alone', async () => {
+      const { userId, token } = await signInPortal('portal-now@example.com');
       expect(decodeJwtClaims(token)).toMatchObject({
-        aud: API_FAMILY_AUDIENCES.developer,
+        aud: 'system',
         client_id: 'system',
         sub: userId,
       });
 
-      expect((await call(probePath('developer'), token)).statusCode).toBe(200);
-      expect((await call(probePath('account'), token)).statusCode).toBe(401);
-      expect((await call(probePath('admin'), token)).statusCode).toBe(401);
       expect((await call('/api/clients', token)).statusCode).toBe(200);
       expect((await call('/oauth/userinfo', token)).json()).toEqual({ sub: userId });
-
-      const { rows } = await app().dbPool.query<{ audience: string[] | null }>(
-        `SELECT audience FROM oauth_clients WHERE client_id = 'system'`
-      );
-      expect(rows).toEqual([{ audience: [API_FAMILY_AUDIENCES.developer] }]);
+      // It is not a developer family token.
+      expect((await call(probePath('developer'), token)).statusCode).toBe(401);
+      expect(await systemClientAudience()).toEqual([null]);
     });
 
-    it('minted before #509 (the system client id as audience) still works on the legacy path', async () => {
-      const { userId } = await signInPortal('portal-old@example.com');
-      // The system client as #509 found it: no audience. The next read gives
-      // it the developer audience; the old token keeps working until it expires.
-      await app().dbPool.query(
-        `UPDATE oauth_clients SET audience = NULL WHERE client_id = 'system'`
-      );
-      const legacy = await app().jwtUtils.signAccessToken({
+    it('with the developer audience, is accepted wherever the legacy one is', async () => {
+      const { userId } = await signInPortal('portal-next@example.com');
+      // What #524's release mints: the system client, the developer audience.
+      const next = await app().jwtUtils.signAccessToken({
         sub: userId,
         clientId: 'system',
-        aud: 'system',
+        aud: API_FAMILY_AUDIENCES.developer,
       });
 
-      const clients = await call('/api/clients', legacy);
+      const clients = await call('/api/clients', next);
       expect(clients.statusCode).toBe(200);
       expect(clients.json()).toMatchObject({ clients: [] });
-      expect((await call('/api/consents', legacy)).statusCode).toBe(200);
-      expect((await call('/oauth/userinfo', legacy)).json()).toEqual({ sub: userId });
-      // It was never a developer family token.
-      expect((await call(probePath('developer'), legacy)).statusCode).toBe(401);
+      expect((await call('/api/consents', next)).statusCode).toBe(200);
+      expect((await call('/oauth/userinfo', next)).json()).toEqual({ sub: userId });
+      expect((await call(probePath('developer'), next)).statusCode).toBe(200);
+      expect((await call(probePath('account'), next)).statusCode).toBe(401);
 
-      const { rows } = await app().dbPool.query<{ audience: string[] | null }>(
-        `SELECT audience FROM oauth_clients WHERE client_id = 'system'`
+      // A sign-out through it ends the session.
+      const logout = await app().inject({
+        method: 'POST',
+        url: '/auth/logout',
+        headers: { authorization: `Bearer ${next}` },
+      });
+      expect(logout.statusCode).toBe(200);
+      expect(logout.json()).toMatchObject({ success: true });
+      expect(await systemClientAudience()).toEqual([null]);
+    });
+  });
+
+  // ADR-019 Decision 1: a token from another realm is refused. Family
+  // audiences and the issuer read the same in every realm, so the guard
+  // resolves the subject in the realm of the request host.
+  describe("the subject, in the request host's realm", () => {
+    const HOST_B = 'beta.example.com';
+
+    async function realmB(): Promise<string> {
+      const { realm } = await app().repositories.realms.createWithPrimaryHost(
+        { name: 'beta', issuer: `https://${HOST_B}`, enabled: true },
+        HOST_B
       );
-      expect(rows).toEqual([{ audience: [API_FAMILY_AUDIENCES.developer] }]);
+      return realm.id;
+    }
+
+    it("refuses a realm-A user's family token at realm B", async () => {
+      await realmB();
+      const userId = await registerPasswordAccount(app(), 'realm-a-dev@example.com');
+      const token = await app().jwtUtils.signAccessToken({
+        sub: userId,
+        clientId: 'system',
+        aud: API_FAMILY_AUDIENCES.developer,
+      });
+
+      expect((await call(probePath('developer'), token)).statusCode).toBe(200);
+      const atB = await call(probePath('developer'), token, HOST_B);
+      expect(atB.statusCode).toBe(401);
+      expect(atB.json()).toMatchObject({ code: 'invalid_access_token' });
+    });
+
+    it('resolves a client_credentials token as the client of that realm, by the same client_id', async () => {
+      const b = await realmB();
+      const admin = API_FAMILY_AUDIENCES.admin;
+      // `twin` in both realms: enabled in A, disabled in B.
+      await seedMachineClient('twin', [admin]);
+      await seedMachineClient('twin', [admin], { realmId: b, enabled: false });
+      const token = (await machineToken('twin', admin)).json<{ access_token: string }>()
+        .access_token;
+
+      expect((await call(probePath('admin'), token)).statusCode).toBe(200);
+      const atB = await call(probePath('admin'), token, HOST_B);
+      expect(atB.statusCode).toBe(401);
+      expect(atB.json()).toMatchObject({ code: 'invalid_access_token' });
     });
   });
 
@@ -475,7 +661,7 @@ describe('one audience per API family and a guard for each (#509, real container
       }
     );
 
-    it('answers a token without the scope a route needs with 403 insufficient_scope', async () => {
+    it('answers a token without the scope a route needs with 403 forbidden and the insufficient_scope challenge', async () => {
       await seedMachineClient(familyClientId('admin'), [API_FAMILY_AUDIENCES.admin]);
       const token = (await machineToken(familyClientId('admin'), API_FAMILY_AUDIENCES.admin)).json<{
         access_token: string;
@@ -483,7 +669,7 @@ describe('one audience per API family and a guard for each (#509, real container
 
       const response = await call(probePath('admin', 'scoped'), token);
       expect(response.statusCode).toBe(403);
-      expect(response.json()).toMatchObject({ status: 403, code: 'insufficient_scope' });
+      expect(response.json()).toMatchObject({ status: 403, code: 'forbidden' });
       expect(response.headers['www-authenticate']).toBe(
         'Bearer realm="OAuth", error="insufficient_scope", scope="probe:write"'
       );

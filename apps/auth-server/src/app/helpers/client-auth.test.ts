@@ -31,6 +31,7 @@ import {
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
+  resolveUserGrantAudience,
   SHED_CLIENT_SECRET_RETRY_AFTER_SECONDS,
   toAgentScopeContext,
   unlistedReservedAudiences,
@@ -709,6 +710,35 @@ describe('resolveAudience', () => {
   });
 });
 
+describe('resolveUserGrantAudience (#509)', () => {
+  const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
+  const base = {
+    id: 'c',
+    clientId: 'app',
+    clientSecretHash: '',
+    enabled: true,
+    grantTypes: ['authorization_code'],
+    scopes: [],
+  };
+
+  it('issues a family audience only when a resource names it', () => {
+    const client = { ...base, audience: [ACCOUNT, 'https://api.example.com'] };
+    expect(resolveUserGrantAudience(client, [ACCOUNT])).toBe(ACCOUNT);
+    expect(resolveUserGrantAudience(client, [])).toBe('https://api.example.com');
+    expect(resolveUserGrantAudience(client)).toBe('https://api.example.com');
+    expect(resolveUserGrantAudience({ ...base, audience: [ACCOUNT] })).toBe('app');
+  });
+
+  it("keeps the system client's default, which /auth/login mints from", () => {
+    const system = { ...base, clientId: 'system', audience: [ACCOUNT] };
+    expect(resolveUserGrantAudience(system)).toBe(ACCOUNT);
+  });
+
+  it('falls back as resolveAudience does for a malformed stored audience', () => {
+    expect(resolveUserGrantAudience({ ...base, audience: 'x' as unknown as string[] })).toBe('app');
+  });
+});
+
 describe('unlistedReservedAudiences (#509)', () => {
   const ADMIN = 'urn:qauth:aud:admin:v1-rc.0';
   const ACCOUNT = 'urn:qauth:aud:account:v1-rc.0';
@@ -732,5 +762,26 @@ describe('unlistedReservedAudiences (#509)', () => {
     expect(unlistedReservedAudiences({ audience: ADMIN as unknown as string[] }, [ADMIN])).toEqual([
       ADMIN,
     ]);
+  });
+
+  // Neither self-registration stores an `audience`: a row that holds a
+  // reserved one was written another way, and fails closed.
+  it.each([
+    ['a CIMD client', { metadata: { registrationType: 'cimd' } }],
+    ['a dynamically registered client', { metadata: { registrationType: 'dynamic' } }],
+    ['a client with a dynamic registration time', { dynamicRegisteredAt: 1_700_000_000_000 }],
+  ])('treats %s as listing no reserved audience', (_label, origin) => {
+    expect(
+      unlistedReservedAudiences({ audience: [ADMIN, 'https://api.example.com'], ...origin }, [
+        ADMIN,
+        'https://api.example.com',
+      ])
+    ).toEqual([ADMIN]);
+  });
+
+  it('reads the listing of an operator-set client, metadata or not', () => {
+    for (const origin of [{}, { metadata: null, dynamicRegisteredAt: null }, { metadata: {} }]) {
+      expect(unlistedReservedAudiences({ audience: [ADMIN], ...origin }, ADMIN)).toEqual([]);
+    }
   });
 });

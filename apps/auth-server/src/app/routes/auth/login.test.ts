@@ -256,7 +256,7 @@ describe('POST /auth/login', () => {
     const systemClient = {
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
+      audience: ['https://auth.example.com'],
     };
 
     (
@@ -280,13 +280,12 @@ describe('POST /auth/login', () => {
 
     const result = await handler(request, reply);
 
-    // aud comes from the system client's audience, the developer API's since
-    // #509 (single-item array → string)
+    // aud comes from the system client's audience (single-item array → string)
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
         clientId: 'system',
-        aud: 'urn:qauth:aud:developer:v1-rc.0',
+        aud: 'https://auth.example.com',
       })
     );
 
@@ -327,7 +326,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
+      audience: ['https://auth.example.com'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -366,7 +365,7 @@ describe('POST /auth/login', () => {
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
         id: 'sc-uuid',
         clientId: 'system',
-        audience: ['urn:qauth:aud:developer:v1-rc.0'],
+        audience: ['https://auth.example.com'],
       });
       (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -434,7 +433,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
+      audience: ['https://auth.example.com'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -454,7 +453,7 @@ describe('POST /auth/login', () => {
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith({
       sub: 'user-1',
       clientId: 'system',
-      aud: 'urn:qauth:aud:developer:v1-rc.0',
+      aud: 'https://auth.example.com',
     });
     // The provider is resolved from the registry — it is load-bearing, not
     // decorative (ADR-003).
@@ -476,7 +475,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
+      audience: ['https://auth.example.com'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -821,7 +820,7 @@ describe('POST /auth/login', () => {
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
         id: 'sc-uuid',
         clientId: 'system',
-        audience: ['urn:qauth:aud:developer:v1-rc.0'],
+        audience: ['https://auth.example.com'],
       });
       (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -989,7 +988,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
+      audience: null,
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 

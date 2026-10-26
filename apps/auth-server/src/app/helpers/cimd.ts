@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 
 import { InvalidClientError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
-import { reservedAudiencesIn } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -118,15 +117,6 @@ export const cimdDocumentSchema = z.object({
    * carrying both is rejected at materialisation.
    */
   jwks_uri: z.string().min(1).max(CLIENT_JWKS_URI_MAX_LENGTH).optional(),
-  /**
-   * `audience` and `resource`: kept only so a document that names a
-   * QAuth-defined audience (`urn:qauth:aud:`) in them can be refused (#509).
-   * Neither is stored or used, and any other value is ignored as unknown
-   * metadata is, so their shape is not checked here. The document's size cap
-   * (`CIMD_MAX_DOCUMENT_BYTES`) bounds them.
-   */
-  audience: z.unknown().optional(),
-  resource: z.unknown().optional(),
 });
 
 export type CimdDocument = z.infer<typeof cimdDocumentSchema>;
@@ -415,18 +405,6 @@ export function toCimdClientInsert(
   // materialised from them included.
   assertRegistrableRedirectUris(doc.redirect_uris);
   const redirectUris = [...doc.redirect_uris];
-
-  // An API family audience is issued only to a client an operator set up to
-  // list it (#509, ADR-019 Decision 7). A document that claims one for itself
-  // is refused outright, as dynamic registration refuses the same request.
-  // Runs on every resolution, so a cached document or an existing row is
-  // refused too.
-  if (
-    reservedAudiencesIn(doc.audience).length > 0 ||
-    reservedAudiencesIn(doc.resource).length > 0
-  ) {
-    throw new InvalidClientError('CIMD document claims a reserved urn:qauth:aud: audience');
-  }
 
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted

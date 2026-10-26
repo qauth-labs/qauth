@@ -96,17 +96,8 @@ async function buildServer(): Promise<FastifyInstance> {
   fastify.setSerializerCompiler(serializerCompiler);
 
   const findActive = vi.fn();
-  const findByClientId = vi.fn().mockResolvedValue(CLIENT);
   fastify.decorate('repositories', {
-    oauthClients: {
-      findByClientId,
-      // The system client is given the developer audience the first time it
-      // is read (#509): the client the lookup returns, with the update.
-      update: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
-        ...(await findByClientId.getMockImplementation()?.()),
-        ...data,
-      })),
-    },
+    oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
     oauthConsents: {
       findActive,
       // The locked re-read before the code insert sees what the first read saw.

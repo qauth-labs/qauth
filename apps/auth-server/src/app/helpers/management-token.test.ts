@@ -155,23 +155,39 @@ describe('assertManagementToken', () => {
     await expect(
       assertManagementToken(fastify, REALM, portalClaims({ aud: 'https://portal.example.com' }))
     ).rejects.toThrow(JWTInvalidError);
+    // The bare client id no longer matches once an audience is configured.
+    await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toThrow(
+      JWTInvalidError
+    );
   });
 
-  describe('the developer audience of the system client (#509)', () => {
+  // #509, expand then contract (ADR-018 §5): the developer API's audience is
+  // accepted on a portal token now, while the system client keeps no audience
+  // and the portal token keeps `aud = client_id`; #524 starts minting it.
+  describe('the developer audience on a system-client token (#509)', () => {
     const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
 
-    beforeEach(() => {
-      systemClient.audience = [DEVELOPER_AUDIENCE];
-    });
-
-    it('accepts the portal token minted since, which carries the developer audience', async () => {
+    it('accepts it while the system client lists no audience, beside the client id', async () => {
+      expect(systemClient.audience).toBeNull();
       await expect(
         assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
       ).resolves.toBeUndefined();
+      await expect(assertManagementToken(fastify, REALM, portalClaims())).resolves.toBeUndefined();
     });
 
-    it('still accepts a portal token minted before, whose audience is the client id', async () => {
-      await expect(assertManagementToken(fastify, REALM, portalClaims())).resolves.toBeUndefined();
+    it('accepts it where the legacy token is accepted, for a sign-out too', async () => {
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }), {
+          requireActiveUser: false,
+        })
+      ).resolves.toBeUndefined();
+    });
+
+    it('accepts it beside an audience an operator configured on the system client', async () => {
+      systemClient.audience = ['https://portal.example.com'];
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
+      ).resolves.toBeUndefined();
     });
 
     it('keeps the client id and delegation pins on either audience', async () => {

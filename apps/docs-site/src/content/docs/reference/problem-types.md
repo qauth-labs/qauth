@@ -157,12 +157,6 @@ The DPoP proof is missing or not valid for this request (RFC 9449 §7.1).
 
 The caller is authenticated but may not perform the operation.
 
-## `insufficient-scope`
-
-**Code** `insufficient_scope` · **Status** 403 · **Title** Insufficient scope
-
-The access token lacks a scope the operation needs. The `WWW-Authenticate` challenge names the scopes.
-
 ## `email-not-verified`
 
 **Code** `email_not_verified` · **Status** 403 · **Title** Email address not verified

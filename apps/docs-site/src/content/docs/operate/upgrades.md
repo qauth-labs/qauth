@@ -127,25 +127,25 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
-### The developer portal's token changes audience in v0.2
+### The developer portal's token: the new audience is accepted first
 
-From v0.2 the token `POST /auth/login` mints for the developer portal carries
-the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, instead of the
-system client's id ([#509](https://github.com/qauth-labs/qauth/issues/509),
-[API conventions](/reference/api-conventions/#family-tokens)). The new version
-gives each realm's system client that audience the first time it reads the
-client; there is no migration and nothing to run.
+The developer portal's token moves to the developer API's audience,
+`urn:qauth:aud:developer:v1-rc.0`, in two releases, expand then contract
+(ADR-018 §5; [#509](https://github.com/qauth-labs/qauth/issues/509),
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)):
 
-- A portal token minted before the upgrade keeps working at `/api/clients`,
-  `/api/consents` and userinfo until it expires.
-- During a rolling upgrade, a node of the old version reads the changed client
-  too, and mints the new token, but its userinfo refuses that token. The portal
-  then shows its sign-in page for every page a node of the old version serves,
-  until the last old node is gone. Applications that hold their own tokens are
-  not affected.
-- An audience set on the system client by hand is replaced, and the server logs
-  a warning that names the old value. A portal token minted with that value is
-  refused after the upgrade, so its user signs in again.
+- **v0.2 accepts it.** `/api/clients`, `/api/consents`, `/auth/logout`, the
+  Bearer path of `/oauth/authorize` and userinfo accept a system-client token
+  whose `aud` is the developer audience, beside today's token, whose `aud` is
+  the system client's id. Nothing mints the new token yet: `POST /auth/login`
+  still mints today's, and the system client's row is not changed.
+- **A later release mints it** ([#524](https://github.com/qauth-labs/qauth/issues/524)).
+  Every v0.2 node accepts the tokens such a node mints.
+
+The upgrade to v0.2 is safe to roll: a node of the previous release accepts
+every portal token a v0.2 node mints, because it is the same token. There is no
+migration and nothing to run. Upgrade every node to v0.2 before the release
+that mints the new token, so no node that refuses it is left.
 
 ### Refresh tokens pause while migration 0038 runs
 

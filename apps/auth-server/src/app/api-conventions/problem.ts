@@ -185,13 +185,6 @@ export const PROBLEM_CODES = {
     title: 'Forbidden',
     description: 'The caller is authenticated but may not perform the operation.',
   },
-  insufficient_scope: {
-    status: 403,
-    type: 'insufficient-scope',
-    title: 'Insufficient scope',
-    description:
-      'The access token lacks a scope the operation needs. The `WWW-Authenticate` challenge names the scopes.',
-  },
   email_not_verified: {
     status: 403,
     type: 'email-not-verified',

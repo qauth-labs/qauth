@@ -33,7 +33,6 @@ export const OAUTH_ERROR_CODES = {
   server_error: 'RFC 6749 §4.1.2.1',
   temporarily_unavailable: 'RFC 6749 §4.1.2.1',
   invalid_token: 'RFC 6750 §3.1',
-  insufficient_scope: 'RFC 6750 §3.1',
   invalid_target: 'RFC 8707 §2.2',
   invalid_client_metadata: 'RFC 7591 §3.2.2',
   invalid_redirect_uri: 'RFC 7591 §3.2.2',

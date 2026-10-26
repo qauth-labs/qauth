@@ -26,6 +26,7 @@ import {
   enforceAgentScopeCap,
   type OAuthClientLike,
   resolveAudience,
+  resolveUserGrantAudience,
   toAgentScopeContext,
   unlistedReservedAudiences,
   validateScopes,
@@ -716,7 +717,11 @@ async function rejectCodeReplay(
  * `invalid_target`, the server being unwilling to issue a token for that
  * resource. A family accepts any token with its audience, whichever client it
  * was issued to, so the operator decides which clients get one. Called by
- * every grant once the audience is known and before anything is written.
+ * every grant once the audience is known and before it issues a token or
+ * spends its grant: a code, a refresh token or a subject token is left as it
+ * was. The ID-JAG consume path is the exception: the assertion's single-use
+ * `jti` was spent when the assertion was validated (GATE 2), as it is for
+ * every refusal after that gate.
  */
 async function assertReservedAudiencesListed(
   ctx: HandlerContext<{ grant_type: string }>,
@@ -935,7 +940,8 @@ async function handleAuthorizationCode(
   // mapped to concrete seconds in one place. Passed both as the signed `exp`
   // override and the response `expires_in` so they always agree.
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-  const aud = resolveAudience(client, effectiveResource);
+  // A QAuth API audience only when a `resource` named it (#509).
+  const aud = resolveUserGrantAudience(client, effectiveResource);
   // Not burned on a refusal, like a `resource` outside the binding: the client
   // may redeem the code again with a `resource` that names no such audience.
   await assertReservedAudiencesListed(ctx, aud, user.id);
@@ -1428,7 +1434,8 @@ async function handleRefreshToken(
 
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-  const aud = resolveAudience(client, effectiveResource);
+  // A QAuth API audience only when a `resource` named it (#509).
+  const aud = resolveUserGrantAudience(client, effectiveResource);
   await assertReservedAudiencesListed(ctx, aud, user.id);
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
@@ -2368,6 +2375,7 @@ async function handleJwtBearer(
   // whole allowlist. `resolveAudience` collapses the single value to a string
   // `aud`, so the token names exactly one resource server.
   const aud = resolveAudience(client, [assertion.resource]);
+  // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
   await assertReservedAudiencesListed(ctx, aud, user.id);
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,

@@ -4,7 +4,6 @@ import rateLimit from '@fastify/rate-limit';
 import {
   EmailNotVerifiedError,
   ForbiddenError,
-  InsufficientScopeError,
   InvalidClientError,
   InvalidClientMetadataError,
   InvalidCredentialsError,
@@ -134,10 +133,14 @@ async function buildApp(): Promise<FastifyInstance> {
     throw new MisdirectedRequestError({ host: 'unknown.example' });
   });
   app.get('/admin/v1-rc.0/scoped', async () => {
-    throw new InsufficientScopeError(
-      ['qauth:admin:read', 'qauth:admin:write'],
-      'the token lacks qauth:admin:write'
-    );
+    throw new ForbiddenError('The access token lacks a scope this operation needs', {
+      requiredScope: ['qauth:admin:read', 'qauth:admin:write'],
+    });
+  });
+  app.get('/admin/v1-rc.0/scoped-odd', async () => {
+    throw new ForbiddenError('The access token lacks a scope this operation needs', {
+      requiredScope: ['account:read', 'bad"scope', 'bad\\scope'],
+    });
   });
   app.get('/auth/shed', async () => {
     throw new TemporarilyUnavailableError(3, { reason: 'argon2_queue_full' });
@@ -450,7 +453,7 @@ describe('error-handler plugin (#513)', () => {
       await app.close();
     });
 
-    it('answers a missing scope with 403 insufficient_scope and a challenge naming the scopes (#509)', async () => {
+    it('answers a 403 that needs several scopes with forbidden and a challenge naming them all (#509)', async () => {
       const app = await buildApp();
 
       const response = await app.inject({
@@ -462,14 +465,28 @@ describe('error-handler plugin (#513)', () => {
       expect(response.statusCode).toBe(403);
       expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
       expect(response.json()).toMatchObject({
-        type: 'https://docs.qauth.dev/reference/problem-types/#insufficient-scope',
-        title: 'Insufficient scope',
+        type: 'https://docs.qauth.dev/reference/problem-types/#forbidden',
         status: 403,
-        code: 'insufficient_scope',
-        detail: 'the token lacks qauth:admin:write',
+        code: 'forbidden',
       });
       expect(response.headers['www-authenticate']).toBe(
         'Bearer realm="OAuth", error="insufficient_scope", scope="qauth:admin:read qauth:admin:write"'
+      );
+
+      await app.close();
+    });
+
+    it('leaves a scope outside the scope-token grammar out of the challenge', async () => {
+      const app = await buildApp();
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/admin/v1-rc.0/scoped-odd',
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+
+      expect(response.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="account:read"'
       );
 
       await app.close();
@@ -866,9 +883,6 @@ describe('error-handler plugin (#513)', () => {
       app.get('/resource-token', OAUTH, async () => {
         throw new JWTInvalidError('Invalid DPoP key binding');
       });
-      app.get('/resource-scope', OAUTH, async () => {
-        throw new InsufficientScopeError(['account:read', 'bad"scope']);
-      });
       return app;
     }
 
@@ -919,31 +933,6 @@ describe('error-handler plugin (#513)', () => {
         );
         await app.close();
       }
-    });
-
-    it('answers a missing scope under the scheme the request used (#509)', async () => {
-      const app = await buildDpopApp(true);
-      const dpop = await app.inject({
-        method: 'GET',
-        url: '/resource-scope',
-        headers: { authorization: 'DPoP some.token.value' },
-      });
-      expect(dpop.statusCode).toBe(403);
-      // A scope outside the scope-token grammar never reaches the quoted string.
-      expect(dpop.headers['www-authenticate']).toBe(
-        'DPoP error="insufficient_scope", scope="account:read", algs="ES256 EdDSA"'
-      );
-      const bearer = await app.inject({
-        method: 'GET',
-        url: '/resource-scope',
-        headers: { authorization: 'Bearer some.token.value' },
-      });
-      expect(bearer.headers['www-authenticate']).toBe(
-        'Bearer realm="OAuth", error="insufficient_scope", scope="account:read"'
-      );
-      // An OAuth protocol endpoint answers the RFC 6750 body, and nothing more.
-      expect(bearer.json()).toEqual({ error: 'insufficient_scope' });
-      await app.close();
     });
 
     it('answers a DPoP-scheme request without a token with a DPoP challenge that names no error', async () => {

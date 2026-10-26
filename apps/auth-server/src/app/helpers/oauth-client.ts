@@ -3,40 +3,23 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
-import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
-
-/**
- * The `audience` of the system client: the developer API's (#509, ADR-019
- * Decision 7). `/auth/login` mints the developer portal's token for this
- * client, so the token carries exactly the developer audience, which the
- * developer family's guard requires. The legacy `/api/*` routes accept it
- * too (`assertManagementToken`).
- */
-export const SYSTEM_CLIENT_AUDIENCE: readonly string[] = [API_FAMILY_AUDIENCES.developer];
 
 /** The `client_id` of the system client, the same in every realm. */
 export function systemClientId(): string {
   return env.SYSTEM_CLIENT_ID || 'system';
 }
 
-/** Whether a stored `audience` is exactly {@link SYSTEM_CLIENT_AUDIENCE}. */
-function hasSystemClientAudience(audience: readonly string[] | null): boolean {
-  return (
-    audience !== null &&
-    audience.length === SYSTEM_CLIENT_AUDIENCE.length &&
-    SYSTEM_CLIENT_AUDIENCE.every((value, index) => audience[index] === value)
-  );
-}
-
 /**
  * Get or create system OAuth client
  * Helper function to get the system OAuth client for direct login operations
  *
- * A system client created before #509 has no `audience`, so its tokens carried
- * its `client_id`. It is given {@link SYSTEM_CLIENT_AUDIENCE} the first time
- * it is read, once per realm; a token minted before that keeps working at the
- * legacy `/api/*` routes for its short life. An audience set on the row by
- * hand is replaced as well, with a warning.
+ * The row is read as it is and created with no `audience`, so the token
+ * `/auth/login` mints carries the system client's `client_id` as its `aud`,
+ * as before #509. This release only ACCEPTS the developer API's audience on a
+ * system-client token (`assertManagementToken`, userinfo); a later release
+ * mints it (#524). Expand, then contract (ADR-018 §5): a node of the previous
+ * release keeps accepting every portal token a node of this one mints, so the
+ * upgrade can roll.
  */
 export async function getOrCreateSystemClient(realmId: string, fastify: FastifyInstance) {
   const clientId = systemClientId();
@@ -60,25 +43,11 @@ export async function getOrCreateSystemClient(realmId: string, fastify: FastifyI
       grantTypes: ['refresh_token'],
       requirePkce: false,
       developerId: null,
-      audience: [...SYSTEM_CLIENT_AUDIENCE],
       // The server provisions this client itself, for its own first-party
       // login (ANT-2026-O8U3P920). It registers no redirect URI, so the marker
       // never sends an error response anywhere; it is set so that every
       // server-written client carries it consistently.
       provisionedByOperator: true,
-    });
-  } else if (!hasSystemClientAudience(client.audience)) {
-    // An audience someone set on the row by hand is replaced too: the portal
-    // token must carry the developer audience alone. A token minted with the
-    // old value is refused from now on, so the operator is told.
-    if (client.audience !== null && client.audience.length > 0) {
-      fastify.log.warn(
-        { realmId, clientId, previousAudience: client.audience },
-        'Replaced the audience of the system client with the developer API audience'
-      );
-    }
-    client = await fastify.repositories.oauthClients.update(client.id, {
-      audience: [...SYSTEM_CLIENT_AUDIENCE],
     });
   }
 

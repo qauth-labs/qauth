@@ -1,8 +1,12 @@
 import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
-import { InsufficientScopeError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 
 import { API_FAMILY_AUDIENCES, type ApiFamily } from '../api-conventions/families';
+import { isClientUsable } from './client-status';
+import { requestRealm } from './request-realm';
+import { inactiveSubjectError } from './token-subject';
 
 /**
  * Decides whether a family accepts a token's `iss` (#509). Called with the
@@ -26,18 +30,40 @@ export type IssuerResolver = (
 export const deploymentIssuer: IssuerResolver = (issuer, request) =>
   issuer === request.server.jwtUtils.getIssuer();
 
+/**
+ * What a token's `sub` may name on a family route (#509):
+ *
+ * - `user`: a user, the subject of every grant but `client_credentials`;
+ * - `client`: a client acting as itself, a `client_credentials` token, whose
+ *   `sub` is its own `client_id`.
+ */
+export type FamilySubjectKind = 'user' | 'client';
+
 /** What a family route asks of a token beyond the family's own rules. */
 export interface FamilyTokenOptions {
   /** The issuer rule. Default: {@link deploymentIssuer}. */
   readonly issuerResolver?: IssuerResolver;
   /**
+   * Which subjects the route admits. Required, and never empty: the guard
+   * resolves the subject in the request's realm (ADR-019 Decision 1) and
+   * refuses a token whose subject is of another kind, names nothing there, or
+   * is disabled there.
+   */
+  readonly subjects: readonly FamilySubjectKind[];
+  /**
    * Scopes the token must carry, every one of them. A token that lacks one is
-   * refused with 403 `insufficient_scope`, and the challenge names them all
-   * (RFC 6750 §3.1). The account and developer families define no scopes yet,
-   * so their routes pass none.
+   * refused with 403 `forbidden`, and the `insufficient_scope` challenge names
+   * them all (RFC 6750 §3.1). The account and developer families define no
+   * scopes yet, so their routes pass none.
    */
   readonly requiredScopes?: readonly string[];
 }
+
+/**
+ * `users.id` is a uuid column: a subject that is not a UUID names no user, and
+ * is refused before it reaches Postgres (22P02 → 500).
+ */
+const uuidSubjectSchema = z.uuid();
 
 /**
  * The `aud` values of a token: none, or the string or list it carries.
@@ -51,9 +77,9 @@ function audiencesOf(claims: JWTPayload): string[] {
  * Decision 7). Each refusal is a `JWTInvalidError`: 401 with the RFC 6750
  * `invalid_token` challenge, because the token is not valid for this resource.
  *
- * - `sub`, `exp` and `jti` are present. RFC 9068 §2.2 requires all three, an
- *   expiry is what bounds the token, and a token without a `jti` could not be
- *   revoked.
+ * - `sub`, `exp` and `jti` are present, `sub` and `jti` as non-empty strings.
+ *   RFC 9068 §2.2 requires all three, an expiry is what bounds the token, and
+ *   a token without a `jti` could not be revoked.
  * - `aud` holds exactly one value, the family's audience. A token with several
  *   audiences is refused even when one of them is the family's: another
  *   resource server received the same token and could replay it here.
@@ -63,12 +89,12 @@ function audiencesOf(claims: JWTPayload): string[] {
  */
 function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
   // A structural check of the claims, not the refusal of a subject that names
-  // no active user, which the route makes (`inactiveSubjectError`) once it
-  // resolves the subject.
+  // no active user, which `assertSubjectOfRealm` makes once it resolves the
+  // subject.
   if (typeof claims.sub !== 'string' || claims.sub.length === 0) {
     throw new JWTInvalidError('Access token lacks a sub claim');
   }
-  if (claims.exp === undefined || claims.jti === undefined) {
+  if (claims.exp === undefined || typeof claims.jti !== 'string' || claims.jti.length === 0) {
     throw new JWTInvalidError('Access token lacks an expiry or a token id');
   }
   const audiences = audiencesOf(claims);
@@ -77,6 +103,50 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
   }
   if (family === 'developer' && claims.act !== undefined && claims.act !== null) {
     throw new JWTInvalidError('A delegated access token cannot use the developer API');
+  }
+}
+
+/**
+ * Refuse a token whose subject is not an active user or client of the
+ * request's realm (ADR-019 Decision 1, #509).
+ *
+ * A family audience reads the same in every realm, and an access token names
+ * no realm: until each realm has its own issuer, the realm a token belongs to
+ * is its subject's. So the guard resolves `sub` in `requestRealm(request)`:
+ *
+ * - a `client_credentials` token (`sub` is its own `client_id`) names a client
+ *   of this realm that is enabled and not suspended;
+ * - any other token names a user of this realm who is enabled.
+ *
+ * A subject of a kind the route does not admit is refused the same way. A
+ * user is refused with the one wording every route uses for a subject that is
+ * not an active user (`inactiveSubjectError`), so the answer does not say
+ * whether the account exists in another realm. A `client_id` names a client
+ * per realm, so one that names an enabled client in two realms is admitted in
+ * both: only per-realm issuers can tell those tokens apart.
+ */
+async function assertSubjectOfRealm(
+  request: FastifyRequest,
+  claims: JWTPayload & { sub: string },
+  subjects: ReadonlySet<FamilySubjectKind>
+): Promise<void> {
+  const realm = requestRealm(request);
+  const { repositories } = request.server;
+  if (claims.clientId !== undefined && claims.sub === claims.clientId) {
+    const client = subjects.has('client')
+      ? await repositories.oauthClients.findByClientId(realm.id, claims.sub)
+      : undefined;
+    if (!client || !isClientUsable(client)) {
+      throw new JWTInvalidError('Access token client is not an active client of this realm');
+    }
+    return;
+  }
+  if (!subjects.has('user') || !uuidSubjectSchema.safeParse(claims.sub).success) {
+    throw inactiveSubjectError();
+  }
+  const user = await repositories.users.findById(claims.sub);
+  if (!user || !user.enabled || user.realmId !== realm.id) {
+    throw inactiveSubjectError();
   }
 }
 
@@ -90,7 +160,8 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  * DPoP binding — with two differences: the issuer rule is
  * `options.issuerResolver`, and the RFC 9068 `typ: at+jwt` header is required
  * whatever `requireAccessTokenTyp` says. Then the family's own rules (see
- * {@link assertFamilyClaims}) and `options.requiredScopes`. On success the
+ * {@link assertFamilyClaims}), the subject in the request's realm (see
+ * {@link assertSubjectOfRealm}) and `options.requiredScopes`. On success the
  * claims are on `request.jwtPayload`.
  *
  * The answers follow RFC 6750 §3.1, in a problem document, as every family
@@ -100,25 +171,25 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  *   challenge that names no error, `WWW-Authenticate: Bearer realm="OAuth"`;
  * - a refused token: 401 `invalid_access_token` (or `access_token_expired`),
  *   with `error="invalid_token"` in the challenge;
- * - a missing scope: 403 `insufficient_scope`, whose challenge names the
- *   scopes the route needs.
+ * - a missing scope: 403 `forbidden`, with an `insufficient_scope` challenge
+ *   whose `scope` names the scopes the route needs, as every route that a
+ *   wider token would let through answers.
  *
  * So a route behind the guard lists 401 in its `x-qauth-errors`, and 403 too
  * when it passes `requiredScopes`.
  *
- * The guard proves the token is one for the family, not who its subject is. It
- * does not check that `sub` names a user, that the user is enabled, or that
- * the token belongs to the request's realm: every realm's tokens carry the
- * deployment's issuer until per-realm issuers ship, and a client an operator
- * gave a family audience may hold a `client_credentials` token whose `sub` is
- * its own id. A route resolves its subject and realm itself, as
- * `assertManagementToken` does for the routes that still use it.
+ * What the route does for its subject beyond that, such as reading the user's
+ * row again or checking a role, is its own.
  */
 export function requireFamilyToken(
   family: ApiFamily,
-  options: FamilyTokenOptions = {}
+  options: FamilyTokenOptions
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
   const issuerResolver = options.issuerResolver ?? deploymentIssuer;
+  const subjects = new Set(options.subjects);
+  if (subjects.size === 0) {
+    throw new Error('requireFamilyToken: a family route admits at least one kind of subject');
+  }
   const requiredScopes = [...(options.requiredScopes ?? [])];
 
   return async function requireFamilyTokenHandler(request) {
@@ -127,14 +198,14 @@ export function requireFamilyToken(
       requireTyp: true,
     });
     assertFamilyClaims(family, claims);
+    await assertSubjectOfRealm(request, claims as JWTPayload & { sub: string }, subjects);
 
     if (requiredScopes.length > 0) {
       const granted = new Set((claims.scope ?? '').split(/\s+/).filter((s) => s.length > 0));
       if (!requiredScopes.every((scope) => granted.has(scope))) {
-        throw new InsufficientScopeError(
-          requiredScopes,
-          'The access token lacks a scope this operation needs'
-        );
+        throw new ForbiddenError('The access token lacks a scope this operation needs', {
+          requiredScope: requiredScopes,
+        });
       }
     }
 

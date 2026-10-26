@@ -3,7 +3,7 @@ import { describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../config/env', () => ({ env: { SYSTEM_CLIENT_ID: 'system' } }));
 
-import { getOrCreateSystemClient, SYSTEM_CLIENT_AUDIENCE } from './oauth-client';
+import { getOrCreateSystemClient } from './oauth-client';
 
 function makeFastify(existing: unknown) {
   return {
@@ -38,42 +38,32 @@ describe('getOrCreateSystemClient', () => {
     expect(row.redirectUris).toEqual([]);
   });
 
-  it('creates the system client with the developer audience (#509)', async () => {
+  // #509, expand then contract (ADR-018 §5): this release accepts the
+  // developer API's audience on a portal token but does not mint it, so a
+  // node of the previous release accepts every portal token this one mints.
+  it('creates the system client with no audience, so its token keeps its client id as aud', async () => {
     const fastify = makeFastify(undefined);
 
     const client = await getOrCreateSystemClient('realm-1', fastify);
 
-    expect(client.audience).toEqual(['urn:qauth:aud:developer:v1-rc.0']);
-    expect(SYSTEM_CLIENT_AUDIENCE).toEqual(['urn:qauth:aud:developer:v1-rc.0']);
-  });
-
-  it('returns an existing system client that has the developer audience without writing', async () => {
-    const existing = {
-      id: 'row-0',
-      clientId: 'system',
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
-    };
-    const fastify = makeFastify(existing);
-
-    await expect(getOrCreateSystemClient('realm-1', fastify)).resolves.toBe(existing);
-    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
-    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+    const row = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(row).not.toHaveProperty('audience');
+    expect(client.audience).toBeUndefined();
   });
 
   it.each([
-    ['no audience, as created before #509', null],
+    ['no audience', null],
     ['an audience an operator set by hand', ['https://portal.example.com']],
-    ['the developer audience beside another', ['urn:qauth:aud:developer:v1-rc.0', 'system']],
-  ])('gives an existing system client with %s the developer audience', async (_label, audience) => {
-    const fastify = makeFastify({ id: 'row-0', clientId: 'system', audience });
+  ])(
+    'returns an existing system client with %s as it is, without writing',
+    async (_l, audience) => {
+      const existing = { id: 'row-0', clientId: 'system', audience };
+      const fastify = makeFastify(existing);
 
-    const client = await getOrCreateSystemClient('realm-1', fastify);
-
-    expect(fastify.repositories.oauthClients.update).toHaveBeenCalledExactlyOnceWith('row-0', {
-      audience: ['urn:qauth:aud:developer:v1-rc.0'],
-    });
-    expect(client).toMatchObject({ id: 'row-0', audience: ['urn:qauth:aud:developer:v1-rc.0'] });
-    // Only an audience someone set by hand is worth a warning.
-    expect(fastify.log.warn).toHaveBeenCalledTimes(audience === null ? 0 : 1);
-  });
+      await expect(getOrCreateSystemClient('realm-1', fastify)).resolves.toBe(existing);
+      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+      expect(fastify.log.warn).not.toHaveBeenCalled();
+    }
+  );
 });

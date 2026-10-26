@@ -4,7 +4,6 @@ import {
   EmailAlreadyVerifiedError,
   EmailNotVerifiedError,
   ForbiddenError,
-  InsufficientScopeError,
   InvalidClientError,
   InvalidClientMetadataError,
   InvalidConfigurationError,
@@ -121,13 +120,6 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
     oauthError: 'invalid_request',
   },
   { errorClass: EmailNotVerifiedError, code: 'email_not_verified', oauthError: 'access_denied' },
-  // A token valid for the resource that lacks a scope it needs (RFC 6750 §3.1,
-  // #509): the challenge names the scopes, so the client can ask for them.
-  {
-    errorClass: InsufficientScopeError,
-    code: 'insufficient_scope',
-    oauthError: 'insufficient_scope',
-  },
   { errorClass: InvalidClientError, code: 'invalid_client', oauthError: 'invalid_client' },
   {
     errorClass: InvalidClientMetadataError,

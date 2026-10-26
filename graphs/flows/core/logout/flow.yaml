@@ -223,22 +223,22 @@ states:
       - guard: "issuedFor == 'otherClient'"
         target: invalid_token.not_management_client
         say: "the token's client_id is not the system client's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:71
+        source: apps/auth-server/src/app/helpers/management-token.ts:74
       - guard: "issuedFor == 'delegated'"
         target: invalid_token.delegated
         say: 'the token acts for an agent'
-        source: apps/auth-server/src/app/helpers/management-token.ts:75
+        source: apps/auth-server/src/app/helpers/management-token.ts:78
       - guard: "issuedFor == 'otherAudience'"
         target: invalid_token.wrong_audience
-        say: "the token's audience lacks the system client's, and its client_id too (a token minted before #509)"
-        source: apps/auth-server/src/app/helpers/management-token.ts:85
+        say: "the token's audience lacks the system client's (its client_id while it lists none), and the developer API's too (#509)"
+        source: apps/auth-server/src/app/helpers/management-token.ts:88
       - guard: "subject == 'otherRealm'"
         target: invalid_token.other_realm
         say: 'the subject is a user of another realm'
-        source: apps/auth-server/src/app/helpers/management-token.ts:92
+        source: apps/auth-server/src/app/helpers/management-token.ts:98
       - target: checkingBinding
         say: "the token is the portal's, for this realm or for no user"
-        source: apps/auth-server/src/app/helpers/management-token.ts:94
+        source: apps/auth-server/src/app/helpers/management-token.ts:100
 
   checkingBinding:
     title: Refuse a DPoP-bound token
@@ -438,20 +438,18 @@ states:
   invalid_token.missing_token:
     type: final
     title: Refuse a header that holds no single token
-    source: apps/auth-server/src/app/routes/auth/logout.ts:75
+    source: apps/auth-server/src/app/routes/auth/logout.ts:77
     response:
       status: 401
       headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="Missing or invalid Authorization
-          header. Expected format:  Bearer <token> "'
+        WWW-Authenticate: 'Bearer realm="OAuth"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#unauthorized
+        title: Unauthorized
         status: 401
         detail: 'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
         instance: /auth/logout
-        code: jwt_invalid
+        code: unauthorized
         trace_id: the request id
 
   invalid_token.unverified:
@@ -465,18 +463,18 @@ states:
       headers:
         WWW-Authenticate: 'Bearer realm="OAuth", error="invalid_token", error_description="<the body''s error>"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: 'Invalid JWT token, or Invalid JWT token: <why>'
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   invalid_token.not_management_client:
     type: final
     title: Refuse a token issued to another client
-    source: apps/auth-server/src/app/helpers/management-token.ts:72
+    source: apps/auth-server/src/app/helpers/management-token.ts:75
     response:
       status: 401
       headers:
@@ -484,18 +482,18 @@ states:
           'Bearer realm="OAuth", error="invalid_token", error_description="Access token was not issued for
           the management API"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: Access token was not issued for the management API
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   invalid_token.delegated:
     type: final
     title: Refuse a token that acts for an agent
-    source: apps/auth-server/src/app/helpers/management-token.ts:76
+    source: apps/auth-server/src/app/helpers/management-token.ts:79
     response:
       status: 401
       headers:
@@ -503,18 +501,18 @@ states:
           'Bearer realm="OAuth", error="invalid_token", error_description="A delegated access token cannot
           use the management API"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: A delegated access token cannot use the management API
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   invalid_token.wrong_audience:
     type: final
     title: Refuse a token for another audience
-    source: apps/auth-server/src/app/helpers/management-token.ts:86
+    source: apps/auth-server/src/app/helpers/management-token.ts:92
     response:
       status: 401
       headers:
@@ -522,18 +520,18 @@ states:
           'Bearer realm="OAuth", error="invalid_token", error_description="Access token audience does not
           match the management API"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: Access token audience does not match the management API
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   invalid_token.other_realm:
     type: final
     title: Refuse a token of another realm's user
-    source: apps/auth-server/src/app/helpers/management-token.ts:109
+    source: apps/auth-server/src/app/helpers/management-token.ts:115
     response:
       status: 401
       headers:
@@ -541,12 +539,12 @@ states:
           'Bearer realm="OAuth", error="invalid_token", error_description="Access token was not issued in
           this realm"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: Access token was not issued in this realm
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   invalid_token.dpop_bound:
@@ -560,12 +558,12 @@ states:
           'Bearer realm="OAuth", error="invalid_token", error_description="A DPoP-bound access token cannot
           be used as a Bearer token"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: A DPoP-bound access token cannot be used as a Bearer token
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   invalid_token.subject_not_a_user:
@@ -579,12 +577,12 @@ states:
           'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not an active
           user"'
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#jwt-invalid
-        title: Access token not valid
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
+        title: Invalid access token
         status: 401
         detail: Access token subject is not an active user
         instance: /auth/logout
-        code: jwt_invalid
+        code: invalid_access_token
         trace_id: the request id
 
   server_error.store:
@@ -593,7 +591,7 @@ states:
     description: >-
       The steps before the failing one stay done. The body says nothing of the failure, in any NODE_ENV; its
       trace_id finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:611
+    source: apps/auth-server/src/app/plugins/error-handler.ts:600
     response:
       status: 500
       body:

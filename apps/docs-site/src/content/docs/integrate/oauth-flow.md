@@ -778,12 +778,13 @@ administrative, such as `admin:org`, are ordinary scopes. The three admin
 scopes and what they allow are on the
 [admin permissions](/reference/admin-permissions/) page.
 
-An audience is held to a stricter rule than a scope. A registration that names
-an audience in the reserved `urn:qauth:aud:` namespace in an `audience` or
-`resource` member is refused with `invalid_client_metadata`, not narrowed, and a
-CIMD document that does so does not resolve: QAuth's own API audiences are
-issued only to clients an operator set up. Any other value in those members is
-ignored, as before.
+QAuth's API audiences, the `urn:qauth:aud:` namespace in any case, follow the
+same rule: self-registration never obtains one. Registration ignores one in an
+`audience` or `resource` member and registers the client with the rest, as it
+ignores every other value there, and a CIMD document that names one resolves
+with that value ignored. Only a client an operator set up receives such an
+audience (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
 
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).

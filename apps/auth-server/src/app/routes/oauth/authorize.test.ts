@@ -1846,6 +1846,47 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
   });
 
+  // #509: the portal's token must never become a token for an API family on
+  // the Bearer path, which has no sign-in and no consent screen.
+  it.each([
+    [
+      'the request names a family audience the client lists',
+      { audience: ['urn:qauth:aud:account:v1-rc.0'] },
+      ['urn:qauth:aud:account:v1-rc.0'],
+    ],
+    [
+      "the client's default audience holds one",
+      { audience: ['https://api.example.com', 'urn:qauth:aud:developer:v1-rc.0'] },
+      undefined,
+    ],
+  ])('refuses the Bearer path with access_denied when %s', async (_label, client, resource) => {
+    // The mock answers the system client lookup with this client too, so the
+    // token carries its audience to pass the portal-token check.
+    const { fastify, state } = await runBearer(
+      'email',
+      { aud: client.audience },
+      {
+        client: { ...DANGEROUS_CLIENT, ...client },
+        consent: {
+          scopes: ['email'],
+          resourceScopes: { 'urn:qauth:aud:account:v1-rc.0': ['email'] },
+          revokedAt: null,
+        },
+        resource,
+      }
+    );
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=access_denied');
+    expect(state.redirected).not.toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'access_denied', reason: 'bearer_path_reserved_audience' },
+      expect.objectContaining({ userId: BEARER_USER, actor: 'user' })
+    );
+  });
+
   it('refuses a Bearer token issued to another client, even with the system audience', async () => {
     // A third-party client's user token whose `aud` was bound to `system`
     // through RFC 8707 `resource` is not the first-party login token: the

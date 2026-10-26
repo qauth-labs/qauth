@@ -1,5 +1,6 @@
 import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
 import { JWTInvalidError, UnauthorizedClientError } from '@qauth-labs/shared-errors';
+import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -11,6 +12,7 @@ import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import {
   findExceedingAgentScopesForClient,
+  resolveAudience,
   unlistedReservedAudiences,
 } from '../../helpers/client-auth';
 import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
@@ -448,6 +450,29 @@ export default async function (fastify: FastifyInstance) {
       return sendAuthorizationError(reply, client, redirectUri, {
         error: 'invalid_target',
         error_description: 'a QAuth API audience is issued only to a client that lists it',
+        state: state ?? undefined,
+        iss,
+      });
+    }
+
+    // The legacy Bearer path (#509) authenticates the user from the developer
+    // portal's token, with no sign-in and no consent screen. It must never
+    // turn that token into a token for an API family: a request on it that
+    // names a QAuth API audience, or a client whose default audience holds
+    // one, is refused. #524 retires the path.
+    if (
+      !browserSession &&
+      [...resources, ...[resolveAudience(client)].flat()].some(isReservedAudience)
+    ) {
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'access_denied', reason: 'bearer_path_reserved_audience' },
+        userEvent
+      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'access_denied',
+        error_description: 'a QAuth API audience is not issued on the Bearer path',
         state: state ?? undefined,
         iss,
       });

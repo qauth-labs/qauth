@@ -9,8 +9,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { authenticateClientAssertion, type ClientAssertionCredentials } from './client-assertion';
-import { isAgentClient, resolveClient } from './client-resolution';
+import { isAgentClient, isCimdClient, resolveClient } from './client-resolution';
 import { isClientUsable } from './client-status';
+import { systemClientId } from './oauth-client';
 import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
 
 /** Maximum length of a single audience URI (defensive cap, RFC 8707 leaves this open). */
@@ -111,6 +112,15 @@ export type OAuthClientLike = {
    * checkpoint — never re-derived inline. OPERATOR-SET, never self-asserted.
    */
   environment?: string | null;
+  /**
+   * How the client was registered: `registrationType` is `cimd` for a client
+   * resolved from a Client ID Metadata Document and `dynamic` for one
+   * registered at `/oauth/register`. Optional for older callers; every stored
+   * row carries the column.
+   */
+  metadata?: Record<string, unknown> | null;
+  /** When `/oauth/register` registered the client; null for any other client. */
+  dynamicRegisteredAt?: number | null;
 };
 
 /**
@@ -591,6 +601,52 @@ export function resolveAudience(client: OAuthClientLike, resource?: string[]): s
 }
 
 /**
+ * The `aud` of a token a user grant issues: the authorization code and the
+ * refresh token grants (#509, ADR-019 Decision 7).
+ *
+ * As {@link resolveAudience}, except that a client's default audience, used
+ * when neither the request nor the grant's binding names a `resource`, leaves
+ * out the QAuth API audiences (`urn:qauth:aud:`). A family audience reaches a
+ * user's token only when the client names it with the RFC 8707 `resource`
+ * parameter, so the consent the user gave covers it: consent binds the
+ * resources, not the client's defaults. When nothing else is left, the token's
+ * `aud` is the client id, as for a client with no audience.
+ *
+ * The system client keeps its default: `/auth/login` mints the developer
+ * portal's token from it without a `resource`. `client_credentials` keeps its
+ * default too: no user consents to it.
+ */
+export function resolveUserGrantAudience(
+  client: OAuthClientLike,
+  resource?: string[]
+): string | string[] {
+  if ((resource !== undefined && resource.length > 0) || client.clientId === systemClientId()) {
+    return resolveAudience(client, resource);
+  }
+  const parsed = audienceSchema.safeParse(client.audience);
+  if (!parsed.success) return resolveAudience(client);
+  return resolveAudience({
+    ...client,
+    audience: parsed.data.filter((value) => !isReservedAudience(value)),
+  });
+}
+
+/**
+ * Whether the client registered itself: resolved from a Client ID Metadata
+ * Document, or registered at `/oauth/register`. Read from both marks the
+ * registration writes, so either one is enough.
+ */
+function isSelfRegisteredClient(
+  client: Pick<OAuthClientLike, 'metadata' | 'dynamicRegisteredAt'>
+): boolean {
+  return (
+    isCimdClient({ metadata: client.metadata ?? null }) ||
+    client.metadata?.['registrationType'] === 'dynamic' ||
+    (client.dynamicRegisteredAt !== undefined && client.dynamicRegisteredAt !== null)
+  );
+}
+
+/**
  * The QAuth-defined audiences (`urn:qauth:aud:`, #509) in `aud` that the
  * client's own `audience` does not list.
  *
@@ -601,12 +657,18 @@ export function resolveAudience(client: OAuthClientLike, resource?: string[]): s
  * refuses `invalid_target` when this returns anything. It reads the client's
  * stored `audience`, never the client id: a client whose id happens to be a
  * reserved value lists nothing by that.
+ *
+ * A self-registered client (CIMD or dynamic registration) lists nothing,
+ * whatever its row holds: neither registration stores an `audience`, so a row
+ * that holds a reserved one was written some other way, and it fails closed.
  */
 export function unlistedReservedAudiences(
-  client: Pick<OAuthClientLike, 'audience'>,
+  client: Pick<OAuthClientLike, 'audience' | 'metadata' | 'dynamicRegisteredAt'>,
   aud: string | readonly string[]
 ): string[] {
-  const parsed = audienceSchema.safeParse(client.audience);
-  const listed = new Set(parsed.success ? parsed.data : []);
+  const parsed = isSelfRegisteredClient(client)
+    ? undefined
+    : audienceSchema.safeParse(client.audience);
+  const listed = new Set(parsed?.success ? parsed.data : []);
   return [aud].flat().filter((value) => isReservedAudience(value) && !listed.has(value));
 }

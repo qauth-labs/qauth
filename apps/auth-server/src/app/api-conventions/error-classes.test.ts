@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 
 import { SsfRequestError } from '@qauth-labs/fastify-plugin-ssf';
 import * as sharedErrors from '@qauth-labs/shared-errors';
-import { InsufficientScopeError, InvalidDpopProofError } from '@qauth-labs/shared-errors';
+import { InvalidDpopProofError } from '@qauth-labs/shared-errors';
 
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
@@ -38,10 +38,6 @@ function instanceOf(errorClass: ErrorClass): Error {
     // The only class whose status depends on where it is thrown. A problem
     // route meets it at a resource, where it is a 401 (RFC 9449 §7.1).
     return new InvalidDpopProofError(undefined, { atResource: true });
-  }
-  if (errorClass === InsufficientScopeError) {
-    // The only class that needs an argument: the scopes its challenge names.
-    return new InsufficientScopeError(['scope:read']);
   }
   return new (errorClass as new () => Error)();
 }

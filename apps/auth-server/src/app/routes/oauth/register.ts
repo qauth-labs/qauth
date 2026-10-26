@@ -7,7 +7,6 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import {
-  assertNoReservedAudienceMetadata,
   registrationSchemaError,
   validateAndNormalize,
 } from '../../helpers/dynamic-client-registration';
@@ -51,11 +50,6 @@ export default async function (fastify: FastifyInstance) {
         response: {
           201: dynamicClientRegistrationResponseSchema,
         },
-      },
-      // Before validation, which drops the `audience` and `resource` members a
-      // client may not use to claim a QAuth API audience (#509).
-      preValidation: async (request) => {
-        assertNoReservedAudienceMetadata(request.body);
       },
       // RFC 7591 §3.2.2: a body the schema refuses answers
       // `invalid_client_metadata` (or `invalid_redirect_uri`), never the
