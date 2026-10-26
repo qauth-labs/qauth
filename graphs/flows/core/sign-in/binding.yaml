@@ -32,6 +32,9 @@ server:
     # one address meets the login limit first, so a lockout is never seen from that address.
     LOGIN_RATE_LIMIT: '10'
     LOGIN_RATE_WINDOW: '900'
+    # The replay runs over plain HTTP, as CI's wire suite does, so the __Host- cookies go without Secure; the replay
+    # reads each Set-Cookie header itself and sends the cookie back in its own Cookie header.
+    SESSION_COOKIE_SECURE: 'false'
   resetBeforeEachWalk: [cache]
 
 seed:

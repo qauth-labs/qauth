@@ -14,9 +14,10 @@
 #   verified-account gate, then the enabled flag, and the two routes share one failed-login counter.
 # - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
 #   `source:` of the transition it decides: the line of the check.
-# - `invoke: { external }` names a store or a service the domain graph holds no entity for: the token signer (the
-#   realm's keys, ADR-019 Decision 9) and the event store with its own writer (ADR-019 Decision 8). The database reads
-#   and writes are domain actions (graphs/domain/).
+# - `invoke: { external }` names a store or a service the domain graph holds no entity for: the token signer, which
+#   still signs with the JWT_PRIVATE_KEY variable rather than the realm's keys (#491 moves it, ADR-019 Decision 9), and
+#   the event store with its own writer (ADR-019 Decision 8). The database reads and writes are domain actions
+#   (graphs/domain/).
 schema: delurio-graph/0
 kind: flow
 id: core.sign-in-token
@@ -26,8 +27,8 @@ title: Sign in with a password for tokens
 summary: >-
   A caller posts an email address and a password as JSON. QAuth refuses a locked-out address, counts the attempt,
   checks the password, the verified-account gate and the enabled flag, and refuses every failure with the same 401.
-  On success it signs an access token for the system client, which carries no scope and whose audience is the
-  management API, stores a new refresh-token family, records the sign-in and answers with both tokens.
+  On success it signs an access token for the system client, which carries no scope, stores a new refresh-token
+  family, records the sign-in and answers with both tokens.
 
 scope:
   shows: POST /auth/login from the request to the response, in the order the server runs its checks
@@ -48,8 +49,8 @@ scope:
       and logs an error. Neither happens in normal operation'
     - 'the system client is created on the realm with its first direct sign-in, with a random secret nobody is
       given; SYSTEM_CLIENT_ID names it'
-    - "with HYBRID_SIGNING_ENABLED the access token is signed with the realm's hybrid keys; its shape is the token
-      flows' to draw"
+    - 'with HYBRID_SIGNING_ENABLED the access token is the same Ed25519 JWS, and its detached ML-DSA signature
+      (JWT_MLDSA_PRIVATE_KEY) is stored in the cache for introspection; a failure to store it answers 500'
     - 'the effects are not one transaction: a failure after the refresh token is stored leaves it stored, though the
       caller never receives it'
 
@@ -67,7 +68,8 @@ context:
       rateLimited: 'the client address has used up its login requests for the window'
       invalidInput: >-
         the body does not pass the schema: an email that is not an address or is longer than 254 characters, a
-        password that is empty or too long, a missing field
+        password longer than 256 characters, a missing field. An empty password passes the schema here, unlike on the
+        form, and is counted and refused like a wrong one
       lockedOut: >-
         the address being signed in to, or the client address, is locked out: FAILED_LOGIN_MAX_ATTEMPTS attempts were
         counted on it within FAILED_LOGIN_WINDOW seconds, and FAILED_LOGIN_LOCKOUT_DURATION seconds have not passed;
@@ -266,8 +268,9 @@ states:
     description: >-
       The system client is found, or created on the realm's first direct sign-in. The token's subject is the user, its
       client and its audience the system client (which registers no audience of its own), and it carries no scope and
-      neither email nor email_verified (ANT-2026-2O0T72HY). It lives ACCESS_TOKEN_LIFESPAN seconds, or
-      DEV_ACCESS_TOKEN_LIFESPAN in development.
+      neither email nor email_verified (ANT-2026-2O0T72HY). It is signed with the JWT_PRIVATE_KEY key and its iss is
+      JWT_ISSUER, in every realm, until #491 moves tokens onto the realm's keys. It lives ACCESS_TOKEN_LIFESPAN
+      seconds, whatever the client's environment.
     source: apps/auth-server/src/app/routes/auth/login.ts:173
     invoke: { external: tokenSigner }
     on:
@@ -277,7 +280,7 @@ states:
         source: apps/auth-server/src/app/routes/auth/login.ts:180
       FAIL.server:
         target: server_error.store
-        say: 'the database or the key store fails'
+        say: 'the database fails, or the hybrid signature cannot be stored'
         source: apps/auth-server/src/app/routes/auth/login.ts:251
 
   storingRefreshToken:
@@ -351,7 +354,7 @@ states:
         Cache-Control: no-store
         Pragma: no-cache
       body:
-        access_token: a JWT signed by the realm, for the system client
+        access_token: 'an Ed25519 JWT signed with JWT_PRIVATE_KEY, iss JWT_ISSUER, for the system client'
         refresh_token: 64 hexadecimal characters
         expires_in: the access token's lifespan, in seconds
         token_type: Bearer
@@ -360,9 +363,10 @@ states:
     type: final
     title: Refuse a locked-out address
     description: >-
-      Not counted, and no password is checked, even the right one. user.sign_in_failed is recorded with the reason
-      locked_out. The answer waits out the 500 ms floor that every refused credential waits. Distinct from the login
-      limit, which the rate limiter answers.
+      Not counted, and no password is checked, even the right one. No event is recorded, unlike on POST /ui/login: only
+      the metric login_attempts (result failure, reason locked_out) and the log line user.login.failure. The answer
+      waits out the 500 ms floor that every refused credential waits. Distinct from the login limit, which the rate
+      limiter answers.
     source: apps/auth-server/src/app/routes/auth/login.ts:83
     response:
       status: 429

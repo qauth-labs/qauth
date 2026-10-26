@@ -66,12 +66,12 @@ actions:
     source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:59
     body:
       type: object
-      required: [userId, oauthClientId, tokenHash, familyId, familyCreatedAt, expiresAt]
+      required: [userId, oauthClientId, tokenHash, familyCreatedAt, expiresAt]
       properties:
         userId: { type: string, format: uuid }
         oauthClientId: { type: string, format: uuid } # core.sign-in-token passes the system client's
         tokenHash: { type: string, pattern: '^[0-9a-f]{64}$' } # SHA-256 of the token, never the token itself
-        familyId: { type: string, format: uuid } # core.sign-in-token starts a new family with a random (v4) UUID
+        familyId: { type: string, format: uuid } # a new family (uuidv7) when absent; core.sign-in-token passes a v4
         familyCreatedAt: { type: integer }
         familySessionExpiresAt: { type: [integer, 'null'] } # core.sign-in-token passes null: no browser session
         expiresAt: { type: integer }

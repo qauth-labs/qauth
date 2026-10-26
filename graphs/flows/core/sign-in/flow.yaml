@@ -62,6 +62,9 @@ scope:
       return_to instead of a handle: that is a same-origin path, and this flow redirects to it'
     - 'GET /ui/resume reads no session: whoever holds a live handle may resume it, and /oauth/authorize then checks
       the session, the client and the request again, as on a first visit'
+    - "Fastify's own answers to GET /ui/resume before any hook, with Fastify's JSON body: a handle over 100
+      characters (the router's parameter limit) is refused with 414, one that is not valid percent-encoding with
+      400, and an empty one with 404"
     - 'two resumes of one handle at the same instant can both read it before either deletes it (no GETDEL): the user
       resumes their own request twice'
     - 'the effects are not one transaction: a failure after the session is created leaves the session in place,
@@ -143,8 +146,8 @@ context:
         the handle names an authorization request parked less than ten minutes ago that no request has resumed yet,
         and the parked value is an /oauth/authorize URL
       spent: >-
-        the handle is malformed or unknown, expired, already resumed, or its parked value is not an /oauth/authorize
-        URL; or the store cannot be read
+        the handle, of 1 to 100 characters, is not 43 base64url characters, or names no parked request: unknown,
+        expired or already resumed; or its parked value is not an /oauth/authorize URL; or the store cannot be read
   attemptCounted: { values: [false, true], initial: false }
   sessionCreated: { values: [false, true], initial: false }
   handleBurned: { values: [false, true], initial: false }
@@ -595,8 +598,9 @@ states:
     description: >-
       A handle that is not 43 base64url characters is refused without reading the store. Otherwise the record is read
       and deleted at once, before its value is looked at, so a handle resumes once; the value is then checked again to
-      be this server's own /oauth/authorize URL. Every miss, a store failure included, is the same 400 page: a
-      distinct answer would tell which handles ever existed, and there is no safe place to redirect to.
+      be this server's own /oauth/authorize URL. Every miss that reaches the handler, a store failure included, is the
+      same 400 page: a distinct answer would tell which handles ever existed, and there is no safe place to redirect
+      to.
     source: apps/auth-server/src/app/routes/ui/resume.ts:115
     invoke: { external: pendingAuthorizationStore }
     on:
@@ -744,8 +748,8 @@ states:
     type: final
     title: Tell the user the authorization request has expired
     description: >-
-      Unknown, malformed, expired and already resumed handles answer the same, with no link and no redirect: the user
-      starts again from the application, which still holds the PKCE verifier.
+      Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, with no link
+      and no redirect: the user starts again from the application, which still holds the PKCE verifier.
     source: apps/auth-server/src/app/routes/ui/resume.ts:123
     response:
       status: 400
