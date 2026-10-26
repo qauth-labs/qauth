@@ -721,7 +721,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     dir: path.join(__dirname, 'plugins'),
     options: { ...pluginOptions },
     ignorePattern:
-      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs|default-realm|realm-resolver)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
+      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs|default-realm|realm-resolver|admin-operations)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {

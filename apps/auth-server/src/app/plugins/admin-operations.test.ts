@@ -1,0 +1,462 @@
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  type AdminOperation,
+  type Classification,
+  createOperationRegistry,
+  defineOperation,
+  type OperationClassification,
+  operationSchemaExtensions,
+} from '../helpers/admin-operations';
+import {
+  adminOperationsPlugin,
+  adminRouteProblem,
+  requestClassification,
+} from './admin-operations';
+
+/**
+ * The classification stage of the admin pipeline (#508): the boot check on
+ * every route, and a classification per request that the handler receives
+ * and cannot lower.
+ */
+
+const WRITE: Classification = {
+  class: 'write',
+  effects: [],
+  permissions: ['realms.policies.write'],
+};
+
+const READ_OPERATION = defineOperation({
+  id: 'widgets.get',
+  class: 'read',
+  effects: [],
+  permissions: ['realms.read'],
+  description: 'Read a widget.',
+});
+
+/** Write for a `lifespan` change, security for anything that touches `password`. */
+const PATCH_OPERATION = defineOperation<{ minScore: number }>({
+  id: 'widgets.policies.update',
+  class: 'security',
+  effects: ['credential-path'],
+  permissions: ['realms.policies.write', 'realms.policies.security'],
+  description: 'Change widget policies.',
+  classify: (request) => {
+    const body = request.body as Record<string, unknown>;
+    if (Object.keys(body).every((key) => key === 'lifespan')) return WRITE;
+    if ('broken' in body) throw new Error('no rule');
+    return {
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.security'],
+    };
+  },
+  loadState: async () => ({ minScore: 2 }),
+});
+
+const REGISTRY = createOperationRegistry([READ_OPERATION, PATCH_OPERATION] as AdminOperation[], {
+  reserved: [],
+});
+
+const schemaOf = (operation: AdminOperation) => ({ ...operationSchemaExtensions(operation) });
+
+let app: FastifyInstance | undefined;
+
+afterEach(async () => {
+  await app?.close();
+  app = undefined;
+});
+
+/** A listener with the stage and whatever routes `routes` adds after it. */
+async function listener(
+  routes: (instance: FastifyInstance) => void,
+  options: { logger?: boolean } = {}
+): Promise<FastifyInstance> {
+  app = Fastify({ logger: options.logger ?? false });
+  await app.register(adminOperationsPlugin, { registry: REGISTRY });
+  await app.register(async (scope) => routes(scope));
+  return app;
+}
+
+/** `listener(routes)` and `ready()`, as one promise for `rejects`. */
+const boot = (routes: (instance: FastifyInstance) => void) =>
+  (async () => {
+    const instance = await listener(routes);
+    await instance.ready();
+  })();
+
+describe('the boot check (#508)', () => {
+  it('refuses a route that names no operation', async () => {
+    await expect(
+      boot((scope) => scope.get('/admin/v1-rc.0/widgets', async () => ({})))
+    ).rejects.toThrow(/GET \/admin\/v1-rc.0\/widgets has no admin operation/);
+  });
+
+  it('refuses a route that names an operation the registry does not hold', async () => {
+    await expect(
+      boot((scope) =>
+        scope.get(
+          '/admin/v1-rc.0/widgets',
+          { config: { operation: 'widgets.list' }, schema: { operationId: 'widgets.list' } },
+          async () => ({})
+        )
+      )
+    ).rejects.toThrow(
+      /names the admin operation "widgets.list", which the operation registry does not hold/
+    );
+  });
+
+  it.each([
+    ['no schema', undefined],
+    ['another operationId', { ...schemaOf(READ_OPERATION), operationId: 'widgets.read' }],
+    ['another class', { ...schemaOf(READ_OPERATION), 'x-qauth-class': 'write' as const }],
+    ['another permission', { ...schemaOf(READ_OPERATION), 'x-qauth-permission': 'realms.export' }],
+    [
+      'an effect on a read operation',
+      { ...schemaOf(READ_OPERATION), 'x-qauth-effects': ['import' as const] },
+    ],
+  ])('refuses a route whose schema disagrees with the registry: %s', async (_label, schema) => {
+    await expect(
+      boot((scope) =>
+        scope.get(
+          '/admin/v1-rc.0/widgets/:id',
+          { config: { operation: 'widgets.get' }, ...(schema ? { schema } : {}) },
+          async () => ({})
+        )
+      )
+    ).rejects.toThrow(/widgets\/:id/);
+  });
+
+  it('refuses a security route without its effects or its two-admin marker', async () => {
+    const withoutMarker: Record<string, unknown> = schemaOf(PATCH_OPERATION);
+    delete withoutMarker['x-qauth-two-admin'];
+    await expect(
+      boot((scope) =>
+        scope.patch(
+          '/admin/v1-rc.0/widgets/policies',
+          { config: { operation: 'widgets.policies.update' }, schema: withoutMarker },
+          async () => ({})
+        )
+      )
+    ).rejects.toThrow(/x-qauth-two-admin/);
+  });
+
+  it('boots routes whose schemas carry the registry members, with a permission list in any order', async () => {
+    const schema = schemaOf(PATCH_OPERATION);
+    await expect(
+      boot((scope) => {
+        scope.get(
+          '/admin/v1-rc.0/widgets/:id',
+          { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
+          async () => ({})
+        );
+        scope.patch(
+          '/admin/v1-rc.0/widgets/policies',
+          {
+            config: { operation: 'widgets.policies.update' },
+            schema: {
+              ...schema,
+              'x-qauth-permission': [...(schema['x-qauth-permission'] as string[])].reverse(),
+            },
+          },
+          async () => ({})
+        );
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('names the problem without Fastify', () => {
+    expect(
+      adminRouteProblem({ method: ['GET', 'HEAD'], url: '/x', config: {}, schema: {} }, REGISTRY)
+    ).toMatch(/^GET,HEAD \/x has no admin operation/);
+    expect(
+      adminRouteProblem(
+        {
+          method: 'GET',
+          url: '/x',
+          config: { operation: 'widgets.get' },
+          schema: schemaOf(READ_OPERATION),
+        },
+        REGISTRY
+      )
+    ).toBeUndefined();
+  });
+});
+
+describe('the classification per request (#508)', () => {
+  /** The listener with both fixture routes; each handler records what it received. */
+  async function withFixtureRoutes(onClassified?: (c: OperationClassification) => void) {
+    return listener((scope) => {
+      scope.get(
+        '/admin/v1-rc.0/widgets/:id',
+        { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
+        async (request) => {
+          onClassified?.(requestClassification(request));
+          return { ok: true };
+        }
+      );
+      scope.patch(
+        '/admin/v1-rc.0/widgets/policies',
+        { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
+        async (request) => {
+          onClassified?.(requestClassification(request));
+          return { ok: true };
+        }
+      );
+    });
+  }
+
+  it('hands a static operation its declaration', async () => {
+    const seen: OperationClassification[] = [];
+    const instance = await withFixtureRoutes((classification) => seen.push(classification));
+    const response = await instance.inject({ method: 'GET', url: '/admin/v1-rc.0/widgets/1' });
+    expect(response.statusCode).toBe(200);
+    expect(seen).toEqual([
+      {
+        operationId: 'widgets.get',
+        class: 'read',
+        effects: [],
+        permissions: ['realms.read'],
+        failedClosed: null,
+      },
+    ]);
+  });
+
+  it('classifies the same HEAD route Fastify adds for a GET', async () => {
+    const seen: OperationClassification[] = [];
+    const instance = await withFixtureRoutes((classification) => seen.push(classification));
+    const response = await instance.inject({ method: 'HEAD', url: '/admin/v1-rc.0/widgets/1' });
+    expect(response.statusCode).toBe(200);
+    expect(seen.map((classification) => classification.operationId)).toEqual(['widgets.get']);
+  });
+
+  it('classifies a request-dependent operation by its body', async () => {
+    const seen: OperationClassification[] = [];
+    const instance = await withFixtureRoutes((classification) => seen.push(classification));
+    await instance.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { lifespan: 600 },
+    });
+    await instance.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { password: 1 },
+    });
+    expect(seen.map(({ class: c, permissions }) => [c, permissions])).toEqual([
+      ['write', ['realms.policies.write']],
+      ['security', ['realms.policies.security']],
+    ]);
+  });
+
+  it('fails a throwing classify closed and logs the reason, not the body', async () => {
+    const seen: OperationClassification[] = [];
+    const lines: string[] = [];
+    app = Fastify({
+      logger: { level: 'warn', stream: { write: (line: string) => void lines.push(line) } },
+    });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
+      async (request) => {
+        seen.push(requestClassification(request));
+        return {};
+      }
+    );
+    await app.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { broken: 'secret-value' },
+    });
+    expect(seen).toEqual([
+      {
+        operationId: 'widgets.policies.update',
+        class: 'security',
+        effects: ['credential-path'],
+        permissions: ['realms.policies.write', 'realms.policies.security'],
+        failedClosed: 'threw',
+      },
+    ]);
+    const warning = lines.map((line) => JSON.parse(line)).find((line) => line.level === 40);
+    expect(warning).toMatchObject({ operation: 'widgets.policies.update', reason: 'threw' });
+    expect(lines.join('\n')).not.toContain('secret-value');
+  });
+
+  // Acceptance criterion: the pipeline hands the handler a classification it
+  // cannot lower. The handler below tries every way to make its request look
+  // like a read; the stage after it (the audit row, the approval
+  // consumption) still sees the security classification.
+  it('hands a hostile handler a classification it cannot lower', async () => {
+    const attempts: Record<string, string> = {};
+    let afterHandler: OperationClassification | null = null;
+    const weaker: OperationClassification = Object.freeze({
+      operationId: 'widgets.policies.update',
+      class: 'read',
+      effects: [],
+      permissions: ['realms.read'],
+      failedClosed: null,
+    });
+
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    app.addHook('onResponse', async (request) => {
+      afterHandler = request.adminOperation;
+    });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
+      async (request: FastifyRequest) => {
+        const tryTo = (name: string, attempt: () => unknown) => {
+          try {
+            const result = attempt();
+            attempts[name] = result === false ? 'refused' : 'ran';
+          } catch (error) {
+            attempts[name] = (error as Error).name;
+          }
+        };
+        const held = request.adminOperation as OperationClassification;
+        const asWritable = held as unknown as Record<string, unknown>;
+        tryTo('assign the property', () => {
+          (request as unknown as Record<string, unknown>).adminOperation = weaker;
+        });
+        tryTo('redefine the property', () =>
+          Object.defineProperty(request, 'adminOperation', { value: weaker })
+        );
+        tryTo('delete the property', () => {
+          delete (request as unknown as Record<string, unknown>).adminOperation;
+        });
+        tryTo('Reflect.set', () => Reflect.set(request, 'adminOperation', weaker));
+        tryTo('Reflect.defineProperty', () =>
+          Reflect.defineProperty(request, 'adminOperation', { value: weaker })
+        );
+        tryTo('lower the class', () => {
+          asWritable.class = 'read';
+        });
+        tryTo('drop the effects', () => {
+          (held.effects as string[]).length = 0;
+        });
+        tryTo('pop an effect', () => (held.effects as string[]).pop());
+        tryTo('replace the permissions', () => {
+          asWritable.permissions = ['realms.read'];
+        });
+        tryTo('splice a permission', () => (held.permissions as string[]).splice(0, 2));
+        tryTo('clear failedClosed', () => {
+          asWritable.failedClosed = 'threw';
+        });
+        tryTo('swap the prototype', () => Object.setPrototypeOf(held, weaker));
+        return { class: request.adminOperation?.class };
+      }
+    );
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { password: 1 },
+    });
+
+    const expected = {
+      operationId: 'widgets.policies.update',
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.security'],
+      failedClosed: null,
+    };
+    expect(response.json()).toEqual({ class: 'security' });
+    expect(afterHandler).toEqual(expected);
+    expect(attempts).toEqual({
+      'assign the property': 'TypeError',
+      'redefine the property': 'TypeError',
+      'delete the property': 'TypeError',
+      'Reflect.set': 'refused',
+      'Reflect.defineProperty': 'refused',
+      'lower the class': 'TypeError',
+      'drop the effects': 'TypeError',
+      'pop an effect': 'TypeError',
+      'replace the permissions': 'TypeError',
+      'splice a permission': 'TypeError',
+      'clear failedClosed': 'TypeError',
+      'swap the prototype': 'TypeError',
+    });
+
+    // The next request is classified afresh, by its own body.
+    const next = await app.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { lifespan: 1 },
+    });
+    expect(next.json()).toEqual({ class: 'write' });
+  });
+
+  it('runs nothing when an earlier stage took the property first', async () => {
+    const handler = vi.fn(async () => ({}));
+    app = Fastify({ logger: false });
+    // Registered before the stage, so it runs first.
+    app.addHook('preHandler', async (request) => {
+      Object.defineProperty(request, 'adminOperation', {
+        value: null,
+        writable: false,
+        configurable: false,
+      });
+    });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    app.get(
+      '/admin/v1-rc.0/widgets/:id',
+      { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
+      handler
+    );
+    const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/widgets/1' });
+    expect(response.statusCode).toBe(500);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('runs nothing for a route registered before the stage, which the boot check never saw', async () => {
+    const handler = vi.fn(async () => ({}));
+    app = Fastify({ logger: false });
+    app.get('/admin/v1-rc.0/early', handler);
+    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.ready();
+    const response = await app.inject({ method: 'GET', url: '/admin/v1-rc.0/early' });
+    expect(response.statusCode).toBe(500);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('runs nothing when the state cannot be read', async () => {
+    const handler = vi.fn(async () => ({}));
+    const failing = defineOperation({
+      ...PATCH_OPERATION,
+      loadState: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, {
+      registry: createOperationRegistry([failing] as AdminOperation[], { reserved: [] }),
+    });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: failing.id }, schema: schemaOf(failing as AdminOperation) },
+      handler
+    );
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      payload: { lifespan: 1 },
+    });
+    expect(response.statusCode).toBe(500);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('leaves a request that matches no route alone', async () => {
+    const instance = await withFixtureRoutes();
+    const response = await instance.inject({ method: 'GET', url: '/admin/v1-rc.0/unknown' });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('never gives a request without a classification a default', () => {
+    expect(() =>
+      requestClassification({ adminOperation: null } as unknown as FastifyRequest)
+    ).toThrow(/no admin operation classification/);
+  });
+});
