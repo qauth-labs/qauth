@@ -471,6 +471,16 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
   const plugins = pluginsFor(roles);
 
+  // The route modules of this process's roles, imported now, all at once and
+  // while the plugins below register. avvio gives a plugin only what is left
+  // of this plugin's start-up time (`pluginTimeout`), so importing them one by
+  // one at the routes would spend it under load. A rejection is awaited below;
+  // the catch only keeps it from counting as unhandled if the boot fails first.
+  const routeModules = Promise.all(
+    routeModulesFor(roles).map(async (entry) => ({ entry, plugin: (await entry.load()).default }))
+  );
+  routeModules.catch(() => undefined);
+
   // Every route of the app names the roles that register it (#495): the route
   // manifest tags its modules' routes below, and the check after them refuses
   // to boot when a route registered here has no role. @fastify/cors's
@@ -831,12 +841,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // encapsulated plugin, under the prefix the autoload gave it. A module the
   // manifest does not list is never registered, and every process registers
   // `/health` and `/metrics`.
-  for (const entry of routeModulesFor(roles)) {
+  for (const { entry, plugin } of await routeModules) {
     await fastify.register(async (scope) => {
       scope.addHook('onRoute', (route) => {
         route.config = { ...route.config, serviceRoles: entry.roles };
       });
-      const { default: plugin } = await entry.load();
       await scope.register(plugin, entry.prefix === undefined ? {} : { prefix: entry.prefix });
     });
   }

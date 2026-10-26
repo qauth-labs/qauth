@@ -777,7 +777,7 @@ describe('app.ts registration order — the invariants with no runtime signal (#
     'fastify.register(errorHandler)',
     'fastify.register(cors,',
     // The route manifest's loop (#495), which replaced both AutoLoad calls.
-    'for (const entry of routeModulesFor(roles))',
+    'for (const { entry, plugin } of await routeModules)',
   ] as const;
 
   /**
@@ -835,7 +835,7 @@ describe('app.ts registration order — the invariants with no runtime signal (#
     // the route manifest, whose one loop sits behind the error handler.
     expect(source).not.toContain('AutoLoad');
     const handler = source.indexOf('fastify.register(errorHandler)');
-    const routes = source.indexOf('routeModulesFor(roles)');
+    const routes = source.indexOf('of await routeModules');
     expect(handler).toBeGreaterThan(0);
     expect(handler).toBeLessThan(routes);
   });
