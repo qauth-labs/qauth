@@ -72,6 +72,7 @@ scenarios:
     # a valid session, Allow with "Remember this decision" ticked: the main story
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -89,6 +90,7 @@ scenarios:
     # remember is false: Allow with the box cleared, so no consent is saved
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -107,6 +109,7 @@ scenarios:
     # hostUnknown
     given:
       gate: unknownHost
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -122,6 +125,7 @@ scenarios:
     # endpointHost: the shared binding gives the realm an endpoint host beside its primary one
     given:
       gate: endpointHost
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -137,6 +141,7 @@ scenarios:
     # rateLimited, for the GET: the address has sent RATE_LIMIT_MAX requests in this window already
     given:
       gate: rateLimited
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -157,6 +162,7 @@ scenarios:
     # rateLimited, for the POST: the address has sent AUTHORIZE_RATE_LIMIT consent posts in this window already
     given:
       gate: rateLimited
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -178,6 +184,7 @@ scenarios:
     # inputInvalid: the GET has no code_challenge, the POST no decision
     given:
       gate: invalidInput
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -189,10 +196,27 @@ scenarios:
     walks: [[SHOW], [SUBMIT]]
     request: { query: { code_challenge: null }, form: { decision: null } }
 
+  malformedCookie:
+    # cookieMalformed: a session cookie that is not valid percent-encoding
+    given:
+      gate: malformedCookie
+      returnUrl: fits
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    request: { headers: { Cookie: '__Host-qauth_session=%zz' } }
+
   noSession:
     # noSession: the walk never signs in
     given:
       gate: noSession
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -203,10 +227,32 @@ scenarios:
       allowForever: true
     walks: [[SHOW], [SUBMIT]]
 
+  oversizedRequest:
+    # noSession and requestTooLarge: four parameters of 2048 tildes each, which the rebuild encodes as %7E
+    given:
+      gate: noSession
+      returnUrl: tooLarge
+      params: valid
+      agentScope: withinCap
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW], [SUBMIT]]
+    setup:
+      - run: [node, --eval, "process.stdout.write('~'.repeat(2048))"]
+        save: { tildes: stdout }
+    request:
+      query: { client_id: '{tildes}', state: '{tildes}', nonce: '{tildes}', scope: '{tildes}' }
+      form: { client_id: '{tildes}', state: '{tildes}', nonce: '{tildes}', scope: '{tildes}' }
+
   staleSession:
     # staleSession: the cookie of a browser session that /auth/logout has ended since
     given:
       gate: staleSession
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -236,6 +282,7 @@ scenarios:
     # accountDisabled: the user is disabled after signing in
     given:
       gate: accountDisabled
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -258,6 +305,7 @@ scenarios:
     # clientUnusable: client_id names no client of the realm
     given:
       gate: open
+      returnUrl: fits
       params: unusableClient
       agentScope: withinCap
       environment: production
@@ -287,6 +335,7 @@ scenarios:
     # redirectUnregistered: a redirect_uri consent-web did not register
     given:
       gate: open
+      returnUrl: fits
       params: unregisteredRedirect
       agentScope: withinCap
       environment: production
@@ -318,6 +367,7 @@ scenarios:
     # redirectNotPermitted: consent-plain-http registered a plain-http redirect URI to a host that is not loopback
     given:
       gate: open
+      returnUrl: fits
       params: unpermittedRedirect
       agentScope: withinCap
       environment: production
@@ -355,6 +405,7 @@ scenarios:
     # dpopJktMalformed: DPoP is on and dpop_jkt is no thumbprint
     given:
       gate: open
+      returnUrl: fits
       params: malformedDpopJkt
       agentScope: withinCap
       environment: production
@@ -385,6 +436,7 @@ scenarios:
     # within the cap, so the POST carries a live CSRF value and a tampered scope field.
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: overCap
       environment: production
@@ -422,6 +474,7 @@ scenarios:
     # overAgentCapShown: a client that registered itself asks for an agent scope, which no such client may hold
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: overCapSelfService
       environment: production
@@ -454,6 +507,7 @@ scenarios:
     # csrfWrong: the form carries a value the session never held
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -472,6 +526,7 @@ scenarios:
     # csrfWrong: a second POST of the same form, whose value the first one burned
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -513,6 +568,7 @@ scenarios:
     # denied: the user presses Deny
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -531,6 +587,7 @@ scenarios:
     # scopesDiffer: the page shows openid profile, and the form posts openid profile email
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -550,6 +607,7 @@ scenarios:
     # never rendered
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -583,6 +641,7 @@ scenarios:
     # resourcesDiffer: the page names a resource, and the form drops it
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -601,6 +660,7 @@ scenarios:
     # needsFreshLogin: max_age=1 on a sign-in two seconds old
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -620,6 +680,7 @@ scenarios:
     # needsFreshLogin: prompt=login on a sign-in older than the two-minute window
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -639,6 +700,7 @@ scenarios:
     # needsFreshLogin: write:notes for a production client, on a sign-in older than the two-minute window
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production
@@ -658,6 +720,7 @@ scenarios:
     # developmentClient: the relaxed style policy on the page, and write:notes on an old sign-in without a step-up
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: development
@@ -701,6 +764,7 @@ scenarios:
   storeFailure:
     given:
       gate: open
+      returnUrl: fits
       params: valid
       agentScope: withinCap
       environment: production

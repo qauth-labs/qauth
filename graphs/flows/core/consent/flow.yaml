@@ -23,7 +23,8 @@ status: captured
 domain: qauth
 title: Ask the user to approve a client's access
 summary: >-
-  /oauth/authorize sends a signed-in user here when no stored consent covers the request. The GET checks the client and
+  /oauth/authorize sends a signed-in user here when no stored consent covers the request, or when prompt=consent asks
+  for the screen. The GET checks the client and
   its redirect URI again, binds the scopes and resource indicators it is about to show to the session, and renders a
   page with a CSRF value. The POST checks that value, burns it, checks the client again and acts on the decision: deny
   sends access_denied back to the client; allow refuses a scope above the agent cap, a scope or resource set other
@@ -34,19 +35,19 @@ scope:
   shows: GET and POST /ui/consent from the request to the response, in the order the server runs its checks
   world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
   outOfView:
-    - 'the consent skip: /oauth/authorize decides it (canSkipConsent) and never sends a covered request here'
+    - 'the consent skip: /oauth/authorize decides it (canSkipConsent), and sends a request here only when no stored
+      consent covers it or prompt=consent asks for the screen'
     - 'revoking a consent (/consents, /api/consents), which is its own flow: ACC-11 moves it to the account console
       and writes its graph'
-    - 'a store failure while the session, the side record or the client is read answers 500 before anything is
-      written; a failure to record the event of a refusal (request.csrf_rejected, consent.denied, step_up.required)
-      turns that refusal into a 500'
-    - "Fastify's own refusals before the schema check, such as a POST body that is not
-      application/x-www-form-urlencoded"
-    - 'the four causes of a 421 on an unknown host (a malformed host, an unknown host, a disabled realm, a realm with no
-      issuer) give one answer and are drawn as one cause'
+    - 'a store failure before anything is written (the lookup of the host, the rate-limit counter, the session, the
+      side record, the client) answers 500, and so does a failure to end the session of a disabled user; a failure to
+      record the event of a refusal (request.csrf_rejected, consent.denied, step_up.required) turns that refusal into
+      a 500'
+    - "Fastify's own answers before the schema check: a POST body of a media type no parser takes is refused with
+      415; a JSON body is parsed and checked like the form, and takes the same flow"
+    - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer, an endpoint host)
+      give one answer and are drawn as one exit'
     - 'with RATE_LIMIT_ENABLED=false neither rate limit is applied'
-    - 'an authorization request rebuilt for the login redirect that is longer than 16 KiB is refused with 400; the
-      request line Node accepts leaves no room for one on the GET'
     - 'when the pending-authorization store is down, the login redirect carries the authorize URL itself in return_to
       instead of a handle'
     - "staging reads as production in every check drawn here; environment names the effective environment, the
@@ -56,8 +57,8 @@ scope:
 
 context:
   # The checks before the agent cap run in a fixed order and each refuses on its own, so the first two variables say
-  # which of them the request fails first, if any: one variable per check would give the checker some 880,000
-  # starting situations instead of 30,720. Both hold for the request in flight, the GET or the POST.
+  # which of them the request fails first, if any: one variable per check would give the checker millions of starting
+  # situations instead of 69,120. Both hold for the request in flight, the GET or the POST.
   gate:
     values:
       - open
@@ -65,6 +66,7 @@ context:
       - endpointHost
       - rateLimited
       - invalidInput
+      - malformedCookie
       - noSession
       - staleSession
       - accountDisabled
@@ -81,9 +83,20 @@ context:
       invalidInput:
         'the query (GET) or the form (POST) does not pass the route schema, such as a missing
         code_challenge or decision'
+      malformedCookie: >-
+        the request carries a session cookie whose value is not valid percent-encoding, such as %zz, which the cookie
+        reader decodes without a catch
       noSession: 'the request carries no session cookie, or one whose signature does not verify'
       staleSession: 'the cookie is signed, but its session has ended or expired'
       accountDisabled: 'the session is live, but its user has been deleted or disabled'
+  returnUrl:
+    values: [fits, tooLarge]
+    initial: any
+    say:
+      fits: 'the authorization request, rebuilt for a sign-in redirect, is at most 16 KiB'
+      tooLarge: >-
+        it is longer: the rebuild encodes each ~ ! ' ( ) of the parameters as three bytes, so a request line of some
+        8 KiB can give 24 KiB
   params:
     values: [valid, unusableClient, unregisteredRedirect, unpermittedRedirect, malformedDpopJkt]
     initial: any
@@ -120,7 +133,9 @@ context:
     initial: any
     say:
       matches: "the posted csrf_token is the session's live value"
-      wrong: 'it is missing, another value, or one an earlier POST of the session burned'
+      wrong: >-
+        it is another value, one an earlier POST of the session burned, or the session holds none; a form with no
+        csrf_token fails the schema instead
   decision:
     values: [allow, deny]
     initial: any
@@ -162,9 +177,11 @@ guards:
   endpointHost: "gate == 'endpointHost'"
   rateLimited: "gate == 'rateLimited'"
   inputInvalid: "gate == 'invalidInput'"
+  cookieMalformed: "gate == 'malformedCookie'"
   noSession: "gate == 'noSession'"
   staleSession: "gate == 'staleSession'"
   accountDisabled: "gate == 'accountDisabled'"
+  requestTooLarge: "returnUrl == 'tooLarge'"
   clientUnusable: "params == 'unusableClient'"
   redirectUnregistered: "params == 'unregisteredRedirect'"
   redirectNotPermitted: "params == 'unpermittedRedirect'"
@@ -202,6 +219,7 @@ failures:
 main:
   given:
     gate: open
+    returnUrl: fits
     params: valid
     agentScope: withinCap
     environment: production
@@ -261,7 +279,7 @@ states:
         source: apps/auth-server/src/app/plugins/rate-limit.ts:26
       - target: showValidatingQuery
         say: 'the address is under its limit'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:34
+        source: apps/auth-server/src/app/plugins/rate-limit.ts:27
 
   showValidatingQuery:
     title: Check the query against the authorize schema
@@ -283,17 +301,21 @@ states:
       to sign in with a short handle that /ui/resume swaps back for it.
     source: apps/auth-server/src/app/routes/ui/consent.ts:340
     always:
+      - guard: cookieMalformed
+        target: server_error.malformed_cookie
+        say: 'the session cookie cannot be decoded'
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:93
       - guard: noSession
-        target: sign_in_required.no_session
-        say: 'the request carries no session'
+        target: parkingRequest
+        say: 'the request carries no session; the authorize URL is rebuilt from the query'
         source: apps/auth-server/src/app/routes/ui/consent.ts:345
       - guard: staleSession
-        target: sign_in_required.stale_session
-        say: 'the cookie names a session that has ended'
+        target: parkingRequest
+        say: 'the cookie names a session that has ended, and is cleared'
         source: apps/auth-server/src/app/helpers/browser-session.ts:105
       - guard: accountDisabled
-        target: sign_in_required.account_disabled
-        say: "the session's user is gone or disabled"
+        target: parkingRequest
+        say: "the session's user is gone or disabled; the session is ended and its cookie cleared"
         source: apps/auth-server/src/app/helpers/browser-session.ts:113
       - target: showCheckingClient
         say: 'the session is live'
@@ -463,13 +485,13 @@ states:
         source: apps/auth-server/src/app/routes/ui/consent.ts:544
       - target: submitValidatingForm
         say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:546
+        source: apps/auth-server/src/app/routes/ui/consent.ts:545
 
   submitValidatingForm:
     title: Check the form against the consent form schema
-    description:
-      consentFormSchema in apps/auth-server/src/app/schemas/consent.ts, a mirror of the authorize schema plus
-      decision, allow_forever and csrf_token.
+    description: >-
+      consentFormSchema in apps/auth-server/src/app/schemas/consent.ts: the authorize schema's parameters, though its
+      code_challenge has no character pattern, plus decision, allow_forever and csrf_token.
     source: apps/auth-server/src/app/routes/ui/consent.ts:539
     always:
       - guard: inputInvalid
@@ -488,17 +510,21 @@ states:
       fields, so the resumed request names no resource indicator; the step-up redirect below keeps them.
     source: apps/auth-server/src/app/routes/ui/consent.ts:560
     always:
+      - guard: cookieMalformed
+        target: server_error.malformed_cookie
+        say: 'the session cookie cannot be decoded'
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:93
       - guard: noSession
-        target: sign_in_required.no_session
-        say: 'the request carries no session'
+        target: parkingRequest
+        say: 'the request carries no session; the authorize URL is rebuilt from the form'
         source: apps/auth-server/src/app/routes/ui/consent.ts:583
       - guard: staleSession
-        target: sign_in_required.stale_session
-        say: 'the cookie names a session that has ended'
+        target: parkingRequest
+        say: 'the cookie names a session that has ended, and is cleared'
         source: apps/auth-server/src/app/helpers/browser-session.ts:105
       - guard: accountDisabled
-        target: sign_in_required.account_disabled
-        say: "the session's user is gone or disabled"
+        target: parkingRequest
+        say: "the session's user is gone or disabled; the session is ended and its cookie cleared"
         source: apps/auth-server/src/app/helpers/browser-session.ts:113
       - target: checkingCsrf
         say: 'the session is live'
@@ -651,7 +677,7 @@ states:
     source: apps/auth-server/src/app/routes/ui/consent.ts:752
     always:
       - guard: needsFreshLogin
-        target: sign_in_required.fresh_login
+        target: parkingRequest
         say: 'the sign-in is too old for what is asked; step_up.required is recorded'
         source: apps/auth-server/src/app/routes/ui/consent.ts:765
       - guard: remember
@@ -686,8 +712,8 @@ states:
     description: >-
       32 random bytes, bound to the client, the user, the redirect URI, the PKCE challenge, the nonce, the shown scopes
       and resources, the DPoP key, the session's sign-in time, assurance level and end, for
-      AUTHORIZATION_CODE_TTL_MS (five minutes). A code that collides with a stored one is drawn again, up to three
-      times.
+      AUTHORIZATION_CODE_TTL_MS (five minutes). A code that collides with a stored one is drawn again, in three
+      attempts at most.
     source: apps/auth-server/src/app/routes/ui/consent.ts:814
     invoke: { action: AuthorizationCode.mint }
     on:
@@ -704,7 +730,8 @@ states:
   recordingGrant:
     title: Record the grant
     description: >-
-      step_up.elevated when a dangerous scope is granted, with the agent's scope mode for an agent client, then
+      step_up.elevated when a dangerous scope is granted, with the highest agent:* mode among the granted scopes for
+      an agent client, then
       consent.granted with the scopes and whether they were remembered. A failed write fails the request after the code
       is minted.
     source: apps/auth-server/src/app/routes/ui/consent.ts:859
@@ -718,6 +745,34 @@ states:
         target: server_error.store
         say: 'the event store fails'
         source: apps/auth-server/src/app/plugins/error-handler.ts:533
+
+  parkingRequest:
+    title: Park the authorization request for the sign-in
+    description: >-
+      Every sign-in redirect of this flow runs here: the rebuilt authorize URL is checked against 16 KiB, stored under a
+      single-use handle for ten minutes, and the browser is sent to /ui/login with /ui/resume/<handle> as its return_to.
+      A stale cookie was already cleared, and a disabled user's session already ended, before this step.
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:293
+    always:
+      - guard: requestTooLarge
+        target: invalid_request.authorization_too_large
+        say: 'the rebuilt request is over 16 KiB'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:224
+      - guard: noSession
+        target: sign_in_required.no_session
+        say: 'the request is parked, for a request with no session'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
+      - guard: staleSession
+        target: sign_in_required.stale_session
+        say: 'the request is parked, for a stale cookie'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
+      - guard: accountDisabled
+        target: sign_in_required.account_disabled
+        say: "the request is parked, for a disabled user's session"
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
+      - target: sign_in_required.fresh_login
+        say: 'the request is parked, for a step-up'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
 
   code_issued:
     type: final
@@ -848,6 +903,19 @@ states:
       headers:
         Location: '/ui/login?return_to=%2Fui%2Fresume%2F<handle>'
 
+  invalid_request.authorization_too_large:
+    type: final
+    title: Refuse a request too large to park for the sign-in
+    description: A stale cookie is cleared in the same response.
+    redirect: never
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:225
+    response:
+      status: 400
+      body:
+        error: 'invalid_request: authorization request is too large'
+        statusCode: 400
+        code: BAD_REQUEST
+
   invalid_csrf_token.mismatch:
     type: final
     title: Refuse a form whose CSRF value is not the session's
@@ -970,6 +1038,18 @@ states:
       body:
         error: 'Rate limit exceeded, retry in {the rest of the window, such as 1 minute}'
         statusCode: 429
+
+  server_error.malformed_cookie:
+    type: final
+    title: Fail on a session cookie that cannot be decoded
+    description: >-
+      The URIError reaches the error handler as an unknown error, logged at error level. With NODE_ENV=production the
+      body is the one below; otherwise it carries URI malformed and the stack.
+    redirect: never
+    source: apps/auth-server/src/app/plugins/error-handler.ts:533
+    response:
+      status: 500
+      body: { error: Internal server error, statusCode: 500 }
 
   server_error.store:
     type: final
