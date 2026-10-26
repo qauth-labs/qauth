@@ -349,6 +349,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
   describe('a QAuth API audience (#509)', () => {
     const ADMIN_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+    const ACCOUNT_AUDIENCE = 'urn:qauth:aud:account:v1-rc.0';
 
     async function issue(client: Record<string, unknown>, resource?: string[]) {
       const { fastify, ctx } = createFastifyStub();
@@ -381,13 +382,34 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     it('maps the resource value to the audience of a client that lists it', async () => {
       const { fastify, result } = await issue(
-        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
-        [ADMIN_AUDIENCE]
+        { clientId: 'family-client', audience: [ACCOUNT_AUDIENCE, 'https://api.example.com'] },
+        [ACCOUNT_AUDIENCE]
       );
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
-        expect.objectContaining({ aud: ADMIN_AUDIENCE })
+        expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
+    });
+
+    // Admin grants belong to accounts, and a client_credentials token names
+    // none (#510): the admin audience is refused even to a client that lists
+    // it, asked for or in its default, and nothing reads a grant.
+    it.each([
+      ['asked for with resource', [ADMIN_AUDIENCE]],
+      ['in the default audience', undefined],
+    ])('refuses the admin audience %s', async (_label, resource) => {
+      const { fastify, result } = await issue(
+        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
+        resource
+      );
+      await expect(result).rejects.toThrow(InvalidTargetError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        expect.objectContaining({
+          error: 'invalid_target',
+          reason: 'admin_audience_without_grant',
+        }),
+      ]);
     });
 
     it('never falls back to a client id in the reserved namespace', async () => {
@@ -401,11 +423,11 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     it("keeps a listed family audience in the client's default audience", async () => {
       const { fastify, result } = await issue({
         clientId: 'family-client',
-        audience: [ADMIN_AUDIENCE, 'https://api.example.com'],
+        audience: [ACCOUNT_AUDIENCE, 'https://api.example.com'],
       });
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
-        expect.objectContaining({ aud: [ADMIN_AUDIENCE, 'https://api.example.com'] })
+        expect.objectContaining({ aud: [ACCOUNT_AUDIENCE, 'https://api.example.com'] })
       );
     });
 

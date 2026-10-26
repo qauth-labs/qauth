@@ -83,9 +83,22 @@ function audiencesOf(claims: JWTPayload): string[] {
  * - `aud` holds exactly one value, the family's audience. A token with several
  *   audiences is refused even when one of them is the family's: another
  *   resource server received the same token and could replay it here.
- * - The developer family refuses a delegated token (an RFC 8693 `act` claim):
- *   a token acting for an agent never manages the developer's clients, the
- *   rule the developer routes' guard (`assertManagementToken`) keeps today.
+ * - The developer and admin families refuse a delegated token (an RFC 8693
+ *   `act` claim, #510):
+ *   - developer: a token acting for an agent never manages the developer's
+ *     clients, the rule the developer routes' guard (`assertManagementToken`)
+ *     keeps today;
+ *   - admin: an admin signs in with a passkey and approves each security
+ *     operation with a fresh one (ADR-019 Decision 7), which a token an agent
+ *     obtained by exchange never stands for. Automation reaches the admin API
+ *     as a service account, with a token of its own.
+ *
+ *   The account family accepts one: ADR-019 Decision 7 has the account API
+ *   refuse an act-chain token per operation, on the routes that change a
+ *   credential, an identifier, the contact address or a linked account, and
+ *   on account deletion. Either way the agent's own client must list the
+ *   family's audience to be issued it (`assertReservedAudiencesListed` in the
+ *   token route).
  */
 function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
   // A structural check of the claims, not the refusal of a subject that names
@@ -101,8 +114,12 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
   if (audiences.length !== 1 || audiences[0] !== API_FAMILY_AUDIENCES[family]) {
     throw new JWTInvalidError(`Access token audience is not the ${family} API`);
   }
-  if (family === 'developer' && claims.act !== undefined && claims.act !== null) {
-    throw new JWTInvalidError('A delegated access token cannot use the developer API');
+  if (
+    (family === 'developer' || family === 'admin') &&
+    claims.act !== undefined &&
+    claims.act !== null
+  ) {
+    throw new JWTInvalidError(`A delegated access token cannot use the ${family} API`);
   }
 }
 

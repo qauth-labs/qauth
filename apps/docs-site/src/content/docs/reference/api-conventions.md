@@ -49,12 +49,17 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
 - its protected header carries `typ: at+jwt` (RFC 9068 §2.1), whatever
   `requireAccessTokenTyp` is set to;
 - its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
-  accepts only the deployment's issuer, `JWT_ISSUER`;
+  accepts only the deployment's issuer, `JWT_ISSUER`. The admin family's hook accepts the issuer
+  of an enabled realm, and only a token that verifies with that realm's keys
+  ([Admin authority](#admin-authority));
 - it carries `sub`, `exp` and `jti`, with `sub` and `jti` non-empty strings;
 - its `aud` holds exactly one value, the family's audience. A token with several audiences is
   refused even when one of them is the family's;
-- on the developer family, it carries no `act` claim: a delegated token (RFC 8693) never manages a
-  developer's clients;
+- on the developer and admin families, it carries no `act` claim. A delegated token (RFC 8693)
+  never manages a developer's clients, and never stands for an admin's passkey sign-in: automation
+  reaches the admin API as a service account. The account family accepts one, and an account route
+  that changes a credential, an identifier, the contact address or a linked account, or deletes the
+  account, refuses it itself (ADR-019 Decision 7);
 - its subject is one the route admits (the required `subjects` option: `user`, `client` or both)
   and is active in the realm of the request (ADR-019 Decision 1). A `client_credentials` token,
   whose `sub` is its own `client_id`, must name a client of that realm that is enabled and not
@@ -80,6 +85,42 @@ gets a `DPoP` challenge instead (RFC 9449 §7.1). A family route therefore lists
 What a route does for its subject beyond that, such as reading the user's row again or checking a
 role, is its own.
 
+### Admin authority
+
+An admin route decides what the token may do to the realm it names with
+`resolveAdminAuthority({ iss, sub, scopes, targetRealmId })` in
+`apps/auth-server/src/app/helpers/admin-authority.ts`
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decision 7). It
+reads the admin grants and roles from the database on every request, never from token claims, so
+a disabled account, a revoked grant or a disabled role counts from the next request, with the
+same token.
+
+1. The realm whose issuer is the token's `iss` must be enabled. Otherwise the token is refused
+   with 401.
+2. The subject must be an enabled account of that realm. Otherwise the token is refused with 401.
+3. A token of the operator realm needs a live grant whose target is the requested realm or every
+   realm.
+4. Any other token is realm-local: the requested realm must be the issuer's own, with a live grant
+   on it. The operator realm is never its target.
+5. The permissions of the matching grants' roles, intersected with the token's scopes, are the
+   permissions the request may use. The operation's own check answers 403 `forbidden` when the one
+   it needs is missing.
+
+A realm outside the caller's grants answers 404 `not_found`, exactly as a realm that does not
+exist, so the answer never confirms that a realm exists.
+
+Admin grants and custom admin roles live in `admin_grants` and `admin_roles`. A grant names a
+built-in role or a custom role, and one realm or every realm. Only an account of the operator realm
+holds a grant on every realm or on another realm than its own; the repository and the database
+trigger `admin_grants_realm_rule` both refuse anything else. A custom role is defined in one realm
+and granted only to that realm's accounts or for that realm. A grant is revoked, never changed, and
+a role is disabled, never deleted while a grant names it.
+
+Until each realm has its own issuer, the realm `JWT_ISSUER` names is the only realm whose tokens an
+admin route accepts: `RealmIssuerDirectory` maps an issuer to its realm, and `IssuerKeyResolver`
+verifies a token with that realm's keys, and both know only the deployment's issuer and today's
+signing key.
+
 ### Issuing a family audience
 
 - A client gets a family audience only when an operator lists it in the client's `audience`. The
@@ -92,6 +133,16 @@ role, is its own.
   `resource` names it, in the request or bound to the code, so the consent the user gave covers
   it: a client's default audience leaves it out. A `client_credentials` token keeps the client's
   default.
+- The admin audience is also issued only to an account that holds a live admin grant, on every
+  grant; otherwise the request is refused with `invalid_target`. A `client_credentials` token
+  names no account, so it never gets it. In a token exchange the agent's own client must list the
+  audience, whatever the subject token carried.
+- An admin scope (`qauth:admin:read`, `qauth:admin:write`, `qauth:admin:security`) is issued only
+  when the client lists the admin audience and the account holds a live admin grant whose role has
+  a permission of that scope's class. Otherwise the token is issued without it, and the response's
+  `scope` says so (RFC 6749 §3.3). No other scope of the reserved `qauth:` namespace is ever
+  issued. Grants are read at every issuance, so the next refresh after a revocation no longer
+  carries what the grant gave.
 - The legacy Bearer path of `/oauth/authorize` never issues one: a request on it that names a
   family audience, or a client whose default audience holds one, is refused with `access_denied`.
 - A family audience never makes a client authoritative at introspection: QAuth is the only
