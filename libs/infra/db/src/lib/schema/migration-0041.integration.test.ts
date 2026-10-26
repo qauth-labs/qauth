@@ -1,5 +1,5 @@
 /**
- * Seed-then-migrate test for migration 0039: the link from a refresh-token
+ * Seed-then-migrate test for migration 0041: the link from a refresh-token
  * family to the authorization code that started it (ADR-017 Decision 10, #627).
  *
  * A code and a refresh token created before the migration come out of it
@@ -8,7 +8,7 @@
  * deleting a code clears the link while the family lives on.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
- * and upgraded through 0038, then 0039, so a later migration cannot change
+ * and upgraded through 0040, then 0041, so a later migration cannot change
  * what this test sees.
  */
 import { rmSync } from 'node:fs';
@@ -23,9 +23,9 @@ import {
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const MIGRATION_IDX = 39;
+const MIGRATION_IDX = 41;
 
-describe('migration 0039 — refresh family to authorization code link (seed-then-migrate)', () => {
+describe('migration 0041 — refresh family to authorization code link (seed-then-migrate)', () => {
   let container: StartedPostgres | undefined;
   let pool: Pool | undefined;
   let dockerUp = false;
@@ -57,17 +57,19 @@ describe('migration 0039 — refresh family to authorization code link (seed-the
     await applyQauthMigrations(container.connectionString, before);
   });
 
+  /** The pool; only called from a test that was not skipped. */
   function db(): Pool {
     if (!pool) throw new Error('no pool');
     return pool;
   }
 
+  /** Apply every migration through 0041. */
   async function migrate(): Promise<void> {
     if (!container) throw new Error('no container');
     await applyQauthMigrations(container.connectionString, through);
   }
 
-  /** A realm, a user, a client, a redeemed code and its refresh token, as 0038 left them. */
+  /** A realm, a user, a client, a redeemed code and its refresh token, as 0040 left them. */
   async function seedGrant(): Promise<{
     userId: string;
     clientId: string;

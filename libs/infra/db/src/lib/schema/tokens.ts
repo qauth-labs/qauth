@@ -263,7 +263,7 @@ export const refreshTokens = pgTable(
      * A second redemption of the code finds the family through it and revokes
      * it (OAuth 2.1 §4.1.3).
      *
-     * NULL for every other token, for a family that predates migration 0039,
+     * NULL for every other token, for a family that predates migration 0041,
      * and once the code row is purged (`ON DELETE SET NULL`): a code that is
      * gone can no longer be replayed, since the token endpoint finds no row.
      */

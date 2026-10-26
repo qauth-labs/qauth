@@ -604,8 +604,157 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs site's new **Reverse Proxy** page (`operate/reverse-proxy`) lists the
   rules proxy-neutrally, with the file layout. The ceremony app has not shipped
   yet, so the configuration is not yet a working front for browser sign-in.
+- **A Shared Signals Framework transmitter** ([#410], ADR-018 §3, ADR-019
+  Decisions 8 and 9). Experimental and off by default: with
+  `SSF_TRANSMITTER_ENABLED=true`, a realm whose new `ssf_transmitter_enabled`
+  column is on serves `/.well-known/ssf-configuration` (SSF 1.0 §7) and stream
+  management under `/ssf/` (§8.1): one push stream per receiver, its status,
+  subjects and verification. A realm whose own switch is off answers the `404`
+  of a route that does not exist. A receiver is an OAuth client using its own
+  `client_credentials` token with the `ssf:stream` scope and the realm's issuer
+  as audience; a token whose audience also names another realm's issuer, or
+  whose client no longer holds the scope, is refused. Security Event Tokens
+  come out of the event store through the delivery role (RFC 8935 push, retried
+  on its schedule; a `400` ends a delivery only with a known SET error); the
+  signer signs them with the realm's `event_signing` key, and the `jti` is the
+  event id on every retry. The SET keys are published apart, at
+  `/ssf/jwks.json`, the metadata's `jwks_uri`; the realm JWKS at
+  `/.well-known/jwks.json` holds only token keys, and so does the signer's
+  `getJwks` (`REALM_JWKS_PURPOSES` is `token_signing` alone), so a verifier
+  that skips the `typ` check cannot take a SET for an access token. A paused
+  stream's events are held without spending attempts and sent within 30
+  seconds of it being enabled: delivery routes gain a `hold` outcome for that.
+  `endpoint_url` is checked through the egress client at registration and at
+  every delivery; the receiver's `authorization_header` is stored encrypted
+  with the realm's `data_at_rest` key, and the delivery role's signer grant
+  gains `decrypt` for a `delivery:` context only, to send it. The delivery role
+  reads only the event subject of each stream subject, not the subject the
+  receiver sent.
+  `GET /ssf/status` adds `delivery_status`, the pending deliveries and the latest
+  failed attempt; a refused and an unreachable endpoint both read
+  `destination_unreachable` there. With `SSF_TRANSMITTER_ENABLED` off, SSF
+  deliveries left from when it was on hold back no event retention. Until the
+  event mapping of #540, verification events are the only SETs sent. The docs
+  site's new **SSF transmitter** page (`operate/ssf-transmitter`) walks through
+  a receiver and the verification event.
+- **Schema**: migration 0039 adds `ssf_streams`, `ssf_stream_subjects`,
+  `realms.ssf_transmitter_enabled` (default off) and an index on
+  `event_deliveries` that finds a destination's latest failed delivery ([#410]).
+  Expand-only; the index build holds back delivery writes while it runs.
+
+- **Admin scopes, the admin permission catalog and the built-in admin roles**
+  ([#507], ADR-019 Decision 7). The admin API's scopes are `qauth:admin:read`,
+  `qauth:admin:write` and `qauth:admin:security`, one per permission class, and
+  no scope implies another. A permission registry (`definePermission`) gives
+  each permission id exactly one class; a security permission never shares an
+  id with a write permission. The built-in roles `viewer`, `editor` and
+  `security-admin` follow the catalog by class and cannot be edited, and a
+  custom role may not take a name that reads as one of theirs (compared after
+  folding case, white space, dashes and compatibility forms).
+  `effectivePermissions` keeps a role's permission only when the token carries
+  its class's scope, and `validateCustomRole` refuses an unknown or retired id.
+  The catalog starts with `realms.read`, `realms.export`, `realms.import.plan`,
+  `realms.policies.write`, `realms.policies.security`, `approvals.read` and
+  `approvals.approve`. A removed permission is retired and keeps its id; like
+  every QAuth-defined identifier, the ids are promised from 1.0.0 on (ADR-018
+  §5). The docs site's new **Admin permissions** page
+  (`reference/admin-permissions`) is generated from the registry, and so is a
+  new stable surface, `apps/docs-site/public/schemas/admin-permissions.json`
+  (`auth-server:admin-permissions-export`): the stable-surface check reports a
+  removed permission or a changed class as a break. The API conventions check
+  refuses an admin operation whose `x-qauth-permission` names a permission the
+  catalog cannot grant, or whose `x-qauth-class` is not the strictest class
+  among them. No admin API route reads the catalog yet.
 
 ### Changed
+
+- **BREAKING (clients of the non-OAuth routes)**: every route that is not an
+  OAuth protocol endpoint answers an error with an RFC 9457 problem document,
+  `application/problem+json` ([#513], ADR-019 Decision 7): `type`, `title`,
+  `status`, `detail`, `instance`, a stable lower-case `code` and `trace_id`
+  (the request id), plus `errors[]` with a `pointer` and a `message` for a
+  validation failure and for weak-password feedback under `/password`. The old
+  `{ error, statusCode, code, feedback, details }` body is gone, from the
+  `/auth`, `/api`, `/consents` and `/ui` routes, the well-known documents, the
+  wallet-link API, the 404 for a path no route serves, the router's own refusals
+  (a path that is not valid percent-encoding, 400; an over-long path parameter,
+  414 `uri_too_long`) and a request that cannot be read (400, 408
+  `request_timeout`, 431 `request_header_fields_too_large`). Each code has its own
+  problem type, listed on the docs site's new **Problem types** page
+  (`reference/problem-types`), and one registry maps every class of
+  `@qauth-labs/shared-errors`, and every error class a route defines, to its
+  code. A 401 or 403 on a bearer-protected route also carries a
+  `WWW-Authenticate` challenge; a 403 says `insufficient_scope` only when a
+  wider token would be let through. A request that presents no credentials
+  answers `unauthorized`, and its challenge names no error (RFC 6750 §3.1); a
+  token that was presented and refused answers `invalid_access_token` or
+  `access_token_expired`, with `error="invalid_token"` in the challenge. A
+  one-time email verification token that is refused answers
+  `invalid_verification_token`, and a duplicate `already_exists`.
+  `POST /api/clients` and `PATCH /api/clients/{id}` refuse client metadata
+  with the codes dynamic registration answers: `invalid_client_metadata` for a
+  scope outside the realm's allowlist, a grant and response type that do not
+  fit together or a public `client_credentials` client, and
+  `invalid_redirect_uri` for a missing `redirect_uris`. The root's own answers
+  carry the request id in `X-Request-Id` (`REQUEST_ID_HEADER`) too, as its
+  `trace_id`, and a missing Swagger UI file under `/docs` answers the
+  `not_found` document. `GET /consents` and `DELETE
+  /consents/{id}` answer a request without a browser session with the 401
+  `unauthorized` problem document too, with no challenge (they answered
+  `{ "consents": [] }` and an empty body). The SSF transmitter's routes
+  ([#410]) answer problem documents as well, SSF 1.0 defining no error body:
+  a realm that does not run the transmitter gets the `not_found` document of a
+  path no route serves, and a token without `ssf:stream` a 403 whose challenge
+  names that scope.
+- **BREAKING (OAuth clients that read QAuth's own members)**: the OAuth protocol
+  endpoints (token, authorize, introspect, revoke, register, userinfo and the
+  wallet-facing OID4VP endpoints) answer only the members their specification
+  defines, `error` and `error_description` ([#513]). `code`, `statusCode`,
+  `feedback` and `retryAfter` are gone; the `Retry-After` and
+  `WWW-Authenticate` headers stay. Two shapes are fixed on the way: an unknown
+  `grant_type` answers `unsupported_grant_type` (RFC 6749 §5.2) instead of a
+  validation error, and dynamic registration answers `invalid_client_metadata`
+  or `invalid_redirect_uri` bare in `error`, with the text in
+  `error_description` (RFC 7591 §3.2.2), also for a body its schema refuses. A
+  validation failure answers `invalid_request`, the rate limiter's 429
+  `temporarily_unavailable`, and a 5xx `server_error`. At `/oauth/authorize`, a
+  `client_id` that names no client answers `invalid_request` (it was
+  `invalid_client`). Redeeming a code whose user has been deleted answers 400
+  `invalid_grant`, as for a disabled user (it was a 404 naming the user's id),
+  and so does a code or refresh token another request spent or revoked first
+  (it was a 404 `invalid_request`). The `authorization.failed` event of a
+  `client_id` that names no client records `error: "invalid_request"`, the
+  code the caller is answered (it recorded `invalid_client`). More shapes that
+  change at these endpoints:
+  - userinfo answers every 401 with `error: "invalid_token"` (it was prose in
+    `error`); a request without a token gets a challenge with no error code;
+  - `/oauth/register` answers a developer token that is not valid with 401
+    `invalid_token`, and the developer's client limit with 403
+    `access_denied` (both were prose in `error`); RFC 7591 defines no error
+    for the limit;
+  - a 421 (a host no realm answers for) answers `invalid_request`, as do a body
+    too large (413), an unsupported media type (415) and any other refusal
+    Fastify raises before the route runs;
+  - a validation failure carries no `details[]` any more; `error_description`
+    names the fields.
+- A refusal that several routes raise now reads one way everywhere ([#513]): an
+  access token whose subject is not an active user answers `invalid_access_token` on a
+  problem route and `invalid_token` at userinfo, in one wording that does not
+  say whether the account was deleted or disabled; a `subject_token` naming no
+  active user answers `invalid_request` in one wording; the consent page refuses
+  an unknown client, a refused redirect URI and a malformed `dpop_jkt` with the
+  same code as `/oauth/authorize`, and a disabled or suspended client with
+  `unauthorized_client` (it was `invalid_client`); a CSRF mismatch answers
+  `invalid_csrf_token`.
+- The OpenAPI documents list each operation's error responses, referencing the
+  shared `Problem` schema, or `OAuthError` on an OAuth protocol endpoint
+  ([#513]). Neither schema refuses members it does not name: RFC 9457 §3.2
+  and RFC 6749 §5.2 let a type or an extension add some, and a client ignores
+  those it does not know.
+
+  **Action for clients**: branch on `code` and the status of a problem document,
+  or on `error` and the status of an OAuth body, never on `title`, `detail` or
+  `error_description`. The developer portal ships updated with this release.
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
@@ -618,6 +767,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public API, and a test keeps it in step with both entry points. A new
   `scope:sdk` boundary rule lets an SDK library import no workspace library.
   Behaviour is unchanged.
+- **BREAKING (operators with scopes in the `qauth:` namespace)**: every scope
+  that starts with `qauth:`, in any case, is QAuth's own ([#507]); the admin
+  API's scopes live there. Other servers' `admin:` scopes, such as `admin:org`,
+  are ordinary scopes. A realm's dynamic registration allowlist cannot hold a
+  `qauth:` scope: the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it
+  names one, and the realms repository refuses one with `400`. So dynamic
+  registration drops one like any scope outside the allowlist and registers the
+  client with the rest; a Client ID Metadata Document's `scope` is never stored,
+  so one there is ignored; the developer API (`POST /api/clients`,
+  `PATCH /api/clients/{id}`) refuses one as a scope the realm does not allow,
+  with the 400 `invalid_client_metadata` problem document ([#513]); discovery
+  never lists one in `scopes_supported`; and the seed manifest refuses one in a
+  `cimd_clients` entry's `scopes`. Migration 0040 removes such entries from
+  every realm's `dynamic_registration_allowed_scopes`, keeping the others in
+  their order, then adds the CHECK
+  `realms_dynamic_registration_scopes_not_qauth`. An empty allowlist is filled
+  from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` at the next registration, so where
+  the removal would leave a list empty, or the value is not a list, the
+  migration stops before changing anything and names the realms. Clients that
+  already hold such a scope keep it.
+
+  **Action for operators**: none unless a scope of yours starts with `qauth:`.
+  Rename it. Remove it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` before the
+  upgrade, or the new release does not boot. If migration 0040 stops, set each
+  realm it names to the list of scopes dynamic registration should allow, as
+  its hint shows, and run the migrations again.
+
+- `PATCH /api/clients/{id}` checks only the scopes it adds against the realm's
+  allowlist ([#507]). A client keeps a scope the realm no longer allows, or one
+  an operator gave it, while its owner renames it or sends its scopes back
+  unchanged; before, such a request was refused.
+
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
   a person or a client did as events in the event store ([#458], ADR-019
   Decision 8) and writes no `audit_logs` row. One emitter, `emitUserEvent`,
@@ -823,16 +1004,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any of those checks answers `invalid_grant` as before, with that check as its
   reason, and revokes nothing, so whoever saw a code without the client's
   credentials or verifier cannot end the client's tokens (OAuth 2.1 §7.5.3). A
-  redemption that loses the race to a concurrent one is the same replay; it
-  used to answer `404` with the code's row id in the message. Access tokens
-  already issued from the code are JWTs and stay valid until they expire. A
+  redemption that loses the race to a concurrent one is the same replay, and
+  revokes the family the winner started. A refusal that burns the code (user
+  disabled, agent scope cap) and loses that race keeps its own answer,
+  `invalid_grant` or `invalid_scope`. Access tokens already issued from the
+  code are JWTs and stay valid until they expire. A
   replay is recognised until the hourly purge job deletes the code, at the
   earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes); after
   that the code is unknown and revokes nothing. `code_replay` is also the
   reason for a code that a logout, a consent revocation or a refused
   redemption (user disabled, agent scope cap) had spent: the server records no
   difference, and such a code started no family, so nothing is revoked for it.
-  Migration 0039 adds the link that makes
+  Migration 0041 adds the link that makes
   this possible, `refresh_tokens.authorization_code_id` (nullable, set on the
   first token of each family, `ON DELETE SET NULL` when the purge job deletes
   the code). Families started before the upgrade, or by a node of the previous
@@ -841,23 +1024,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this becomes a covered row, beside new OAuth 2.1 and RFC 6749 rows.
 - **`POST /oauth/token`: an authorization code presented without
   `redirect_uri` answers `invalid_grant`** ([#627], ADR-017 Decision 10). The
-  request schema required the parameter, so a missing one answered
-  `400 VALIDATION_ERROR`, not an OAuth error. Every code QAuth issues came
-  through a browser redirect and still needs the URI the authorization request
-  named, so a missing or empty value is now a mismatch: `400 invalid_grant`,
-  like a different value, and the code is not spent. A client that follows
-  OAuth 2.1 alone, which drops the parameter, is still refused; it now gets an
-  OAuth error it can read.
+  request schema required the parameter, so a missing one was refused as a
+  malformed request (`400 VALIDATION_ERROR` in v0.1, `invalid_request` with
+  the RFC 6749 error bodies of [#513]). Every code QAuth issues came through a
+  browser redirect and still needs the URI the authorization request named, so
+  a missing or empty value is now a mismatch: `400 invalid_grant`, like a
+  different value, and the code is not spent. A client that follows OAuth 2.1
+  alone, which drops the parameter, is still refused, with the error a wrong
+  `redirect_uri` gets.
 - Every authorization code is minted by one helper, `mintAuthorizationCode`
   ([#627], ADR-017 Decision 10), which refuses to write a code without an S256
   PKCE challenge of 43 to 128 unreserved characters (RFC 7636 §4.2) in every
   environment. `/oauth/authorize` validated the challenge that way already. The
   consent screen's form checked only its length, so a hand-built
   `POST /ui/consent` with a challenge outside that character set was given a
-  code that could never be redeemed; it now answers `400`. A consent screen the
-  server rendered always carries a valid challenge, so nothing a browser sends
-  changes. The published OpenAPI document gains the same `pattern` on that
-  form's `code_challenge`, an approved stable-surface break.
+  code that could never be redeemed; it now answers a `400` `validation_error`
+  problem document ([#513]). A consent screen the server rendered always
+  carries a valid challenge, so nothing a browser sends changes. The published
+  OpenAPI document gains the same `pattern` on that form's `code_challenge`, an
+  approved stable-surface break.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
@@ -985,6 +1170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nx` command by up to about 50 seconds before Nx falls back to the local
   cache.
 
+[#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
 [#434]: https://github.com/qauth-labs/qauth/issues/434
 [#435]: https://github.com/qauth-labs/qauth/issues/435
@@ -1017,6 +1203,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#507]: https://github.com/qauth-labs/qauth/issues/507
+[#513]: https://github.com/qauth-labs/qauth/issues/513
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#552]: https://github.com/qauth-labs/qauth/issues/552

@@ -46,8 +46,10 @@ const SCOPES = ['openid', 'email'];
 const EMAIL = 'replay-owner@example.test';
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 
+/** The two places a code is minted: `/oauth/authorize` skipping consent, and the consent form. */
 type MintPath = 'consent skip' | 'consent screen';
 
+/** The columns of a refresh token a replay test reads. */
 interface RefreshRow {
   readonly revoked: boolean;
   readonly revoked_reason: string | null;
@@ -79,11 +81,13 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     await resetE2eState(booted.app);
   });
 
+  /** The booted auth server; only called from a test that was not skipped. */
   function server(): FastifyInstance {
     if (booted === undefined) throw new Error('server not booted');
     return booted.app;
   }
 
+  /** A form-encoded `POST /oauth/token`. */
   function tokenRequest(
     app: FastifyInstance,
     form: Record<string, string>
@@ -182,6 +186,7 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     return { code, verifier: pkce.verifier };
   }
 
+  /** Redeem `code` as the public client, with its redirect URI unless `extra` says otherwise. */
   function exchange(
     app: FastifyInstance,
     code: string,
@@ -197,6 +202,7 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     });
   }
 
+  /** Use `refreshToken` as the public client. */
   function refresh(app: FastifyInstance, refreshToken: string): Promise<LightMyRequestResponse> {
     return tokenRequest(app, {
       grant_type: 'refresh_token',
@@ -205,6 +211,7 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     });
   }
 
+  /** Every token of the refresh family `code` started, oldest first; empty when it started none. */
   async function familyOf(app: FastifyInstance, code: string): Promise<RefreshRow[]> {
     const { rows } = await app.dbPool.query<RefreshRow>(
       `SELECT t.revoked, t.revoked_reason, t.authorization_code_id
@@ -219,6 +226,7 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     return rows;
   }
 
+  /** The `reason` of every `token.request_failed` event, in the order they were recorded. */
   async function tokenFailureReasons(app: FastifyInstance): Promise<unknown[]> {
     const { rows } = await app.dbPool.query<{ data: { reason?: string } }>(
       `SELECT data FROM events WHERE type = 'urn:qauth:event:token.request_failed:v1-rc.0' ORDER BY seq`
@@ -339,7 +347,11 @@ describe('authorization code replay revokes its refresh family (#627, real conta
       }).toString(),
     });
 
+    // The consent form is not an OAuth protocol endpoint: its refusal is a
+    // problem document (ADR-019 Decision 7, #513).
     expect(decision.statusCode).toBe(400);
+    expect(decision.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(decision.json()).toMatchObject({ status: 400, code: 'validation_error' });
     const { rows } = await app.dbPool.query('SELECT id FROM authorization_codes');
     expect(rows).toEqual([]);
   }, 60_000);

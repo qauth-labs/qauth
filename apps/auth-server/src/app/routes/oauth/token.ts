@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { DpopProofError } from '@qauth-labs/fastify-plugin-dpop';
 import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
 import {
-  BadRequestError,
   InvalidClientError,
   InvalidDpopProofError,
   InvalidGrantError,
@@ -13,6 +12,7 @@ import {
   NotFoundError,
   TemporarilyUnavailableError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -58,11 +58,13 @@ import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
+import { inactiveSubjectTokenError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, oauthErrorCode } from '../../helpers/user-events';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
   TOKEN_EXCHANGE_GRANT_TYPE,
+  TOKEN_GRANT_TYPES,
   TOKEN_TYPE_ACCESS_TOKEN,
   TOKEN_TYPE_ID_JAG,
   type TokenEndpointResponse,
@@ -80,6 +82,39 @@ import {
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 /** The event of a refused token request. */
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
+
+/**
+ * RFC 6749 §5.2: a `grant_type` the endpoint does not serve is answered
+ * `unsupported_grant_type`, not as a malformed request (#513). The body
+ * schema is a union keyed on `grant_type`, so without this hook an unknown
+ * value failed validation and answered `invalid_request`. A missing or
+ * repeated `grant_type` is still the schema's to refuse: that request is
+ * malformed. Runs before validation, so it reads the parsed body as sent.
+ *
+ * The jwt-bearer grant while `ID_JAG_ENABLED` is off is refused here too, as
+ * the handler's master gate refuses it (ADR-011): exactly as an unknown grant
+ * type, whatever else the body holds or lacks, with the gate's event.
+ */
+async function rejectUnsupportedGrantType(request: FastifyRequest): Promise<void> {
+  const body = request.body;
+  const grantType =
+    typeof body === 'object' && body !== null
+      ? (body as { grant_type?: unknown }).grant_type
+      : undefined;
+  if (typeof grantType !== 'string') return;
+  if (grantType === JWT_BEARER_GRANT_TYPE && !env.ID_JAG_ENABLED) {
+    await emitUserEvent(
+      request,
+      TOKEN_REQUEST_FAILED,
+      { grantType, error: 'unsupported_grant_type', reason: 'id_jag_disabled' },
+      { actor: 'client' }
+    );
+    throw new UnsupportedGrantTypeError();
+  }
+  if (!TOKEN_GRANT_TYPES.includes(grantType)) {
+    throw new UnsupportedGrantTypeError();
+  }
+}
 
 /**
  * POST /oauth/token
@@ -117,6 +152,7 @@ export default async function (fastify: FastifyInstance) {
           'OAuth 2.1 token endpoint. Supports authorization_code (with PKCE) and client_credentials grants. Client auth via client_secret_post or client_secret_basic.',
         tags: ['OAuth', 'Token'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 503],
         body: tokenExchangeBodySchema,
         response: {
           // A UNION, not the Bearer-only schema: an ID-JAG mint (ADR-011) must
@@ -127,8 +163,12 @@ export default async function (fastify: FastifyInstance) {
           200: tokenEndpointResponseSchema,
         },
       },
+      preValidation: rejectUnsupportedGrantType,
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body
+        // (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit: {
           // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
           // forces the strict cap; a development/staging ceiling permits the
@@ -159,7 +199,9 @@ export default async function (fastify: FastifyInstance) {
 
       try {
         // ADR-011 MASTER GATE. With `ID_JAG_ENABLED` off the jwt-bearer grant
-        // does not exist on this deployment, so it is refused HERE — before
+        // does not exist on this deployment, so it is refused HERE (and in
+        // `rejectUnsupportedGrantType`, before validation, for a body the
+        // schema would refuse) — before
         // client authentication, before any DB work — exactly as an unknown
         // grant type is. This keeps the flag-off behaviour equivalent to the
         // pre-ADR-011 build (which fell through to `unsupported_grant_type`)
@@ -177,7 +219,7 @@ export default async function (fastify: FastifyInstance) {
             },
             { actor: 'client' }
           );
-          throw new BadRequestError('unsupported_grant_type');
+          throw new UnsupportedGrantTypeError();
         }
 
         const realm = requestRealm(request);
@@ -379,8 +421,9 @@ export default async function (fastify: FastifyInstance) {
           return reply.send(responseBody);
         }
 
-        // Schema validation should have rejected this already, but guard anyway.
-        throw new BadRequestError('unsupported_grant_type');
+        // `rejectUnsupportedGrantType` should have refused this already, but
+        // guard anyway.
+        throw new UnsupportedGrantTypeError();
       } catch (error) {
         // A client-secret check shed under load (#751) is thrown only by
         // client authentication, whose catch above already recorded it.
@@ -391,7 +434,7 @@ export default async function (fastify: FastifyInstance) {
           error instanceof InvalidScopeError ||
           error instanceof InvalidRequestError ||
           error instanceof NotFoundError ||
-          error instanceof BadRequestError ||
+          error instanceof UnsupportedGrantTypeError ||
           error instanceof UnauthorizedClientError ||
           error instanceof InvalidDpopProofError ||
           error instanceof TemporarilyUnavailableError
@@ -552,24 +595,42 @@ async function emitRequestFailed(
   );
 }
 
+/** What a caller is told about an authorization code it cannot redeem. */
+const UNUSABLE_CODE = 'Invalid or expired authorization code';
+
+/** What a caller is told about a refresh token it cannot use. */
+const UNUSABLE_REFRESH_TOKEN = 'Invalid or expired refresh token';
+
 /**
- * Spend an authorization code in the redemption's transaction: the
- * compare-and-set of `markUsed`.
+ * Spend a grant through its compare-and-set (`authorizationCodes.markUsed`,
+ * `refreshTokens.revoke`): the one place a token request learns that another
+ * request spent the grant first. The repository answers a row that is no
+ * longer unspent with `NotFoundError`, and that is never answered as a 404
+ * `invalid_request` naming the row's internal id. A lost compare-and-set is a
+ * grant already spent, which the client may not use (RFC 6749 §5.2
+ * `invalid_grant`). What else it means depends on why the grant was being
+ * spent, so the caller is told:
  *
- * @returns false when the code was already spent, by a concurrent redemption
- *   or by a logout or consent revocation that invalidated it
+ * - A redemption that loses is the second redemption of its code, a replay:
+ *   once the losing transaction has rolled back, {@link rejectCodeReplay}
+ *   revokes the family the winner started and answers `invalid_grant`.
+ * - A refusal that burns the grant (a disabled user, the agent-mode cap) finds
+ *   it burned already and gives its own answer, `invalid_grant` or
+ *   `invalid_scope`.
+ *
+ * Any other failure propagates unchanged.
+ *
+ * @param spend - the compare-and-set
+ * @returns `true` when this request spent the grant, `false` when it had been
+ *   spent already
  */
-async function spendCode(
-  fastify: FastifyInstance,
-  authorizationCodeId: string,
-  tx: Parameters<FastifyInstance['repositories']['authorizationCodes']['markUsed']>[1]
-): Promise<boolean> {
+async function spendGrant(spend: () => Promise<unknown>): Promise<boolean> {
   try {
-    await fastify.repositories.authorizationCodes.markUsed(authorizationCodeId, tx);
+    await spend();
     return true;
-  } catch (err) {
-    if (err instanceof NotFoundError) return false;
-    throw err;
+  } catch (error) {
+    if (error instanceof NotFoundError) return false;
+    throw error;
   }
 }
 
@@ -594,7 +655,7 @@ async function rejectCodeReplay(
     'code_replay'
   );
   await emitRequestFailed(ctx, 'invalid_grant', 'code_replay', authCode.userId);
-  throw new InvalidGrantError('Invalid or expired authorization code');
+  throw new InvalidGrantError(UNUSABLE_CODE);
 }
 
 /**
@@ -732,19 +793,21 @@ async function handleAuthorizationCode(
 
   const user = await fastify.repositories.users.findById(authCode.userId);
   if (!user) {
-    // The code names no user any more, so the event has none.
-    const notFound = new NotFoundError('User', authCode.userId);
-    await emitRequestFailed(ctx, oauthErrorCode(notFound), 'user_not_found');
-    throw notFound;
+    // The code names no user any more, so the event has none. Answered as the
+    // disabled user below is (RFC 6749 §5.2 `invalid_grant`), so the answer
+    // does not tell a deleted account from a disabled one (#513).
+    await emitRequestFailed(ctx, 'invalid_grant', 'user_not_found');
+    throw new InvalidGrantError('Invalid or expired authorization code');
   }
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the
   // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
-  // code is burned all the same, so it cannot be retried.
+  // code is burned all the same, so it cannot be retried; a code a concurrent
+  // request spent first is burned already, and the answer is the same.
   if (!user.enabled) {
-    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
+    await spendGrant(() => fastify.repositories.authorizationCodes.markUsed(authCode.id));
     await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
-    throw new InvalidGrantError('Invalid or expired authorization code');
+    throw new InvalidGrantError(UNUSABLE_CODE);
   }
 
   // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,
@@ -754,11 +817,12 @@ async function handleAuthorizationCode(
   // client is no longer an agent), redeeming the code must not mint the old
   // mode. Fail-closed via `toAgentScopeContext`. The code is burned all the
   // same: a client cannot narrow a code, so it goes back through
-  // /oauth/authorize.
+  // /oauth/authorize. A code a concurrent request spent first is burned
+  // already, and the answer stays `invalid_scope`.
   try {
     enforceAgentScopeCap(authCode.scopes, toAgentScopeContext(client));
   } catch (err) {
-    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
+    await spendGrant(() => fastify.repositories.authorizationCodes.markUsed(authCode.id));
     await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_exceeds_agent_mode', user.id);
     throw err;
   }
@@ -826,9 +890,12 @@ async function handleAuthorizationCode(
   //
   // A redemption that loses the compare-and-set to a concurrent one is the
   // second redemption of the code: the transaction writes nothing and the
-  // family the winner started is revoked once it has committed.
+  // family the winner started is revoked once it has rolled back.
   const redeemed = await fastify.db.transaction(async (tx) => {
-    if (!(await spendCode(fastify, authCode.id, tx))) return undefined;
+    const spent = await spendGrant(() =>
+      fastify.repositories.authorizationCodes.markUsed(authCode.id, tx)
+    );
+    if (!spent) return undefined;
     if (refresh) {
       await fastify.repositories.refreshTokens.create(
         {
@@ -1175,9 +1242,13 @@ async function handleRefreshToken(
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
   if (!user.enabled) {
-    await fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled');
+    // Burned all the same; a token a concurrent request revoked first is
+    // burned already, and the answer is the same.
+    await spendGrant(() =>
+      fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled')
+    );
     await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
-    throw new InvalidGrantError('Invalid or expired refresh token');
+    throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
   }
 
   // Down-scoping: request narrower scope or keep original set.
@@ -1489,7 +1560,7 @@ async function handleTokenExchange(
   }
   if (!subjectPayload.sub) {
     await emitRequestFailed(ctx, 'invalid_request', 'subject_token_missing_sub');
-    throw new InvalidRequestError('subject_token has no subject');
+    throw inactiveSubjectTokenError();
   }
 
   // GATE 3b — token-confusion defence. Issuer is now asserted by
@@ -1586,7 +1657,7 @@ async function handleTokenExchange(
   // `client_id` is never read as a `users.id` (#754).
   if (subjectPayload.sub === subjectPayload.clientId) {
     await emitRequestFailed(ctx, 'invalid_request', 'subject_not_a_user');
-    throw new InvalidRequestError('subject_token subject is not a user');
+    throw inactiveSubjectTokenError();
   }
 
   // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
@@ -1595,11 +1666,11 @@ async function handleTokenExchange(
   const user = await fastify.repositories.users.findById(subjectPayload.sub);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_request', 'user_not_found');
-    throw new InvalidRequestError('subject_token subject is unknown');
+    throw inactiveSubjectTokenError();
   }
   if (!user.enabled) {
     await emitRequestFailed(ctx, 'invalid_request', 'user_disabled', user.id);
-    throw new InvalidRequestError('subject_token subject is not active');
+    throw inactiveSubjectTokenError();
   }
 
   // GATE 4a — scope narrowing. The delegated token's scope is the subject
@@ -2049,7 +2120,7 @@ async function handleJwtBearer(
   // able to skip the flag.
   if (!env.ID_JAG_ENABLED) {
     await emitRequestFailed(ctx, 'unsupported_grant_type', 'id_jag_disabled');
-    throw new BadRequestError('unsupported_grant_type');
+    throw new UnsupportedGrantTypeError();
   }
 
   // GATE 1 — grant authorisation (RFC 6749 §5.2). The grant is not registrable

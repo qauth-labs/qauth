@@ -8,6 +8,7 @@ import {
   InvalidTargetError,
   NotFoundError,
   UnauthorizedClientError,
+  UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -2008,6 +2009,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   });
 
   describe('a second redemption of a code (OAuth 2.1 draft-16 §4.1.3, RFC 6749 §4.1.2, RFC 9700 §4.2.4)', () => {
+    /** The authorization-code stub, with the code read as spent a second ago and `fields` over it. */
     function setupSpentCode(fields: Record<string, unknown> = {}) {
       const stub = setupAuthCodeStub();
       (
@@ -2199,7 +2201,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       const handler = ctx.handler;
       if (!handler) throw new Error('Handler missing');
 
-      await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+      // RFC 6749 §5.2 `invalid_grant` with the usual wording: not a 404
+      // naming the row (#513).
+      const refused = await handler(baseRequest(), createReply()).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(InvalidGrantError);
+      expect(refused).toMatchObject({ errorDescription: 'Invalid or expired authorization code' });
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
       expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
       expect(
@@ -2372,6 +2378,88 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
   });
 
+  // A refusal that burns the code and loses the compare-and-set to a
+  // concurrent request finds the code burned already: the refusal stands as
+  // it is, and nothing is revoked as a replay.
+  it('answers invalid_grant for a disabled user when the code it burns was spent meanwhile', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-1',
+      email: 'u@example.com',
+      emailVerified: true,
+      enabled: false,
+    });
+    (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
+      new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const refused = await handler(baseRequest(), createReply()).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(InvalidGrantError);
+    expect(refused).toMatchObject({ errorDescription: 'Invalid or expired authorization code' });
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(
+      fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+    ).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'authorization_code', error: 'invalid_grant', reason: 'user_disabled' },
+    ]);
+  });
+
+  it("answers invalid_scope for the agent's cap when the code it burns was spent meanwhile", async () => {
+    const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...client,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+    });
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, scopes: ['read:foo', 'agent:exec'] });
+    (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
+      new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(
+      fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+    ).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      {
+        grantType: 'authorization_code',
+        error: 'invalid_scope',
+        reason: 'scope_exceeds_agent_mode',
+      },
+    ]);
+  });
+
+  it('lets a failure other than a lost compare-and-set through when burning a code', async () => {
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-1',
+      enabled: false,
+    });
+    const lost = new Error('connection lost');
+    (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(lost);
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toBe(lost);
+    // Only the catch-all's server_error is recorded, not the refusal's reason.
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'authorization_code', error: 'server_error' },
+    ]);
+  });
+
   // RFC 9700 §4.14: a user disabled between code issuance and redemption gets
   // no tokens — the same gate the refresh, exchange and jwt-bearer grants apply.
   it('rejects a code whose user has been disabled (invalid_grant, no tokens)', async () => {
@@ -2437,7 +2525,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
   });
 
-  it('rejects when the user bound to the code cannot be found', async () => {
+  it('rejects with invalid_grant, as for a disabled user, when the user bound to the code cannot be found', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(null);
     await tokenRoute(fastify);
@@ -2445,7 +2533,15 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     if (!handler) throw new Error('Handler missing');
 
     const reply = createReply();
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
+    // The answer does not tell a deleted account from a disabled one (#513);
+    // the event's reason does.
+    await expect(handler(baseRequest(), reply)).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.request_failed:v1-rc.0',
+      expect.objectContaining({ error: 'invalid_grant', reason: 'user_not_found' }),
+      expect.anything()
+    );
   });
 
   it('rejects with unauthorized_client when the client is not authorized for the authorization_code grant', async () => {
@@ -2629,6 +2725,38 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       headers: { 'user-agent': 'vitest', ...headers },
     };
   }
+
+  it('answers invalid_grant, not a 404, when the refresh token of a disabled user was revoked meanwhile', async () => {
+    // The revocation is a compare-and-set: a concurrent request that revoked
+    // the token first leaves no active row, and the repository says
+    // NotFoundError. The token is unusable either way (RFC 6749 §5.2).
+    const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      enabled: false,
+    });
+    (fastify.repositories.refreshTokens.revoke as unknown as Mock).mockRejectedValue(
+      new NotFoundError('RefreshToken', storedToken.id)
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const refused = await handler(refreshRequest(), createReply()).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(InvalidGrantError);
+    expect(refused).toMatchObject({ errorDescription: 'Invalid or expired refresh token' });
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    // The token is burned already; the refusal and its reason stand.
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'user_disabled' },
+    ]);
+  });
 
   it('signs inside the rotation transaction, before token.issued, so a signing failure records none', async () => {
     // As for a code: a token that cannot be signed rolls the rotation back,
@@ -3642,9 +3770,11 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
   it('fails the exchange closed when the revocation denylist cannot be read', async () => {
     const { fastify, ctx, subjectPayload } = setupExchangeStub();
     (subjectPayload as { jti?: string }).jti = 'some-jti';
-    (fastify.redis.exists as unknown as Mock).mockRejectedValueOnce(new Error('redis down'));
+    const redisDown = new Error('redis down');
+    (fastify.redis.exists as unknown as Mock).mockRejectedValueOnce(redisDown);
 
-    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow('redis down');
+    // The store's own failure propagates, to be answered as a server error.
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toBe(redisDown);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     // The catch-all records the OAuth code the error stands for, never its message.
     expect(emitUserEventMock).toHaveBeenCalledWith(
@@ -3922,10 +4052,9 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       aud: AGENT_CLIENT_ID,
     });
 
-    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toMatchObject({
-      message: 'invalid_request',
-      errorDescription: 'subject_token subject is not a user',
-    });
+    const refusal = invoke(fastify, ctx, exchangeRequest());
+    await expect(refusal).rejects.toBeInstanceOf(InvalidRequestError);
+    await expect(refusal).rejects.toMatchObject({ message: 'invalid_request' });
 
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
@@ -4382,7 +4511,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
-    ).rejects.toBeInstanceOf(Error);
+    ).rejects.toBeInstanceOf(UnsupportedGrantTypeError);
     // Refused BEFORE client authentication, so nothing was looked up.
     expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
@@ -5058,10 +5187,9 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
         subjectScope: 'chat.read chat.history',
       });
 
-      await expect(invoke(fastify, ctx, mintRequest())).rejects.toMatchObject({
-        message: 'invalid_scope',
-        errorDescription: 'chat.history not permitted for this client',
-      });
+      const refusal = invoke(fastify, ctx, mintRequest());
+      await expect(refusal).rejects.toBeInstanceOf(InvalidScopeError);
+      await expect(refusal).rejects.toMatchObject({ message: 'invalid_scope' });
       expectRefusedWithEvent();
     });
 

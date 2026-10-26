@@ -1,4 +1,4 @@
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -14,8 +14,12 @@ import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
-import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
-import { isClientUsable } from '../../helpers/client-status';
+import {
+  isAgentClient,
+  resolveClient,
+  unresolvedClientError,
+} from '../../helpers/client-resolution';
+import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import {
   canSkipConsent,
   describeScope,
@@ -25,13 +29,15 @@ import {
   redirectHost,
 } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
-import { readAuthorizationDpopJkt } from '../../helpers/dpop';
+import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
 import {
   buildRedirectUrl,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
+  redirectUriNotPermittedError,
+  unregisteredRedirectUriError,
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -370,6 +376,7 @@ export default async function (fastify: FastifyInstance) {
           'Render the OAuth consent screen. Requires a valid __Host-qauth_session cookie; otherwise redirects to /ui/login.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         querystring: authorizeQuerySchema,
       },
       config: { surface: 'browser' },
@@ -407,12 +414,11 @@ export default async function (fastify: FastifyInstance) {
       // resolveClient hits it; if its document cache expired it is re-fetched
       // and re-validated here).
       const { client } = await resolveClient(fastify, realm.id, query.client_id);
+      if (!client) throw unresolvedClientError();
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
-      if (!client || !isClientUsable(client)) {
-        throw new BadRequestError('invalid_client');
-      }
+      if (!isClientUsable(client)) throw unusableClientError();
       if (!redirectUriMatchesRegistered(query.redirect_uri, client.redirectUris)) {
-        throw new BadRequestError('redirect_uri not registered');
+        throw unregisteredRedirectUriError();
       }
 
       // ADR-008 §5/§7 (#197): effective environment policy for this (client,
@@ -425,7 +431,7 @@ export default async function (fastify: FastifyInstance) {
       if (
         !isRedirectUriAllowedForPolicy(query.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
       ) {
-        throw new BadRequestError('redirect_uri not permitted for this environment');
+        throw redirectUriNotPermittedError();
       }
 
       // RFC 9449 §10 (#480): the DPoP key the code will be bound to, carried
@@ -433,7 +439,7 @@ export default async function (fastify: FastifyInstance) {
       // refused a malformed value before redirecting here.
       const dpopJkt = readAuthorizationDpopJkt(fastify, query.dpop_jkt);
       if (dpopJkt.kind === 'malformed') {
-        throw new BadRequestError('dpop_jkt is not a DPoP key thumbprint');
+        throw malformedDpopJktError();
       }
 
       // ADR-007 §2 (#184): fail fast on the render path too — don't show a
@@ -583,6 +589,7 @@ export default async function (fastify: FastifyInstance) {
           'Submit the consent decision. CSRF-protected; re-uses the authorize params to issue a code on Allow.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         body: consentFormSchema,
       },
       config: {
@@ -639,7 +646,7 @@ export default async function (fastify: FastifyInstance) {
           { form: 'consent' },
           { userId: session.userId, actor: 'user' }
         );
-        throw new BadRequestError('invalid_csrf_token');
+        throw new InvalidCsrfTokenError();
       }
 
       // Burn the CSRF token so the form cannot be replayed. A fresh one is
@@ -648,12 +655,11 @@ export default async function (fastify: FastifyInstance) {
 
       const realm = requestRealm(request);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
+      if (!client) throw unresolvedClientError();
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
-      if (!client || !isClientUsable(client)) {
-        throw new BadRequestError('invalid_client');
-      }
+      if (!isClientUsable(client)) throw unusableClientError();
       if (!redirectUriMatchesRegistered(body.redirect_uri, client.redirectUris)) {
-        throw new BadRequestError('redirect_uri not registered');
+        throw unregisteredRedirectUriError();
       }
 
       // ADR-008 §5/§7 (#197): effective environment policy for this (client,
@@ -662,14 +668,14 @@ export default async function (fastify: FastifyInstance) {
       if (
         !isRedirectUriAllowedForPolicy(body.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
       ) {
-        throw new BadRequestError('redirect_uri not permitted for this environment');
+        throw redirectUriNotPermittedError();
       }
 
       // RFC 9449 §10 (#480): the DPoP key the code is bound to, from the
       // rendered form. A malformed value was never rendered, so it is refused.
       const dpopJkt = readAuthorizationDpopJkt(fastify, body.dpop_jkt);
       if (dpopJkt.kind === 'malformed') {
-        throw new BadRequestError('dpop_jkt is not a DPoP key thumbprint');
+        throw malformedDpopJktError();
       }
 
       // Deny path: redirect with error=access_denied, state preserved

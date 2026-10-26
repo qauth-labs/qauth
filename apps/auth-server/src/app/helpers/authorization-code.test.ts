@@ -42,6 +42,7 @@ function uniqueViolation(): Error {
   });
 }
 
+/** A Fastify instance whose code repository is `create` alone. */
 function stub(create: CreateCode = vi.fn<CreateCode>(async (row) => row as never)) {
   const fastify = {
     repositories: { authorizationCodes: { create } as unknown as CodeRepository },

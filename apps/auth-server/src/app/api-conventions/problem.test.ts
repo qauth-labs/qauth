@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { codeForStatus, PROBLEM_CODES, problemCodeFor } from './problem';
 
 /**
- * The published problem `code` values (#506): which code an error gets, and
- * that the docs site's table is this table.
+ * The published problem `code` values (#506, #513): which code an error gets,
+ * and that the docs site's problem types page lists exactly these types.
  */
 
-const CONVENTIONS_PAGE = join(
+const PROBLEM_TYPES_PAGE = join(
   __dirname,
   '..',
   '..',
@@ -20,16 +20,34 @@ const CONVENTIONS_PAGE = join(
   'content',
   'docs',
   'reference',
-  'api-conventions.md'
+  'problem-types.md'
 );
 
-/** One row of the page's code table: `` | `CODE` | 400 | Meaning | ``. */
-const CODE_ROW = /^\|\s*`([a-z_]+)`\s*\|\s*(\d{3})\s*\|\s*(.*?)\s*\|\s*$/;
+/** The heading of one type on the page: ``## `not-found` ``. */
+const TYPE_HEADING = /^## `([a-z0-9-]+)`$/;
+
+/** The line under it: ``**Code** `not_found` · **Status** 404 · **Title** Not found``. */
+const TYPE_FACTS = /^\*\*Code\*\* `([a-z_]+)` · \*\*Status\*\* (\d{3}) · \*\*Title\*\* (.+)$/;
+
+/** Each type the page documents, in page order: slug, code, status, title, meaning. */
+function publishedTypes(page: string): [string, string, number, string, string][] {
+  const lines = page.split('\n');
+  const types: [string, string, number, string, string][] = [];
+  lines.forEach((line, index) => {
+    const heading = TYPE_HEADING.exec(line);
+    if (!heading) return;
+    const facts = TYPE_FACTS.exec(lines[index + 2] ?? '');
+    const meaning = lines[index + 4] ?? '';
+    if (!facts) throw new Error(`no facts line under ${line}`);
+    types.push([heading[1], facts[1], Number(facts[2]), facts[3], meaning]);
+  });
+  return types;
+}
 
 describe('problem codes (#506)', () => {
   it('gives every status the code its entry lists for that status', () => {
     for (const status of [
-      400, 401, 403, 404, 405, 409, 412, 413, 415, 421, 422, 428, 429, 500, 503,
+      400, 401, 403, 404, 405, 408, 409, 412, 413, 414, 415, 421, 422, 428, 429, 431, 500, 503,
     ]) {
       expect(PROBLEM_CODES[codeForStatus(status)].status).toBe(status);
     }
@@ -47,7 +65,8 @@ describe('problem codes (#506)', () => {
     expect(problemCodeFor('weak_password', 422)).toBe('weak_password');
     expect(problemCodeFor('NOT_FOUND', 400)).toBe('bad_request');
     expect(problemCodeFor('FST_ERR_CTP_INVALID_MEDIA_TYPE', 415)).toBe('unsupported_media_type');
-    expect(problemCodeFor('INVALID_GRANT', 400)).toBe('bad_request');
+    expect(problemCodeFor('INVALID_GRANT', 400)).toBe('invalid_grant');
+    expect(problemCodeFor('INVALID_GRANT', 401)).toBe('unauthorized');
     expect(problemCodeFor(undefined, 404)).toBe('not_found');
     expect(problemCodeFor('toString', 400)).toBe('bad_request');
   });
@@ -60,18 +79,15 @@ describe('problem codes (#506)', () => {
     }
   });
 
-  it('is the table the conventions page publishes, row for row', () => {
-    const page = readFileSync(CONVENTIONS_PAGE, 'utf8');
-    const published = page
-      .split('\n')
-      .map((line) => CODE_ROW.exec(line))
-      .filter((match) => match !== null)
-      .map(([, code, status, description]) => [code, Number(status), description]);
+  it('is the list the problem types page publishes, type for type', () => {
+    const page = readFileSync(PROBLEM_TYPES_PAGE, 'utf8');
 
-    expect(published).toEqual(
-      Object.entries(PROBLEM_CODES).map(([code, { status, description }]) => [
+    expect(publishedTypes(page)).toEqual(
+      Object.entries(PROBLEM_CODES).map(([code, { status, type, title, description }]) => [
+        type,
         code,
         status,
+        title,
         description,
       ])
     );

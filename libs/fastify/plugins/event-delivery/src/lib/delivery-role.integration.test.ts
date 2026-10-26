@@ -75,6 +75,7 @@ function signedIn(realm: string): EmitEvent<'urn:qauth:event:user.signed_in:v1-r
 const signer: DeliverySigner = {
   signWebhook: async () => 'v1,c2lnbmF0dXJl',
   signEventToken: async () => 'h.p.s',
+  decrypt: async () => new Uint8Array(),
 };
 
 const silent = {

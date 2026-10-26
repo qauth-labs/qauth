@@ -764,9 +764,10 @@ describe('POST /auth/login', () => {
         (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
       });
 
+      // Answered 401 `invalid_credentials` (the error registry, #513).
       expect(fresh.observed.error).toMatchObject({
         name: 'InvalidCredentialsError',
-        message: 'Invalid email or password',
+        code: 'INVALID_CREDENTIALS',
         statusCode: 401,
       });
       expect(fresh.observed).toEqual(taken.observed);

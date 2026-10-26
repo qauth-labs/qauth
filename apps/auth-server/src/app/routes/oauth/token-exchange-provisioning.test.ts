@@ -21,8 +21,8 @@
  * which is the property that was missing.
  */
 import {
-  BadRequestError,
   InvalidClientError,
+  InvalidClientMetadataError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
@@ -90,7 +90,20 @@ interface TestContext {
    * imported here that could drift from it.
    */
   opts?: {
-    schema?: { body?: { safeParse: (v: unknown) => { success: boolean; data?: unknown } } };
+    schema?: {
+      body?: {
+        safeParse: (
+          v: unknown
+        ) =>
+          | { success: true; data: unknown }
+          | { success: false; error: { issues: { path: PropertyKey[]; message: string }[] } };
+      };
+    };
+    /** The route's own `schemaErrorFormatter`: the error a body its schema refuses raises. */
+    schemaErrorFormatter?: (
+      issues: { instancePath: string; message: string }[],
+      context: string
+    ) => Error;
   };
 }
 
@@ -155,12 +168,21 @@ async function registerAgentThroughDcr(body: Record<string, unknown>) {
   // very allowlist this issue is about — and did, in the first draft of this
   // file: reverting the DCR enum left the headline test green. Run the body
   // through the route's OWN declared schema first, exactly as the type provider
-  // does, and fail the way a 400 would.
+  // does, and fail the way a 400 would: with the error the route's own
+  // `schemaErrorFormatter` makes of the issues (RFC 7591 §3.2.2).
   const bodySchema = ctx.opts?.schema?.body;
   if (!bodySchema) throw new Error('register route declared no body schema');
+  const formatSchemaError = ctx.opts?.schemaErrorFormatter;
+  if (!formatSchemaError) throw new Error('register route declared no schemaErrorFormatter');
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) {
-    throw new BadRequestError('invalid_client_metadata: request body failed schema validation');
+    throw formatSchemaError(
+      parsed.error.issues.map((issue) => ({
+        instancePath: issue.path.map((segment) => `/${String(segment)}`).join(''),
+        message: issue.message,
+      })),
+      'body'
+    );
   }
 
   const response = (await ctx.handler(
@@ -357,7 +379,7 @@ describe('the token-exchange grant is reachable through a shipped provisioning p
         ['openid'],
         []
       )
-    ).toThrow(/invalid_client_metadata/);
+    ).toThrow(InvalidClientMetadataError);
   });
 
   it('rejects the grant on a public client through the route, with RFC 7591 shape', async () => {
@@ -366,7 +388,7 @@ describe('the token-exchange grant is reachable through a shipped provisioning p
         ...AGENT_REGISTRATION,
         token_endpoint_auth_method: 'none',
       })
-    ).rejects.toThrow(BadRequestError);
+    ).rejects.toBeInstanceOf(InvalidClientMetadataError);
   });
 });
 

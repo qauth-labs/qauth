@@ -251,8 +251,8 @@ A rotation follows the overlap rules of the automatic rotation (ADR-019, #542):
   `DEFAULT_KEY_PREPUBLISH_DAYS`).
 - A retired client-assertion key stays in the provider's JWKS for `retiredRetentionMs` (default 14
   days, `DEFAULT_KEY_RETIRED_RETENTION_DAYS`). A retired webhook secret signs nothing more.
-- `activateNextKey` takes scoped purposes only; the rotation job of #542 rotates the others. The
-  rotation settings of #542 set both windows.
+- `activateNextKey` takes scoped purposes only; the rotation job of #542 is to rotate the others.
+  That job, and the rotation settings that set both windows, are not built yet.
 
 `deleteScopedKeys` deletes every key of one scope, whatever its status, with their public rows. It is
 the hook the deletion of a subscription or a provider calls, in the same transaction (`tx`), so the
@@ -359,7 +359,7 @@ const token = await signer.signJws('api', {
 | `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
 | `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
 | `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |
-| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` and `event_signing` keys inside their window, `next` keys included, in a fixed order. |
+| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` keys in their window, `next` keys included, in a fixed order. No `event_signing` key. |
 | `getUpstreamJwks(realmId, providerId)`                                       | The JWKS of one upstream provider's client-assertion keys, by the same window rules as `getJwks`.                                     |
 
 What the signer guarantees:
@@ -383,10 +383,15 @@ What the signer guarantees:
   | `local`    | Everything. The caller inside the signer's own process, in a single deployment.           |
   | `web`      | `getCookieSecrets`. It never signs anything.                                              |
   | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt`. |
-  | `delivery` | `signJws` for `event_signing`, `signWebhook`.                                             |
+  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` of a `delivery:` context only.    |
   | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                   |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
+
+- **The two signing purposes publish apart** (d-1026-09). The realm JWKS holds only
+  `token_signing` keys (`REALM_JWKS_PURPOSES`). The SSF transmitter serves the `event_signing`
+  keys at its own `jwks_uri`, from `getVerificationKeys`. A verifier that reads the realm JWKS and
+  skips the `typ` check still cannot take a Security Event Token for an access token.
 
 - **No key leaves it.** No operation returns a private key, a key object or symmetric material,
   except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A webhook secret
@@ -488,7 +493,8 @@ const signer = createInProcessSigner({
 - With hybrid signing off, `signHybrid` is refused and the ML-DSA-65 private key is never unwrapped
   (ADR-005, #248 F10).
 
-The remote signer of a distributed deployment (#497) implements the same interface.
+The remote signer of a distributed deployment (#497) is not built yet. It is to implement the same
+interface.
 
 ### Data at rest
 

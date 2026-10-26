@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { InvalidClientError, InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { fetchAndValidateCimdDocument, isCimdClientId, toCimdClientInsert } from './cimd';
@@ -201,6 +201,17 @@ function cimdRowMatchesInsert(row: object, insert: object): boolean {
   return CIMD_REFRESHED_FIELDS.every(
     (field) => canonicalJson(current[field] ?? null) === canonicalJson(next[field] ?? null)
   );
+}
+
+/**
+ * The refusal of a `client_id` {@link resolveClient} resolves to no client, at
+ * the authorization and consent endpoints (#513). RFC 6749 §4.1.2.1 forbids
+ * redirecting it, so it is answered in place, as `invalid_request`: the
+ * parameter names no client this realm can use. Why (unknown, a CIMD document
+ * refused) goes to the event, never to the wire.
+ */
+export function unresolvedClientError(): InvalidRequestError {
+  return new InvalidRequestError('client_id does not name a client of this realm');
 }
 
 /**

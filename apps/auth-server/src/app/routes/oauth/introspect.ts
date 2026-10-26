@@ -81,6 +81,7 @@ export default async function (fastify: FastifyInstance) {
           'RFC 7662 token introspection. Send access token and client credentials in application/x-www-form-urlencoded body. Returns active and claims when token is valid for the client.',
         tags: ['OAuth', 'Introspection'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400, 401, 503],
         body: introspectRequestSchema,
         response: {
           200: introspectResponseSchema,
@@ -88,6 +89,9 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         surface: 'api',
+        // An OAuth protocol endpoint: errors answer the RFC 6749 §5.2 body
+        // (ADR-019 Decision 7, #513).
+        errorFormat: 'oauth',
         rateLimit: {
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,

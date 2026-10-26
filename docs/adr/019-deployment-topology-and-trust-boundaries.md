@@ -87,6 +87,17 @@
 > - Decision 8: the operator's telemetry export (OTLP) is outside the egress client. Its
 >   destination comes only from deployment configuration, never from a realm admin, a client or an
 >   end user. It follows no redirect, and caps the time and the size of each export's response.
+>
+> **Amended 2026-10-26** with the maintainer's decision on the admin scope names. Decision 7 named
+> the scopes `admin:read`, `admin:write` and `admin:security`. Other servers use `admin:` for
+> scopes of their own, such as GitHub's `admin:org`, so reserving that prefix would have refused
+> ordinary scopes.
+>
+> - Decision 7: the admin API's scopes are `qauth:admin:read`, `qauth:admin:write` and
+>   `qauth:admin:security`. Only the `qauth:` namespace is reserved, in any case: a realm's dynamic
+>   registration allowlist cannot hold a scope in it, and discovery never lists one. Dynamic
+>   registration drops such a scope like any other scope outside the allowlist, and registers the
+>   client with the rest; it does not refuse the request.
 
 ## Context
 
@@ -530,16 +541,18 @@ Today one global error handler answers every route with QAuth's own JSON body: `
 
 **Permissions.**
 
-- Scopes are coarse and independent: `admin:read`, `admin:write` and `admin:security`.
+- Scopes are coarse and independent: `qauth:admin:read`, `qauth:admin:write` and
+  `qauth:admin:security`. They sit in the `qauth:` namespace, which only QAuth's own scopes use
+  (amended 2026-10-26).
 - Scopes are intersected with roles.
 - Roles are built from a permission catalog. Custom roles are allowed.
 
 **Authority Tree powers.** ADR-014 gives a realm admin three powers. They map onto the permission
 catalog. This answers ADR-015 parked question 10. Decided 2026-10-09 (maintainer).
 
-- Revoke-by-agent needs `admin:security`, with a fresh passkey approval for each operation.
+- Revoke-by-agent needs `qauth:admin:security`, with a fresh passkey approval for each operation.
 - Disabling a transmitter needs the same.
-- The view the agent's public profile withholds needs `admin:read`.
+- The view the agent's public profile withholds needs `qauth:admin:read`.
 
 **Credentials.**
 
@@ -550,10 +563,10 @@ catalog. This answers ADR-015 parked question 10. Decided 2026-10-09 (maintainer
 - Security operations include key rotation, realm deletion and ownership transfer. The next
   paragraph defines them by effect.
 
-**Security operations, defined by effect.** An admin API operation needs `admin:security` because of
-what it does, not because of the screen it sits on. The developer API's changes to a client or
-resource the caller owns (ADR-012) and the account API's changes to the caller's own account keep
-their own rules. An admin API operation is a security operation when it:
+**Security operations, defined by effect.** An admin API operation needs `qauth:admin:security`
+because of what it does, not because of the screen it sits on. The developer API's changes to a
+client or resource the caller owns (ADR-012) and the account API's changes to the caller's own
+account keep their own rules. An admin API operation is a security operation when it:
 
 - changes which credentials, links or addresses can authenticate or recover an account: a set-up or
   reset link the admin copies; an account's identifier or contact address; removing a passkey, TOTP
@@ -581,16 +594,16 @@ their own rules. An admin API operation is a security operation when it:
   (Decision 9), loosening the environment posture (Decision 10) and revoking sessions or
   refresh-token families in bulk (ADR-020 §3).
 
-`admin:write` covers the rest: display data, and operational changes with none of these effects. A
-permission that performs a security operation exists only under `admin:security`, so no custom
-role reaches one through `admin:write`. Sending a set-up or reset link to the contact address
-already on the account is not a security operation. The link reaches only the person a
-self-service reset reaches, and it does no more than ADR-017 Decision 8's reset could. Apart from
-the copy operation, which returns its link once to the admin who performs it, no event, log,
-webhook payload, admin view or API response carries a set-up or reset link, code or token.
+`qauth:admin:write` covers the rest: display data, and operational changes with none of these
+effects. A permission that performs a security operation exists only under `qauth:admin:security`,
+so no custom role reaches one through `qauth:admin:write`. Sending a set-up or reset link to the
+contact address already on the account is not a security operation. The link reaches only the person
+a self-service reset reaches, and it does no more than ADR-017 Decision 8's reset could. Apart from
+the copy operation, which returns its link once to the admin who performs it, no event, log, webhook
+payload, admin view or API response carries a set-up or reset link, code or token.
 
-Brand strings and links are not security settings: they are display data under `admin:write` on
-the ceremony pages. Mail takes the brand's logo, colours and strings but no brand link (ADR-020
+Brand strings and links are not security settings: they are display data under `qauth:admin:write`
+on the ceremony pages. Mail takes the brand's logo, colours and strings but no brand link (ADR-020
 fork C). Brand settings never form or replace a mail's link, code or pass, which the server builds
 from the realm row (Decision 1).
 
@@ -601,7 +614,7 @@ different human admin approves too.
 
 **Two-admin approval**, decided 2026-10-10 (maintainer).
 
-- The admin console recommends a second admin's approval for every `admin:security` operation.
+- The admin console recommends a second admin's approval for every `qauth:admin:security` operation.
 - A realm chooses the operations where it is mandatory. Deleting a user's passkey or TOTP is the
   first example.
 - The second admin approves with their own fresh passkey. Nobody approves their own request.
@@ -613,18 +626,18 @@ different human admin approves too.
 How the rule protects itself:
 
 - Once any operation is mandatory, these are themselves mandatory two-admin operations: changing
-  the mandatory set, creating an admin, granting or removing `admin:security`, and changing an
+  the mandatory set, creating an admin, granting or removing `qauth:admin:security`, and changing an
   admin's credentials, identifier or contact address through the admin API. One admin alone can
   only tighten the mandatory set, by adding an operation. An admin's change to its own credentials,
   identifier or contact address through the account API needs no second admin: it follows the
   account API's own rules (ADR-017 Decision 8, ADR-020 §3), and that admin cannot approve for the
   next 7 days (below).
-- The approver is a different account that held `admin:security` in the target realm before the
-  request was made. In the 7 days before the request it was not created or granted a role, and its
-  credentials, identifier and contact address did not change, whoever made the change. The
-  automatic password disable of ADR-017 Decision 7 is not such a change. It approves
-  with a passkey credential that is not registered to the requester's account. The admin event
-  records both credential ids.
+- The approver is a different account that held `qauth:admin:security` in the target realm before
+  the request was made. In the 7 days before the request it was not created or granted a role, and
+  its credentials, identifier and contact address did not change, whoever made the change. The
+  automatic password disable of ADR-017 Decision 7 is not such a change. It approves with a passkey
+  credential that is not registered to the requester's account. The admin event records both
+  credential ids.
 - An approval is single use and expires within minutes. Its passkey challenge is bound to the hash
   of the canonical operation: the target, the parameters, the realm, the requester and a nonce.
 - The approver sees the operation rendered from the stored request. Text the requester adds, such
@@ -806,7 +819,7 @@ How that separation is enforced:
 - The next signing key is pre-published in JWKS before it signs.
 - The old key stays published for verification.
 - The default period is 90 days. The operator can change it.
-- A manual rotation needs `admin:security` plus a passkey approval.
+- A manual rotation needs `qauth:admin:security` plus a passkey approval.
 - This record closes the three retired-key gaps that ADR-001's status note records: retired keys
   are published, every token names its key by `kid`, and verification resolves a retired key.
 - Both keys of a hybrid pair rotate together, under the same overlap.
@@ -817,8 +830,8 @@ How that separation is enforced:
 **Emergency retirement.** A key that may be compromised is retired as soon as its retirement is
 approved, as below. This is not a rotation, and the overlap above does not apply.
 
-- It needs `admin:security`, a fresh passkey and the second admin where the realm requires one for
-  key operations or bulk revocation; the other admins are notified. When no second admin can
+- It needs `qauth:admin:security`, a fresh passkey and the second admin where the realm requires one
+  for key operations or bulk revocation; the other admins are notified. When no second admin can
   approve in time, the break-glass CLI does it (Decision 7).
 - The key leaves the JWKS at once, and a new key starts signing.
 - Its `kid` goes on a denylist that every verifier inside the auth server checks, whatever a JWKS
@@ -848,7 +861,7 @@ Decided 2026-10-10 (maintainer).
   admin console. They include sign-up, the verified-account requirement, password and MFA policy,
   session and token lifetimes, brand settings, upstream providers and the email sender. A change
   that Decision 7 counts as a security operation, such as the email sender, an upstream provider or
-  a looser password or MFA policy, needs `admin:security` and a fresh passkey.
+  a looser password or MFA policy, needs `qauth:admin:security` and a fresh passkey.
 - **The environment only seeds a new realm's defaults.** Changing an environment key later does not
   change an existing realm.
 - The admin API's realm representation and the declarative realm file of ADR-018 §5 carry these
@@ -856,7 +869,8 @@ Decided 2026-10-10 (maintainer).
 
 ADR-008's posture already lives in the database: `realms.max_environment_laxity` and
 `oauth_clients.environment`. The admin console edits both. Tightening is free. Loosening needs
-`admin:security` with a fresh passkey, and a second admin where the realm requires one (Decision 7).
+`qauth:admin:security` with a fresh passkey, and a second admin where the realm requires one
+(Decision 7).
 
 ### 11. Paired sandbox realm
 
@@ -876,7 +890,7 @@ How a realm file reaches a live realm:
   the single operation it equals, and the diff marks each change as tightening, loosening or
   neutral.
 - The strictest change gates the import. If any change is a security operation (Decision 7), the
-  import needs `admin:security`, a fresh passkey bound to the whole diff, and the second admin
+  import needs `qauth:admin:security`, a fresh passkey bound to the whole diff, and the second admin
   wherever the realm requires one for any change in it.
 - A promotion from the sandbox is an import into the live realm.
 - Fields that describe the sandbox's environment are not promoted unless they are selected one by
@@ -917,8 +931,8 @@ Decided 2026-10-10 (maintainer).
 - One engine and one step grammar serve both browser ceremonies and first-party native apps.
 - The ceremony app's server holds no privileged key, so a compromise there yields no signing key.
 - Admin access is passkey-gated, DPoP-bound and audited. No static admin key exists to leak.
-- Security operations are defined by effect, so `admin:write` alone cannot change who can sign in
-  to an account or what its tokens assert.
+- Security operations are defined by effect, so `qauth:admin:write` alone cannot change who can sign
+  in to an account or what its tokens assert.
 - A compromised key is retired as soon as its retirement is approved, without waiting out the
   rotation overlap.
 - A key rotation no longer forces users to sign in again.

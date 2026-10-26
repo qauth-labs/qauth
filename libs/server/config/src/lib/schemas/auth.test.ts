@@ -197,6 +197,50 @@ describe('authEnvSchema MAX_CLIENTS_PER_DEVELOPER', () => {
 });
 
 /**
+ * DEFAULT_DYNAMIC_REGISTRATION_SCOPES seeds a realm's dynamic registration
+ * allowlist, which may never hold a scope in the reserved `qauth:` namespace
+ * (#507, ADR-019 Decision 7).
+ */
+describe('authEnvSchema DEFAULT_DYNAMIC_REGISTRATION_SCOPES', () => {
+  const parse = (raw?: string) =>
+    authEnvSchema.parse(raw === undefined ? {} : { DEFAULT_DYNAMIC_REGISTRATION_SCOPES: raw })
+      .DEFAULT_DYNAMIC_REGISTRATION_SCOPES;
+
+  it('defaults to the OIDC core scopes', () => {
+    expect(parse()).toEqual(['openid', 'profile', 'email', 'offline_access']);
+  });
+
+  it('splits on spaces and commas', () => {
+    expect(parse('openid, mcp:read  mcp:write')).toEqual(['openid', 'mcp:read', 'mcp:write']);
+  });
+
+  // Other servers' scopes that look administrative are ordinary scopes.
+  it('accepts admin: scopes and scopes that only contain "qauth"', () => {
+    expect(parse('openid admin:read admin:org example:qauth qauthx:read')).toEqual([
+      'openid',
+      'admin:read',
+      'admin:org',
+      'example:qauth',
+      'qauthx:read',
+    ]);
+  });
+
+  it.each([
+    'openid qauth:admin:read',
+    'qauth:admin:write',
+    'openid,qauth:admin:security',
+    'QAUTH:admin:read',
+    'qauth:custom',
+  ])('refuses the boot for %j, naming the reserved scope', (raw) => {
+    const result = authEnvSchema.safeParse({ DEFAULT_DYNAMIC_REGISTRATION_SCOPES: raw });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toMatch(
+      /^DEFAULT_DYNAMIC_REGISTRATION_SCOPES lists "[^"]+": the "qauth:" scope namespace is reserved/
+    );
+  });
+});
+
+/**
  * SESSION_LAST_SEEN_INTERVAL (ADR-019 Decision 3, issue #469): how often, at
  * most, a browser session's `last_seen_at` is written. One minute by default,
  * as ADR-019 decides; the operator may change it.

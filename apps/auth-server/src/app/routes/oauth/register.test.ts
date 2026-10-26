@@ -1,6 +1,7 @@
 import {
-  BadRequestError,
   ForbiddenError,
+  InvalidClientMetadataError,
+  InvalidRedirectUriError,
   MisdirectedRequestError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
@@ -290,7 +291,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
         },
         reply
       )
-    ).rejects.toThrow(/invalid_redirect_uri/);
+    ).rejects.toBeInstanceOf(InvalidRedirectUriError);
   });
 
   // Found while fixing the findings of scan qauth-20261015-005.
@@ -309,7 +310,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
           },
           createReply().reply
         )
-      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      ).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(state.createdClients).toHaveLength(0);
     }
   );
@@ -339,7 +340,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
 
     it('refuses a bare scheme when the setting is empty', async () => {
       const { run, state } = await registerWith(cursorCallback);
-      await expect(run()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: cursor:/);
+      await expect(run()).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(state.createdClients).toHaveLength(0);
     });
 
@@ -355,7 +356,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     it('still refuses a bare scheme that is not listed', async () => {
       env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
       const { run, state } = await registerWith('myapp:/callback');
-      await expect(run()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: myapp:/);
+      await expect(run()).rejects.toBeInstanceOf(InvalidRedirectUriError);
       expect(state.createdClients).toHaveLength(0);
     });
   });
@@ -379,7 +380,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
         },
         reply
       )
-    ).rejects.toThrow(/invalid_client_metadata/);
+    ).rejects.toBeInstanceOf(InvalidClientMetadataError);
   });
 
   it('strips unrecognized fields (application_type, custom_ext) without error (RFC 7591 §3.2)', async () => {

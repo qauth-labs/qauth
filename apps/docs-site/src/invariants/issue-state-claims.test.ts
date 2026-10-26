@@ -181,17 +181,13 @@ describe('REGRESSION: the real #396 defect this check exists for', () => {
 });
 
 /**
- * The scan set for THIS check, and why it differs from the evidence-path one.
+ * The scan set for THIS check: the site content plus the repo-root status
+ * surfaces.
  *
- * `status-claims.test.ts` deliberately excludes `MVP-PRD.md`, because a PRD's
- * status column calls already-shipped work "in progress" by design and would
- * make the evidence-path guard permanently red for a reason unrelated to drift.
- *
- * That reasoning does not transfer. This check flags only issues that are
- * CLOSED while being listed as outstanding, and a planning record naming
- * finished work as remaining is simply wrong — `MVP-PRD.md` carried two of
- * #396's six defects. So it joins the scan set here and stays out there. The
- * decision #399 asked for is that split, not a single answer for both checks.
+ * `MVP-PRD.md` was in this set until it moved to `docs/archive/mvp-prd.md`.
+ * The archive banner says its status notes are out of date, so it is no longer
+ * a status surface and is not scanned. Keep this list in step with
+ * `REPO_ROOT_PAGES` in `scripts/check-issue-state-claims.mts`.
  */
 function buildIssueStateScanSet(): ScannablePage[] {
   const contentDir = join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs');
@@ -201,7 +197,7 @@ function buildIssueStateScanSet(): ScannablePage[] {
     unbuiltClaims: page.frontmatter.unbuiltClaims === true,
   }));
 
-  const repoFiles = ['README.md', 'docs/README.md', 'MVP-PRD.md', 'AGENTS.md'].map((rel) => ({
+  const repoFiles = ['README.md', 'docs/README.md', 'AGENTS.md'].map((rel) => ({
     id: rel,
     content: readFileSync(join(REPO_ROOT, rel), 'utf8'),
   }));
@@ -210,13 +206,11 @@ function buildIssueStateScanSet(): ScannablePage[] {
 }
 
 describe('issue-state claims — real tree', () => {
-  it('scans the site content plus the four repo-root status surfaces', () => {
+  it('scans the site content plus the three repo-root status surfaces', () => {
     const ids = buildIssueStateScanSet().map((page) => page.id);
     // Non-vacuity: zero violations looks identical whether this scanned
     // everything or nothing.
-    expect(ids).toEqual(
-      expect.arrayContaining(['README.md', 'docs/README.md', 'MVP-PRD.md', 'AGENTS.md'])
-    );
+    expect(ids).toEqual(expect.arrayContaining(['README.md', 'docs/README.md', 'AGENTS.md']));
     expect(ids.length).toBeGreaterThanOrEqual(10);
   });
 

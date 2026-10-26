@@ -4,6 +4,7 @@
 export {
   DEFAULT_DELIVERY_SETTINGS,
   DELIVERY_ERROR_CLASSES,
+  DELIVERY_HOLD_INTERVAL_MS,
   DeliveryAttemptTimeoutError,
   type DeliveryRole,
   type DeliveryRoleOptions,
@@ -34,5 +35,6 @@ export type {
   DeliveryRoute,
   DeliverySigner,
   DeliveryStore,
+  EventSubjectRef,
   RouteDestination,
 } from './lib/types';

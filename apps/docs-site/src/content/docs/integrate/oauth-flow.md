@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-25'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -732,7 +732,7 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 | `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
-| `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+| `scope`                      | Space-separated; **capped to the realm allowlist**. No `qauth:` scope. |
 
 Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
 `[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
@@ -752,6 +752,18 @@ boundary an operator owns. Zod strips these keys, so a registration request
 carrying them is silently ignored rather than honoured; do not rely on that
 silence as the enforcement mechanism.
 
+A scope the realm allowlist does not list is dropped, and the client is
+registered with the rest (RFC 7591 §2 lets the server narrow the request). The
+`qauth:` scope namespace, in any case, is QAuth's own: the admin API's scopes
+(`qauth:admin:read`, `qauth:admin:write`, `qauth:admin:security`) live in it,
+and only an operator provisions their clients. A realm's allowlist cannot hold
+such a scope, so registration always drops one; a client that echoes a
+resource's `scopes_supported` still registers. A CIMD document's `scope` is
+never stored, so one there is ignored. Other servers' scopes that look
+administrative, such as `admin:org`, are ordinary scopes. The three admin
+scopes and what they allow are on the
+[admin permissions](/reference/admin-permissions/) page.
+
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).
 
@@ -763,20 +775,21 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 
 > **Where they arrive.** In a JSON error body these codes come from
 > `apps/auth-server/src/app/plugins/error-handler.ts`, which is registered ahead
-> of both route sweeps so that every route resolves it. `error` carries the bare
-> RFC 6749 §5.2 token and `error_description` carries the human-readable detail,
-> where there is any to give.
+> of both route sweeps so that every route resolves it. On the OAuth protocol
+> endpoints the body holds only `error`, the bare registered code, and
+> `error_description`, the human-readable detail, where there is any to give.
+> Every other route answers an RFC 9457 problem document instead; see the
+> [error model](/integrate/api-reference/#error-model).
 >
 > `/oauth/authorize` is different by design. Once `client_id` and `redirect_uri`
 > validate it returns `invalid_scope`, `access_denied`, `login_required` and
 > `consent_required` as redirect query parameters built in the route itself.
-> The errors RFC 6749 §4.1.2.1 forbids redirecting — an unknown client and a
-> `redirect_uri` that is not registered or not permitted for the environment —
-> are thrown as `BadRequestError` and reach the caller in the JSON body
-> instead. So is `unauthorized_client` (a disabled client, or one not registered
-> for the `authorization_code` grant or the `code` response type): it is
-> checked before any user interaction, and is never redirected. See the
-> [error model](/integrate/api-reference/#error-model).
+> The errors RFC 6749 §4.1.2.1 forbids redirecting — a `client_id` that names
+> no client, and a `redirect_uri` that is not registered or not permitted for
+> the environment — reach the caller in the JSON body instead, as
+> `invalid_request`. So is `unauthorized_client` (a disabled client, or one not
+> registered for the `authorization_code` grant or the `code` response type):
+> it is checked before any user interaction, and is never redirected.
 >
 > **Clients no operator provisioned.** RFC 9700 §4.11.2 lets an
 > authorization server redirect automatically only to a redirect URI it trusts.
@@ -792,16 +805,22 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > of a 302. An owner who changes the redirect URIs of an operator-provisioned
 > client through `PATCH /api/clients/{id}` removes that trust.
 
-| Code                      | Meaning                                                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `invalid_request`         | Missing/malformed parameter.                                                                                                  |
-| `invalid_client`          | Client authentication failed or client unknown.                                                                               |
-| `invalid_grant`           | Bad, expired or already-redeemed code, wrong or missing `redirect_uri`, bad PKCE verifier, or invalid/replayed refresh token. |
-| `unauthorized_client`     | Client not allowed to use this grant.                                                                                         |
-| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                    |
-| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                       |
-| `unsupported_grant_type`  | Unknown `grant_type`.                                                                                                         |
-| `temporarily_unavailable` | HTTP `503` with `Retry-After`: the server is too busy to check the client secret now; retry after the delay.                  |
+| Code                      | Meaning                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `invalid_request`         | Missing/malformed parameter.                                                                                                                                                                                             |
+| `invalid_client`          | Client authentication failed or client unknown.                                                                                                                                                                          |
+| `invalid_grant`           | Bad, expired or already-redeemed code, wrong or missing `redirect_uri`, bad PKCE verifier, or invalid/replayed refresh token.                                                                                            |
+| `unauthorized_client`     | Client not allowed to use this grant.                                                                                                                                                                                    |
+| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                                                                                                               |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                                                                                                                  |
+| `unsupported_grant_type`  | A `grant_type` the token endpoint does not serve; a missing one is `invalid_request`.                                                                                                                                    |
+| `invalid_client_metadata` | Dynamic registration: a metadata value is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                    |
+| `invalid_redirect_uri`    | Dynamic registration: a redirect URI is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                      |
+| `access_denied`           | Dynamic registration with a developer token: the developer already has as many clients as the realm allows (HTTP `403`). RFC 7591 defines no error for this refusal; QAuth answers RFC 6749's `access_denied`.           |
+| `invalid_token`           | Userinfo, and dynamic registration with a developer token that is not valid: the access token is missing, not valid, or names no active user (RFC 6750 §3.1). A request without one gets a challenge with no error code. |
+| `invalid_dpop_proof`      | With DPoP on, the DPoP proof is missing or not valid (RFC 9449).                                                                                                                                                         |
+| `temporarily_unavailable` | HTTP `503` with `Retry-After` when the server is too busy to check the client secret now, or `429` when the rate limit refuses the request; retry after the delay.                                                       |
+| `server_error`            | HTTP `5xx`: the server failed. The answer says nothing more; its `X-Request-Id` finds the log line.                                                                                                                      |
 
 ---
 

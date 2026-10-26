@@ -24,8 +24,9 @@ test-vectors/
 | `dpop/proof.json`         | The DPoP proof checks of RFC 9449 §4.3, nonces and replay          | RFC 9449 Figures 2, 7 and 13, and fixed-seed throwaway Ed25519 keys |
 
 The server's tests run `pkce/s256` in `libs/server/pkce`, `jwt/access-token` in `libs/server/jwt`,
-`dpop/proof` in `libs/server/dpop` and `agent/act-chain` in `apps/auth-server`. QAuth has no webhook signer yet, so
-`libs/shared/test-vectors` checks `webhooks/signature` against `node:crypto` until it has one.
+`dpop/proof` in `libs/server/dpop` and `agent/act-chain` in `apps/auth-server`.
+`libs/shared/test-vectors` checks `webhooks/signature` against `node:crypto`. The webhook signer in
+`libs/server/keys` does not run these vectors yet.
 
 ## The format
 

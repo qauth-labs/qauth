@@ -15,7 +15,11 @@ describe('JWS_TYP_BY_PURPOSE', () => {
       event_signing: ['secevent+jwt', 'logout+jwt'],
     });
     expect(JWS_SIGNING_PURPOSES).toEqual(['token_signing', 'event_signing']);
-    expect(REALM_JWKS_PURPOSES).toEqual(['token_signing', 'event_signing']);
+  });
+
+  it('keeps the event signing keys out of the realm JWKS (d-1026-09)', () => {
+    expect(REALM_JWKS_PURPOSES).toEqual(['token_signing']);
+    expect(Object.isFrozen(REALM_JWKS_PURPOSES)).toBe(true);
   });
 
   it('shares no typ between purposes', () => {

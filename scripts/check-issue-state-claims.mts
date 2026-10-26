@@ -55,14 +55,11 @@ const REPO = 'qauth';
 /**
  * The repo-root status surfaces, on top of the site content tree.
  *
- * `MVP-PRD.md` is IN here and OUT of the evidence-path guard's scan set, and
- * that split is the decision #399 asked for. The evidence-path check excludes
- * it because a PRD's status column calls shipped work "in progress" by design;
- * this check only ever flags an issue that is CLOSED while listed as
- * outstanding, and a planning record naming finished work as remaining is
- * simply wrong. `MVP-PRD.md` carried two of #396's six defects.
+ * `MVP-PRD.md` was in here until it moved to `docs/archive/mvp-prd.md`. The
+ * archive banner says its status notes are out of date, so it is no longer a
+ * status surface and is not scanned.
  */
-const REPO_ROOT_PAGES = ['README.md', 'docs/README.md', 'MVP-PRD.md', 'AGENTS.md'];
+const REPO_ROOT_PAGES = ['README.md', 'docs/README.md', 'AGENTS.md'];
 
 function fail(code: number, message: string): never {
   process.stderr.write(`check-issue-state-claims: ${message}\n`);

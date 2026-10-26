@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { AUTHORIZATION_CODE_TTL_MS } from '../constants';
 
+/** The repository every code is written through. */
 type CodeRepository = FastifyInstance['repositories']['authorizationCodes'];
 
 /**

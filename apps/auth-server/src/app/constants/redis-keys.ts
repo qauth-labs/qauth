@@ -152,4 +152,13 @@ export const REDIS_KEYS = {
    * the cache keeps verifying throughout.
    */
   ID_JAG_FETCH_FAILED: (issuer: string) => `id-jag:fetch-failed:${digest(issuer)}`,
+  /**
+   * A receiver's last verification request (SSF 1.0 §8.1.4.2, #410): set for
+   * the stream's `min_verification_interval`, so a request sooner is answered
+   * 429. Keyed by the receiver's client row, not the stream, so deleting the
+   * stream and creating another does not reset it; a receiver has one stream
+   * per realm. Both components are UUIDs.
+   */
+  SSF_VERIFICATION: (realmId: string, receiverClientId: string) =>
+    `ssf:verification:${realmId}:${receiverClientId}`,
 } as const;

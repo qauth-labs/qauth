@@ -281,6 +281,35 @@ describe('GET /.well-known/jwks.json', () => {
       await app.close();
     }
   });
+
+  it('holds no SET key, even for a realm that runs the SSF transmitter (d-1026-09)', async () => {
+    const app = Fastify({ logger: false });
+    const jwks = { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'x', alg: 'EdDSA', kid: 'token' }] };
+    const eventKey = { kid: 'event', publicJwk: { kty: 'OKP', crv: 'Ed25519', kid: 'event' } };
+    const getVerificationKeys = vi.fn(async () => [eventKey]);
+    app.decorate('jwtUtils', {
+      getIssuer: () => ISSUER,
+      getJwks: async () => jwks,
+      getIdTokenSigningAlgValuesSupported: () => ['EdDSA'],
+    } as unknown as never);
+    app.decorate('ssf', {} as never);
+    app.decorate('signer', { getVerificationKeys } as unknown as never);
+    app.decorateRequest('realm', null);
+    app.addHook('onRequest', async (request) => {
+      request.realm = { id: 'realm-id', issuer: ISSUER, ssfTransmitterEnabled: true } as never;
+    });
+    await app.register(wellKnownRoutes);
+    await app.ready();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
+      expect(res.statusCode).toBe(200);
+      // The SET keys are published apart, at the transmitter's own JWKS.
+      expect(res.json()).toEqual(jwks);
+      expect(getVerificationKeys).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 /**

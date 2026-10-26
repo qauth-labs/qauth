@@ -453,6 +453,11 @@ export const tokenExchangeBodySchema = z.discriminatedUnion('grant_type', [
   tokenExchangeJwtBearerBodySchema,
 ]);
 
+/** The `grant_type` values the token endpoint serves: the union's discriminators. */
+export const TOKEN_GRANT_TYPES: readonly string[] = tokenExchangeBodySchema.options.map(
+  (option) => option.shape.grant_type.value
+);
+
 export type TokenExchangeAuthCodeBody = z.infer<typeof tokenExchangeAuthCodeBodySchema>;
 export type TokenExchangeClientCredsBody = z.infer<typeof tokenExchangeClientCredsBodySchema>;
 export type TokenExchangeRefreshBody = z.infer<typeof tokenExchangeRefreshBodySchema>;

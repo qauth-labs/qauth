@@ -740,6 +740,7 @@ describe('repository integration (real Postgres)', () => {
   // --- code replay revokes the family the code started (#627) --------------
 
   describe('authorization codes — the refresh family a code started (#627)', () => {
+    /** An unspent, PKCE-bound code for `clientId` and `userId`. */
     async function seedCode(clientId: string, userId: string, code: string, expiresAt: number) {
       return createAuthorizationCodesRepository(db().database.db).create({
         code,
@@ -753,6 +754,7 @@ describe('repository integration (real Postgres)', () => {
       });
     }
 
+    /** A live refresh token; `fields` sets its family and the code that started it. */
     async function seedFamilyToken(
       userId: string,
       clientId: string,
@@ -771,6 +773,7 @@ describe('repository integration (real Postgres)', () => {
       });
     }
 
+    /** The refresh token's row as stored. */
     async function tokenRow(id: string): Promise<RefreshToken> {
       const [row] = await db()
         .database.db.select()

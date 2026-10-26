@@ -161,9 +161,9 @@ SELECT count(*) FROM refresh_tokens;
 With many rows, run the migration at a quiet hour, and keep the proxy's and
 the clients' timeouts above the expected pause.
 
-### Migration 0039 reads `refresh_tokens` once more
+### Migration 0041 reads `refresh_tokens` once more
 
-Migration 0039 ([#627](https://github.com/qauth-labs/qauth/issues/627)) links
+Migration 0041 ([#627](https://github.com/qauth-labs/qauth/issues/627)) links
 each refresh-token family to the authorization code that started it. It adds a
 column that starts empty, so it rewrites no row, but its foreign key and index
 each read the whole table while the runner holds the lock 0038 described. The
@@ -172,7 +172,7 @@ commits, so minting a code at `/oauth/authorize` or on the consent screen,
 redeeming one at `/oauth/token` and a logout wait too, on nodes of either
 version. On the same virtual machine, against a `postgres:18-alpine` container
 with 1,000,000 rows in `refresh_tokens` (531 MB), it took 1.3 s, and a token
-insert waited for it. Upgrading from a release before 0038 runs both migrations
+insert waited for it. Upgrading from a release before 0038 runs 0038 and 0041
 in the one transaction, so the two pauses add up.
 
 ## Upgrading within 1.x

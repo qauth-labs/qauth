@@ -26,6 +26,12 @@ export interface WireConfig {
   readonly adminUrl: string;
   /** The confidential client from the seed manifest. */
   readonly confidentialClient: SeededClient;
+  /**
+   * Whether the target's realm runs the Shared Signals Framework transmitter
+   * (`QAUTH_WIRE_SSF_TRANSMITTER=1`). Off unless set: a default deployment
+   * serves no SSF metadata.
+   */
+  readonly ssfTransmitter: boolean;
 }
 
 /** A configuration problem. The suite does not start when one is raised. */
@@ -84,6 +90,11 @@ export function readWireConfig(env: Environment = process.env): WireConfig {
   const adminValue = env['QAUTH_ADMIN_URL']?.trim();
   const adminUrl = adminValue ? serverUrl('QAUTH_ADMIN_URL', adminValue) : baseUrl;
 
+  const ssf = env['QAUTH_WIRE_SSF_TRANSMITTER'];
+  if (ssf !== undefined && ssf !== '' && ssf !== '0' && ssf !== '1') {
+    throw new WireConfigError(`QAUTH_WIRE_SSF_TRANSMITTER must be 1, 0 or unset: ${ssf}`);
+  }
+
   return {
     baseUrl,
     adminUrl,
@@ -91,6 +102,7 @@ export function readWireConfig(env: Environment = process.env): WireConfig {
       id: required(env, 'QAUTH_WIRE_CLIENT_ID'),
       secret: required(env, 'QAUTH_WIRE_CLIENT_SECRET'),
     },
+    ssfTransmitter: ssf === '1',
   };
 }
 

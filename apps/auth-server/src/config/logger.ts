@@ -280,6 +280,12 @@ interface SerializedErrorForLog {
  * since on an unwrapped query error it is an own field and would be copied
  * verbatim.
  *
+ * `err.rawPacket` is dropped for the same reason. Node's HTTP parser attaches
+ * the bytes it could not parse to its client errors (`HPE_*`), and those
+ * bytes are the request as sent: its `Cookie` and `Authorization` headers
+ * included. Copied as an own field, a malformed request would put the
+ * caller's session cookie or access token in the log.
+ *
  * A duplicate registration was the everyday case: every second
  * `POST /auth/register` for an address fails inside the credential insert,
  * AFTER the password was hashed — and when it is the account holder retrying,
@@ -330,9 +336,11 @@ function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErr
   }
   for (const [key, value] of Object.entries(err)) {
     // `cause` is already folded into `message` and `stack`; `errors` into
-    // `aggregateErrors`; a failed query's `params` are the secret.
+    // `aggregateErrors`; a failed query's `params` are the secret, and so are
+    // the raw request bytes a parser error carries in `rawPacket`.
     if (
       key === 'cause' ||
+      key === 'rawPacket' ||
       (key === 'errors' && Array.isArray(errors)) ||
       (key === 'params' && isFailedQueryError(err))
     ) {
