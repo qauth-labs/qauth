@@ -19,6 +19,7 @@ import {
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  provisionRealmKeys,
   registerPasswordAccount,
   resetE2eState,
   signInWithPassword,
@@ -158,6 +159,8 @@ describe('every absolute URL comes from the realm row (#490)', () => {
       { name: 'beta', issuer: ISSUER_B, enabled: true },
       HOST_B
     );
+    // Its own keys: the realm's tokens are signed with them (#491).
+    await provisionRealmKeys(app, 'beta');
     return { app, realmA, realmB };
   }
 
@@ -708,30 +711,27 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     expect(authorize.headers['location']).toBeUndefined();
   }, 120_000);
 
-  it("documents, until #491, that realm B's own tokens carry realm A's issuer: A accepts them, B does not", async () => {
+  it("signs realm B's tokens with its own issuer and keys: B accepts them, A does not (#491)", async () => {
     const { app, realmA, realmB } = await boot();
-    // The same client_id names a client in each realm (#487).
+    // The same client_id names a client in each realm (#487), so realm A's
+    // client passes introspection's same-client check for a token of B's:
+    // only its keys and issuer pin can refuse it.
     await seedIntrospectingClient(app, realmA, 'urls-client');
     await seedIntrospectingClient(app, realmB, 'urls-client');
 
-    // Realm B mints it, but every token is still signed with JWT_ISSUER.
     const tokenOfB = await clientCredentialsToken(app, HOST_B, 'urls-client');
-    expect(decodeJwtClaims(tokenOfB)['iss']).toBe(ISSUER_A);
+    expect(decodeJwtClaims(tokenOfB)['iss']).toBe(ISSUER_B);
 
-    // Realm B pins its own issuer, so it refuses its own token: introspection
-    // reports it inactive, and revocation answers 200 (RFC 7009 §2.2) but
-    // denylists nothing.
-    expect(await introspect(app, HOST_B, 'urls-client', tokenOfB)).toEqual({ active: false });
-    expect((await revoke(app, HOST_B, 'urls-client', tokenOfB)).statusCode).toBe(200);
-
-    // Realm A accepts it: the issuer is A's, and the client_id names a client
-    // of A. Introspection reports it active, so B's revocation did nothing...
-    expect(await introspect(app, HOST_A, 'urls-client', tokenOfB)).toMatchObject({
+    // Realm A refuses it: introspection reports it inactive, and revocation
+    // answers 200 (RFC 7009 §2.2) but denylists nothing...
+    expect(await introspect(app, HOST_A, 'urls-client', tokenOfB)).toEqual({ active: false });
+    expect((await revoke(app, HOST_A, 'urls-client', tokenOfB)).statusCode).toBe(200);
+    // ...so realm B still reports it active, and B's own revocation works.
+    expect(await introspect(app, HOST_B, 'urls-client', tokenOfB)).toMatchObject({
       active: true,
     });
-    // ...and A's revocation denylists it.
-    expect((await revoke(app, HOST_A, 'urls-client', tokenOfB)).statusCode).toBe(200);
-    expect(await introspect(app, HOST_A, 'urls-client', tokenOfB)).toEqual({ active: false });
+    expect((await revoke(app, HOST_B, 'urls-client', tokenOfB)).statusCode).toBe(200);
+    expect(await introspect(app, HOST_B, 'urls-client', tokenOfB)).toEqual({ active: false });
   }, 120_000);
 
   it("builds a trusted proxy's request on the row of the realm it names, never on the header's text", async () => {

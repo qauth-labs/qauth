@@ -12,6 +12,7 @@ import {
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
+  provisionRealmKeys,
   registerPasswordAccount,
   resetE2eState,
   startE2eInfrastructure,
@@ -80,6 +81,8 @@ describe('handlers take the realm of the request host (#487)', () => {
       { name: 'beta', issuer: `https://${HOST_B}`, enabled: true },
       HOST_B
     );
+    // Its own keys: the realm's tokens are signed with them (#491).
+    await provisionRealmKeys(app, 'beta');
     return { app, realmA, realmB };
   }
 
