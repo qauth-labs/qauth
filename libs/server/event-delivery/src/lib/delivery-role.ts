@@ -175,6 +175,18 @@ export class DeliveryAttemptTimeoutError extends Error {
   }
 }
 
+/**
+ * Whether a route threw a `503` `TemporarilyUnavailableError` of
+ * `@qauth-labs/shared-errors`: what a signer that cannot be reached throws.
+ * Read by its fields, since the error may come from another copy of the
+ * module.
+ */
+function isTemporarilyUnavailable(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const { statusCode, code } = error as { statusCode?: unknown; code?: unknown };
+  return statusCode === 503 && code === 'TEMPORARILY_UNAVAILABLE';
+}
+
 /** The abort reason of an attempt the role gave up on when it stopped. */
 export class DeliveryRoleStoppedError extends Error {
   override readonly name = 'DeliveryRoleStoppedError';
@@ -608,6 +620,16 @@ class Runner implements DeliveryRole {
     } catch (error) {
       if (timedOut) return { ok: false, errorClass: DELIVERY_ERROR_CLASSES.timeout };
       if (controller.signal.aborted) return 'abandoned';
+      if (isTemporarilyUnavailable(error)) {
+        // The signer cannot be reached from this process (#495, #497): the
+        // receiver was never called, so the delivery waits like a held one
+        // and spends no attempt, instead of failing for good while it lasts.
+        this.log.info(
+          { kind: route.kind, deliveryId: claim.id, attempt: claim.attempt },
+          'the signer is unavailable; the delivery is held and spends no attempt'
+        );
+        return { ok: false, hold: true };
+      }
       this.log.warn(
         { err: error, kind: route.kind, deliveryId: claim.id, attempt: claim.attempt },
         'a delivery route threw; the attempt counts as failed'

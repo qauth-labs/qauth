@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
+
+import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, RouteOptions } from 'fastify';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   baseEnvironment,
@@ -136,12 +139,16 @@ describe('service roles (#495)', () => {
   /** Boot under `serviceRoles`, collecting the routes the app registers. */
   async function boot(
     serviceRoles: string,
-    extra: Record<string, string> = {}
+    extra: Record<string, string> = {},
+    eventDeliveryRoutes?: readonly DeliveryRoute[]
   ): Promise<{ app: FastifyInstance; routes: RouteOptions[] }> {
     const routes: RouteOptions[] = [];
     const server = await bootAuthServer(
       { ...environmentFor(serviceRoles), ...extra },
-      { onRoute: (route) => void routes.push(route) }
+      {
+        onRoute: (route) => void routes.push(route),
+        ...(eventDeliveryRoutes === undefined ? {} : { eventDeliveryRoutes }),
+      }
     );
     booted.push(server);
     return { app: server.app, routes };
@@ -254,6 +261,69 @@ describe('service roles (#495)', () => {
     const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
     expect(jwks.statusCode).toBe(200);
     expect(jwks.json<{ keys: unknown[] }>().keys.length).toBeGreaterThan(0);
+  });
+
+  it('holds a delivery a process without the signer cannot sign, spending no attempt', async () => {
+    // A route that signs a Security Event Token, as the SSF route does.
+    const realm: { id?: string } = {};
+    let calls = 0;
+    const signing: DeliveryRoute = {
+      kind: 'test',
+      destinations: async () =>
+        realm.id === undefined ? [] : [{ id: 'receiver', realmId: realm.id }],
+      async deliver(delivery, _event, { signer }) {
+        calls += 1;
+        await signer.signEventToken({
+          realmId: delivery.realmId,
+          typ: 'secevent+jwt',
+          claims: { jti: delivery.eventId },
+        });
+        return { ok: true, statusCode: 202 };
+      },
+    };
+    const { app } = await boot('delivery', {}, [signing]);
+    const found = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!found) throw new Error('the default realm was not booted');
+    realm.id = found.id;
+    await vi.waitFor(
+      async () => {
+        const { rows } = await app.dbPool.query(
+          'SELECT 1 FROM event_delivery_positions WHERE realm_id = $1',
+          [found.id]
+        );
+        expect(rows).toHaveLength(1);
+      },
+      { timeout: 10_000, interval: 50 }
+    );
+
+    await app.repositories.events.emitInOwnTransaction({
+      type: 'urn:qauth:event:user.signed_in:v1-rc.0',
+      realm: found.id,
+      actor: { type: 'user', id: randomUUID() },
+      data: { method: 'password' },
+    });
+    await vi.waitFor(() => expect(calls).toBeGreaterThan(0), { timeout: 15_000, interval: 100 });
+
+    // Once the attempt is recorded, the lease is gone: a held delivery
+    // spent no attempt and records no error, where a failed one would.
+    await vi.waitFor(
+      async () => {
+        const { rows } = await app.dbPool.query<{
+          status: string;
+          attempt_count: number;
+          last_error_class: string | null;
+          locked_until: string | null;
+        }>(
+          `SELECT status, attempt_count, last_error_class, locked_until
+             FROM event_deliveries WHERE realm_id = $1`,
+          [found.id]
+        );
+        expect(rows).toEqual([
+          { status: 'pending', attempt_count: 0, last_error_class: null, locked_until: null },
+        ]);
+      },
+      { timeout: 15_000, interval: 100 }
+    );
   });
 
   it('leaves the repositories a role does not use unbuilt', async () => {

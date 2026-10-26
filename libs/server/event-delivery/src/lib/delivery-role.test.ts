@@ -296,6 +296,43 @@ describe('startDeliveryRole', () => {
     expect(attempts.map((attempt) => attempt.result)).toEqual(['delivered']);
   });
 
+  it('holds a delivery whose signer cannot be reached, spending no attempt (#495)', async () => {
+    let signerUp = false;
+    let signing!: ReturnType<typeof route>;
+    const { clock, store, attempts, log } = await setup(
+      (clock) => {
+        signing = route(clock, [{ id: 'a', realmId: REALM }], () =>
+          signerUp
+            ? Promise.resolve({ ok: true, statusCode: 202 } as DeliveryOutcome)
+            : Promise.reject(
+                Object.assign(new Error('temporarily_unavailable'), {
+                  statusCode: 503,
+                  code: 'TEMPORARILY_UNAVAILABLE',
+                })
+              )
+        );
+        return [signing];
+      },
+      { settings: { maxAttempts: 2 } }
+    );
+    store.append(envelope());
+    await clock.advanceBy(POLL);
+    await vi.waitFor(() => expect(signing.calls).toHaveLength(1));
+    // More refusals than the delivery has attempts.
+    for (let calls = 2; calls <= 4; calls += 1) {
+      await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+      await vi.waitFor(() => expect(signing.calls).toHaveLength(calls));
+    }
+    expect(store.rows[0]).toMatchObject({ status: 'pending', attempt: 0, lastErrorClass: null });
+    expect(attempts).toEqual([]);
+    expect(log.warn).not.toHaveBeenCalledWith(expect.anything(), 'event delivery failed for good');
+
+    signerUp = true;
+    await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+    await vi.waitFor(() => expect(store.rows[0].status).toBe('delivered'));
+    expect(attempts.map((attempt) => attempt.result)).toEqual(['delivered']);
+  });
+
   it.each([
     ['throws', () => Promise.reject(new Error('boom'))],
     ['returns no outcome', () => Promise.resolve(undefined as unknown as DeliveryOutcome)],
