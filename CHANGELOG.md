@@ -703,7 +703,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JWT plugin's new `verifyRequestAccessToken(request, policy)` runs
   `requireJwt`'s checks under a route's issuer rule and `typ` requirement.
 
+- **Admin roles and grants, with the issuer-bound realm rule** ([#510], ADR-019
+  Decision 7). Migration 0042 adds `admin_roles` (a realm's custom roles: a
+  name and permission ids from the catalog, checked with `validateCustomRole`)
+  and `admin_grants` (an account, a built-in or custom role, one target realm
+  or every realm, who created it, and when it was created, revoked and last
+  changed in what it gives). Only an account of the operator realm holds a
+  grant on every realm or on another realm than its own, and a custom role is
+  granted only within its realm: the repositories refuse anything else, and so
+  does the trigger `admin_grants_realm_rule` for every writer. A grant is
+  revoked, never changed; a role is disabled, never deleted while a grant names
+  it. `resolveAdminAuthority({ iss, sub, scopes, targetRealmId })` decides what
+  an admin token may do to a realm, reading the grants on every request, never
+  from the token: an operator-realm admin needs a grant on the realm or on every
+  realm, a realm-local admin acts only on its own realm and never on the
+  operator realm, a realm outside the grants answers 404 exactly as a missing
+  one, and the grants' permissions are intersected with the token's scopes. So
+  a disabled account, a revoked grant or a disabled role counts from the next
+  request, with the same token. `RealmIssuerDirectory` (issuer to realm) and
+  `IssuerKeyResolver` are the seams per-realm issuers and keys replace
+  ([#491]); the defaults know only `JWT_ISSUER`, its realm and today's signing
+  key. No admin route uses them yet; the admin listener comes with [#511].
+
 ### Changed
+
+- **BREAKING (clients that hold `qauth:admin:*` scopes or the admin audience)**:
+  the token endpoint issues an admin scope only when the client lists the admin
+  API's audience and the account holds a live admin grant whose role has a
+  permission of that scope's class, and the admin audience only to an account
+  that holds a live admin grant ([#510]), on every grant: authorization code,
+  refresh token, client credentials, token exchange (both outcomes) and the
+  jwt-bearer grant. A scope that fails is left out of the token and the
+  response's `scope` says so; the audience is refused with `invalid_target`.
+  Grants are read at every issuance, so the refresh after a revocation no
+  longer carries what the grant gave. A `client_credentials` token names no
+  account, so it gets neither until service accounts exist ([#522]). No other
+  scope of the reserved `qauth:` namespace is ever issued. The admin family's
+  token guard also refuses a delegated token (an RFC 8693 `act` claim), as the
+  developer family's does; the account family accepts one, and its routes
+  decide per operation. **Action for operators**: no route needs these tokens
+  yet. Before the admin API ships, give each account that will use it an admin
+  grant.
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
   OAuth protocol endpoint answers an error with an RFC 9457 problem document,
@@ -1275,9 +1315,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#491]: https://github.com/qauth-labs/qauth/issues/491
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#509]: https://github.com/qauth-labs/qauth/issues/509
+[#510]: https://github.com/qauth-labs/qauth/issues/510
+[#511]: https://github.com/qauth-labs/qauth/issues/511
 [#513]: https://github.com/qauth-labs/qauth/issues/513
+[#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
