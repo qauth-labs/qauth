@@ -55,13 +55,15 @@ const hashed = await hasher.hashPassword('password');
 
 ```typescript
 import { createPasswordHasher } from '@qauth-labs/server-password';
-import { env } from '@qauth-labs/server-config';
+import { parseEnv, passwordEnvSchema } from '@qauth-labs/server-config';
 
 // Use validated environment variables
+const env = parseEnv(passwordEnvSchema);
 const hasher = createPasswordHasher({
   memoryCost: env.PASSWORD_MEMORY_COST,
   timeCost: env.PASSWORD_TIME_COST,
   parallelism: env.PASSWORD_PARALLELISM,
+  queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
 });
 ```
 
@@ -207,26 +209,34 @@ async function registerUser(email: string, password: string) {
 ### Login Flow
 
 ```typescript
+import { randomBytes } from 'node:crypto';
+
 import { createPasswordHasher } from '@qauth-labs/server-password';
 
 const hasher = createPasswordHasher(); // Uses defaults
 
+// A decoy hash of a random secret nobody holds, made by the same hasher so it
+// costs what a stored hash costs.
+let decoyHash: Promise<string> | undefined;
+
 async function loginUser(email: string, password: string) {
-  const user = await findUserByEmail(email);
-  if (!user) {
-    throw new Error('User not found');
+  // Your own lookup. Since ADR-002 (#230) the hash lives in the password
+  // credential (`credential_data.password_hash`), not on the user row.
+  const credential = await findPasswordCredential(email); // { userId, passwordHash } | undefined
+
+  // Verify even when no credential exists: an unknown email then costs the same
+  // Argon2id work and throws the same error as a wrong password, so neither
+  // tells a caller which accounts exist.
+  decoyHash ??= hasher.hashPassword(randomBytes(32).toString('hex'));
+  const isValid = await hasher.verifyPassword(
+    credential?.passwordHash ?? (await decoyHash),
+    password
+  );
+  if (!credential || !isValid) {
+    throw new Error('Invalid credentials');
   }
 
-  // Verify password. Since ADR-002 (#230) the hash lives in the credential's
-  // JSONB blob (`credential_data.password_hash`), not on the user row.
-  const isValid = await hasher.verifyPassword(credential.credentialData.password_hash, password);
-  if (!isValid) {
-    throw new Error('Invalid password');
-  }
-
-  // Remove passwordHash from response
-  const { passwordHash: _, ...safeUser } = user;
-  return safeUser;
+  return credential.userId;
 }
 ```
 

@@ -262,13 +262,18 @@ await fastify.register(emailPlugin, {
 The plugin accepts configuration through options. For environment-based configuration, you can extend `@qauth-labs/server-config`:
 
 ```typescript
-import { env } from '@qauth-labs/server-config';
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 await fastify.register(emailPlugin, {
-  provider: env.EMAIL_PROVIDER || 'mock',
+  provider: env.EMAIL_PROVIDER, // 'mock' (default), 'resend' or 'smtp'
+  // 'resend' and 'smtp' also need `providerConfig` (see Resend Provider and SMTP
+  // Provider above), built from RESEND_API_KEY or the SMTP_* keys; without it,
+  // registration fails.
   serviceConfig: {
     defaultFrom: env.EMAIL_FROM_ADDRESS,
     baseUrl: env.EMAIL_BASE_URL,
+    verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
   },
 });
 ```
@@ -309,8 +314,9 @@ import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
-import { env } from '@qauth-labs/server-config';
-import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 await fastify.register(databasePlugin, {
   config: {
@@ -400,12 +406,43 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 import { generateVerificationToken } from '@qauth-labs/server-email';
+import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
+import { normalizeEmail } from '@qauth-labs/shared-validation';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
 
+// The realm the accounts belong to (a `realms.id`). QAuth's auth server takes
+// it from the host each request names.
+const realmId = '<your realm id>';
+
 // Register plugins
-await fastify.register(databasePlugin);
-await fastify.register(cachePlugin);
+await fastify.register(databasePlugin, {
+  config: {
+    connectionString: env.DATABASE_URL,
+    pool: {
+      max: env.DB_POOL_MAX,
+      min: env.DB_POOL_MIN,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+    },
+  },
+});
+await fastify.register(cachePlugin, {
+  config: {
+    url: env.REDIS_URL,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
+    password: env.REDIS_PASSWORD,
+    db: env.REDIS_DB,
+    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+    lazyConnect: true,
+  },
+});
 await fastify.register(passwordPlugin);
 await fastify.register(emailPlugin, {
   provider: 'mock', // Use 'resend' or 'smtp' in production
@@ -439,7 +476,7 @@ fastify.post('/auth/register', async (request, reply) => {
     userId: user.id,
     realmId,
     providerType: 'password',
-    externalSub: email, // the normalized email
+    externalSub: normalizeEmail(email),
     credentialData: buildPasswordCredentialData(passwordHash, false),
   });
 

@@ -26,7 +26,9 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 ```typescript
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { env } from '@qauth-labs/server-config';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
 
@@ -55,7 +57,9 @@ await fastify.listen({ port: 3000 });
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
-import { env } from '@qauth-labs/server-config';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
 
@@ -292,14 +296,34 @@ fastify.get('/safe-cache', async (request, reply) => {
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
+
 const fastify = Fastify();
 
 // Register cache plugin
-await fastify.register(cachePlugin);
+await fastify.register(cachePlugin, {
+  config: {
+    url: env.REDIS_URL,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
+    password: env.REDIS_PASSWORD,
+    db: env.REDIS_DB,
+    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+    lazyConnect: true,
+  },
+});
 
-// Use Redis in routes
-fastify.post('/login', async (request, reply) => {
-  const { userId, sessionData } = request.body;
+// Use Redis in routes. This shows the cache API only: it is not a login.
+// A real route stores a session only after it has authenticated the user,
+// and never takes the user id from the request body.
+fastify.post('/session-demo', async (request, reply) => {
+  const { userId, sessionData } = request.body as {
+    userId: string;
+    sessionData: Record<string, unknown>;
+  };
 
   // Use the session utils the plugin decorates
   await fastify.sessionUtils.setSession(userId, sessionData, 3600);

@@ -87,9 +87,10 @@ if (isValidEmail('user@example.com')) {
 
 ```typescript
 import { createPasswordValidator } from '@qauth-labs/shared-validation';
-import { env } from '@qauth-labs/server-config';
+import { parseEnv, passwordEnvSchema } from '@qauth-labs/server-config';
 
 // Use validated environment variables
+const env = parseEnv(passwordEnvSchema);
 const validator = createPasswordValidator({
   minScore: env.PASSWORD_MIN_SCORE,
 });
@@ -240,7 +241,7 @@ async function registerUser(email: string, password: string) {
 ### Login Flow
 
 ```typescript
-import { validateEmail, normalizeEmail } from '@qauth-labs/shared-validation';
+import { normalizeEmail } from '@qauth-labs/shared-validation';
 
 async function loginUser(email: string, password: string) {
   // Normalize email for lookup (no validation needed for login)
