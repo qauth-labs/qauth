@@ -683,10 +683,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any other refuses to boot when `KEK`, `KEK_PATH`, a KEK provider adapter, a
   `JWT_*_PRIVATE_KEY*` or an `OID4VP_VERIFIER_SIGNING_KEY*` variable is set,
   naming it, and needs `SIGNER_URL` and `INTERNAL_TLS_CERT_PATH`,
-  `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH` (advanced). Until the
-  signer service ships, such a process answers every signature with `503`
-  `temporarily_unavailable`, and verifies tokens with `JWT_PUBLIC_KEY`, which
-  it needs where tokens are verified. `@fastify/autoload` is no longer a
+  `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH` (advanced). The key
+  variables are refused before the configuration reads any key file. Until
+  the signer service ships, such a process answers a request that needs a
+  signature with `503` `temporarily_unavailable`, and its event deliveries wait
+  without spending attempts (the delivery role now holds a delivery whose
+  signer is unavailable). It verifies tokens with `JWT_PUBLIC_KEY`, which it
+  needs where tokens are verified, publishes `JWT_RS256_PUBLIC_KEY` when set,
+  and refuses `HYBRID_SIGNING_ENABLED=true`. `@fastify/autoload` is no longer a
   dependency. The docs site's new **Service roles** page
   (`operate/service-roles`) describes the split that works today.
 

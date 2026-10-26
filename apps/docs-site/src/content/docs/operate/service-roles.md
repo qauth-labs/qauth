@@ -10,7 +10,8 @@ The auth server is one codebase that starts as one or more **service roles**
 (ADR-019 Decision 8). `SERVICE_ROLES` picks them. The default, `all`, runs
 every role in one process: a single deployment, which needs no change and is
 one trust domain. A distributed deployment starts each role on its own nodes,
-so that a node that faces browsers or API clients holds no key.
+so that a node that faces browsers or API clients holds no KEK and no private
+key.
 
 ## The roles
 
@@ -20,7 +21,7 @@ so that a node that faces browsers or API clients holds no key.
 | `api`      | Token, introspection, revocation, userinfo, dynamic registration, discovery, JWKS, the OID4VP endpoints a wallet calls, the account and developer APIs, the SSF transmitter and the legacy `/auth` routes. | `purge-expired`: expired codes, tokens and wallet state |
 | `admin`    | The admin API and key operations, on the internal listener. Neither has shipped, so the role serves only `/health` and `/metrics` for now.                                                                 | —                                                       |
 | `signer`   | The KEK, every private key and the signer. It runs the default realm's key boot step.                                                                                                                      | Key rotation, when it ships                             |
-| `delivery` | The event delivery reader, which sends SSF streams and webhooks.                                                                                                                                           | `event-retention`                                       |
+| `delivery` | The event delivery reader, which sends the SSF streams.                                                                                                                                                    | `event-retention`                                       |
 
 Every role answers `/health` and `/metrics` for its own process. Write the
 roles as a comma-separated list, such as `SERVICE_ROLES=web` or
@@ -55,16 +56,33 @@ needs `SIGNER_URL` (an `https` URL) and the internal TLS files
 `INTERNAL_TLS_CERT_PATH`, `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH`,
 or it refuses to boot. A process with the `web` or `api` role verifies access
 tokens with the public key, so it needs `JWT_PUBLIC_KEY` or
-`JWT_PUBLIC_KEY_PATH` too. A process that holds the signer ignores
-`SIGNER_URL` and warns.
+`JWT_PUBLIC_KEY_PATH` too, and publishes `JWT_RS256_PUBLIC_KEY` when it is set,
+so its JWKS and discovery match the signer's. A process that holds the signer
+ignores `SIGNER_URL` and warns.
+
+The check is by variable name. It cannot see the credentials a KEK provider
+adapter takes from its cloud SDK's own settings or from the machine's identity:
+grant the KMS permission to the signer nodes only. Two secrets are not keys of
+the signer yet and stay in the environment of the processes that use them:
+`SESSION_COOKIE_SECRET` (below) and `OID4VP_RESPONSE_KEY_SECRET`, which wraps
+the wallet response keys on `web` and `api` nodes.
 
 ## What a split deployment can do today
 
 The signer service and the internal listener it answers on are not built yet.
-Until they are, a process without the signer cannot sign anything: token
-issuance, ID-JAG assertions, SSF signing and every other signature answer
-`503` with `temporarily_unavailable`, and the process warns at boot. Token
-verification, JWKS and the endpoints that sign nothing keep working.
+Until they are, a process without the signer cannot sign anything, and warns
+at boot:
+
+- a request that needs a signature, such as token issuance or an ID-JAG
+  assertion, answers `503` with `temporarily_unavailable`, and so does
+  `/ssf/jwks.json`, which reads its keys through the signer;
+- an event delivery waits: the `delivery` role holds it without spending an
+  attempt and offers it again every 30 seconds, until a signer answers.
+
+Token verification, the realm JWKS, discovery and the endpoints that sign
+nothing keep working. Hybrid signing (`HYBRID_SIGNING_ENABLED=true`) needs the
+ML-DSA-65 key wherever tokens are signed or verified, so a process without the
+signer refuses to boot with it on.
 
 So the split that works today keeps every signing role together:
 
