@@ -703,6 +703,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JWT plugin's new `verifyRequestAccessToken(request, policy)` runs
   `requireJwt`'s checks under a route's issuer rule and `typ` requirement.
 
+- **Security operations, defined by effect, as an enforced classification**
+  ([#508], ADR-019 Decision 7). The eleven effect tags (`credential-path`,
+  `token-content`, `issue-for-other`, `administration`, `import`,
+  `federation-operator`, `key-custody`, `realm-lifecycle`,
+  `authority-tree-power`, `posture-loosening`, `bulk-revocation`) are a closed
+  list in `@qauth-labs/shared-validation`. Every admin operation is defined once
+  with `defineOperation` (id, class, effects, permissions); the registry refuses
+  a `write` or `read` operation with an effect, a `security` operation without
+  one, a class other than the strictest class of its permissions and an unknown
+  member. An operation whose request decides what it needs declares the
+  security case and a pure `classify`; a `classify` that throws, meets an
+  unknown field or returns an unknown member, effect, class or permission, or
+  more than the declaration, gives the request the declared security
+  classification. The admin pipeline's classification stage
+  (`plugins/admin-operations.ts`, for the admin listener) refuses at boot a
+  route that names no registered operation or whose OpenAPI members differ from
+  the registry, and on every request hands the handler a frozen classification
+  it cannot lower. A reserved table names, for each effect, the operation ids
+  later areas register, and the registry refuses one registered with a weaker
+  classification. The API conventions check fails when an admin operation of
+  the OpenAPI document disagrees with the registry, and the docs site's new
+  **Security operations** page (`reference/security-operations`) is generated
+  from it. No admin operation is registered yet.
+
 ### Changed
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
@@ -1276,6 +1300,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
 [#507]: https://github.com/qauth-labs/qauth/issues/507
+[#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513
 [#524]: https://github.com/qauth-labs/qauth/issues/524
