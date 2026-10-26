@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { type AddressKind, addressKind, isPublicUnicastAddress } from './address';
+import {
+  type AddressKind,
+  addressKind,
+  isCloudMetadataAddress,
+  isPublicUnicastAddress,
+} from './address';
 
 /*
  * The address table of the egress client: every literal below is dialled
@@ -98,8 +103,25 @@ const TABLE: readonly [string, AddressKind, string][] = [
   ['2002:a9fe:a9fe::', 'link-local', '6to4 metadata'],
   ['2002:c000:201::', 'documentation', '6to4 TEST-NET-1'],
 
+  // Carried over from the auth server's former fetcher (ssrf-safe-fetch.ts,
+  // removed in #481), whose regressions this table keeps.
+  ['1.1.1.1', 'public', 'public IPv4'],
+  ['2001:4860:4860::8888', 'public', 'public IPv6'],
+  ['172.16.5.4', 'private', 'RFC 1918 172.16/12'],
+  ['::ffff:a00:1', 'private', 'mapped 10.0.0.1, hex (ANT-2026-K1WCPR4R)'],
+  ['::ffff:ac10:5', 'private', 'mapped 172.16.0.5, hex'],
+  ['0000:0000:0000:0000:0000:ffff:7f00:0001', 'loopback', 'mapped loopback, unshortened'],
+  ['::7f00:1', 'reserved', 'IPv4-compatible loopback, hex'],
+  ['::a9fe:a9fe', 'reserved', 'IPv4-compatible metadata, hex'],
+  ['::a00:1', 'reserved', 'IPv4-compatible 10.0.0.1, hex'],
+  ['::ffff:0:a00:1', 'reserved', 'IPv4-translated'],
+  ['feff::1', 'reserved', 'site-local, top of fec0::/10'],
+  ['64:ff9b::a00:1', 'private', 'NAT64 10.0.0.1, hex'],
+  ['2002:c0a8:101::1', 'private', '6to4 192.168.1.1'],
+
   // Not an IP literal
   ['example.com', 'invalid', 'a host name'],
+  ['not-an-ip', 'invalid', 'a word'],
   ['', 'invalid', 'empty'],
   ['127.1', 'invalid', 'short IPv4 form'],
   ['0x7f.0.0.1', 'invalid', 'hex IPv4 form'],
@@ -118,5 +140,31 @@ describe('addressKind', () => {
 describe('isPublicUnicastAddress', () => {
   it.each(TABLE)('%s → %s (%s)', (ip, kind) => {
     expect(isPublicUnicastAddress(ip)).toBe(kind === 'public');
+  });
+});
+
+describe('isCloudMetadataAddress', () => {
+  it.each([
+    '169.254.169.254',
+    'fd00:ec2::254',
+    'FD00:EC2:0:0:0:0:0:254',
+    '::ffff:169.254.169.254',
+    '::ffff:a9fe:a9fe',
+    '64:ff9b::a9fe:a9fe',
+    '2002:a9fe:a9fe::',
+  ])('%s is the metadata address', (ip) => {
+    expect(isCloudMetadataAddress(ip)).toBe(true);
+  });
+
+  it.each([
+    '169.254.169.253',
+    '169.254.0.1',
+    'fd00:ec2::253',
+    '10.0.0.1',
+    '::1',
+    'example.com',
+    '',
+  ])('%s is not', (ip) => {
+    expect(isCloudMetadataAddress(ip)).toBe(false);
   });
 });

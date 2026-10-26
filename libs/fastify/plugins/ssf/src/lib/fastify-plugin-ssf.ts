@@ -74,7 +74,8 @@ export const ssfPlugin = fp<SsfPluginOptions>(
       eventsSupported: Object.freeze(ssfEventsSupported()),
       async checkEndpoint(url: string) {
         try {
-          await egress.validateDestination(url, { purpose: SSF_EGRESS_PURPOSE });
+          // The receiver set it, so the deployment allowlist never applies.
+          await egress.validateDestination(url, { purpose: SSF_EGRESS_PURPOSE, source: 'client' });
         } catch (error) {
           if (!isEgressError(error)) throw error;
           // The reason stays in the server's log (the egress client logs it):

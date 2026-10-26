@@ -89,7 +89,11 @@ const NAT64_PREFIX = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
 const SIX_TO_FOUR_PREFIX = [0x20, 0x02];
 
 /** True when the first `bits` bits of `bytes` equal those of `prefix`. */
-function inRange(bytes: readonly number[], prefix: readonly number[], bits: number): boolean {
+export function inRange(
+  bytes: readonly number[],
+  prefix: readonly number[],
+  bits: number
+): boolean {
   const whole = Math.floor(bits / 8);
   for (let i = 0; i < whole; i += 1) {
     if (bytes[i] !== prefix[i]) return false;
@@ -105,7 +109,7 @@ function startsWith(bytes: readonly number[], prefix: readonly number[]): boolea
 }
 
 /** The four bytes of a dotted-quad IPv4 literal, or `null`. */
-function parseIpv4(text: string): number[] | null {
+export function parseIpv4(text: string): number[] | null {
   if (isIP(text) !== 4) return null;
   return text.split('.').map((octet) => Number.parseInt(octet, 10));
 }
@@ -151,19 +155,36 @@ function ipv4Kind(bytes: readonly number[]): AddressKind {
   return 'public';
 }
 
+/**
+ * The IPv4 address an IPv6 form carries, or `null`. A dual-stack socket dials
+ * a mapped address over IPv4, and a NAT64 gateway and a 6to4 relay forward to
+ * the embedded one, so each of them reaches that IPv4 address.
+ */
+function embeddedIpv4(bytes: readonly number[]): readonly number[] | null {
+  if (startsWith(bytes, IPV4_MAPPED_PREFIX) || startsWith(bytes, NAT64_PREFIX)) {
+    return bytes.slice(12, 16);
+  }
+  if (startsWith(bytes, SIX_TO_FOUR_PREFIX)) return bytes.slice(2, 6);
+  return null;
+}
+
+/**
+ * The IPv4 address of an IPv4-mapped IPv6 address (`::ffff:0:0/96`), or
+ * `null`. A dual-stack socket dials a mapped address as that IPv4 address.
+ */
+export function mappedIpv4(bytes: readonly number[]): readonly number[] | null {
+  return startsWith(bytes, IPV4_MAPPED_PREFIX) ? bytes.slice(12, 16) : null;
+}
+
 function ipv6Kind(bytes: readonly number[]): AddressKind {
   if (bytes.every((b) => b === 0)) return 'unspecified';
   if (bytes.slice(0, 15).every((b) => b === 0) && bytes[15] === 1) return 'loopback';
 
-  // An IPv6 form that carries an IPv4 address reaches that address: a
-  // dual-stack socket dials a mapped address over IPv4, a NAT64 gateway and a
-  // 6to4 relay forward to the embedded one. Judge it by that address, so
+  // Judge an IPv6 form that carries an IPv4 address by that address, so
   // `::ffff:169.254.169.254` and `64:ff9b::a9fe:a9fe` are the metadata address
   // and a DNS64 record of a public host stays reachable.
-  if (startsWith(bytes, IPV4_MAPPED_PREFIX) || startsWith(bytes, NAT64_PREFIX)) {
-    return ipv4Kind(bytes.slice(12, 16));
-  }
-  if (startsWith(bytes, SIX_TO_FOUR_PREFIX)) return ipv4Kind(bytes.slice(2, 6));
+  const v4 = embeddedIpv4(bytes);
+  if (v4 !== null) return ipv4Kind(v4);
 
   for (const range of IPV6_BLOCKED) {
     if (inRange(bytes, range.prefix, range.bits)) return range.kind;
@@ -195,4 +216,25 @@ export function addressKind(ip: string): AddressKind {
  */
 export function isPublicUnicastAddress(ip: string): boolean {
   return addressKind(ip) === 'public';
+}
+
+/** The cloud metadata address over IPv4, `169.254.169.254`. */
+const METADATA_IPV4 = [169, 254, 169, 254];
+/** The cloud metadata address over IPv6, `fd00:ec2::254`. */
+const METADATA_IPV6 = [0xfd, 0, 0x0e, 0xc2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x54];
+
+/**
+ * True when `ip` is the cloud metadata address, `169.254.169.254` or
+ * `fd00:ec2::254`, in any text form, an IPv6 form that carries the IPv4 one
+ * included. No allowlist entry makes it reachable.
+ */
+export function isCloudMetadataAddress(ip: string): boolean {
+  const same = (a: readonly number[], b: readonly number[]) =>
+    a.length === b.length && a.every((byte, i) => byte === b[i]);
+  const v4 = parseIpv4(ip);
+  if (v4 !== null) return same(v4, METADATA_IPV4);
+  const v6 = parseIpv6(ip);
+  if (v6 === null) return false;
+  const embedded = embeddedIpv4(v6);
+  return same(v6, METADATA_IPV6) || (embedded !== null && same(embedded, METADATA_IPV4));
 }
