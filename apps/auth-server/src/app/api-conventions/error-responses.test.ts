@@ -76,6 +76,21 @@ describe.each(Object.entries(DOCUMENTS))(
       expect(wrong).toEqual([]);
     });
 
+    it('publishes Problem and OAuthError as objects that do not refuse extension members', () => {
+      // RFC 9457 §3.2 and RFC 6749 §5.2: a problem type or an extension may
+      // add members, and a client ignores those it does not know. A published
+      // `additionalProperties: false` would tell a client to reject them.
+      const { components } = JSON.parse(readFileSync(path, 'utf8')) as {
+        components: { schemas: Record<string, { additionalProperties?: unknown }> };
+      };
+      for (const name of ['Problem', 'OAuthError']) {
+        const schema = components.schemas[name];
+        if (schema === undefined) continue;
+        expect(schema.additionalProperties, name).not.toBe(false);
+      }
+      expect(components.schemas['Problem'], 'Problem').toBeDefined();
+    });
+
     it('lists 421 and 500 on every operation of a realm', () => {
       for (const [operation, { responses = {} }] of operations) {
         if (operation === 'GET /health') continue;

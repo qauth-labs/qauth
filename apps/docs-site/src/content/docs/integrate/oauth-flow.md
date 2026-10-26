@@ -781,21 +781,22 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > of a 302. An owner who changes the redirect URIs of an operator-provisioned
 > client through `PATCH /api/clients/{id}` removes that trust.
 
-| Code                      | Meaning                                                                                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `invalid_request`         | Missing/malformed parameter.                                                                                                                                       |
-| `invalid_client`          | Client authentication failed or client unknown.                                                                                                                    |
-| `invalid_grant`           | Bad/expired code, bad PKCE verifier, or invalid/replayed refresh token.                                                                                            |
-| `unauthorized_client`     | Client not allowed to use this grant.                                                                                                                              |
-| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                                                         |
-| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                                                            |
-| `unsupported_grant_type`  | A `grant_type` the token endpoint does not serve; a missing one is `invalid_request`.                                                                              |
-| `invalid_client_metadata` | Dynamic registration: a metadata value is not valid or not allowed (RFC 7591 §3.2.2).                                                                              |
-| `invalid_redirect_uri`    | Dynamic registration: a redirect URI is not valid or not allowed (RFC 7591 §3.2.2).                                                                                |
-| `invalid_token`           | Userinfo: the access token is not valid, or names no active user (RFC 6750 §3.1).                                                                                  |
-| `invalid_dpop_proof`      | With DPoP on, the DPoP proof is missing or not valid (RFC 9449).                                                                                                   |
-| `temporarily_unavailable` | HTTP `503` with `Retry-After` when the server is too busy to check the client secret now, or `429` when the rate limit refuses the request; retry after the delay. |
-| `server_error`            | HTTP `5xx`: the server failed. The answer says nothing more; its `X-Request-Id` finds the log line.                                                                |
+| Code                      | Meaning                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `invalid_request`         | Missing/malformed parameter.                                                                                                                                                                                             |
+| `invalid_client`          | Client authentication failed or client unknown.                                                                                                                                                                          |
+| `invalid_grant`           | Bad/expired code, bad PKCE verifier, or invalid/replayed refresh token.                                                                                                                                                  |
+| `unauthorized_client`     | Client not allowed to use this grant.                                                                                                                                                                                    |
+| `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                                                                                                               |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                                                                                                                  |
+| `unsupported_grant_type`  | A `grant_type` the token endpoint does not serve; a missing one is `invalid_request`.                                                                                                                                    |
+| `invalid_client_metadata` | Dynamic registration: a metadata value is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                    |
+| `invalid_redirect_uri`    | Dynamic registration: a redirect URI is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                      |
+| `access_denied`           | Dynamic registration with a developer token: the developer already has as many clients as the realm allows (HTTP `403`). RFC 7591 defines no error for this refusal; QAuth answers RFC 6749's `access_denied`.           |
+| `invalid_token`           | Userinfo, and dynamic registration with a developer token that is not valid: the access token is missing, not valid, or names no active user (RFC 6750 §3.1). A request without one gets a challenge with no error code. |
+| `invalid_dpop_proof`      | With DPoP on, the DPoP proof is missing or not valid (RFC 9449).                                                                                                                                                         |
+| `temporarily_unavailable` | HTTP `503` with `Retry-After` when the server is too busy to check the client secret now, or `429` when the rate limit refuses the request; retry after the delay.                                                       |
+| `server_error`            | HTTP `5xx`: the server failed. The answer says nothing more; its `X-Request-Id` finds the log line.                                                                                                                      |
 
 ---
 

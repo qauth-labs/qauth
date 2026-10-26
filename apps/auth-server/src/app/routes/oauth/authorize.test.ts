@@ -964,12 +964,12 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
       expect(state.redirected).toBeUndefined();
       // Fail closed: nothing is materialised from the refused document.
       expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
-      // The refusal's prose stays in the log; the event carries its code,
-      // and names no client: none resolved.
+      // The refusal's prose stays in the log; the event carries the code the
+      // caller is answered, and names no client: none resolved.
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
         'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: 'invalid_client', reason: 'cimd_client_refused' },
+        { error: 'invalid_request', reason: 'cimd_client_refused' },
         { realmId: expect.any(String), actor: 'client' }
       );
     }

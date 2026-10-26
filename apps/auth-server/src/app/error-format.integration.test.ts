@@ -103,11 +103,10 @@ describe('OAuth protocol endpoints keep their RFC error shape (real containers, 
       /^https:\/\/docs\.qauth\.dev\/reference\/problem-types\/#/
     );
     expect(typeof body['title']).toBe('string');
-    // The request id the response header carries, where the app's request-id
-    // plugin ran; the root's answer for a path no route serves has no header.
+    // The request id the response header carries: the app's request-id
+    // plugin sets it on every route, and the root's own answers echo it too.
     expect(typeof body['trace_id']).toBe('string');
-    const echoed = response.headers['x-request-id'];
-    if (echoed !== undefined) expect(body['trace_id']).toBe(echoed);
+    expect(body['trace_id']).toBe(response.headers['x-request-id']);
     for (const member of LEGACY_MEMBERS) expect(body).not.toHaveProperty(member);
     return body;
   }
@@ -211,9 +210,13 @@ describe('OAuth protocol endpoints keep their RFC error shape (real containers, 
   });
 
   it('answers a 404 on a route that is not an OAuth endpoint with a problem document (RFC 9457 §3)', async () => {
-    // A path no route serves...
-    const unknown = await app().inject({ method: 'GET', url: '/no-such-route?x=1' });
-    expectProblem(unknown, 404, 'not_found');
+    // A path no route serves, answered by the root instance...
+    const unknown = await app().inject({
+      method: 'GET',
+      url: '/no-such-route?x=1',
+      headers: { 'x-request-id': 'trace-from-the-caller' },
+    });
+    expect(expectProblem(unknown, 404, 'not_found')['trace_id']).toBe('trace-from-the-caller');
 
     // ...and a resource a route does not find, for the portal's own token.
     await registerPasswordAccount(app(), 'portal-dev@example.com');

@@ -51,15 +51,19 @@ export interface ProblemCodeEntry {
  * client treats a code it does not know by its HTTP status. The same holds for
  * each type's slug. The error handler sends no other value: an error whose
  * class the registry (`error-classes.ts`) does not list is sent with the code
- * of its status ({@link codeForStatus}). The docs site publishes this table on
- * `reference/problem-types.md`, and a test keeps the page equal to it.
+ * of its status ({@link codeForStatus}). Each code is sent with the status its
+ * entry lists, except `bad_request` and `internal_error`, which are also sent
+ * with any 4xx and any 5xx status that has no code of its own. The docs site
+ * publishes this table on `reference/problem-types.md`, and a test keeps the
+ * page equal to it.
  */
 export const PROBLEM_CODES = {
   bad_request: {
     status: 400,
     type: 'bad-request',
     title: 'Bad request',
-    description: 'The request is malformed and no more specific code applies.',
+    description:
+      'The request is malformed and no more specific code applies. Also sent with any other 4xx status that has no code of its own.',
   },
   validation_error: {
     status: 400,
@@ -124,12 +128,11 @@ export const PROBLEM_CODES = {
     title: 'Invalid cursor',
     description: 'The `cursor` does not parse, or it belongs to another list.',
   },
-  invalid_token: {
+  invalid_verification_token: {
     status: 400,
-    type: 'invalid-token',
-    title: 'Invalid token',
-    description:
-      'A one-time token in the request, such as an email verification token, is not valid.',
+    type: 'invalid-verification-token',
+    title: 'Invalid verification token',
+    description: 'The email verification token in the request is not valid, or has expired.',
   },
   invalid_csrf_token: {
     status: 400,
@@ -142,18 +145,19 @@ export const PROBLEM_CODES = {
     status: 401,
     type: 'unauthorized',
     title: 'Unauthorized',
-    description: 'The request carries no valid credentials.',
+    description:
+      'The request carries no credentials: no access token on a route that takes one, or no valid browser session on a route that takes the session cookie.',
   },
-  jwt_expired: {
+  access_token_expired: {
     status: 401,
-    type: 'jwt-expired',
+    type: 'access-token-expired',
     title: 'Access token expired',
     description: 'The access token has expired.',
   },
-  jwt_invalid: {
+  invalid_access_token: {
     status: 401,
-    type: 'jwt-invalid',
-    title: 'Access token not valid',
+    type: 'invalid-access-token',
+    title: 'Invalid access token',
     description:
       'The access token is not valid, is not valid for this operation, or names no active user.',
   },
@@ -205,10 +209,10 @@ export const PROBLEM_CODES = {
     title: 'Conflict',
     description: 'The request conflicts with the current state of the resource.',
   },
-  unique_constraint_violation: {
+  already_exists: {
     status: 409,
-    type: 'unique-constraint-violation',
-    title: 'Resource already exists',
+    type: 'already-exists',
+    title: 'Already exists',
     description: 'A resource with the same unique value already exists.',
   },
   email_already_verified: {
@@ -217,17 +221,17 @@ export const PROBLEM_CODES = {
     title: 'Email address already verified',
     description: 'The email address is already verified.',
   },
-  token_already_used: {
+  verification_token_used: {
     status: 409,
-    type: 'token-already-used',
-    title: 'Token already used',
-    description: 'The one-time token has already been used.',
+    type: 'verification-token-used',
+    title: 'Verification token used',
+    description: 'The email verification token has already been used.',
   },
-  token_expired: {
+  verification_token_expired: {
     status: 410,
-    type: 'token-expired',
-    title: 'Token expired',
-    description: 'The one-time token has expired.',
+    type: 'verification-token-expired',
+    title: 'Verification token expired',
+    description: 'The email verification token has expired.',
   },
   request_timeout: {
     status: 408,
@@ -302,7 +306,8 @@ export const PROBLEM_CODES = {
     status: 500,
     type: 'internal-error',
     title: 'Internal error',
-    description: 'The server failed. `trace_id` finds the failure in the server log.',
+    description:
+      'The server failed. `trace_id` finds the failure in the server log. Also sent with any other 5xx status that has no code of its own.',
   },
   service_unavailable: {
     status: 503,
@@ -349,7 +354,9 @@ export function isProblemCode(value: unknown): value is ProblemCode {
 
 /**
  * The published code for a status: its own entry, else `bad_request` for any
- * other 4xx and `internal_error` for anything else.
+ * other 4xx and `internal_error` for anything else. The two fallbacks are the
+ * only codes sent with a status other than the one their entry lists: a 406 is
+ * sent as `bad_request`, a 502 or 504 as `internal_error`.
  */
 export function codeForStatus(status: number): ProblemCode {
   return (
@@ -397,9 +404,13 @@ export const problemFieldErrorSchema = z.object({
  *
  * Registered under {@link PROBLEM_SCHEMA_ID}, so a route that uses it gets a
  * `$ref` to one shared component instead of a copy (see `openapi-options.ts`).
+ *
+ * A loose object: the published schema does not refuse members it does not
+ * name (no `additionalProperties: false`). RFC 9457 §3.2 lets a problem type
+ * define extension members, and a client ignores those it does not know.
  */
 export const problemSchema = z
-  .object({
+  .looseObject({
     type: z.string().meta({
       description: `The problem type: \`${PROBLEM_TYPE_BASE}\` followed by the type's slug.`,
     }),

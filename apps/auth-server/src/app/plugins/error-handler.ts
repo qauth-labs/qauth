@@ -4,6 +4,7 @@ import {
   InvalidDpopProofError,
   JWTExpiredError,
   JWTInvalidError,
+  MissingAccessTokenError,
   NotFoundError,
   TemporarilyUnavailableError,
   UniqueConstraintError,
@@ -213,6 +214,15 @@ function usedDpopScheme(request: FastifyRequest): boolean {
 }
 
 /**
+ * Whether the request presented credentials at all: an `Authorization` header
+ * with something in it. RFC 6750 §3.1 sends no error code in the challenge to
+ * a request that presented none.
+ */
+function presentedCredentials(request: FastifyRequest): boolean {
+  return (request.headers.authorization ?? '').trim() !== '';
+}
+
+/**
  * Whether the route that failed takes a bearer access token: it is a route of
  * an API family (ADR-019 Decision 7), or its schema declares the `bearerAuth`
  * security requirement, as the developer API at `/api/clients` does.
@@ -239,7 +249,9 @@ function problemCodeOf(error: FastifyError | Error, status: number): ProblemCode
   if (entry !== undefined) {
     // A class thrown with a status its entry does not list (an
     // InvalidDpopProofError meant for a token request) gets the code of the
-    // status, so a code is never sent with another status than its own.
+    // status instead: the status's own code, or `bad_request` / `internal_error`
+    // for a 4xx / 5xx that has none (`codeForStatus`). Only those two are ever
+    // sent with a status other than the one their entry lists.
     return PROBLEM_CODES[entry.code].status === status ? entry.code : codeForStatus(status);
   }
   // An error no entry lists: a framework error, the rate limiter's, a route's
@@ -405,7 +417,7 @@ function bearerChallenge(
       parameters.push('error="insufficient_scope"');
       parameters.push(`scope="${sanitizeDescription(scope, MAX_CHALLENGE_DESCRIPTION)}"`);
     }
-  } else if ((request.headers.authorization ?? '') !== '') {
+  } else if (presentedCredentials(request) && !(error instanceof MissingAccessTokenError)) {
     parameters.push('error="invalid_token"');
   }
   if (dpopAlgs !== undefined && usedDpopScheme(request)) {
@@ -485,22 +497,39 @@ export default fp(async function (fastify: FastifyInstance) {
       }
 
       // RFC 6750 §3: a bearer-protected resource (e.g. /oauth/userinfo) that
-      // rejects an access token MUST answer with a `WWW-Authenticate: Bearer`
-      // challenge carrying the `invalid_token` error code. This is scoped to the
-      // JWT/access-token failures — thrown by `requireJwt` / access-token
+      // refuses a request for its access token MUST answer with a
+      // `WWW-Authenticate: Bearer` challenge. This is scoped to the
+      // access-token failures — thrown by `requireJwt` / access-token
       // verification on bearer-protected routes — and is DISTINCT from the
       // client-authentication Basic case below (`InvalidClientError`).
-      // `InvalidTokenError` (email-verification tokens, etc.) is intentionally
-      // NOT included: it is not a bearer resource failure. The header is set in
+      // `InvalidTokenError` (email-verification tokens) is intentionally NOT
+      // included: it is not a bearer resource failure. The header is set in
       // either error format.
       //
-      // RFC 9449 §7.1 (#480): with DPoP on, a token refused under the `DPoP`
-      // scheme gets a `DPoP` challenge instead, with the proof algorithms in
-      // `algs`, and a refused proof gets `error="invalid_dpop_proof"`. While
-      // DPoP is off (`fastify.dpop` null) the `DPoP` scheme is no credential and
-      // every challenge stays the Bearer one above.
+      // RFC 6750 §3.1: a token that was presented and refused gets
+      // `error="invalid_token"`; a request that "lacks any authentication
+      // information" (no `Authorization` header, no token in it, or a scheme
+      // this server does not take: `MissingAccessTokenError`) gets the bare
+      // challenge, with no error code.
+      //
+      // RFC 9449 §7.1 (#480): with DPoP on, a request under the `DPoP` scheme
+      // gets a `DPoP` challenge instead, with the proof algorithms in `algs`,
+      // and a refused proof gets `error="invalid_dpop_proof"`. While DPoP is
+      // off (`fastify.dpop` null) the `DPoP` scheme is no credential and every
+      // challenge stays the Bearer one.
       const dpopAlgs = fastify.dpop ? fastify.dpop.algorithms.join(' ') : undefined;
-      if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) {
+      const tokenRefused = error instanceof JWTInvalidError || error instanceof JWTExpiredError;
+      if (
+        error instanceof MissingAccessTokenError ||
+        (tokenRefused && !presentedCredentials(request))
+      ) {
+        reply.header(
+          'WWW-Authenticate',
+          dpopAlgs !== undefined && usedDpopScheme(request)
+            ? `DPoP algs="${dpopAlgs}"`
+            : 'Bearer realm="OAuth"'
+        );
+      } else if (tokenRefused) {
         const description = sanitizeDescription(error.message, MAX_CHALLENGE_DESCRIPTION);
         reply.header(
           'WWW-Authenticate',

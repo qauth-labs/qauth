@@ -25,12 +25,17 @@ import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors'
 
 ### Authentication Errors
 
-Authentication-specific errors for JWT, tokens, and credentials.
+Authentication-specific errors for access tokens, email verification tokens and credentials.
+Their codes are the auth server's problem codes, upper-cased: an access token that is not valid is
+`INVALID_ACCESS_TOKEN`, an expired one `ACCESS_TOKEN_EXPIRED`, and a request that presents none
+`UNAUTHORIZED` (`MissingAccessTokenError`, RFC 6750 §3.1). The email verification token's are
+`INVALID_VERIFICATION_TOKEN`, `VERIFICATION_TOKEN_EXPIRED` and `VERIFICATION_TOKEN_USED`.
 
 ```typescript
 import {
   JWTExpiredError,
   JWTInvalidError,
+  MissingAccessTokenError,
   InvalidCredentialsError,
   TokenExpiredError,
   TokenAlreadyUsedError,
@@ -39,7 +44,12 @@ import {
   EmailAlreadyVerifiedError,
 } from '@qauth-labs/shared-errors';
 
-// JWT verification
+// A route that takes an access token, reached without one
+if (!credential) {
+  throw new MissingAccessTokenError(); // 401, code UNAUTHORIZED
+}
+
+// Access token verification
 try {
   const payload = await verifyAccessToken(token, publicKey);
 } catch (error) {
@@ -63,9 +73,9 @@ if (!credential.credentialData.email_verified) {
   throw new EmailNotVerifiedError(); // 403
 }
 
-// Token verification
+// Email verification token
 if (token.used) {
-  throw new TokenAlreadyUsedError(); // 400
+  throw new TokenAlreadyUsedError(); // 409, code VERIFICATION_TOKEN_USED
 }
 
 if (token.expiresAt < Date.now()) {
@@ -194,6 +204,8 @@ new UniqueConstraintError(constraint: string, cause?: unknown)
 - `name`: `'UniqueConstraintError'`
 - `message`: `"Unique constraint violated: {constraint}"`
 - `statusCode`: `409` (HTTP status code for REST API responses)
+- `code`: `'ALREADY_EXISTS'`; the auth server answers `already_exists` and never sends the
+  constraint name
 - `constraint`: The name of the violated constraint
 - `cause`: The original error that caused this error (if provided)
 
@@ -275,6 +287,7 @@ libs/shared/errors/
 │       │   ├── invalid-token.error.ts
 │       │   ├── jwt-expired.error.ts
 │       │   ├── jwt-invalid.error.ts
+│       │   ├── missing-access-token.error.ts
 │       │   ├── token-already-used.error.ts
 │       │   ├── token-expired.error.ts
 │       │   ├── weak-password.error.ts

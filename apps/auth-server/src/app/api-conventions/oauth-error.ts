@@ -58,9 +58,14 @@ export const OAUTH_ERROR_MEDIA_TYPE = 'application/json';
  *
  * Registered under {@link OAUTH_ERROR_SCHEMA_ID}, so a route that uses it gets
  * a `$ref` to one shared component instead of a copy.
+ *
+ * A loose object: the published schema does not refuse members it does not
+ * name (no `additionalProperties: false`). RFC 6749 §5.2 lets an extension
+ * add response parameters and a client ignores those it does not know; QAuth
+ * itself sends only these three (`plugins/error-handler.ts`).
  */
 export const oauthErrorSchema = z
-  .object({
+  .looseObject({
     error: z.string().meta({ 'x-extensible-enum': Object.keys(OAUTH_ERROR_CODES) }),
     error_description: z.string().optional(),
     error_uri: z.string().optional(),

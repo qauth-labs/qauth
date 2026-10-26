@@ -14,6 +14,7 @@ import {
   InvalidTokenError,
   JWTExpiredError,
   JWTInvalidError,
+  MissingAccessTokenError,
   NotFoundError,
   TemporarilyUnavailableError,
   TokenExpiredError,
@@ -222,6 +223,7 @@ export function oauthErrorCode(error: unknown): string {
   if (
     error instanceof JWTInvalidError ||
     error instanceof JWTExpiredError ||
+    error instanceof MissingAccessTokenError ||
     error instanceof InvalidTokenError ||
     error instanceof TokenExpiredError
   ) {

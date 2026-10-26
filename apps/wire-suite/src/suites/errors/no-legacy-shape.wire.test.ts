@@ -61,12 +61,14 @@ describe('RFC 9457 §3 — every route but the protocol endpoints answers a prob
   });
 
   // RFC 6750 §3: a bearer-protected resource answers a refused request with a
-  // challenge, whichever body format it uses.
-  it('answers the developer API without an access token with a 401 problem and a Bearer challenge (§3.1)', async () => {
+  // challenge, whichever body format it uses. A request that presented no
+  // credentials is `unauthorized`, and its challenge names no error (§3.1).
+  it('answers the developer API without an access token with a 401 unauthorized problem and a bare Bearer challenge (§3.1)', async () => {
     const response = await get('/api/clients');
     expect(response.headers.get('www-authenticate') ?? '').toMatch(/^Bearer\b/);
+    expect(response.headers.get('www-authenticate') ?? '').not.toMatch(/error=/);
 
-    const problem = await expectProblem(response, { status: 401, code: 'jwt_invalid' });
+    const problem = await expectProblem(response, { status: 401, code: 'unauthorized' });
 
     expect(problem).not.toHaveProperty('statusCode');
   });
@@ -102,12 +104,13 @@ describe('the consent list without a browser session', () => {
 // the transmitter (`QAUTH_WIRE_SSF_TRANSMITTER=1`).
 describe('SSF stream management without a receiver token', () => {
   it.runIf(ssfTransmitter)(
-    'answers a 401 jwt_invalid problem and a Bearer challenge (RFC 6750 §3.1)',
+    'answers a 401 unauthorized problem and a bare Bearer challenge (RFC 6750 §3.1)',
     async () => {
       const response = await get('/ssf/stream');
       expect(response.headers.get('www-authenticate') ?? '').toMatch(/^Bearer\b/);
+      expect(response.headers.get('www-authenticate') ?? '').not.toMatch(/error=/);
 
-      const problem = await expectProblem(response, { status: 401, code: 'jwt_invalid' });
+      const problem = await expectProblem(response, { status: 401, code: 'unauthorized' });
 
       expect(problem).not.toHaveProperty('statusCode');
     }
@@ -184,9 +187,12 @@ describe('RFC 7591 §3.2.2 — dynamic registration answers the error response b
 });
 
 describe('RFC 6750 §3.1 — userinfo answers the error response body and a challenge', () => {
-  it('answers a request without an access token with 401 invalid_token (§3, §3.1)', async () => {
+  // The body needs an `error`; the challenge names none for a request that
+  // presented no credentials (§3.1).
+  it('answers a request without an access token with 401 invalid_token and a bare challenge (§3, §3.1)', async () => {
     const response = await get('/oauth/userinfo');
     expect(response.headers.get('www-authenticate') ?? '').toMatch(/^Bearer\b/);
+    expect(response.headers.get('www-authenticate') ?? '').not.toMatch(/error=/);
 
     const error = await expectOAuthError(response, { status: 401, error: 'invalid_token' });
 

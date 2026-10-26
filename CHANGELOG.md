@@ -661,7 +661,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@qauth-labs/shared-errors`, and every error class a route defines, to its
   code. A 401 or 403 on a bearer-protected route also carries a
   `WWW-Authenticate` challenge; a 403 says `insufficient_scope` only when a
-  wider token would be let through. `GET /consents` and `DELETE
+  wider token would be let through. A request that presents no credentials
+  answers `unauthorized`, and its challenge names no error (RFC 6750 §3.1); a
+  token that was presented and refused answers `invalid_access_token` or
+  `access_token_expired`, with `error="invalid_token"` in the challenge. A
+  one-time email verification token that is refused answers
+  `invalid_verification_token`, and a duplicate `already_exists`.
+  `POST /api/clients` and `PATCH /api/clients/{id}` refuse client metadata
+  with the codes dynamic registration answers: `invalid_client_metadata` for a
+  scope outside the realm's allowlist, a grant and response type that do not
+  fit together or a public `client_credentials` client, and
+  `invalid_redirect_uri` for a missing `redirect_uris`. The root's own answers
+  carry the request id in `X-Request-Id` (`REQUEST_ID_HEADER`) too, as its
+  `trace_id`, and a missing Swagger UI file under `/docs` answers the
+  `not_found` document. `GET /consents` and `DELETE
   /consents/{id}` answer a request without a browser session with the 401
   `unauthorized` problem document too, with no challenge (they answered
   `{ "consents": [] }` and an empty body). The SSF transmitter's routes
@@ -683,17 +696,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `temporarily_unavailable`, and a 5xx `server_error`. At `/oauth/authorize`, a
   `client_id` that names no client answers `invalid_request` (it was
   `invalid_client`). Redeeming a code whose user has been deleted answers 400
-  `invalid_grant`, as for a disabled user (it was a 404 naming the user's id).
+  `invalid_grant`, as for a disabled user (it was a 404 naming the user's id),
+  and so does a code or refresh token another request spent or revoked first
+  (it was a 404 `invalid_request`). The `authorization.failed` event of a
+  `client_id` that names no client records `error: "invalid_request"`, the
+  code the caller is answered (it recorded `invalid_client`). More shapes that
+  change at these endpoints:
+  - userinfo answers every 401 with `error: "invalid_token"` (it was prose in
+    `error`); a request without a token gets a challenge with no error code;
+  - `/oauth/register` answers a developer token that is not valid with 401
+    `invalid_token`, and the developer's client limit with 403
+    `access_denied` (both were prose in `error`); RFC 7591 defines no error
+    for the limit;
+  - a 421 (a host no realm answers for) answers `invalid_request`, as do a body
+    too large (413), an unsupported media type (415) and any other refusal
+    Fastify raises before the route runs;
+  - a validation failure carries no `details[]` any more; `error_description`
+    names the fields.
 - A refusal that several routes raise now reads one way everywhere ([#513]): an
-  access token whose subject is not an active user answers `jwt_invalid` on a
+  access token whose subject is not an active user answers `invalid_access_token` on a
   problem route and `invalid_token` at userinfo, in one wording that does not
   say whether the account was deleted or disabled; a `subject_token` naming no
   active user answers `invalid_request` in one wording; the consent page refuses
   an unknown client, a refused redirect URI and a malformed `dpop_jkt` with the
-  same code as `/oauth/authorize`; a CSRF mismatch answers `invalid_csrf_token`.
+  same code as `/oauth/authorize`, and a disabled or suspended client with
+  `unauthorized_client` (it was `invalid_client`); a CSRF mismatch answers
+  `invalid_csrf_token`.
 - The OpenAPI documents list each operation's error responses, referencing the
   shared `Problem` schema, or `OAuthError` on an OAuth protocol endpoint
-  ([#513]).
+  ([#513]). Neither schema refuses members it does not name: RFC 9457 §3.2
+  and RFC 6749 §5.2 let a type or an extension add some, and a client ignores
+  those it does not know.
 
   **Action for clients**: branch on `code` and the status of a problem document,
   or on `error` and the status of an OAuth body, never on `title`, `detail` or

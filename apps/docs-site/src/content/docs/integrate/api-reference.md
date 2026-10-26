@@ -51,7 +51,8 @@ answers with an RFC 9457 problem details document, sent as `application/problem+
 - `code` is the stable, machine-readable name of the error. The list of codes, with each one's
   `type`, status and title, is on [Problem types](/reference/problem-types/).
 - `trace_id` is the id the server logged the request under, the `X-Request-Id` the response also
-  carries. Quote it when you report a failure.
+  carries (the header `REQUEST_ID_HEADER` names), on every answer, the 404 of a path no route
+  serves and a request the server could not read included. Quote it when you report a failure.
 - `errors` names each field a validation failure rejected: `pointer` is an RFC 6901 JSON Pointer
   into the body or the parameters, and `message` says what is wrong with it. The validator's own
   issue objects also carry the schema path, the rule keyword and a parameter bag, and those
@@ -60,7 +61,9 @@ answers with an RFC 9457 problem details document, sent as `application/problem+
   elements are not checked. A weak password's feedback arrives as entries whose pointer names the
   password field.
 - A 5xx carries no `detail`. A 401 or 403 from a route that takes a bearer token also carries a
-  `WWW-Authenticate` challenge (RFC 6750 §3).
+  `WWW-Authenticate` challenge (RFC 6750 §3): `error="invalid_token"` for a token that was
+  presented and refused (`invalid_access_token`, `access_token_expired`), and no error code for a
+  request that presented none (`unauthorized`).
 
 **OAuth error bodies.** The OAuth protocol endpoints answer with the body their specification
 defines, `application/json` with only `error` and, where there is something to say,
@@ -507,8 +510,10 @@ stream management statuses but defines no error body, so these routes are not
 OAuth protocol endpoints. `400` is `validation_error` for a body or query the
 schema refuses and `bad_request` for a request the protocol refuses, with the
 reason in `detail` (`endpoint_url is refused`, a transmitter-supplied member that
-does not match, poll delivery); `401` is `jwt_invalid` with a
-`WWW-Authenticate: Bearer` challenge carrying `error="invalid_token"`; `403` is
+does not match, poll delivery); `401` is `unauthorized` for a request with no
+token, with a bare `WWW-Authenticate: Bearer` challenge, and `invalid_access_token`
+or `access_token_expired` for a token that was refused, with
+`error="invalid_token"` in the challenge; `403` is
 `forbidden` with `error="insufficient_scope", scope="ssf:stream"` in the
 challenge; `404` is `not_found`, for a stream the receiver does not have and, as
 for any path no route serves, for a realm that does not run the transmitter;

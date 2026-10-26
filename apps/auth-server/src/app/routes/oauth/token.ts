@@ -595,6 +595,29 @@ async function emitRequestFailed(
   );
 }
 
+/** What a caller is told about an authorization code it cannot redeem. */
+const UNUSABLE_CODE = 'Invalid or expired authorization code';
+
+/** What a caller is told about a refresh token it cannot use. */
+const UNUSABLE_REFRESH_TOKEN = 'Invalid or expired refresh token';
+
+/**
+ * Spend a grant through its compare-and-set (`authorizationCodes.markUsed`,
+ * `refreshTokens.revoke`). The repository answers a row that is no longer
+ * unspent with `NotFoundError`: a concurrent request spent or revoked it
+ * first. That is a grant the client may not use, RFC 6749 §5.2
+ * `invalid_grant` with the usual wording, never a 404 `invalid_request`
+ * naming the row's internal id.
+ */
+async function spendGrant<T>(spend: () => Promise<T>, description: string): Promise<T> {
+  try {
+    return await spend();
+  } catch (error) {
+    if (error instanceof NotFoundError) throw new InvalidGrantError(description);
+    throw error;
+  }
+}
+
 /**
  * Handle the authorization_code grant (legacy flow from Phase 1).
  * Now also issues `aud` + `scope` claims on the access token.
@@ -711,9 +734,12 @@ async function handleAuthorizationCode(
   // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
   // code is burned all the same, so it cannot be retried.
   if (!user.enabled) {
-    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
+    await spendGrant(
+      () => fastify.repositories.authorizationCodes.markUsed(authCode.id),
+      UNUSABLE_CODE
+    );
     await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
-    throw new InvalidGrantError('Invalid or expired authorization code');
+    throw new InvalidGrantError(UNUSABLE_CODE);
   }
 
   // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,
@@ -727,7 +753,10 @@ async function handleAuthorizationCode(
   try {
     enforceAgentScopeCap(authCode.scopes, toAgentScopeContext(client));
   } catch (err) {
-    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
+    await spendGrant(
+      () => fastify.repositories.authorizationCodes.markUsed(authCode.id),
+      UNUSABLE_CODE
+    );
     await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_exceeds_agent_mode', user.id);
     throw err;
   }
@@ -793,7 +822,10 @@ async function handleAuthorizationCode(
   // token is committed, where the sweep that follows sees it. The
   // `token.issued` event commits with the redemption, or neither does.
   const { accessToken, idToken } = await fastify.db.transaction(async (tx) => {
-    await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
+    await spendGrant(
+      () => fastify.repositories.authorizationCodes.markUsed(authCode.id, tx),
+      UNUSABLE_CODE
+    );
     if (refresh) {
       await fastify.repositories.refreshTokens.create(
         {
@@ -1135,9 +1167,12 @@ async function handleRefreshToken(
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
   if (!user.enabled) {
-    await fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled');
+    await spendGrant(
+      () => fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled'),
+      UNUSABLE_REFRESH_TOKEN
+    );
     await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
-    throw new InvalidGrantError('Invalid or expired refresh token');
+    throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
   }
 
   // Down-scoping: request narrower scope or keep original set.

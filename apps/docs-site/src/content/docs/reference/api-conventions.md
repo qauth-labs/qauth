@@ -150,7 +150,8 @@ document, sent as `application/problem+json` (ADR-019 Decision 7, decided 2026-1
 - A minor release may add codes. A client treats a code it does not know by its HTTP status.
 - A 401 or 403 from a bearer-protected route also carries a `WWW-Authenticate` challenge (RFC 6750
   §3; the `DPoP` scheme of RFC 9449 §7.1 when the request used it): `invalid_token` for a token
-  that is not valid. A 403 says `insufficient_scope`, with the `scope`, only when a token with that
+  that was presented and is not valid (`invalid_access_token`, `access_token_expired`), and no
+  error code for a request that presented none (`unauthorized`, RFC 6750 §3.1). A 403 says `insufficient_scope`, with the `scope`, only when a token with that
   scope would be let through; a refusal no scope can lift, such as the developer client limit,
   carries a challenge with no error code, so a client does not go back for a wider token.
 - A weak password's feedback is a list of `errors` under the pointer `/password`.
@@ -173,9 +174,10 @@ everywhere else.
 
 The codes, with each one's problem type, status and title, are listed on
 [Problem types](/reference/problem-types/). They are inside the 1.0 promise: a published code keeps
-its meaning within a major version. Each is sent with one status. An error that has no code of its
-own is sent with the code of its status. Codes are lower-case `snake_case`, like the `error` values
-of OAuth.
+its meaning within a major version. Each is sent with the status listed for it. An error that has
+no code of its own is sent with the code of its status, and a status with no code of its own with
+`bad_request` (any 4xx) or `internal_error` (any 5xx), so those two are the only codes sent with
+more than one status. Codes are lower-case `snake_case`, like the `error` values of OAuth.
 
 Which code each domain error class of `@qauth-labs/shared-errors` answers, and which OAuth `error`
 it answers on a protocol endpoint, is set once, in

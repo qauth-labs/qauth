@@ -10,10 +10,12 @@ import { app } from './app/app';
 import {
   answerClientError,
   answerFrameworkError,
+  answerRouteNotFound,
   answerUnknownRouteBeforeBody,
   requestDeadlineOptions,
 } from './app/helpers/request-bounds';
 import { openapiOptions } from './app/openapi-options';
+import errorHandler from './app/plugins/error-handler';
 import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
@@ -71,6 +73,15 @@ const server = Fastify({
 // limiter in, yet Fastify still parses its body, so it buffered bodies for anyone
 // at any rate. Same answer and log line as Fastify's own handler.
 server.addHook('onRequest', answerUnknownRouteBeforeBody);
+
+// The root instance's own answers are problem documents too (#513): a route
+// registered here rather than in the app, such as the Swagger UI's static
+// files under `/docs` (`ENABLE_SWAGGER`), and `reply.callNotFound()` from one,
+// would otherwise answer Fastify's `{ message, error, statusCode }` envelope.
+// The not-found handler is the document of a path no route serves; the error
+// handler is the app's own (`app/plugins/error-handler.ts`), registered on the
+// root as well, since the app's copy covers only the app's scope.
+server.setNotFoundHandler(answerRouteNotFound);
 
 // Set up Zod validator and serializer.
 //
@@ -156,6 +167,7 @@ async function start() {
     // hardened deployment. The spec is still registered (so routes are
     // discoverable for the Zod type provider) even when the UI is off — the
     // gate only suppresses the `/docs` route.
+    await server.register(errorHandler);
     await server.register(swagger, openapiOptions);
     if (env.ENABLE_SWAGGER) {
       await server.register(swaggerUi, {

@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  InvalidClientMetadataError,
+  InvalidRedirectUriError,
+  JWTInvalidError,
+  NotFoundError,
+} from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -195,9 +201,12 @@ async function resolveClientPolicy(
  *   least one `redirect_uri`; without one the client can never complete a
  *   user-agent flow (mirrors DCR's `redirect_uris is required …` rejection).
  *
- * Throws `BadRequestError` (→ HTTP 400) on any violation. Each call site has
- * already resolved the effective grant/response/auth/redirect values (request
- * value or persisted value for partial updates).
+ * Throws on any violation what `/oauth/register` throws for the same one
+ * (#513): `InvalidRedirectUriError` (400 `invalid_redirect_uri`) for the
+ * missing redirect URIs, `InvalidClientMetadataError` (400
+ * `invalid_client_metadata`) for the rest. Each call site has already resolved
+ * the effective grant/response/auth/redirect values (request value or
+ * persisted value for partial updates).
  */
 function assertGrantResponseConsistency(input: {
   grantTypes: string[];
@@ -208,20 +217,24 @@ function assertGrantResponseConsistency(input: {
   const { grantTypes, responseTypes, tokenEndpointAuthMethod, redirectUris } = input;
 
   if (grantTypes.includes('authorization_code') && !responseTypes.includes('code')) {
-    throw new BadRequestError('authorization_code grant requires the "code" response type');
+    throw new InvalidClientMetadataError(
+      'authorization_code grant requires the "code" response type'
+    );
   }
   if (!grantTypes.includes('authorization_code') && responseTypes.length > 0) {
-    throw new BadRequestError('response_types without authorization_code grant is not supported');
+    throw new InvalidClientMetadataError(
+      'response_types without authorization_code grant is not supported'
+    );
   }
   if (tokenEndpointAuthMethod === 'none' && grantTypes.includes('client_credentials')) {
-    throw new BadRequestError(
+    throw new InvalidClientMetadataError(
       'client_credentials grant requires a confidential client (token_endpoint_auth_method must not be "none")'
     );
   }
   const userInvolving =
     grantTypes.includes('authorization_code') || grantTypes.includes('refresh_token');
   if (userInvolving && redirectUris.length === 0) {
-    throw new BadRequestError(
+    throw new InvalidRedirectUriError(
       'redirect_uris is required for grants that involve a user-agent (authorization_code / refresh_token)'
     );
   }
@@ -266,13 +279,14 @@ async function resolveRealmAllowedScopes(
 
 /**
  * Cap requested `scopes` against the realm allowlist, rejecting anything
- * outside it (RFC 7591 `invalid_client_metadata` equivalent). Empty allowlist
- * means no custom scopes are permitted. Throws `BadRequestError` → HTTP 400.
+ * outside it with `InvalidClientMetadataError` (400 `invalid_client_metadata`,
+ * as `/oauth/register` answers it; #513). Empty allowlist means no custom
+ * scopes are permitted.
  */
 function assertScopesAllowed(requested: string[], realmAllowedScopes: string[]): void {
   const disallowed = requested.filter((s) => !realmAllowedScopes.includes(s));
   if (disallowed.length > 0) {
-    throw new BadRequestError(`scope not permitted: ${disallowed.join(' ')}`);
+    throw new InvalidClientMetadataError(`scope not permitted: ${disallowed.join(' ')}`);
   }
 }
 

@@ -14,11 +14,13 @@ the problem types. A document's `type` is this page's address followed by the ty
 https://docs.qauth.dev/reference/problem-types/#validation-error
 ```
 
-Each type has one `code`, one HTTP status and one `title`. A client branches on `code` and the
-status, never on `type`, `title` or `detail`. The codes and the slugs are inside the 1.0 promise
-([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)): each keeps its meaning within a
-major version, and a minor release may add types. A client treats a code it does not know by its
-HTTP status.
+Each type has one `code` and one `title`, and each code is sent with the status listed under it,
+except two: `bad_request` is also sent with any other 4xx status that has no code of its own (such
+as 406), and `internal_error` with any other 5xx (such as 502 or 504). A client branches on `code`
+and the status, never on `type`, `title` or `detail`. The codes and the slugs are inside the 1.0
+promise ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)): each keeps its meaning
+within a major version, and a minor release may add types. A client treats a code it does not know
+by its HTTP status.
 
 An error the server cannot place more precisely gets the type of its status: `bad-request`,
 `unauthorized`, `forbidden`, `not-found` and so on. A 5xx never carries a `detail`; its `trace_id`
@@ -29,15 +31,17 @@ The list is generated from `PROBLEM_CODES` in
 type each domain error class answers is set once, in
 `apps/auth-server/src/app/api-conventions/error-classes.ts`: the classes of
 `@qauth-labs/shared-errors`, and those a route or a server library defines itself. The Shared
-Signals Framework transmitter's routes answer `bad-request`, `validation-error`, `jwt-invalid`,
-`forbidden`, `not-found`, `conflict` and `too-many-requests`; a cookie-authenticated route reached
-without a browser session answers `unauthorized`.
+Signals Framework transmitter's routes answer `bad-request`, `validation-error`, `unauthorized`,
+`invalid-access-token`, `access-token-expired`, `forbidden`, `not-found`, `conflict` and
+`too-many-requests`. A request with no credentials answers `unauthorized`, whether the route takes
+an access token or the session cookie; a token that was presented and refused answers
+`invalid-access-token` or `access-token-expired`.
 
 ## `bad-request`
 
 **Code** `bad_request` · **Status** 400 · **Title** Bad request
 
-The request is malformed and no more specific code applies.
+The request is malformed and no more specific code applies. Also sent with any other 4xx status that has no code of its own.
 
 ## `validation-error`
 
@@ -99,11 +103,11 @@ A redirect URI is not valid or not allowed (RFC 7591 §3.2.2).
 
 The `cursor` does not parse, or it belongs to another list.
 
-## `invalid-token`
+## `invalid-verification-token`
 
-**Code** `invalid_token` · **Status** 400 · **Title** Invalid token
+**Code** `invalid_verification_token` · **Status** 400 · **Title** Invalid verification token
 
-A one-time token in the request, such as an email verification token, is not valid.
+The email verification token in the request is not valid, or has expired.
 
 ## `invalid-csrf-token`
 
@@ -115,17 +119,17 @@ A cookie-authenticated request that changes state carries no CSRF token, or not 
 
 **Code** `unauthorized` · **Status** 401 · **Title** Unauthorized
 
-The request carries no valid credentials.
+The request carries no credentials: no access token on a route that takes one, or no valid browser session on a route that takes the session cookie.
 
-## `jwt-expired`
+## `access-token-expired`
 
-**Code** `jwt_expired` · **Status** 401 · **Title** Access token expired
+**Code** `access_token_expired` · **Status** 401 · **Title** Access token expired
 
 The access token has expired.
 
-## `jwt-invalid`
+## `invalid-access-token`
 
-**Code** `jwt_invalid` · **Status** 401 · **Title** Access token not valid
+**Code** `invalid_access_token` · **Status** 401 · **Title** Invalid access token
 
 The access token is not valid, is not valid for this operation, or names no active user.
 
@@ -177,9 +181,9 @@ The resource does not support the method.
 
 The request conflicts with the current state of the resource.
 
-## `unique-constraint-violation`
+## `already-exists`
 
-**Code** `unique_constraint_violation` · **Status** 409 · **Title** Resource already exists
+**Code** `already_exists` · **Status** 409 · **Title** Already exists
 
 A resource with the same unique value already exists.
 
@@ -189,17 +193,17 @@ A resource with the same unique value already exists.
 
 The email address is already verified.
 
-## `token-already-used`
+## `verification-token-used`
 
-**Code** `token_already_used` · **Status** 409 · **Title** Token already used
+**Code** `verification_token_used` · **Status** 409 · **Title** Verification token used
 
-The one-time token has already been used.
+The email verification token has already been used.
 
-## `token-expired`
+## `verification-token-expired`
 
-**Code** `token_expired` · **Status** 410 · **Title** Token expired
+**Code** `verification_token_expired` · **Status** 410 · **Title** Verification token expired
 
-The one-time token has expired.
+The email verification token has expired.
 
 ## `request-timeout`
 
@@ -271,7 +275,7 @@ The request headers are larger than the server accepts.
 
 **Code** `internal_error` · **Status** 500 · **Title** Internal error
 
-The server failed. `trace_id` finds the failure in the server log.
+The server failed. `trace_id` finds the failure in the server log. Also sent with any other 5xx status that has no code of its own.
 
 ## `service-unavailable`
 

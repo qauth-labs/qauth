@@ -12,6 +12,7 @@ export * from './invalid-target.error';
 export * from './invalid-token.error';
 export * from './jwt-expired.error';
 export * from './jwt-invalid.error';
+export * from './missing-access-token.error';
 export * from './provider-already-registered.error';
 export * from './provider-not-registered.error';
 export * from './token-already-used.error';

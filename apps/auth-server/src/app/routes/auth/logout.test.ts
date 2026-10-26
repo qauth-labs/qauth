@@ -1,4 +1,8 @@
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  MissingAccessTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -414,7 +418,8 @@ describe('POST /auth/logout', () => {
     );
   });
 
-  it('throws JWTInvalidError (401) when the Authorization header is missing', async () => {
+  // No credential is not a refused token (RFC 6750 §3.1): `unauthorized`.
+  it('throws MissingAccessTokenError (401) when the Authorization header is missing', async () => {
     const { fastify, ctx } = createFastifyStub();
     // extractFromHeader returns null for a missing/malformed header.
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
@@ -423,7 +428,9 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await expect(handler(logoutRequest(undefined), createReply())).rejects.toThrow(JWTInvalidError);
+    await expect(handler(logoutRequest(undefined), createReply())).rejects.toThrow(
+      MissingAccessTokenError
+    );
 
     // No verification, no revocation when the header is absent.
     expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();

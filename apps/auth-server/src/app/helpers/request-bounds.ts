@@ -4,6 +4,7 @@ import type { Socket } from 'node:net';
 
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import { redactLoggedUrl } from '../../config/logger';
 import { describeProblem } from '../api-conventions/error-classes';
 import {
   codeForStatus,
@@ -47,11 +48,12 @@ export function requestDeadlineOptions(requestTimeoutMs: number) {
  * caller could therefore park unfinished 1 MiB bodies on unknown paths at any
  * rate, and about 2000 of them ran the process out of heap in seconds.
  *
- * The log line is the one Fastify's own handler writes. The answer is the
- * `not_found` problem document every route that is not an OAuth protocol
- * endpoint answers with (ADR-019 Decision 7, #513): a path no route serves is
- * no protocol endpoint. Its `instance` and `detail` leave out the query, which
- * can carry a secret a client sent to the wrong path.
+ * The log line is the one Fastify's own handler writes, with the URL censored
+ * as every other log line's is. The answer is the `not_found` problem document
+ * every route that is not an OAuth protocol endpoint answers with (ADR-019
+ * Decision 7, #513): a path no route serves is no protocol endpoint. Its
+ * `instance` and `detail` leave out the query, which can carry a secret a
+ * client sent to the wrong path.
  */
 export async function answerUnknownRouteBeforeBody(
   request: FastifyRequest,
@@ -68,13 +70,19 @@ export async function answerUnknownRouteBeforeBody(
  *
  * A route that must look absent sends this from its own `onRequest` hook,
  * before the body is read, as the SSF routes do for a realm that does not run
- * the transmitter. `reply.callNotFound()` would not do: it reaches Fastify's
- * default 404 handler, which answers its own `{ message, error, statusCode }`
+ * the transmitter. It is also the root instance's not-found handler, which
+ * `reply.callNotFound()` reaches (`main.ts`): without it that is Fastify's
+ * default handler, which answers its own `{ message, error, statusCode }`
  * envelope rather than the document an unknown path gets (#513).
+ *
+ * The request-target goes to the log through {@link redactLoggedUrl}: on
+ * `/ui/wallet-login/return?response_code=…` the query holds a redeemable
+ * Response Code, and a client may send one to a wrong path too.
  */
 export function answerRouteNotFound(request: FastifyRequest, reply: FastifyReply): FastifyReply {
   const { method, url = '/' } = request.raw;
-  request.log.info(`Route ${method}:${url} not found`);
+  request.log.info(`Route ${method}:${redactLoggedUrl(url)} not found`);
+  echoRequestId(request, reply);
   const queryAt = url.indexOf('?');
   const path = queryAt === -1 ? url : url.slice(0, queryAt);
   const { code, type, title } = describeProblem('not_found');
@@ -88,6 +96,29 @@ export function answerRouteNotFound(request: FastifyRequest, reply: FastifyReply
     trace_id: request.id,
   };
   return reply.code(404).type(PROBLEM_MEDIA_TYPE).send(document);
+}
+
+/**
+ * Echo the request id in the header the server reads it from (`requestIdHeader`,
+ * `REQUEST_ID_HEADER` in `main.ts`), as `plugins/request-id.ts` does for every
+ * route. The root's own answers run outside that plugin's scope, and without
+ * this their `trace_id` would be the one id the response does not carry.
+ */
+function echoRequestId(request: FastifyRequest, reply: FastifyReply): void {
+  const header = requestIdHeaderOf(request.server);
+  if (header !== undefined) reply.header(header, request.id);
+}
+
+/** An RFC 9110 §5.6.2 token: what a header name may be. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/**
+ * The header the request id travels in, when the server names one that is a
+ * valid header name: {@link answerClientError} writes it to the socket raw.
+ */
+function requestIdHeaderOf(server: FastifyInstance): string | undefined {
+  const header = server.initialConfig.requestIdHeader;
+  return typeof header === 'string' && HEADER_NAME.test(header) ? header : undefined;
 }
 
 /** What a caller is told about a request the router refused before any route. */
@@ -106,7 +137,8 @@ const FRAMEWORK_ERROR_DETAILS: Readonly<Record<string, string>> = {
  * Fastify's own answer was its `{ error, code, message, statusCode }`
  * envelope, with a framework code and the whole request-target, query
  * included, in `message`. The document carries neither: no `instance`, since
- * the path is not one, and a fixed `detail`.
+ * the path is not one, and a fixed `detail`. The request id is echoed, as on
+ * every other answer, so the `trace_id` can be matched to the response.
  */
 export function answerFrameworkError(
   error: FastifyError,
@@ -117,6 +149,7 @@ export function answerFrameworkError(
   const status =
     typeof declared === 'number' && declared >= 400 && declared <= 599 ? declared : 500;
   request.log.info({ code: error.code, statusCode: status }, 'Request refused by the router');
+  echoRequestId(request, reply);
   const { code, type, title } = describeProblem(codeForStatus(status));
   const detail = status < 500 ? FRAMEWORK_ERROR_DETAILS[error.code] : undefined;
   const document: ProblemDocument = {
@@ -145,8 +178,12 @@ function clientErrorStatus(error: Error & { code?: string }): 400 | 408 | 431 {
  *
  * Fastify's default writes its `{ error, message, statusCode }` envelope.
  * There is no request here, so no request id: the document's `trace_id` is
- * made for it and logged with the error. Written raw to the socket, which
- * Fastify then closes, as its own handler does.
+ * made for it, sent in the request-id header as every other answer's is, and
+ * logged at `info` so an operator can find it. The log line carries the
+ * parser's code, the trace id and the status, never the error itself: Node
+ * attaches the bytes it could not parse as `rawPacket`, and those are the
+ * request as sent, its `Cookie` and `Authorization` headers included. Written
+ * raw to the socket, which Fastify then closes, as its own handler does.
  */
 export function answerClientError(
   this: FastifyInstance,
@@ -156,12 +193,14 @@ export function answerClientError(
   if (error.code === 'ECONNRESET' || socket.destroyed) return;
   const status = clientErrorStatus(error);
   const traceId = randomUUID();
-  this.log.debug({ err: error, traceId, statusCode: status }, 'Client error');
+  this.log.info({ code: error.code, traceId, statusCode: status }, 'Client error');
   const { code, type, title } = describeProblem(codeForStatus(status));
   const body = JSON.stringify({ type, title, status, code, trace_id: traceId });
+  const requestIdHeader = requestIdHeaderOf(this);
+  const echoed = requestIdHeader === undefined ? '' : `${requestIdHeader}: ${traceId}\r\n`;
   if (socket.writable) {
     socket.write(
-      `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Length: ${Buffer.byteLength(body)}\r\nContent-Type: ${PROBLEM_MEDIA_TYPE}\r\nConnection: close\r\n\r\n${body}`
+      `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Length: ${Buffer.byteLength(body)}\r\nContent-Type: ${PROBLEM_MEDIA_TYPE}\r\n${echoed}Connection: close\r\n\r\n${body}`
     );
   }
   socket.destroy(error);

@@ -176,17 +176,21 @@ endpoint: an RFC 9457 problem document, `application/problem+json`, with a stabl
 `trace_id` the server logged the request under ([Problem types](/reference/problem-types/)).
 Branch on the status and `code`, never on `detail`:
 
-| Status | `code`              | When                                                                                            |
-| ------ | ------------------- | ----------------------------------------------------------------------------------------------- |
-| `400`  | `validation_error`  | The body or the query does not match the schema; `errors` names each field.                     |
-| `400`  | `bad_request`       | The protocol refuses the request: poll delivery, a refused `endpoint_url`, a mismatched member. |
-| `401`  | `jwt_invalid`       | The token is missing, not valid, not the receiver's own, or for another audience or realm.      |
-| `403`  | `forbidden`         | The token lacks `ssf:stream`.                                                                   |
-| `404`  | `not_found`         | No such stream for this receiver, or a realm that does not run the transmitter.                 |
-| `409`  | `conflict`          | The receiver already has a stream in the realm.                                                 |
-| `429`  | `too_many_requests` | A verification within `min_verification_interval`; `Retry-After` says when to try again.        |
+| Status | `code`                 | When                                                                                            |
+| ------ | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `400`  | `validation_error`     | The body or the query does not match the schema; `errors` names each field.                     |
+| `400`  | `bad_request`          | The protocol refuses the request: poll delivery, a refused `endpoint_url`, a mismatched member. |
+| `401`  | `unauthorized`         | The request carries no access token.                                                            |
+| `401`  | `invalid_access_token` | The token is not valid, not the receiver's own, or for another audience or realm.               |
+| `401`  | `access_token_expired` | The token has expired.                                                                          |
+| `403`  | `forbidden`            | The token lacks `ssf:stream`.                                                                   |
+| `404`  | `not_found`            | No such stream for this receiver, or a realm that does not run the transmitter.                 |
+| `409`  | `conflict`             | The receiver already has a stream in the realm.                                                 |
+| `429`  | `too_many_requests`    | A verification within `min_verification_interval`; `Retry-After` says when to try again.        |
 
-A `401` carries `WWW-Authenticate: Bearer realm="OAuth", error="invalid_token"`, and a `403`
+A `401` for a token that was presented carries
+`WWW-Authenticate: Bearer realm="OAuth", error="invalid_token"`; one for a request with no token
+carries `Bearer realm="OAuth"` alone (RFC 6750 §3.1). A `403` carries
 `error="insufficient_scope", scope="ssf:stream"` (RFC 6750 §3). A realm that does not run the
 transmitter answers exactly what a path no route serves answers.
 

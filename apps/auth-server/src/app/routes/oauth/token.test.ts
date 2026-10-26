@@ -2046,12 +2046,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(emittedData(TOKEN_ISSUED)).toEqual([]);
   });
 
-  it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
+  it('rejects replay via the markUsed CAS losing the race with invalid_grant and no token', async () => {
     // Models the concurrent-redemption window: a code passes findByCode (it was
     // still live when read), but a parallel exchange consumed it first, so the
     // atomic markUsed CAS (`WHERE used = false`) matches no row and throws
-    // NotFoundError. The route must surface that and issue NO token, rather than
-    // minting a second access token for the same code.
+    // NotFoundError. The route must issue NO token, rather than minting a
+    // second access token for the same code, and answer RFC 6749 §5.2
+    // `invalid_grant` with the usual wording: not a 404 naming the row (#513).
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
       new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
@@ -2061,7 +2062,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     if (!handler) throw new Error('Handler missing');
 
     const reply = createReply();
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
+    const refused = await handler(baseRequest(), reply).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(InvalidGrantError);
+    expect(refused).toMatchObject({
+      errorDescription: 'Invalid or expired authorization code',
+    });
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
     expect(emittedData(TOKEN_ISSUED)).toEqual([]);
@@ -2076,6 +2081,24 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     const reply = createReply();
     await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
+  });
+
+  it('answers invalid_grant when a code burned for a disabled user was spent meanwhile', async () => {
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-1',
+      email: 'u@example.com',
+      emailVerified: true,
+      enabled: false,
+    });
+    (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
+      new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
   });
 
   // RFC 9700 §4.14: a user disabled between code issuance and redemption gets
@@ -2337,6 +2360,34 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       headers: { 'user-agent': 'vitest', ...headers },
     };
   }
+
+  it('answers invalid_grant, not a 404, when the refresh token of a disabled user was revoked meanwhile', async () => {
+    // The revocation is a compare-and-set: a concurrent request that revoked
+    // the token first leaves no active row, and the repository says
+    // NotFoundError. The token is unusable either way (RFC 6749 §5.2).
+    const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      enabled: false,
+    });
+    (fastify.repositories.refreshTokens.revoke as unknown as Mock).mockRejectedValue(
+      new NotFoundError('RefreshToken', storedToken.id)
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const refused = await handler(refreshRequest(), createReply()).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(InvalidGrantError);
+    expect(refused).toMatchObject({ errorDescription: 'Invalid or expired refresh token' });
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
 
   it('signs inside the rotation transaction, before token.issued, so a signing failure records none', async () => {
     // As for a code: a token that cannot be signed rolls the rotation back,

@@ -192,7 +192,7 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
     if (format === 'oauth') {
       expect(response.json()).toMatchObject({ error: 'invalid_token' });
     } else {
-      expect(response.json()).toMatchObject({ status: 401, code: 'jwt_invalid' });
+      expect(response.json()).toMatchObject({ status: 401, code: 'invalid_access_token' });
     }
   }
 

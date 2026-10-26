@@ -82,6 +82,18 @@ describe('main.ts boot warnings', () => {
     expect(mainCode).toMatch(/clientErrorHandler:\s*answerClientError/);
   });
 
+  it("answers the root instance's own routes and callNotFound with problem documents (#513)", () => {
+    // Swagger UI's static files are root routes: a missing one reaches the
+    // root not-found handler, and a failure the root error handler. Fastify's
+    // defaults answer its `{ message, error, statusCode }` envelope.
+    expect(mainCode).toMatch(/server\.setNotFoundHandler\(\s*answerRouteNotFound\s*\)/);
+    expect(mainCode).toMatch(/await server\.register\(\s*errorHandler\s*\)/);
+    // Registered before the root's own routes, so they answer through it.
+    expect(mainCode.indexOf('server.register(errorHandler)')).toBeLessThan(
+      mainCode.indexOf('server.register(swagger')
+    );
+  });
+
   it('logs every env deprecation warning through the server logger', () => {
     expect(mainCode).toMatch(
       /for \(const \w+ of envDeprecationWarnings\)\s*\{\s*server\.log\.warn\(/

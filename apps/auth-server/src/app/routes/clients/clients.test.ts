@@ -1,6 +1,7 @@
 import {
   BadRequestError,
   ForbiddenError,
+  InvalidClientMetadataError,
   InvalidRedirectUriError,
   JWTInvalidError,
   NotFoundError,
@@ -629,7 +630,9 @@ describe('POST /api/clients (create) — #86', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
@@ -647,7 +650,9 @@ describe('POST /api/clients (create) — #86', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
   });
 
   it('rejects a client_credentials token subject (non-UUID) from creating clients', async () => {
@@ -857,7 +862,9 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 
@@ -1035,7 +1042,9 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     // Rejected before hashing or persisting.
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
@@ -1103,7 +1112,9 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(
+      InvalidClientMetadataError
+    );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 
@@ -1202,7 +1213,9 @@ describe('redirect_uris required for user-involving grants (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(
+      InvalidRedirectUriError
+    );
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
@@ -1225,7 +1238,9 @@ describe('redirect_uris required for user-involving grants (#86/#88)', () => {
     });
     const { reply } = createReply();
 
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(
+      InvalidRedirectUriError
+    );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
   });
 

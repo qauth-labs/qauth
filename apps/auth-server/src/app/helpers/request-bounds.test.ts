@@ -1,4 +1,5 @@
 import { connect } from 'node:net';
+import { Writable } from 'node:stream';
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,9 +7,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   answerClientError,
   answerFrameworkError,
+  answerRouteNotFound,
   answerUnknownRouteBeforeBody,
   requestDeadlineOptions,
 } from './request-bounds';
+
+/** A logger stream that keeps every line, parsed. */
+function capturedLog(): { stream: Writable; lines: Record<string, unknown>[] } {
+  const lines: Record<string, unknown>[] = [];
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      for (const line of chunk.toString().split('\n').filter(Boolean)) {
+        lines.push(JSON.parse(line) as Record<string, unknown>);
+      }
+      callback();
+    },
+  });
+  return { stream, lines };
+}
 
 /**
  * Two things let one address park unfinished request bodies until the heap ran
@@ -77,6 +93,56 @@ describe('answerUnknownRouteBeforeBody', () => {
       for (const member of ['error', 'statusCode', 'message']) {
         expect(body).not.toHaveProperty(member);
       }
+    }
+  });
+
+  it('logs the unknown path with its secret query values censored', async () => {
+    const { stream, lines } = capturedLog();
+    app = Fastify({ logger: { level: 'info', stream } });
+    app.addHook('onRequest', answerUnknownRouteBeforeBody);
+
+    await app.inject({ method: 'GET', url: '/ui/wallet-login/returns?response_code=s3cr3t&x=1' });
+
+    // Fastify's own request line is censored by the app's `req` serializer,
+    // which this bare instance does not install; the not-found line is ours.
+    const notFound = lines.find((line) => String(line['msg']).endsWith('not found'));
+    expect(notFound?.['msg']).toBe(
+      'Route GET:/ui/wallet-login/returns?response_code=[Redacted]&x=1 not found'
+    );
+  });
+
+  it('echoes the request id in the header the server reads it from (trace_id)', async () => {
+    app = Fastify({ requestIdHeader: 'x-request-id' });
+    app.addHook('onRequest', answerUnknownRouteBeforeBody);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/nope',
+      headers: { 'x-request-id': 'trace-1234' },
+    });
+
+    expect(res.headers['x-request-id']).toBe('trace-1234');
+    expect(res.json()).toMatchObject({ trace_id: 'trace-1234' });
+  });
+
+  it('is the not-found handler reply.callNotFound() reaches, so no route sends the old envelope', async () => {
+    app = Fastify({ requestIdHeader: 'x-request-id' });
+    app.setNotFoundHandler(answerRouteNotFound);
+    // Like a static file handler that has no such file.
+    app.get('/docs/static/*', async (_request, reply) => reply.callNotFound());
+
+    const res = await app.inject({ method: 'GET', url: '/docs/static/missing.js' });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+    expect(res.json()).toMatchObject({
+      status: 404,
+      code: 'not_found',
+      instance: '/docs/static/missing.js',
+      trace_id: res.headers['x-request-id'],
+    });
+    for (const member of ['error', 'statusCode', 'message']) {
+      expect(res.json()).not.toHaveProperty(member);
     }
   });
 
@@ -189,6 +255,21 @@ describe("the router's refusals and unreadable requests (#513)", () => {
     expect(res.body).not.toContain('FST_ERR');
   });
 
+  it("echoes the request id on the router's refusal (trace_id)", async () => {
+    app = Fastify({ frameworkErrors: answerFrameworkError, requestIdHeader: 'x-request-id' });
+    app.get('/items/:id', async () => ({ ok: true }));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/items/%E0%A4%A',
+      headers: { 'x-request-id': 'trace-5678' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers['x-request-id']).toBe('trace-5678');
+    expect(res.json()).toMatchObject({ trace_id: 'trace-5678' });
+  });
+
   it("answers a path parameter over the router's limit with uri_too_long", async () => {
     app = Fastify({ frameworkErrors: answerFrameworkError });
     app.get('/items/:id', async () => ({ ok: true }));
@@ -225,5 +306,30 @@ describe("the router's refusals and unreadable requests (#513)", () => {
 
     expect(answer.split('\r\n')[0]).toBe('HTTP/1.1 431 Request Header Fields Too Large');
     expect(rawBody(answer)).toMatchObject({ status: 431, code: 'request_header_fields_too_large' });
+  });
+
+  it('logs an unreadable request at info by its code, trace id and status, never its bytes', async () => {
+    const { stream, lines } = capturedLog();
+    app = Fastify({
+      clientErrorHandler: answerClientError,
+      logger: { level: 'info', stream },
+      requestIdHeader: 'x-request-id',
+    });
+    app.get('/', async () => ({ ok: true }));
+
+    // Node's parser keeps what it could not parse as `rawPacket`: here, a
+    // session cookie and an access token in front of a broken header.
+    const answer = await rawExchange(
+      app,
+      'GET / HTTP/1.1\r\nHost: localhost\r\nCookie: __Host-qauth_session=s3cr3t-session\r\nAuthorization: Bearer s3cr3t-token\r\nBroken header\r\n\r\n'
+    );
+
+    const traceId = rawBody(answer)['trace_id'];
+    expect(answer).toContain(`x-request-id: ${String(traceId)}`);
+    const line = lines.find((entry) => entry['msg'] === 'Client error');
+    expect(line).toMatchObject({ level: 30, traceId, statusCode: 400 });
+    expect(line?.['code']).toEqual(expect.stringMatching(/^HPE_/));
+    expect(line).not.toHaveProperty('err');
+    expect(JSON.stringify(lines)).not.toContain('s3cr3t');
   });
 });

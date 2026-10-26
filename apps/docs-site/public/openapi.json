@@ -50,11 +50,11 @@
               "invalid_client_metadata",
               "invalid_redirect_uri",
               "invalid_cursor",
-              "invalid_token",
+              "invalid_verification_token",
               "invalid_csrf_token",
               "unauthorized",
-              "jwt_expired",
-              "jwt_invalid",
+              "access_token_expired",
+              "invalid_access_token",
               "invalid_credentials",
               "invalid_client",
               "invalid_dpop_proof",
@@ -63,10 +63,10 @@
               "not_found",
               "method_not_allowed",
               "conflict",
-              "unique_constraint_violation",
+              "already_exists",
               "email_already_verified",
-              "token_already_used",
-              "token_expired",
+              "verification_token_used",
+              "verification_token_expired",
               "request_timeout",
               "precondition_failed",
               "content_too_large",
@@ -112,7 +112,7 @@
           "code",
           "trace_id"
         ],
-        "additionalProperties": false,
+        "additionalProperties": {},
         "description": "RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong."
       },
       "OAuthError": {
@@ -147,7 +147,7 @@
         "required": [
           "error"
         ],
-        "additionalProperties": false,
+        "additionalProperties": {},
         "description": "An OAuth error (RFC 6749 §5.2). Branch on `error`, never on `error_description`."
       }
     }

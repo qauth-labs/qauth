@@ -218,10 +218,10 @@ const PROBLEM_CODE_MAP: Readonly<Record<string, string>> = {
   weak_password: 'WEAK_PASSWORD',
   // A generic conflict. Registration never answers with it: an address that
   // already has an account gets the same 202 as a free one.
-  unique_constraint_violation: 'CONFLICT',
+  already_exists: 'CONFLICT',
   conflict: 'CONFLICT',
   // An email verification token, not an access token.
-  invalid_token: 'INVALID_TOKEN',
+  invalid_verification_token: 'INVALID_TOKEN',
   email_already_verified: 'EMAIL_ALREADY_VERIFIED',
   // Login refuses an unverified account with `invalid_credentials`; a 403
   // elsewhere is the generic refusal it always was here.
@@ -238,8 +238,8 @@ const PROBLEM_CODE_MAP: Readonly<Record<string, string>> = {
   // An access token that is missing, expired, not valid or names no active
   // user: the session is over.
   unauthorized: 'UNAUTHENTICATED',
-  jwt_invalid: 'UNAUTHENTICATED',
-  jwt_expired: 'UNAUTHENTICATED',
+  invalid_access_token: 'UNAUTHENTICATED',
+  access_token_expired: 'UNAUTHENTICATED',
   not_found: 'NOT_FOUND',
   too_many_requests: 'RATE_LIMITED',
 };
@@ -515,7 +515,10 @@ export const authServerClient = {
   },
 
   userinfo(accessToken: string): Promise<Result<UserInfoData>> {
-    return apiRequest<UserInfoData>('/userinfo', {
+    // The OIDC userinfo endpoint is served under `/oauth` (its discovery
+    // `userinfo_endpoint`); a bare `/userinfo` is a 404, which signed every
+    // portal user out on their first page.
+    return apiRequest<UserInfoData>('/oauth/userinfo', {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,

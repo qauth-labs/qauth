@@ -59,7 +59,7 @@ export function realmRunsTransmitter(request: FastifyRequest): boolean {
  *
  * Every refusal but the scope's 403 is a 401 with an `invalid_token`
  * challenge, as RFC 6750 §3.1 prescribes for a token not valid for the
- * resource. Both are problem documents (`jwt_invalid`, `forbidden`): SSF 1.0
+ * resource. Both are problem documents (`invalid_access_token`, `forbidden`): SSF 1.0
  * gives stream management statuses but no error body, so these are not OAuth
  * protocol endpoints (ADR-019 Decision 7, #513). The 403's challenge says
  * `insufficient_scope` with `scope="ssf:stream"`.

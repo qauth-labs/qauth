@@ -374,8 +374,20 @@ describe('assembled app — global error handler reachability (#365)', () => {
     expect(res.json()).not.toHaveProperty('code');
   });
 
-  it('[#365 ORDERING GUARD] (b) unauthenticated GET /oauth/userinfo answers 401 with an RFC 6750 §3 WWW-Authenticate: Bearer challenge', async () => {
-    const res = await server.inject({ method: 'GET', url: '/oauth/userinfo' });
+  it('[#365 ORDERING GUARD] (b) GET /oauth/userinfo answers 401 with an RFC 6750 §3 WWW-Authenticate: Bearer challenge', async () => {
+    // RFC 6750 §3.1: a request that "lacks any authentication information"
+    // gets the challenge with no error code. The OAuth body still needs one.
+    const bare = await server.inject({ method: 'GET', url: '/oauth/userinfo' });
+    expect(bare.statusCode).toBe(401);
+    expect(bare.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+    expect(expectOAuthError(bare)).toBe('invalid_token');
+
+    // A token that was presented and refused names `invalid_token`.
+    const res = await server.inject({
+      method: 'GET',
+      url: '/oauth/userinfo',
+      headers: { authorization: 'Bearer not-a-jwt' },
+    });
 
     expect(res.statusCode).toBe(401);
 
@@ -409,7 +421,7 @@ describe('assembled app — global error handler reachability (#365)', () => {
     const body = res.json() as Record<string, unknown>;
     // The code and the status survive so a legitimate client can still branch
     // on the conflict; nothing of the message is sent.
-    expect(expectProblem(res)).toBe('unique_constraint_violation');
+    expect(expectProblem(res)).toBe('already_exists');
     expect(body).not.toHaveProperty('detail');
 
     // The F-01 guarantee, asserted on the RAW body: the constraint name must
@@ -609,7 +621,11 @@ describe('assembled app — problem details on the API families (#506)', () => {
   });
 
   it('GET /oauth/userinfo keeps the RFC 6750 §3 challenge and is not a problem document', async () => {
-    const res = await server.inject({ method: 'GET', url: '/oauth/userinfo' });
+    const res = await server.inject({
+      method: 'GET',
+      url: '/oauth/userinfo',
+      headers: { authorization: 'Bearer not-a-jwt' },
+    });
 
     expect(res.statusCode).toBe(401);
     expect(res.headers['content-type']).not.toMatch(PROBLEM);

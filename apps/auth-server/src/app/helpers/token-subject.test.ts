@@ -43,7 +43,7 @@ import {
  * (management token) and `Token subject is not an active user` (the
  * authorization endpoint's bearer path) — and the token exchange said three
  * more things about its `subject_token`. Every route now raises it through
- * `helpers/token-subject.ts`, and so answers one code: `jwt_invalid` on a
+ * `helpers/token-subject.ts`, and so answers one code: `invalid_access_token` on a
  * problem route, `invalid_token` on an OAuth endpoint, and `invalid_request`
  * for a `subject_token` (RFC 8693 §2.2.2).
  */
@@ -97,7 +97,7 @@ describe('the inactive-subject refusal (#513)', () => {
     expect(subjectToken.message).toBe('invalid_request');
   });
 
-  it('answers jwt_invalid on a problem route and invalid_token on an OAuth endpoint', async () => {
+  it('answers invalid_access_token on a problem route and invalid_token on an OAuth endpoint', async () => {
     const app = Fastify({ logger: false });
     await app.register(errorHandler);
     app.get('/api/clients', async () => {
@@ -110,13 +110,16 @@ describe('the inactive-subject refusal (#513)', () => {
       throw inactiveSubjectTokenError();
     });
 
-    const problem = await app.inject({ method: 'GET', url: '/api/clients' });
-    const oauth = await app.inject({ method: 'GET', url: '/oauth/userinfo' });
+    // The refusal is of a token that was presented: its challenge names
+    // `invalid_token` (RFC 6750 §3.1).
+    const presented = { authorization: 'Bearer a.b.c' };
+    const problem = await app.inject({ method: 'GET', url: '/api/clients', headers: presented });
+    const oauth = await app.inject({ method: 'GET', url: '/oauth/userinfo', headers: presented });
     const exchange = await app.inject({ method: 'POST', url: '/oauth/token' });
     await app.close();
 
     expect(problem.statusCode).toBe(401);
-    expect(problem.json()).toMatchObject({ status: 401, code: 'jwt_invalid' });
+    expect(problem.json()).toMatchObject({ status: 401, code: 'invalid_access_token' });
     expect(oauth.statusCode).toBe(401);
     expect(oauth.json()).toMatchObject({ error: 'invalid_token' });
     expect(oauth.headers['www-authenticate']).toContain('error="invalid_token"');

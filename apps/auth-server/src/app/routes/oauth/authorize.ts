@@ -174,11 +174,12 @@ export default async function (fastify: FastifyInstance) {
 
     if (!client) {
       // No client resolved: the `client_id` the request named is not one,
-      // so the event names no client.
+      // so the event names no client. Its `error` is the one the caller is
+      // answered, `invalid_request` (RFC 6749 §4.1.2.1; #513).
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: 'invalid_client', reason: unresolvedClientReason(reason) },
+        { error: 'invalid_request', reason: unresolvedClientReason(reason) },
         { realmId: realm.id, actor: 'client' }
       );
       throw unresolvedClientError();

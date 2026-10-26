@@ -19,6 +19,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   MisdirectedRequestError,
+  MissingAccessTokenError,
   NotFoundError,
   ProviderAlreadyRegisteredError,
   ProviderNotRegisteredError,
@@ -51,10 +52,15 @@ import { PROBLEM_CODES, type ProblemCode, problemTypeUri } from './problem';
  * when a class of the package has no entry. The classes a route or a server
  * library defines itself are mapped the same way, in {@link APP_ERROR_CLASSES}.
  *
- * A class's own `code` member, in upper case, is the code of the body the
- * routes answered before #513, and is lower-cased here where it is published.
- * The exceptions are the server-side failures, whose code says nothing a
- * caller may act on (`internal_error`), and the shed request
+ * A class's own `code` member is its published code in upper case, and a test
+ * keeps the two equal. Six were renamed before they froze into the 1.0 promise
+ * (2026-10-26): `jwt_invalid` and `jwt_expired` became `invalid_access_token`
+ * and `access_token_expired`, the one-time token's `invalid_token`,
+ * `token_expired` and `token_already_used` became
+ * `invalid_verification_token`, `verification_token_expired` and
+ * `verification_token_used`, and `unique_constraint_violation` became
+ * `already_exists`. The exceptions are the server-side failures, whose code
+ * says nothing a caller may act on (`internal_error`), and the shed request
  * (`service_unavailable`).
  */
 
@@ -103,7 +109,7 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // Database errors.
   {
     errorClass: UniqueConstraintError,
-    code: 'unique_constraint_violation',
+    code: 'already_exists',
     oauthError: 'invalid_request',
   },
 
@@ -139,9 +145,17 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
   { errorClass: InvalidRequestError, code: 'invalid_request', oauthError: 'invalid_request' },
   { errorClass: InvalidScopeError, code: 'invalid_scope', oauthError: 'invalid_scope' },
   { errorClass: InvalidTargetError, code: 'invalid_target', oauthError: 'invalid_target' },
-  { errorClass: InvalidTokenError, code: 'invalid_token', oauthError: 'invalid_request' },
-  { errorClass: JWTExpiredError, code: 'jwt_expired', oauthError: 'invalid_token' },
-  { errorClass: JWTInvalidError, code: 'jwt_invalid', oauthError: 'invalid_token' },
+  {
+    errorClass: InvalidTokenError,
+    code: 'invalid_verification_token',
+    oauthError: 'invalid_request',
+  },
+  { errorClass: JWTExpiredError, code: 'access_token_expired', oauthError: 'invalid_token' },
+  { errorClass: JWTInvalidError, code: 'invalid_access_token', oauthError: 'invalid_token' },
+  // No credentials (RFC 6750 §3.1): `unauthorized`, not `invalid_access_token`.
+  // An OAuth resource's body still needs an `error`, and userinfo's has
+  // always been `invalid_token`.
+  { errorClass: MissingAccessTokenError, code: 'unauthorized', oauthError: 'invalid_token' },
   {
     errorClass: ProviderAlreadyRegisteredError,
     code: 'internal_error',
@@ -152,8 +166,16 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'internal_error',
     oauthError: 'server_error',
   },
-  { errorClass: TokenAlreadyUsedError, code: 'token_already_used', oauthError: 'invalid_request' },
-  { errorClass: TokenExpiredError, code: 'token_expired', oauthError: 'invalid_request' },
+  {
+    errorClass: TokenAlreadyUsedError,
+    code: 'verification_token_used',
+    oauthError: 'invalid_request',
+  },
+  {
+    errorClass: TokenExpiredError,
+    code: 'verification_token_expired',
+    oauthError: 'invalid_request',
+  },
   {
     errorClass: UnauthorizedClientError,
     code: 'unauthorized_client',

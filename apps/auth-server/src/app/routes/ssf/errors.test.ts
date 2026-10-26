@@ -1,5 +1,5 @@
 import { SsfRequestError } from '@qauth-labs/fastify-plugin-ssf';
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
+import { JWTInvalidError, MissingAccessTokenError } from '@qauth-labs/shared-errors';
 import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
@@ -87,7 +87,9 @@ async function buildApp(options: { switchOn?: boolean } = {}) {
     },
   } as unknown as never);
   app.decorate('requireJwt', (async (request: FastifyRequest) => {
-    const token = (request.headers.authorization ?? '').replace(/^Bearer /, '');
+    // As the JWT plugin's `requireJwt`: no credential is not a refused token.
+    if (request.headers.authorization === undefined) throw new MissingAccessTokenError();
+    const token = request.headers.authorization.replace(/^Bearer /, '');
     const claims = TOKENS[token];
     if (claims === undefined) throw new JWTInvalidError('Invalid access token');
     request.jwtPayload = claims as never;
@@ -156,13 +158,22 @@ describe('SSF stream management errors (#513)', () => {
     expect(response.headers['www-authenticate']).toBeUndefined();
   });
 
-  it('answers a token that is not a receiver’s with 401 jwt_invalid and an invalid_token challenge', async () => {
+  it('answers a request without a token with 401 unauthorized and a challenge that names no error', async () => {
     const { app } = await buildApp();
 
-    for (const token of [undefined, 'not-a-token', 'for-a-user']) {
+    const response = await call(app, 'GET', '/ssf/stream');
+
+    problemOf(response, 401, 'unauthorized');
+    expect(response.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+  });
+
+  it('answers a token that is not a receiver’s with 401 invalid_access_token and an invalid_token challenge', async () => {
+    const { app } = await buildApp();
+
+    for (const token of ['not-a-token', 'for-a-user']) {
       const response = await call(app, 'GET', '/ssf/stream', { token });
 
-      problemOf(response, 401, 'jwt_invalid');
+      problemOf(response, 401, 'invalid_access_token');
       expect(response.headers['www-authenticate'], token).toMatch(
         /^Bearer realm="OAuth", error="invalid_token"/
       );

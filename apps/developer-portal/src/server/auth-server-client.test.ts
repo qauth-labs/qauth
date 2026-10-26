@@ -217,10 +217,10 @@ describe('authServerClient.register', () => {
     }
   });
 
-  it('maps a unique-constraint conflict to a generic CONFLICT, never EMAIL_TAKEN', async () => {
+  it('maps an already_exists conflict to a generic CONFLICT, never EMAIL_TAKEN', async () => {
     // Registration no longer answers 409 (ANT-2026-SPEMY9GU); a conflict from
     // another route must not be read as "this address is registered".
-    mockProblem(409, 'unique_constraint_violation');
+    mockProblem(409, 'already_exists');
     const result = await authServerClient.register('test@example.com', 'Password1!');
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -312,7 +312,7 @@ describe('authServerClient.logout', () => {
   });
 
   it('maps a refused access token to UNAUTHENTICATED', async () => {
-    mockProblem(401, 'jwt_invalid');
+    mockProblem(401, 'invalid_access_token');
     const result = await authServerClient.logout('some-token');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
@@ -344,7 +344,7 @@ describe('authServerClient.verifyEmail', () => {
   });
 
   it('returns INVALID_TOKEN on 400 with code', async () => {
-    mockProblem(400, 'invalid_token');
+    mockProblem(400, 'invalid_verification_token');
     const result = await authServerClient.verifyEmail(validToken, 'registrant-pw');
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -388,6 +388,22 @@ describe('authServerClient.resendVerification', () => {
 });
 
 describe('authServerClient.userinfo', () => {
+  it('calls the userinfo endpoint the auth-server serves, with the bearer token', async () => {
+    mockFetch(200, { sub: 'user-id' });
+
+    await authServerClient.userinfo('valid-access-token');
+
+    const [url, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe('http://auth-server:3001/oauth/userinfo');
+    expect(init.method).toBe('GET');
+    expect((init.headers as Record<string, string>)['Authorization']).toBe(
+      'Bearer valid-access-token'
+    );
+  });
+
   it('returns ok result with user claims', async () => {
     mockFetch(200, { sub: 'user-id', email: 'test@example.com', email_verified: true });
     const result = await authServerClient.userinfo('valid-access-token');
@@ -457,7 +473,7 @@ describe('authServerClient.listClients', () => {
   });
 
   it('maps 401 to UNAUTHENTICATED', async () => {
-    mockProblem(401, 'jwt_invalid');
+    mockProblem(401, 'invalid_access_token');
     const result = await authServerClient.listClients('bad');
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -466,8 +482,15 @@ describe('authServerClient.listClients', () => {
     }
   });
 
+  it('maps a request that presented no credentials (unauthorized) to UNAUTHENTICATED', async () => {
+    mockProblem(401, 'unauthorized');
+    const result = await authServerClient.listClients('');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+  });
+
   it('maps an expired access token to UNAUTHENTICATED', async () => {
-    mockProblem(401, 'jwt_expired');
+    mockProblem(401, 'access_token_expired');
     const result = await authServerClient.listClients('expired');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
@@ -581,7 +604,7 @@ describe('authServerClient.deleteClient', () => {
   });
 
   it('maps a refused access token to UNAUTHENTICATED', async () => {
-    mockProblem(401, 'jwt_invalid');
+    mockProblem(401, 'invalid_access_token');
     const result = await authServerClient.deleteClient('expired', 'row-1');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');

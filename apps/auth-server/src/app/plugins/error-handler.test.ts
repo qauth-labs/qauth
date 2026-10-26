@@ -12,6 +12,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   MisdirectedRequestError,
+  MissingAccessTokenError,
   NotFoundError,
   TemporarilyUnavailableError,
   UnauthorizedClientError,
@@ -112,6 +113,9 @@ async function buildApp(): Promise<FastifyInstance> {
   });
   app.get('/account/v1-rc.0/token', async () => {
     throw new JWTInvalidError('Invalid JWT token');
+  });
+  app.get('/account/v1-rc.0/no-token', async () => {
+    throw new MissingAccessTokenError('Missing or malformed Authorization header');
   });
   app.post('/auth/password', async () => {
     throw new WeakPasswordError(undefined, ['Add another word or two.', 'Avoid common phrases.']);
@@ -412,7 +416,7 @@ describe('error-handler plugin (#513)', () => {
 
       expect(response.statusCode).toBe(409);
       // Code + status preserved so legitimate clients can branch on the conflict.
-      expect(bodyOf(response)['code']).toBe('unique_constraint_violation');
+      expect(bodyOf(response)['code']).toBe('already_exists');
       expect(bodyOf(response)).not.toHaveProperty('detail');
       expect(response.body).not.toContain('users_email_realm_key');
 
@@ -429,7 +433,7 @@ describe('error-handler plugin (#513)', () => {
       });
 
       expect(response.statusCode).toBe(401);
-      expect(bodyOf(response)['code']).toBe('jwt_invalid');
+      expect(bodyOf(response)['code']).toBe('invalid_access_token');
       expect(response.headers['www-authenticate']).toMatch(
         /^Bearer realm="OAuth", error="invalid_token", error_description="[^"]*"$/
       );
@@ -518,6 +522,24 @@ describe('error-handler plugin (#513)', () => {
         expect(presented.headers['www-authenticate']).toBe(
           'Bearer realm="OAuth", error="invalid_token"'
         );
+
+        await app.close();
+      });
+
+      it('answers a request that presented no access token with unauthorized and no error in the challenge (RFC 6750 §3.1)', async () => {
+        const app = await buildApp();
+
+        // What `requireJwt` throws for a request without a credential.
+        const missing = await app.inject({ method: 'GET', url: '/account/v1-rc.0/no-token' });
+        expect(missing.statusCode).toBe(401);
+        expect(bodyOf(missing)).toMatchObject({ status: 401, code: 'unauthorized' });
+        expect(missing.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+
+        // A refused-token class met by a request that sent no Authorization
+        // header: the code is the class's, the challenge still names no error.
+        const unsent = await app.inject({ method: 'GET', url: '/account/v1-rc.0/token' });
+        expect(bodyOf(unsent)['code']).toBe('invalid_access_token');
+        expect(unsent.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
 
         await app.close();
       });
@@ -860,6 +882,26 @@ describe('error-handler plugin (#513)', () => {
         );
         await app.close();
       }
+    });
+
+    it('answers a DPoP-scheme request without a token with a DPoP challenge that names no error', async () => {
+      const app = Fastify({ logger: false });
+      app.decorate('dpop', { algorithms: ['ES256', 'EdDSA'] } as never);
+      await app.register(errorHandler);
+      app.get('/resource-none', OAUTH, async () => {
+        throw new MissingAccessTokenError();
+      });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/resource-none',
+        headers: { authorization: 'DPoP ' },
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['www-authenticate']).toBe('DPoP algs="ES256 EdDSA"');
+      expect(response.json()).toMatchObject({ error: 'invalid_token' });
+      await app.close();
     });
 
     it('keeps the Bearer challenge for a DPoP-scheme request while DPoP is off', async () => {

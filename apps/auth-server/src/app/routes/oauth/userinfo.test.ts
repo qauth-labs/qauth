@@ -1,4 +1,9 @@
-import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  InvalidRequestError,
+  JWTExpiredError,
+  JWTInvalidError,
+  MissingAccessTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -647,7 +652,10 @@ describe('GET /userinfo route', () => {
     }
   });
 
-  it('returns 401 for missing token', async () => {
+  // RFC 6750 §3.1: a request that "lacks any authentication information" is
+  // answered with no error code in the challenge. The body of an OAuth
+  // protected resource still needs an `error`: `invalid_token`.
+  it('returns 401 for missing token, with a challenge that names no error', async () => {
     const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -658,8 +666,9 @@ describe('GET /userinfo route', () => {
       '/oauth/userinfo',
       {
         config: await userinfoErrorConfig(),
+        // What `requireJwt` throws for a request without a credential.
         preHandler: async () => {
-          throw new JWTInvalidError('Missing or malformed Authorization header');
+          throw new MissingAccessTokenError('Missing or malformed Authorization header');
         },
       },
       async () => ({ sub: 'user-1' })
@@ -674,7 +683,12 @@ describe('GET /userinfo route', () => {
         },
       });
 
-      expectInvalidTokenAnswer(response);
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+      expect(response.json()).toEqual({
+        error: 'invalid_token',
+        error_description: 'Missing or malformed Authorization header',
+      });
     } finally {
       await app.close();
     }

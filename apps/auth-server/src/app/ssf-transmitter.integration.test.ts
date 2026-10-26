@@ -624,7 +624,11 @@ describe('the SSF transmitter (real containers)', () => {
       });
 
       // A's token is no receiver of B, and A cannot name B's stream at its own host.
-      problemOf(await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_B), 401, 'jwt_invalid');
+      problemOf(
+        await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_B),
+        401,
+        'invalid_access_token'
+      );
       problemOf(await call(app, inA, 'GET', `/ssf/stream?stream_id=${streamB}`), 404, 'not_found');
       problemOf(
         await call(app, inA, 'POST', '/ssf/verify', { stream_id: streamB }),
@@ -677,9 +681,13 @@ describe('the SSF transmitter (real containers)', () => {
         'Bearer realm="OAuth", error="insufficient_scope", scope="ssf:stream"'
       );
       const response = await call(app, otherAudience, 'GET', '/ssf/stream');
-      problemOf(response, 401, 'jwt_invalid');
+      problemOf(response, 401, 'invalid_access_token');
       expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
-      problemOf(await app.inject({ method: 'GET', url: '/ssf/stream' }), 401, 'jwt_invalid');
+      // No token at all is `unauthorized`, with a challenge that names no
+      // error (RFC 6750 §3.1).
+      const bare = await app.inject({ method: 'GET', url: '/ssf/stream' });
+      problemOf(bare, 401, 'unauthorized');
+      expect(bare.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
 
       // A receiver whose scope is taken away stops at once, not when its
       // token expires, as its deliveries do.
@@ -689,7 +697,7 @@ describe('the SSF transmitter (real containers)', () => {
         who.id,
       ]);
       const scopeGone = await call(app, who, 'GET', '/ssf/stream');
-      problemOf(scopeGone, 401, 'jwt_invalid');
+      problemOf(scopeGone, 401, 'invalid_access_token');
       expect(scopeGone.headers['www-authenticate']).toMatch(/error="invalid_token"/);
     });
 
@@ -708,7 +716,7 @@ describe('the SSF transmitter (real containers)', () => {
       await newReceiver(app, realmC, { clientId, audience: ISSUER_C, host: HOST_C });
 
       const response = await call(app, inA, 'GET', '/ssf/stream', undefined, HOST_C);
-      problemOf(response, 401, 'jwt_invalid');
+      problemOf(response, 401, 'invalid_access_token');
       expect(response.headers['www-authenticate']).toMatch(/error="invalid_token"/);
     });
 

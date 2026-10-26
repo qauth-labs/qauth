@@ -1,5 +1,5 @@
 import { type JWTPayload, refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import { JWTExpiredError, MissingAccessTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -72,8 +72,10 @@ export default async function (fastify: FastifyInstance) {
         const token = fastify.jwtUtils.extractFromHeader(authHeader);
 
         if (!token) {
+          // No credential is not a refused token (RFC 6750 §3.1): 401
+          // `unauthorized`, with a challenge that names no error.
           throw withEventReason(
-            new JWTInvalidError(
+            new MissingAccessTokenError(
               'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
             ),
             'missing_token'

@@ -11,7 +11,7 @@ import { InvalidRequestError, JWTInvalidError } from '@qauth-labs/shared-errors'
  *
  * - {@link inactiveSubjectError} for an access token presented as a
  *   credential: `invalid_token` at an OAuth resource such as userinfo (RFC
- *   6750 §3.1), `jwt_invalid` on a problem route such as the management API;
+ *   6750 §3.1), `invalid_access_token` on a problem route such as the management API;
  * - {@link inactiveSubjectTokenError} for a `subject_token` in a token
  *   exchange: `invalid_request`, as RFC 8693 §2.2.2 requires for a subject
  *   token that is not valid.
