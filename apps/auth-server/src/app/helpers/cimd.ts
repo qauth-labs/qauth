@@ -469,6 +469,10 @@ export function toCimdClientInsert(
     provisionedByOperator: false,
     idJagTargets: [],
     dpopBoundAccessTokens: false,
+    // The document's `scope` grants nothing: a CIMD client's scopes are the
+    // operator's grant in the seed manifest (#770). A scope in QAuth's own
+    // `qauth:` namespace there is ignored like every other (#507); the
+    // manifest refuses to grant one.
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.
     isAgent: doc.is_agent ?? false,

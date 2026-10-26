@@ -1050,6 +1050,33 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
+  // #507: a scope in QAuth's qauth: namespace is refused like any scope the
+  // realm does not allow, even from a list that holds one.
+  it('rejects a qauth: scope as not permitted, even when the realm list holds it', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({ id: 'realm-1', dynamicRegistrationAllowedScopes: ['openid', 'qauth:admin:read'] })
+    );
+    await clientsRoute(fastify);
+
+    const request = authedRequest({
+      body: {
+        name: 'Admin-scoped',
+        redirectUris: ['https://app.example.com/cb'],
+        scopes: ['openid', 'qauth:admin:read'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toMatchObject({
+      name: 'InvalidClientMetadataError',
+      message: 'invalid_client_metadata',
+      errorDescription: 'scope not permitted: qauth:admin:read',
+    });
+    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+  });
+
   it('allows create when every requested scope is within the realm allowlist', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
@@ -1116,6 +1143,87 @@ describe('scope allowlist enforcement (#86/#88)', () => {
       InvalidClientMetadataError
     );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+
+  // #507: a PATCH cannot add a qauth: scope either.
+  it('rejects a PATCH that adds a qauth: scope, even when the realm list holds it', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({
+        id: 'realm-1',
+        dynamicRegistrationAllowedScopes: ['openid', 'QAuth:Admin:Write'],
+      })
+    );
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { scopes: ['openid', 'QAuth:Admin:Write'] },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toMatchObject({
+      name: 'InvalidClientMetadataError',
+      message: 'invalid_client_metadata',
+      errorDescription: 'scope not permitted: QAuth:Admin:Write',
+    });
+    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+
+  // A client may hold a scope the realm no longer allows, or one an operator
+  // gave it. Its owner can still rename it, and send its scopes back as they
+  // are: only a scope the update ADDS is checked against the allowlist.
+  it('lets a PATCH keep scopes the realm no longer allows, and checks only the ones it adds', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({ id: 'realm-1', dynamicRegistrationAllowedScopes: ['openid', 'profile'] })
+    );
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, scopes: ['openid', 'legacy:read', 'qauth:admin:read'] })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const kept = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { name: 'Renamed', scopes: ['openid', 'legacy:read', 'qauth:admin:read'] },
+    });
+    await route(ctx, 'PATCH /:id').handler(kept, createReply().reply);
+    expect(fastify.repositories.oauthClients.update).toHaveBeenCalledWith(
+      '0190a000-0000-7000-8000-000000000001',
+      expect.objectContaining({
+        name: 'Renamed',
+        scopes: ['openid', 'legacy:read', 'qauth:admin:read'],
+      })
+    );
+
+    // Dropping a scope is not adding one either.
+    const narrowed = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { scopes: ['legacy:read'] },
+    });
+    await route(ctx, 'PATCH /:id').handler(narrowed, createReply().reply);
+    expect(fastify.repositories.oauthClients.update).toHaveBeenLastCalledWith(
+      '0190a000-0000-7000-8000-000000000001',
+      expect.objectContaining({ scopes: ['legacy:read'] })
+    );
+
+    // A scope the update adds is still checked, beside the ones it keeps.
+    const widened = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { scopes: ['openid', 'legacy:read', 'tenant-a:write'] },
+    });
+    await expect(
+      route(ctx, 'PATCH /:id').handler(widened, createReply().reply)
+    ).rejects.toMatchObject({ errorDescription: 'scope not permitted: tenant-a:write' });
+    expect(fastify.repositories.oauthClients.update).toHaveBeenCalledTimes(2);
   });
 
   it('stores a repeated scope once, on create and on PATCH', async () => {

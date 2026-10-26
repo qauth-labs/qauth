@@ -720,7 +720,7 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 | `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
-| `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+| `scope`                      | Space-separated; **capped to the realm allowlist**. No `qauth:` scope. |
 
 Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
 `[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
@@ -739,6 +739,18 @@ only** — a client must not be able to grant itself a capability whose trust
 boundary an operator owns. Zod strips these keys, so a registration request
 carrying them is silently ignored rather than honoured; do not rely on that
 silence as the enforcement mechanism.
+
+A scope the realm allowlist does not list is dropped, and the client is
+registered with the rest (RFC 7591 §2 lets the server narrow the request). The
+`qauth:` scope namespace, in any case, is QAuth's own: the admin API's scopes
+(`qauth:admin:read`, `qauth:admin:write`, `qauth:admin:security`) live in it,
+and only an operator provisions their clients. A realm's allowlist cannot hold
+such a scope, so registration always drops one; a client that echoes a
+resource's `scopes_supported` still registers. A CIMD document's `scope` is
+never stored, so one there is ignored. Other servers' scopes that look
+administrative, such as `admin:org`, are ordinary scopes. The three admin
+scopes and what they allow are on the
+[admin permissions](/reference/admin-permissions/) page.
 
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).

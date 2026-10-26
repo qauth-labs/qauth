@@ -142,7 +142,9 @@ async function buildApp(): Promise<FastifyInstance> {
     throw new ForbiddenError('No.');
   });
   app.get('/admin/v1-rc.0/needs-scope', async () => {
-    throw new ForbiddenError('This operation needs admin:read.', { requiredScope: 'admin:read' });
+    throw new ForbiddenError('This operation needs qauth:admin:read.', {
+      requiredScope: 'qauth:admin:read',
+    });
   });
   app.get('/auth/credentials', async () => {
     throw new InvalidCredentialsError();
@@ -501,7 +503,7 @@ describe('error-handler plugin (#513)', () => {
         expect(response.statusCode).toBe(403);
         expect(bodyOf(response)['code']).toBe('forbidden');
         expect(response.headers['www-authenticate']).toBe(
-          'Bearer realm="OAuth", error="insufficient_scope", scope="admin:read"'
+          'Bearer realm="OAuth", error="insufficient_scope", scope="qauth:admin:read"'
         );
 
         await app.close();
