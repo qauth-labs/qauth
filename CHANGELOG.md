@@ -641,6 +641,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `realms.ssf_transmitter_enabled` (default off) and an index on
   `event_deliveries` that finds a destination's latest failed delivery ([#410]).
   Expand-only; the index build holds back delivery writes while it runs.
+- **The egress allowlist** ([#481], ADR-019 Decision 8). `EGRESS_ALLOWLIST_PATH`
+  names a JSON file of hosts and CIDR ranges, each for the realms it lists, that
+  the egress client may reach although they are not public. An entry applies
+  only to a destination the operator or a realm admin set, for a realm it names;
+  a destination that a client, an end user or a fetched document supplies never
+  uses it, and no entry opens an unspecified, multicast or cloud metadata
+  address. The server reads the file once at boot: a file that cannot be read or
+  does not validate stops the boot, and one that group or others can write gives
+  a warning. The list is not in the database and no API edits it. Every egress
+  call now names who set its destination (`source`), and tests reach a local
+  fixture server through `createTestEgressClient`, which exists only under
+  `NODE_ENV=test`. The configuration page lists removed keys.
 
 ### Changed
 
@@ -953,6 +965,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults `NODE_ENV` to `production`, so a local stack that needs one sets
   `NODE_ENV=development` in `.env`.
 
+- **BREAKING (security)**: `CIMD_ALLOW_PRIVATE_ADDRESSES` and
+  `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are removed ([#481]). Set to any value, in
+  any `NODE_ENV`, either one stops the boot with a message that names
+  `EGRESS_ALLOWLIST_PATH`. The CIMD document, client `jwks_uri` and ID-JAG
+  issuer fetches go through the egress client (ADR-019 Decision 8) instead of
+  the auth server's own fetcher. A metadata document or `jwks_uri` never reaches
+  a private address. A trusted ID-JAG issuer's discovery URL may, through an
+  allowlist entry naming the realm, but the `jwks_uri` its document names may
+  not, so an issuer whose keys are on a private network cannot be used yet. The
+  fetches now also refuse documentation and other reserved ranges
+  (`203.0.113.0/24` and the rest of the egress address table), send
+  `User-Agent: qauth-egress`, and run in the egress client's fetch processes: up
+  to 8, about 70 MB each while busy, exiting after a minute idle.
+
+  **Action for operators**: remove both variables. An operator-set private
+  destination goes into the allowlist file.
+
 - **BREAKING (ID-JAG; only with `ID_JAG_ENABLED`, which is off by default)**:
   a client's ID-JAG targets have a column of their own, `oauth_clients.id_jag_targets`
   (migration 0027, [#434], [ADR-011](./docs/adr/011-enterprise-managed-authorization.md)
@@ -1088,6 +1117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#479]: https://github.com/qauth-labs/qauth/issues/479
 [#480]: https://github.com/qauth-labs/qauth/issues/480
+[#481]: https://github.com/qauth-labs/qauth/issues/481
 [#482]: https://github.com/qauth-labs/qauth/issues/482
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 [#485]: https://github.com/qauth-labs/qauth/issues/485

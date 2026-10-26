@@ -78,6 +78,7 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/fastify/plugins/federation` | `@qauth-labs/fastify-plugin-federation` | `scope:fastify`                        |
 | `libs/fastify/plugins/signer`     | `@qauth-labs/fastify-plugin-signer`     | `scope:fastify`                        |
 | `libs/fastify/plugins/dpop`       | `@qauth-labs/fastify-plugin-dpop`       | `scope:fastify`                        |
+| `libs/fastify/plugins/egress`     | `@qauth-labs/fastify-plugin-egress`     | `scope:fastify`                        |
 | `libs/sdk/resource-guard`         | `@qauth-labs/resource-guard`            | `scope:sdk` + `type:sdk`               |
 
 ## The layering

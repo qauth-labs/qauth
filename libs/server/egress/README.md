@@ -3,21 +3,30 @@
 The one client for every outbound call that configuration or user input causes: webhooks,
 back-channel logout, SSF push, upstream discovery, CIMD and `jwks_uri` fetches, and every call a
 plugin makes ([ADR-019 Decisions 8 and 12](../../../docs/adr/019-deployment-topology-and-trust-boundaries.md)).
-It is SSRF-safe by construction and has no switch that lets it reach a private address.
+It is SSRF-safe by construction. It has no switch that lets it reach a private address; only the
+deployment allowlist can, for a destination the operator or an admin set, in a realm the entry
+names.
 
-> **Status:** the library is complete, but nothing calls it yet. #481 moves the CIMD, client JWKS
-> and ID-JAG fetches onto it and adds the deployment-level allowlist for operator-set private
-> destinations.
+> **Status:** the CIMD, client JWKS and ID-JAG issuer fetches of the auth server (through
+> `@qauth-labs/fastify-plugin-egress`, as `fastify.egress`) and the SSF push use it (#410, #481).
+> The back-channel logout, webhook and upstream provider callers move onto it as they land.
 
 ## Usage
 
 ```typescript
-import { createEgressClient, isEgressError } from '@qauth-labs/server-egress';
+import { createEgressClient, isEgressError, loadEgressAllowlist } from '@qauth-labs/server-egress';
 
-const egress = createEgressClient({ logger: fastify.log });
+const egress = createEgressClient({
+  logger: fastify.log,
+  allowlist: loadEgressAllowlist(process.env.EGRESS_ALLOWLIST_PATH), // when it is set
+});
 
 // At registration: resolve and check, send nothing.
-await egress.validateDestination(webhookUrl, { purpose: 'webhook' });
+await egress.validateDestination(webhookUrl, {
+  purpose: 'webhook',
+  source: 'admin',
+  realm: 'acme',
+});
 
 // At every delivery: the same checks again, then the call.
 try {
@@ -27,6 +36,8 @@ try {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(event),
     purpose: 'webhook',
+    source: 'admin', // an admin set this webhook
+    realm: 'acme', // the allowlist entries naming this realm apply
     limits: { maxRedirects: 0 },
   });
   // res.status, res.headers, res.body (a Buffer), res.url, res.redirects
@@ -46,6 +57,19 @@ header the client sets itself, or an invalid limit.
 `purpose` is a fixed label of the caller, such as `webhook` or `cimd`, not data. It names the call
 in counts and logs, so it is limited to lower-case letters, digits and `_ . : -`, 64 characters at
 most.
+
+`source` says who set the destination, and every call names it:
+
+| Source            | Destinations                                                                   |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `operator`        | The deployment's configuration: a trusted ID-JAG issuer's discovery URL.       |
+| `admin`           | A realm admin: a back-channel logout URI or webhook an admin sets.             |
+| `client`          | An OAuth client: a CIMD `client_id`, a registered `jwks_uri`, an SSF endpoint. |
+| `end_user`        | An end user.                                                                   |
+| `remote_document` | A fetched document: the `jwks_uri` an issuer's discovery document names.       |
+
+`realm` names the realm the destination belongs to, by name. Only an `operator` or `admin`
+destination with a `realm` can use the [allowlist](#the-deployment-allowlist).
 
 ## What the client checks
 
@@ -68,6 +92,50 @@ most.
   hide the real destination from the address checks.
 - **Where the connection is made.** Not in the server's process: see
   [Fetch processes](#fetch-processes).
+
+## The deployment allowlist
+
+ADR-019 Decision 8 lets a non-public address be reached only when a deployment-level allowlist
+names its host or range, the destination's `source` is `operator` or `admin`, and the call's
+`realm` is one the entry names. A `client`, `end_user` or `remote_document` destination never uses
+it. `EGRESS_ALLOWLIST_PATH` names the file; `loadEgressAllowlist(path)` reads and validates it, and
+`parseEgressAllowlist(json)` validates a value already in hand. The client accepts only a list
+those two made.
+
+```json
+{
+  "entries": [
+    { "host": "idp.corp.example", "realms": ["master"] },
+    { "cidr": "10.20.0.0/16", "realms": ["master", "acme"], "note": "partner VPN" }
+  ]
+}
+```
+
+- `host` is matched exactly and case-insensitively against the URL's host, never with a wildcard.
+  Every address the host resolves to may then be dialled. An IP address is written as a `cidr`.
+- `cidr` is an IPv4 or IPv6 range in its first-address form (`10.20.0.0/16`, not `10.20.0.7/16`).
+  Every address of the URL's host must lie in a listed range or be public. An IPv4-mapped IPv6
+  address (`::ffff:10.20.0.7`) is judged by its IPv4 address; a NAT64 or 6to4 address is not.
+- `realms` lists realm names, compared exactly. `note` is the operator's and is not read.
+- An unknown member, an entry with both or neither of `host` and `cidr`, or an entry without realms
+  refuses the whole file, naming where the mistake is.
+- No entry opens an unspecified (`0.0.0.0/8`, `::`), multicast or cloud metadata
+  (`169.254.169.254`, `fd00:ec2::254`, in any IPv6 form that carries it) address.
+- A redirect to another host never uses the entry that let the first request through: its target is
+  the remote side's choice, not the operator's. A redirect on the same host does.
+
+The list is not in the database and no API edits it; the auth server reads the file once at boot
+(`@qauth-labs/fastify-plugin-egress`).
+
+## The test-only client
+
+`createTestEgressClient(options)` is the production client with two changes: it may also reach
+loopback addresses (`localhost`, `127.0.0.1`, `::1`) for any source, and its names resolve with the
+operating system's resolver (so `localhost` resolves) and its exchanges run in the test's process.
+Every other check stays. It exists only while `NODE_ENV` is `test`: creating one, and every call
+through one, throws otherwise. TLS trusts the process's default CA certificates;
+`src/testing/loopback-fixture.ts` starts an HTTPS server on localhost whose CA it adds. It replaces
+the removed `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` switches.
 
 Refused addresses (`isPublicUnicastAddress`, `addressKind`):
 
@@ -208,7 +276,7 @@ query string or a header.
 Every blocked or failed call is counted by purpose, outcome and reason. `egress.counts()` returns
 the counts. A `counter` option receives them too; a prom-client
 `Counter<'purpose' | 'outcome' | 'reason'>` fits. A `logger` option (pino-style `warn(fields,
-message)`) gets one line per call with `purpose`, `host`, `reason` and `outcome`.
+message)`) gets one line per call with `purpose`, `source`, `host`, `reason` and `outcome`.
 
 ## Tests
 

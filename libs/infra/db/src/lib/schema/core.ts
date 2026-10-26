@@ -425,10 +425,11 @@ export const oauthClients = pgTable(
      * (see above). NULL for every existing client.
      *
      * SECURITY: this is an operator/registration-supplied URL that the AS will
-     * dereference, so every fetch MUST go through `ssrfSafeGet` with the same
-     * guards the CIMD path uses — https-only, no redirect following, DNS-pinned
-     * IP validation, byte cap, timeout, non-200 rejection — and the result MUST
-     * be cached with a bounded TTL. It is NEVER read from a token request; only
+     * dereference, so every fetch MUST go through the egress client as a
+     * `client` destination (ADR-019 Decision 8), with the same guards the CIMD
+     * path uses — https-only, no redirect following, DNS-pinned IP validation,
+     * byte cap, timeout, non-200 rejection — and the result MUST be cached with
+     * a bounded TTL. It is NEVER read from a token request; only
      * from the persisted client record resolved by an authenticated client_id.
      */
     jwksUri: text('jwks_uri'),

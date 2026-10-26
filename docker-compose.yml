@@ -276,9 +276,6 @@ services:
       CIMD_ENABLED:
       CIMD_TRUST_POLICY:
       CIMD_TRUSTED_DOMAINS:
-      # Test-only. Under NODE_ENV=production, the default above, `true`
-      # fails the boot; set NODE_ENV=development in .env to use it.
-      CIMD_ALLOW_PRIVATE_ADDRESSES:
       CIMD_FETCH_TIMEOUT_MS:
       CIMD_MAX_DOCUMENT_BYTES:
       CIMD_CACHE_DEFAULT_TTL:
@@ -287,9 +284,6 @@ services:
       # ID-JAG cross-domain assertions (ADR-011)
       ID_JAG_ENABLED:
       ID_JAG_TRUSTED_ISSUERS:
-      # Test-only. Under NODE_ENV=production, the default above, `true`
-      # fails the boot; set NODE_ENV=development in .env to use it.
-      ID_JAG_ALLOW_PRIVATE_ADDRESSES:
       ID_JAG_CLOCK_SKEW_LEEWAY:
       ID_JAG_FETCH_TIMEOUT_MS:
       ID_JAG_ISSUED_LIFETIME:
@@ -298,6 +292,12 @@ services:
       ID_JAG_JWKS_REFRESH_COOLDOWN:
       ID_JAG_MAX_ASSERTION_LIFETIME:
       ID_JAG_MAX_DOCUMENT_BYTES:
+
+      # Egress allowlist (ADR-019 Decision 8): a JSON file of private hosts
+      # and ranges that operator- and admin-set destinations may reach, per
+      # realm. Mount the file into the container read-only and name its path
+      # here; unset, no outbound call reaches a private address.
+      EGRESS_ALLOWLIST_PATH:
 
       # Signing algorithm / post-quantum hybrid (ADR-005)
       SIGNING_ALGORITHM_MODE:

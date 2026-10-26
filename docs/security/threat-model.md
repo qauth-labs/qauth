@@ -65,7 +65,10 @@ Other untrusted input:
 
 - **Documents QAuth fetches from URLs a client or credential names.** Client ID
   Metadata Documents, a client's `jwks_uri` for `private_key_jwt` and ID-JAG
-  issuer keys go through `apps/auth-server/src/app/helpers/ssrf-safe-fetch.ts`.
+  issuer keys go through the egress client (`libs/server/egress`, ADR-019
+  Decision 8). The deployment egress allowlist never opens a private address
+  for them; it may open one only for the operator-set ID-JAG discovery URL, for
+  the realms an entry names.
   Token Status Lists named by a wallet credential are fetched by
   `libs/server/federation/src/status/`, only under an operator allowlist of
   URI prefixes.
