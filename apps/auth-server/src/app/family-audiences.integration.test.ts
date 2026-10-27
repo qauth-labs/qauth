@@ -659,11 +659,13 @@ describe('one audience per API family and a guard for each (#509, real container
     it('refuses a token of a client_id that both realms enable at the realm that did not mint it', async () => {
       const b = await realmB();
       await provisionRealmKeys(app(), 'beta');
-      const admin = API_FAMILY_AUDIENCES.admin;
-      await seedMachineClient('twin', [admin]);
-      await seedMachineClient('twin', [admin], { realmId: b });
+      // The developer family: since #510 a client_credentials token never gets
+      // the admin audience, which names an account's admin grants.
+      const developer = API_FAMILY_AUDIENCES.developer;
+      await seedMachineClient('twin', [developer]);
+      await seedMachineClient('twin', [developer], { realmId: b });
 
-      const tokenOfA = (await machineToken('twin', admin)).json<{ access_token: string }>()
+      const tokenOfA = (await machineToken('twin', developer)).json<{ access_token: string }>()
         .access_token;
       const tokenOfB = (
         await app().inject({
@@ -675,7 +677,7 @@ describe('one audience per API family and a guard for each (#509, real container
             client_id: 'twin',
             client_secret: CLIENT_SECRET,
             scope: PROBE_SCOPE,
-            resource: admin,
+            resource: developer,
           }).toString(),
         })
       ).json<{ access_token: string }>().access_token;
@@ -683,14 +685,14 @@ describe('one audience per API family and a guard for each (#509, real container
       expect(decodeJwtClaims(tokenOfB)['iss']).toBe(`https://${HOST_B}`);
 
       // Each token works in its own realm...
-      expect((await call(probePath('admin'), tokenOfA)).statusCode).toBe(200);
-      expect((await call(probePath('admin'), tokenOfB, HOST_B)).statusCode).toBe(200);
+      expect((await call(probePath('developer'), tokenOfA)).statusCode).toBe(200);
+      expect((await call(probePath('developer'), tokenOfB, HOST_B)).statusCode).toBe(200);
       // ...and is refused in the other, though `twin` is an active client there.
       for (const [token, host] of [
         [tokenOfA, HOST_B],
         [tokenOfB, undefined],
       ] as const) {
-        const refused = await call(probePath('admin'), token, host);
+        const refused = await call(probePath('developer'), token, host);
         expect(refused.statusCode).toBe(401);
         expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
       }
