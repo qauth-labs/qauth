@@ -11,6 +11,7 @@ describe('deliverySignerHandle', () => {
     return {
       signWebhook: vi.fn(async () => 'v1,c2ln'),
       signJws: vi.fn(async () => 'h.p.s'),
+      decrypt: vi.fn(async () => Buffer.from('Bearer t')),
     };
   }
 
@@ -43,13 +44,28 @@ describe('deliverySignerHandle', () => {
     });
   });
 
+  it('decrypts a stored destination secret as the delivery caller', async () => {
+    const fake = signer();
+    const handle = deliverySignerHandle(fake as unknown as Signer);
+    const plain = await handle.decrypt({ realmId: 'r', ciphertext: 'v1.k.i.c', context: 'ctx' });
+    expect(new TextDecoder().decode(plain)).toBe('Bearer t');
+    expect(fake.decrypt).toHaveBeenCalledWith('delivery', {
+      realmId: 'r',
+      ciphertext: 'v1.k.i.c',
+      context: 'ctx',
+    });
+  });
+
   it('asks for nothing the signer policy refuses the delivery caller', () => {
     expect(isSignerCallAllowed('delivery', 'signWebhook')).toBe(true);
     expect(isSignerCallAllowed('delivery', 'signJws', 'event_signing')).toBe(true);
+    expect(isSignerCallAllowed('delivery', 'decrypt', 'delivery:ssf_streams.x:1')).toBe(true);
+    expect(isSignerCallAllowed('delivery', 'decrypt', 'another_table.secret:1')).toBe(false);
     // What the handle never offers.
     expect(isSignerCallAllowed('delivery', 'signJws', 'token_signing')).toBe(false);
-    expect(isSignerCallAllowed('delivery', 'decrypt')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'encrypt')).toBe(false);
     expect(Object.keys(deliverySignerHandle(signer() as unknown as Signer)).sort()).toEqual([
+      'decrypt',
       'signEventToken',
       'signWebhook',
     ]);

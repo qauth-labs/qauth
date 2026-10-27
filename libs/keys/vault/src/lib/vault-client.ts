@@ -12,17 +12,22 @@ import type { VaultHttpResponse, VaultTransport } from './https-transport';
  * and Vault's statuses as errors.
  */
 
-/** The clock the client and the token session use: time, and timers. */
+/**
+ * The clock the client, the token session and the key check use: time, and
+ * timers. Only the difference between two readings is used, for ages and
+ * expiries counted from a TTL Vault reports in seconds, so it may be
+ * monotonic: a wall clock stepped by NTP or by hand moves no expiry.
+ */
 export interface VaultClock {
-  /** Epoch milliseconds. */
+  /** Milliseconds from an arbitrary origin; never goes back. */
   now(): number;
   setTimeout(callback: () => void, delayMs: number): unknown;
   clearTimeout(timer: unknown): void;
 }
 
-/** The process clock. */
+/** The process clock: monotonic time (`performance.now()`), and Node's timers. */
 export const SYSTEM_CLOCK: VaultClock = Object.freeze({
-  now: () => Date.now(),
+  now: () => performance.now(),
   setTimeout: (callback: () => void, delayMs: number): unknown => setTimeout(callback, delayMs),
   clearTimeout: (timer: unknown) => clearTimeout(timer as NodeJS.Timeout),
 });
@@ -69,6 +74,8 @@ export interface VaultCall {
   /** The Vault token, for every call but a login. */
   readonly token?: string;
   readonly body?: Readonly<Record<string, unknown>>;
+  /** Replaces the transport's answer size cap, for a call whose answer can be larger. */
+  readonly maxResponseBytes?: number;
 }
 
 /** Sends Vault calls. */
@@ -128,6 +135,7 @@ export function createVaultClient(options: VaultClientOptions): VaultClient {
         path: `/v1/${call.path}`,
         headers,
         ...(call.body !== undefined ? { body: JSON.stringify(call.body) } : {}),
+        ...(call.maxResponseBytes !== undefined ? { maxResponseBytes: call.maxResponseBytes } : {}),
       };
 
       const idempotent = !NOT_IDEMPOTENT.has(operation);

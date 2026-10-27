@@ -115,8 +115,38 @@ describe('the Vault settings', () => {
       /KEK_VAULT_TRANSIT_MOUNT must be/,
     ],
     ['the namespace has a space', { KEK_VAULT_NAMESPACE: 'team a' }, /KEK_VAULT_NAMESPACE must be/],
+    [
+      'the mount is only slashes',
+      { KEK_VAULT_TRANSIT_MOUNT: '///' },
+      /KEK_VAULT_TRANSIT_MOUNT must be/,
+    ],
+    [
+      'the mount has an empty segment',
+      { KEK_VAULT_TRANSIT_MOUNT: 'kek//transit' },
+      /KEK_VAULT_TRANSIT_MOUNT must be/,
+    ],
   ])('stops the boot when %s', (_what, env, message) => {
     expect(refusal({ ...BASE, ...env }).message).toMatch(message);
+  });
+
+  it('trims every leading and trailing slash of a mount, and keeps one without any', () => {
+    expect(read({ ...BASE, KEK_VAULT_TRANSIT_MOUNT: '///kek/transit///' }).transitMount).toBe(
+      'kek/transit'
+    );
+    expect(read({ ...BASE, KEK_VAULT_TRANSIT_MOUNT: 'kek-transit' }).transitMount).toBe(
+      'kek-transit'
+    );
+  });
+
+  it('refuses a long run of slashes inside a path in linear time', () => {
+    const started = performance.now();
+    const error = refusal({
+      ...BASE,
+      KEK_VAULT_TRANSIT_MOUNT: `kek${'/'.repeat(100_000)}transit`,
+    });
+
+    expect(error.message).toMatch(/KEK_VAULT_TRANSIT_MOUNT must be/);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it('refuses an address with credentials without echoing them', () => {

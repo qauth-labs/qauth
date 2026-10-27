@@ -8,6 +8,7 @@ import {
   encodeKeyAad,
   generateKeyMaterial,
   type KekProvider,
+  type KekWarning,
   KEY_AAD_VERSION,
   type KeyAad,
   runKekProviderContract,
@@ -25,8 +26,10 @@ import {
   tokenFileEnv,
 } from '../testing/double-provider';
 import { createVaultDouble, signerPolicy, type VaultDouble } from '../testing/vault-double';
+import { MAX_KEY_READ_RESPONSE_BYTES } from './https-transport';
 import { parseKekRef } from './kek-ref';
 import { formatCiphertext } from './transit';
+import { KEY_CHECK_MAX_AGE_MS } from './vault-kek-provider';
 
 const files = createSecretFiles();
 afterAll(() => files.cleanup());
@@ -48,22 +51,32 @@ interface Setup {
   readonly provider: KekProvider;
   readonly token: string;
   readonly tokenPath: string;
+  /** What the provider warned about. */
+  readonly warnings: KekWarning[];
   /** Another provider over the same Vault and token: a restarted signer. */
   restart(): KekProvider;
 }
 
-function setup(options: { derived?: boolean; env?: Record<string, string> } = {}): Setup {
+function setup(
+  options: { derived?: boolean; imported?: boolean; env?: Record<string, string> } = {}
+): Setup {
   const clock = createManualClock(START);
   const double = createVaultDouble(clock);
-  double.createKey(DOUBLE_KEY, { derived: options.derived ?? true });
+  double.createKey(DOUBLE_KEY, {
+    derived: options.derived ?? true,
+    imported: options.imported ?? false,
+  });
   const login = tokenFileEnv(double, files);
-  const create = () => doubleProvider(double, { env: { ...login.env, ...options.env }, clock });
+  const warnings: KekWarning[] = [];
+  const create = () =>
+    doubleProvider(double, { env: { ...login.env, ...options.env }, clock, warnings });
   return {
     double,
     clock,
     provider: create(),
     token: login.token,
     tokenPath: login.path,
+    warnings,
     restart: create,
   };
 }
@@ -148,7 +161,7 @@ describe('wrap', () => {
     expect(Buffer.from(String(encrypt.body?.['plaintext']), 'base64')).toEqual(dek);
   });
 
-  it('checks the key, encrypts, then decrypts the result once before handing it back', async () => {
+  it('checks the key, encrypts, then decrypts the result, and requires Vault to refuse it under another context', async () => {
     const { double, provider } = setup();
 
     await provider.wrap(randomBytes(32), AAD);
@@ -158,7 +171,12 @@ describe('wrap', () => {
       `transit/keys/${DOUBLE_KEY}`,
       `transit/encrypt/${DOUBLE_KEY}`,
       `transit/decrypt/${DOUBLE_KEY}`,
+      `transit/decrypt/${DOUBLE_KEY}`,
     ]);
+    const [opened, otherContext] = transitRequests(double, 'decrypt');
+    expect(opened.status).toBe(200);
+    expect(otherContext.status).toBe(400);
+    expect(otherContext.body?.['context']).not.toBe(opened.body?.['context']);
   });
 
   it('names the Transit key and the key version in kekRef, and stores the ciphertext bytes alone', async () => {
@@ -234,6 +252,92 @@ describe('wrap', () => {
 
     expect(String((error as Error).cause)).toMatch(/can leave Vault/);
     expect(transitRequests(double, 'encrypt')).toEqual([]);
+  });
+
+  it.each([
+    ['exportable', { exportable: true }, /can leave Vault \(exportable\)/],
+    [
+      'allow_plaintext_backup',
+      { allowPlaintextBackup: true },
+      /can leave Vault \(allow_plaintext_backup\)/,
+    ],
+    ['deletion_allowed', { deletionAllowed: true }, /can be deleted \(deletion_allowed\)/],
+  ])(
+    'refuses wraps but still unwraps, with a warning, once a key is switched to %s',
+    async (_what, config, reason) => {
+      const { double, clock, provider, warnings } = setup();
+      const dek = randomBytes(32);
+      const { wrapped, kekRef } = await provider.wrap(Buffer.from(dek), AAD);
+
+      double.configureKey(DOUBLE_KEY, config);
+      await clock.advanceBy(KEY_CHECK_MAX_AGE_MS + 1);
+
+      const error = await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+      expect(String((error as Error).cause)).toMatch(reason);
+      expect((await provider.health()).ok).toBe(false);
+      expect(warnings).toEqual([]);
+
+      expect(Buffer.from(await provider.unwrap(wrapped, AAD, kekRef))).toEqual(dek);
+      expect(Buffer.from(await provider.unwrap(wrapped, AAD, kekRef))).toEqual(dek);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatchObject({ variable: 'KEK_VAULT_TRANSIT_KEY' });
+      expect(warnings[0].message).toMatch(reason);
+      expect(warnings[0].message).toMatch(/every wrap is refused/);
+
+      // The warning comes back with the next key check, not with every unwrap.
+      await clock.advanceBy(KEY_CHECK_MAX_AGE_MS + 1);
+      await provider.unwrap(wrapped, AAD, kekRef);
+      expect(warnings).toHaveLength(2);
+    }
+  );
+
+  it('wraps again once deletion_allowed is switched back off', async () => {
+    const { double, provider } = setup();
+    double.configureKey(DOUBLE_KEY, { deletionAllowed: true });
+    await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+
+    double.configureKey(DOUBLE_KEY, { deletionAllowed: false });
+
+    await expect(provider.wrap(randomBytes(32), AAD)).resolves.toMatchObject({
+      kekRef: `vault:transit/keys/${DOUBLE_KEY}#v1`,
+    });
+  });
+
+  it('wraps and unwraps under an imported key, warning once', async () => {
+    const { provider, warnings } = setup({ imported: true });
+
+    const { wrapped, kekRef } = await provider.wrap(randomBytes(32), AAD);
+    await provider.unwrap(wrapped, AAD, kekRef);
+    await provider.wrap(randomBytes(32), AAD);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ variable: 'KEK_VAULT_TRANSIT_KEY' });
+    expect(warnings[0].message).toMatch(/imported_key=true/);
+  });
+
+  it('refuses a wrap the key opens under another context, even inside the key check window', async () => {
+    const { double, provider } = setup();
+    await provider.wrap(randomBytes(32), AAD);
+
+    // Recreated without derivation since the last check, which still holds.
+    double.deleteKey(DOUBLE_KEY);
+    double.createKey(DOUBLE_KEY, { derived: false });
+    const error = await expectCode(provider.wrap(randomBytes(32), AAD), 'KEK_ACCESS_DENIED');
+
+    expect(String((error as Error).cause)).toMatch(/opened a data key under another context/);
+    expect(transitRequests(double, 'keys')).toHaveLength(1);
+    expect(transitRequests(double, 'decrypt').map((request) => request.status)).toEqual([
+      200, 400, 200, 200,
+    ]);
+  });
+
+  it('reads the key with a larger answer size cap, for a key with many versions', async () => {
+    const { double, provider } = setup();
+
+    await provider.wrap(randomBytes(32), AAD);
+
+    expect(transitRequests(double, 'keys')[0].maxResponseBytes).toBe(MAX_KEY_READ_RESPONSE_BYTES);
+    expect(transitRequests(double, 'encrypt')[0].maxResponseBytes).toBeUndefined();
   });
 
   it('refuses a Transit key that is not derived, before sending any data key', async () => {

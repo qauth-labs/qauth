@@ -216,6 +216,12 @@ export function buildIdTokenClaims(payload: SignIdTokenPayload): {
   if (typeof payload.acr === 'string' && payload.acr.length > 0) {
     claims['acr'] = payload.acr;
   }
+  // OIDC `sid` (#549): the browser session behind the code, as back-channel
+  // logout will name it. Absent when no session backs the token, and never an
+  // empty string, which would name no session.
+  if (typeof payload.sid === 'string' && payload.sid.length > 0) {
+    claims['sid'] = payload.sid;
+  }
   return { claims, audience: payload.audience };
 }
 

@@ -16,15 +16,15 @@ Standards-aligned HTTP API design for QAuth auth-server. APIs are resource-orien
 
 ## Quick Reference
 
-| Concern          | QAuth pattern                                                                      |
-| ---------------- | ---------------------------------------------------------------------------------- |
-| **Validation**   | Zod schemas in `app/schemas/`; `fastify-type-provider-zod` on routes               |
-| **Route schema** | `schema: { body?, querystring?, params?, response: { 200: schema } }`              |
-| **Success**      | 200/201/204 with typed body; no extra envelope unless needed                       |
-| **Errors**       | `{ error, statusCode, code?, feedback?, constraint?, retryAfter?, details? }`      |
-| **OAuth tokens** | RFC 6749: snake_case (`access_token`, `refresh_token`, `expires_in`, `token_type`) |
-| **Other JSON**   | camelCase for app-specific fields (e.g. `emailVerified`, `realmId`)                |
-| **Versioning**   | Not in use yet; prefer path `/v1/` or header when introduced                       |
+| Concern          | QAuth pattern                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------- |
+| **Validation**   | Zod schemas in `app/schemas/`; `fastify-type-provider-zod` on routes                           |
+| **Route schema** | `schema: { body?, querystring?, params?, response: { 200: schema } }`                          |
+| **Success**      | 200/201/204 with typed body; no extra envelope unless needed                                   |
+| **Errors**       | RFC 9457 problem+json (`code`, `trace_id`); `{ error, error_description? }` on OAuth endpoints |
+| **OAuth tokens** | RFC 6749: snake_case (`access_token`, `refresh_token`, `expires_in`, `token_type`)             |
+| **Other JSON**   | camelCase for app-specific fields (e.g. `emailVerified`, `realmId`)                            |
+| **Versioning**   | Not in use yet; prefer path `/v1/` or header when introduced                                   |
 
 ## Route Structure (QAuth)
 
@@ -69,12 +69,12 @@ Standards-aligned HTTP API design for QAuth auth-server. APIs are resource-orien
 
 ## Error Response Shape
 
-All errors use a common shape (see `error-handler.ts` and `common.ts`):
+Two formats, chosen by the route's `config.errorFormat` (see `plugins/error-handler.ts`, ADR-019 Decision 7, #513):
 
-- **Required**: `error` (string), `statusCode` (number).
-- **Optional**: `code` (e.g. `VALIDATION_ERROR`), `feedback` (e.g. password rules), `constraint` (e.g. unique violation), `retryAfter` (429), `details` (validation details). In development, `stack` may be included for 500.
+- **`problem`** (default): RFC 9457 `application/problem+json` with `type`, `title`, `status`, `detail`, `instance`, a stable lower-case `code` and `trace_id`; `errors[]` (`pointer`, `message`) for validation failures.
+- **`oauth`** (OAuth protocol endpoints only): `{ error, error_description? }`, no other member.
 
-Use custom error classes from `@qauth-labs/shared-errors` so the handler can set status and optional fields consistently.
+Use custom error classes from `@qauth-labs/shared-errors`; `api-conventions/error-classes.ts` maps each class to its code. Declare a route's by-design error statuses with `'x-qauth-errors': [400, 401]` in its schema; the OpenAPI document references `Problem` or `OAuthError` for them. The codes are listed on the docs site's `reference/problem-types.md`.
 
 ## Naming Conventions
 

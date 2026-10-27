@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { VaultHttpError, VaultTransportError } from './errors';
 import type { VaultHttpRequest, VaultHttpResponse, VaultTransport } from './https-transport';
-import { createVaultClient, VAULT_BACKOFF_MS, VAULT_MAX_ATTEMPTS } from './vault-client';
+import {
+  createVaultClient,
+  SYSTEM_CLOCK,
+  VAULT_BACKOFF_MS,
+  VAULT_MAX_ATTEMPTS,
+} from './vault-client';
 
 /** A transport that answers from a list, recording each request. */
 function scripted(answers: Array<VaultHttpResponse | Error>) {
@@ -66,6 +71,33 @@ describe('the Vault client', () => {
     });
 
     expect(requests[0].headers).toEqual({ 'X-Vault-Request': 'true' });
+  });
+
+  it("passes a call's own answer size cap to the transport, and none otherwise", async () => {
+    const { transport, requests } = scripted([]);
+    const client = createVaultClient({ transport });
+
+    await client.send('read-key', {
+      method: 'GET',
+      path: 'transit/keys/qauth-kek',
+      token: 'hvs.token',
+      maxResponseBytes: 1024 * 1024,
+    });
+    await client.send('encrypt', { method: 'POST', path: 'transit/encrypt/qauth-kek', body: {} });
+
+    expect(requests[0].maxResponseBytes).toBe(1024 * 1024);
+    expect(requests[1]).not.toHaveProperty('maxResponseBytes');
+  });
+
+  it('ages on a monotonic clock that a wall-clock step does not move', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    try {
+      const first = SYSTEM_CLOCK.now();
+      expect(SYSTEM_CLOCK.now()).toBeGreaterThanOrEqual(first);
+      expect(SYSTEM_CLOCK.now()).toBeGreaterThan(0);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it.each([412, 429, 500, 502, 503, 504])(

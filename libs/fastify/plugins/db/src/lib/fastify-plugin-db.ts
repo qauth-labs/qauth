@@ -15,6 +15,7 @@ import {
   createRealmsRepository,
   createRefreshTokensRepository,
   createSessionsRepository,
+  createSsfStreamsRepository,
   createUserAttributesRepository,
   createUserCredentialsRepository,
   createUsersRepository,
@@ -30,6 +31,7 @@ import {
   type RealmsRepository,
   type RefreshTokensRepository,
   type SessionsRepository,
+  type SsfStreamsRepository,
   type UserAttributesRepository,
   type UserCredentialsRepository,
   type UsersRepository,
@@ -90,6 +92,12 @@ declare module 'fastify' {
        * lifetimes and the last-seen throttle.
        */
       sessions: SessionsRepository;
+      /**
+       * The streams of the Shared Signals Framework transmitter (#410): the
+       * stream management routes, the status endpoint and the SSF delivery
+       * route read and write them.
+       */
+      ssfStreams: SsfStreamsRepository;
     };
   }
 }
@@ -141,6 +149,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       eventDeliveries: createEventDeliveriesRepository(database.db),
       eventRetention: createEventRetentionRepository(database.db),
       sessions: createSessionsRepository(database.db),
+      ssfStreams: createSsfStreamsRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {

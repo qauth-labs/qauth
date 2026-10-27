@@ -59,12 +59,18 @@ export interface DpopPluginOptions extends FastifyPluginOptions {
   /** `DPOP_ENABLED`. Off, the plugin decorates `fastify.dpop` with `null`. */
   readonly enabled: boolean;
   /**
-   * The server's public base URL, from its configuration: the issuer, path
-   * included, as discovery builds every endpoint URL from it. A proof's `htu`
-   * is compared with this base and the request path, so it names the endpoint
-   * URL discovery publishes. Never the request's `Host` header.
+   * The server's public base URL: the issuer, path included, as discovery
+   * builds every endpoint URL from it. A proof's `htu` is compared with this
+   * base and the request path, so it names the endpoint URL discovery
+   * publishes. Never the request's `Host` header.
+   *
+   * A string is one base for every request, checked at boot. A function gives
+   * the base of each request, for a server with several issuers: the auth
+   * server passes the issuer of the realm the request was resolved to
+   * (ADR-019 Decision 1, #490). It must not read the request's authority
+   * either; a base it returns is checked when the proof is.
    */
-  readonly baseUrl: string;
+  readonly baseUrl: string | ((request: FastifyRequest) => string);
   /** The allowlist; default the verifier's `DEFAULT_DPOP_ALGORITHMS`. */
   readonly algorithms?: readonly DpopAlgorithm[];
   /** The clock, in epoch milliseconds. Defaults to `Date.now`. */
@@ -90,6 +96,16 @@ function requestUrlUnder(baseUrl: string, target: string): string {
 }
 
 /**
+ * A base URL as the request URLs are built on it: checked to be an absolute
+ * http(s) URL, and without a trailing slash, as discovery drops it from the
+ * issuer (RFC 8414 §2).
+ */
+function canonicalBaseUrl(baseUrl: string): string {
+  dpopRequestUrl(baseUrl, '/');
+  return baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+}
+
+/**
  * The Redis key prefix of the auth server's used proofs. The verifier hashes
  * each proof's key thumbprint and `jti` into the rest of the key.
  */
@@ -110,10 +126,12 @@ export const dpopPlugin = fp<DpopPluginOptions>(
       fastify.decorate('dpop', null);
       return;
     }
-    // Refused here, at boot, rather than on the first proof. A trailing slash
-    // is dropped, as discovery drops it from the issuer (RFC 8414 §2).
-    dpopRequestUrl(options.baseUrl, '/');
-    const baseUrl = options.baseUrl.endsWith('/') ? options.baseUrl.slice(0, -1) : options.baseUrl;
+    // A fixed base is refused here, at boot, rather than on the first proof.
+    const { baseUrl: configured } = options;
+    const fixedBaseUrl = typeof configured === 'string' ? canonicalBaseUrl(configured) : undefined;
+    const baseUrlOf = (request: FastifyRequest): string =>
+      fixedBaseUrl ??
+      canonicalBaseUrl((configured as (request: FastifyRequest) => string)(request));
 
     const verifier = createDpopVerifier({
       // ioredis's `set` overloads include `SET key value PX ms NX`, the one
@@ -131,7 +149,7 @@ export const dpopPlugin = fp<DpopPluginOptions>(
         return verifier.verify({
           proof: request.headers.dpop,
           method: request.method,
-          url: requestUrlUnder(baseUrl, request.url),
+          url: requestUrlUnder(baseUrlOf(request), request.url),
           ...(check.accessToken === undefined ? {} : { accessToken: check.accessToken }),
           ...(check.expectedThumbprint === undefined
             ? {}

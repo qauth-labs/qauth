@@ -9,11 +9,17 @@
  * and `api` cannot get a `logout+jwt`.
  *
  * The protection reaches as far as the verifier checks `typ`. QAuth's own
- * verifiers resolve access tokens against `token_signing` keys only. Both
- * purposes publish in one realm JWKS, though, so a relying party that does not
- * require `logout+jwt` (OpenID Connect Back-Channel Logout leaves explicit
- * typing optional) can be handed a `JWT`-typed token from `token_signing`
- * that carries a logout `events` claim.
+ * verifiers resolve access tokens against `token_signing` keys only, and the
+ * two purposes are published apart (d-1026-09): the realm JWKS holds only
+ * `token_signing` keys ({@link REALM_JWKS_PURPOSES}), and the SSF transmitter
+ * serves the `event_signing` keys at its own `jwks_uri`. A relying party that
+ * reads the realm JWKS and skips the `typ` check therefore still cannot take a
+ * Security Event Token for an access token, nor the other way round.
+ *
+ * A logout token is verified against the realm JWKS (OpenID Connect
+ * Back-Channel Logout 1.0 §2.6), which holds no `event_signing` key. Where
+ * back-channel logout publishes its keys is for its own issue to settle
+ * before it ships.
  *
  * A purpose that is not listed is not signed through `signJws` at all. The
  * scoped purposes have their own operations (`signWebhook`,
@@ -57,13 +63,18 @@ export function isTypAllowed(purpose: JwsSigningPurpose, typ: unknown): typ is J
 
 /**
  * The purposes whose published keys make up the realm's JWKS (`jwks_uri`):
- * the keys that verify the realm's access tokens, ID tokens, logout tokens and
- * Security Event Tokens. The other published purposes appear elsewhere: the
- * federation keys in the entity configuration, the OID4VP keys in the request
- * object and its certificate, and an upstream client-assertion key in the JWKS
- * served to that provider (`getUpstreamJwks`, #547).
+ * the keys that verify the realm's access tokens and ID tokens. The
+ * `event_signing` keys are published apart, at the SSF transmitter's own JWKS
+ * (`getVerificationKeys`, d-1026-09), so a token of one purpose never verifies
+ * against the key set of the other. The other published purposes appear
+ * elsewhere too: the federation keys in the entity configuration, the OID4VP
+ * keys in the request object and its certificate, and an upstream
+ * client-assertion key in the JWKS served to that provider
+ * (`getUpstreamJwks`, #547).
  */
-export const REALM_JWKS_PURPOSES: readonly JwsSigningPurpose[] = JWS_SIGNING_PURPOSES;
+export const REALM_JWKS_PURPOSES: readonly JwsSigningPurpose[] = Object.freeze([
+  'token_signing',
+] as const);
 
 /**
  * The `typ` of a client assertion: a client authentication JWT, explicitly

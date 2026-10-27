@@ -5,8 +5,10 @@ a worker that hands every event to every destination whose filter matches it, **
 and with the event's own id. Webhooks (#538) and Shared Signals Framework streams (#410) plug in
 as routes.
 
-> **Status:** the role and its queue are complete; no route exists yet. The auth server starts the
-> role in-process with no route, and it then does nothing (`@qauth-labs/fastify-plugin-event-delivery`).
+> **Status:** the role and its queue are complete. The auth server starts the role in-process
+> (`@qauth-labs/fastify-plugin-event-delivery`); its one route so far is the SSF route of
+> `@qauth-labs/server-ssf` (#410), present while `SSF_TRANSMITTER_ENABLED` is on. With no route the
+> role does nothing.
 
 ## Usage
 
@@ -45,7 +47,8 @@ await role.stop();
 - **`store`** is the delivery queue: `createEventDeliveriesRepository` of `@qauth-labs/infra-db`,
   connected as the delivery role's own database user (`eventDeliveryGrantStatements`).
 - **`signer`** is the handle the signer role gives the delivery role (`deliverySignerHandle` in
-  `@qauth-labs/fastify-plugin-event-delivery`). It signs webhook messages and event tokens; the
+  `@qauth-labs/fastify-plugin-event-delivery`). It signs webhook messages and event tokens, and
+  decrypts a destination's stored secret, such as an SSF receiver's `Authorization` header; the
   role never sees a key.
 
 ## How it works
@@ -64,6 +67,9 @@ for good after `maxAttempts`.
 - **Retries.** Exponential backoff with jitter (`retry`): 30 seconds, doubling, at most 6 hours,
   less up to 20%, by default; 12 attempts by default. A route marks a refusal no retry can change
   with `retry: false`, and the delivery ends `failed` at once. A failed delivery stays in the queue.
+- **Holds.** A route returns `{ ok: false, hold: true }` when its destination holds its events,
+  such as a paused SSF stream. That is no attempt: it is not counted, records no failure, and the
+  delivery comes due again after 30 seconds (`DELIVERY_HOLD_INTERVAL_MS`), however long the hold.
 - **A failing listing.** When a route's `destinations()` throws, nothing is fanned out that cycle,
   so no destination misses an event because its route could not be asked.
 - **Stopping.** `stop()` claims nothing more, waits for the attempts in flight up to

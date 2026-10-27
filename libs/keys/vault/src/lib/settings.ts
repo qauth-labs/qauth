@@ -159,7 +159,13 @@ function vaultOrigin(value: string): string {
 
 /** A mount path or namespace, without leading or trailing `/`. */
 function vaultPath(variable: string, value: string, what: string): string {
-  const path = value.replace(/^\/+|\/+$/g, '');
+  // Index loops, not a regular expression: `/\/+$/` backtracks in quadratic
+  // time over a long run of `/` that does not end the value.
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '/') start++;
+  while (end > start && value[end - 1] === '/') end--;
+  const path = value.slice(start, end);
   if (path === '' || path.length > MAX_PATH_LENGTH || !PATH.test(path)) {
     throw new InvalidConfigurationError(
       `${variable} must be ${what}: segments of letters, digits, "_", "-" and ".", separated by "/". See this error's "details" for the value.`,

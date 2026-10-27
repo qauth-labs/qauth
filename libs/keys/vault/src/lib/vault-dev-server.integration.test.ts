@@ -323,7 +323,7 @@ describe('vault against a Vault dev server', () => {
   );
 
   live(
-    'logs in again with AppRole once the token reaches its maximum TTL',
+    'still unwraps and wraps after the AppRole token reaches its maximum TTL',
     async () => {
       const role = await signerRole(KEY, { ttl: '4s', maxTtl: '6s' });
       const kek = provider({

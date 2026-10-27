@@ -15,13 +15,13 @@ import {
   SUCCESS_MESSAGES,
 } from '../../constants';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmMailLink } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   type ResendVerificationRequest,
   resendVerificationResponseSchema,
   resendVerificationSchema,
 } from '../../schemas/auth';
-import { errorResponseSchema } from '../../schemas/common';
 
 /**
  * Resend verification email route
@@ -60,10 +60,10 @@ export default async function (fastify: FastifyInstance) {
           'Request a new verification email. Rate limited per IP and per email. Always returns success to prevent email enumeration.',
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         body: resendVerificationSchema,
         response: {
           200: resendVerificationResponseSchema,
-          429: errorResponseSchema,
         },
       },
       config: {
@@ -186,7 +186,9 @@ export default async function (fastify: FastifyInstance) {
         // logged and does not fail the request: the user can try again later.
         const recipient = credential.externalSub;
         const send: Promise<void> = Promise.resolve()
-          .then(() => fastify.emailService.sendVerificationEmail(recipient, token))
+          .then(() =>
+            fastify.emailService.sendVerificationEmail(recipient, token, realmMailLink(realm))
+          )
           .then(
             () => undefined,
             (error: unknown) => {

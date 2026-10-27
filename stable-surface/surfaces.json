@@ -33,6 +33,15 @@
       "maximalOf": "openapi"
     },
     {
+      "name": "admin-permissions",
+      "description": "The admin permission catalog: every permission id, retired ones included, with its class (ADR-019 Decision 7, #507). Custom roles store the ids, so a removed permission or a changed class is a break; a new or retired permission is not.",
+      "format": "json-schema",
+      "role": "output",
+      "generator": "pnpm exec nx run auth-server:admin-permissions-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/admin-permissions.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-envelope",
       "description": "The envelope every QAuth event carries, of any type (ADR-018 §5, #456). Compared as both: QAuth emits it, and the events it stored under an earlier release must still match it.",
       "format": "json-schema",
@@ -174,6 +183,15 @@
       "role": "both",
       "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
       "path": "apps/docs-site/public/schemas/events/request.csrf_rejected.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-ssf-stream-verification-requested-v1",
+      "description": "The urn:qauth:event:ssf.stream.verification_requested:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #410).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/ssf.stream.verification_requested.v1-rc.0.json",
       "stability": "stable"
     },
     {
@@ -345,6 +363,167 @@
       "role": "both",
       "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
       "path": "apps/docs-site/public/schemas/events/wallet.presentation_received.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-api-v1",
+      "description": "The Interaction API v1-rc.0 contract: the OpenAPI 3.1 document of /interaction/v1-rc.0, with every step's schema (ADR-019 Decision 6, ADR-018 §5, #590). The auth server serves the same document at /interaction/v1-rc.0/openapi.json.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/openapi.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-identifier-v1",
+      "description": "The urn:qauth:ia:identifier:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/identifier.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-password-v1",
+      "description": "The urn:qauth:ia:password:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/password.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-email-code-v1",
+      "description": "The urn:qauth:ia:email_code:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/email_code.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-new-password-v1",
+      "description": "The urn:qauth:ia:new_password:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/new_password.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-password-reset-v1",
+      "description": "The urn:qauth:ia:password_reset:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/password_reset.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-captcha-v1",
+      "description": "The urn:qauth:ia:captcha:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/captcha.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-webauthn-get-v1",
+      "description": "The urn:qauth:ia:webauthn_get:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/webauthn_get.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-webauthn-create-v1",
+      "description": "The urn:qauth:ia:webauthn_create:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/webauthn_create.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-totp-v1",
+      "description": "The urn:qauth:ia:totp:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/totp.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-recovery-code-v1",
+      "description": "The urn:qauth:ia:recovery_code:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/recovery_code.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-recovery-codes-v1",
+      "description": "The urn:qauth:ia:recovery_codes:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/recovery_codes.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-totp-setup-v1",
+      "description": "The urn:qauth:ia:totp_setup:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/totp_setup.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-consent-v1",
+      "description": "The urn:qauth:ia:consent:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/consent.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-select-account-v1",
+      "description": "The urn:qauth:ia:select_account:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/select_account.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-device-code-v1",
+      "description": "The urn:qauth:ia:device_code:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/device_code.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-device-confirm-v1",
+      "description": "The urn:qauth:ia:device_confirm:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/device_confirm.json",
+      "stability": "stable"
+    },
+    {
+      "name": "interaction-step-logout-confirm-v1",
+      "description": "The urn:qauth:ia:logout_confirm:v1-rc.0 step as one record: its params, answer, personal data, errors and amr (ADR-017 Decision 3, #590). Compared as both: QAuth emits the params and personal data and accepts the answer.",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-interaction-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/interaction/v1-rc.0/steps/logout_confirm.json",
       "stability": "stable"
     }
   ]

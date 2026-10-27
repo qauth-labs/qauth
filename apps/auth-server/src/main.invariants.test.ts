@@ -74,6 +74,26 @@ describe('main.ts security invariants', () => {
  * `env.test.ts`); this pins that `main.ts` logs them at boot.
  */
 describe('main.ts boot warnings', () => {
+  it("answers the router's refusals and unreadable requests with problem documents (#513)", () => {
+    // Without them Fastify sends its own { error, code, message, statusCode }
+    // envelope for a path that is not valid percent-encoding, an over-long
+    // path parameter, a malformed request or a request timeout.
+    expect(mainCode).toMatch(/frameworkErrors:\s*answerFrameworkError/);
+    expect(mainCode).toMatch(/clientErrorHandler:\s*answerClientError/);
+  });
+
+  it("answers the root instance's own routes and callNotFound with problem documents (#513)", () => {
+    // Swagger UI's static files are root routes: a missing one reaches the
+    // root not-found handler, and a failure the root error handler. Fastify's
+    // defaults answer its `{ message, error, statusCode }` envelope.
+    expect(mainCode).toMatch(/server\.setNotFoundHandler\(\s*answerRouteNotFound\s*\)/);
+    expect(mainCode).toMatch(/await server\.register\(\s*errorHandler\s*\)/);
+    // Registered before the root's own routes, so they answer through it.
+    expect(mainCode.indexOf('server.register(errorHandler)')).toBeLessThan(
+      mainCode.indexOf('server.register(swagger')
+    );
+  });
+
   it('logs every env deprecation warning through the server logger', () => {
     expect(mainCode).toMatch(
       /for \(const \w+ of envDeprecationWarnings\)\s*\{\s*server\.log\.warn\(/

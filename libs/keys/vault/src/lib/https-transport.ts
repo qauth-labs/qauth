@@ -14,7 +14,8 @@ import { Agent, request as httpsRequest } from 'node:https';
  *   off. `KEK_VAULT_CA_CERT_FILE` replaces Node's CA store for these calls.
  * - One deadline per request, connection and TLS handshake included, so a
  *   Vault that stops answering fails the call instead of holding the signer.
- * - A cap on the answer's size; a larger answer is dropped unread.
+ * - A cap on the answer's size, {@link MAX_RESPONSE_BYTES} unless the request
+ *   sets its own; a larger answer is dropped unread.
  * - Redirects are not followed: a request carries a token, which must reach
  *   no other host. A standby that answers with a redirect fails the attempt.
  */
@@ -27,6 +28,8 @@ export interface VaultHttpRequest {
   readonly headers: Readonly<Record<string, string>>;
   /** The JSON body, for a POST. */
   readonly body?: string;
+  /** The largest answer read for this request; {@link MAX_RESPONSE_BYTES} when unset. */
+  readonly maxResponseBytes?: number;
 }
 
 /** Vault's answer. */
@@ -44,6 +47,13 @@ export const VAULT_REQUEST_TIMEOUT_MS = 5_000;
 
 /** The largest answer read, in bytes. A Transit or token answer is well under 4 KiB. */
 export const MAX_RESPONSE_BYTES = 64 * 1024;
+
+/**
+ * The largest answer the key read (`<mount>/keys/<name>`) may have, in bytes.
+ * It lists every key version from `min_decryption_version` on, about 20 bytes
+ * each, so a key rotated hourly for months outgrows {@link MAX_RESPONSE_BYTES}.
+ */
+export const MAX_KEY_READ_RESPONSE_BYTES = 1024 * 1024;
 
 /** What {@link createHttpsTransport} needs. */
 export interface HttpsTransportOptions {
@@ -104,6 +114,7 @@ export function createHttpsTransport(options: HttpsTransportOptions): VaultTrans
         outcome();
       };
 
+      const maxResponseBytes = request.maxResponseBytes ?? MAX_RESPONSE_BYTES;
       const headers: Record<string, string | number> = {
         ...request.headers,
         accept: 'application/json',
@@ -129,11 +140,11 @@ export function createHttpsTransport(options: HttpsTransportOptions): VaultTrans
           let size = 0;
           response.on('data', (chunk: Buffer) => {
             size += chunk.length;
-            if (size > MAX_RESPONSE_BYTES) {
+            if (size > maxResponseBytes) {
               fail(
                 new TransportFailure(
                   'ERR_VAULT_RESPONSE_TOO_LARGE',
-                  `Vault's answer is larger than ${MAX_RESPONSE_BYTES} bytes`
+                  `Vault's answer is larger than ${maxResponseBytes} bytes`
                 )
               );
               return;

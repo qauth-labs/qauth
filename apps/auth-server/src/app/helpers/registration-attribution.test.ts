@@ -139,13 +139,15 @@ describe('resolveRegistrationDeveloperId', () => {
   });
 
   it('checks the management token only after requireJwt verified it', async () => {
+    const forged = new JWTInvalidError('bad signature');
     const fastify = makeFastify(() => {
-      throw new JWTInvalidError('bad signature');
+      throw forged;
     });
 
+    // requireJwt's own refusal, unchanged.
     await expect(
       resolveRegistrationDeveloperId(fastify, makeRequest('Bearer forged.token'))
-    ).rejects.toThrow('bad signature');
+    ).rejects.toBe(forged);
     expect(assertManagementToken).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,8 @@ import type { VaultHttpRequest, VaultHttpResponse, VaultTransport } from '../lib
  *   answers them (the dev-server suite pins the same messages).
  * - Tokens expire on the test's clock, renew up to their maximum TTL, and can
  *   be revoked. A token's policy names the paths it may use, as an ACL
- *   policy does; the default policy grants lookup-self and renew-self.
+ *   policy does; the default policy grants lookup-self, renew-self and
+ *   revoke-self.
  *
  * It never leaves the process. The dev-server suite runs the provider against
  * a real Vault.
@@ -40,6 +41,7 @@ export function signerPolicy(name = 'qauth-kek', mount = 'transit'): DoublePolic
 const DEFAULT_POLICY: DoublePolicy = {
   'auth/token/lookup-self': ['read'],
   'auth/token/renew-self': ['update'],
+  'auth/token/revoke-self': ['update'],
 };
 
 interface DoubleKey {
@@ -47,6 +49,8 @@ interface DoubleKey {
   readonly type: string;
   exportable: boolean;
   allowPlaintextBackup: boolean;
+  deletionAllowed: boolean;
+  readonly imported: boolean;
   readonly versions: Map<number, Buffer>;
   latest: number;
   minDecryptionVersion: number;
@@ -67,6 +71,7 @@ interface DoubleRole {
   readonly tokenTtlMs: number;
   readonly tokenMaxTtlMs: number;
   readonly policy: DoublePolicy;
+  readonly defaultPolicy: boolean;
 }
 
 /** What {@link VaultDouble.createToken} takes. */
@@ -94,6 +99,8 @@ export interface DoubleRequest {
   readonly token: string | undefined;
   readonly namespace: string | undefined;
   readonly body: Record<string, unknown> | undefined;
+  /** The answer size cap the request set, if any. */
+  readonly maxResponseBytes: number | undefined;
   readonly status: number;
 }
 
@@ -104,14 +111,17 @@ export interface VaultDouble {
   readonly requests: DoubleRequest[];
   /** The root token: every path, no expiry. */
   readonly rootToken: string;
-  createKey(name: string, options?: { derived?: boolean; type?: string; mount?: string }): void;
+  createKey(
+    name: string,
+    options?: { derived?: boolean; type?: string; mount?: string; imported?: boolean }
+  ): void;
   /** Add a key version; new encryptions use it. */
   rotateKey(name: string, mount?: string): number;
   setMinDecryptionVersion(name: string, version: number, mount?: string): void;
-  /** Change a key's export settings, as `<mount>/keys/<name>/config` does. */
+  /** Change a key's export and deletion settings, as `<mount>/keys/<name>/config` does. */
   configureKey(
     name: string,
-    config: { exportable?: boolean; allowPlaintextBackup?: boolean }
+    config: { exportable?: boolean; allowPlaintextBackup?: boolean; deletionAllowed?: boolean }
   ): void;
   /** Delete a key, as Vault does once `deletion_allowed` is set. */
   deleteKey(name: string, mount?: string): void;
@@ -125,6 +135,8 @@ export interface VaultDouble {
     readonly tokenMaxTtlMs: number;
     readonly policy: DoublePolicy;
     readonly mount?: string;
+    /** Whether the role's tokens get the default policy too. Defaults to `true`. */
+    readonly defaultPolicy?: boolean;
   }): { roleId: string; secretId: string };
   revokeSecretId(roleId: string, secretId: string): void;
   /** Answer the next `times` requests whose path matches `path` with `fault`. */
@@ -211,12 +223,20 @@ export function createVaultDouble(
     return keys.get(`${mount}/${name}`);
   }
 
-  function addKey(mount: string, name: string, derived: boolean, type: string): DoubleKey {
+  function addKey(
+    mount: string,
+    name: string,
+    derived: boolean,
+    type: string,
+    imported = false
+  ): DoubleKey {
     const key: DoubleKey = {
       derived,
       type,
       exportable: false,
       allowPlaintextBackup: false,
+      deletionAllowed: false,
+      imported,
       versions: new Map([[1, randomBytes(32)]]),
       latest: 1,
       minDecryptionVersion: 1,
@@ -294,6 +314,7 @@ export function createVaultDouble(
         ttlMs: role.tokenTtlMs,
         maxTtlMs: role.tokenMaxTtlMs,
         policy: role.policy,
+        defaultPolicy: role.defaultPolicy,
       });
       return {
         status: 200,
@@ -323,9 +344,16 @@ export function createVaultDouble(
             ttl,
             renewable: entry.renewable,
             expire_time: entry.expiresAt === null ? null : new Date(entry.expiresAt).toISOString(),
+            policies: entry.policy === 'root' ? ['root'] : ['default', 'signer'],
           },
         },
       };
+    }
+
+    if (path === 'auth/token/revoke-self' && method === 'POST') {
+      demand(entry, path, 'update');
+      entry.revoked = true;
+      return { status: 204, body: undefined };
     }
 
     if (path === 'auth/token/renew-self' && method === 'POST') {
@@ -367,6 +395,8 @@ export function createVaultDouble(
               supports_decryption: true,
               exportable: key.exportable,
               allow_plaintext_backup: key.allowPlaintextBackup,
+              deletion_allowed: key.deletionAllowed,
+              imported_key: key.imported,
             },
           },
         };
@@ -425,7 +455,15 @@ export function createVaultDouble(
     const token = request.headers['X-Vault-Token'];
     const namespace = request.headers['X-Vault-Namespace'];
     const record = (status: number) =>
-      requests.push({ method: request.method, path, token, namespace, body, status });
+      requests.push({
+        method: request.method,
+        path,
+        token,
+        namespace,
+        body,
+        maxResponseBytes: request.maxResponseBytes,
+        status,
+      });
 
     const fault = faults.find((entry) => entry.path === undefined || entry.path.test(path));
     if (fault !== undefined) {
@@ -460,7 +498,8 @@ export function createVaultDouble(
         options.mount ?? 'transit',
         name,
         options.derived ?? true,
-        options.type ?? 'aes256-gcm96'
+        options.type ?? 'aes256-gcm96',
+        options.imported ?? false
       );
     },
 
@@ -485,6 +524,7 @@ export function createVaultDouble(
       if (config.allowPlaintextBackup !== undefined) {
         key.allowPlaintextBackup = config.allowPlaintextBackup;
       }
+      if (config.deletionAllowed !== undefined) key.deletionAllowed = config.deletionAllowed;
     },
 
     deleteKey(name, mount = 'transit') {
@@ -511,6 +551,7 @@ export function createVaultDouble(
         tokenTtlMs: options.tokenTtlMs,
         tokenMaxTtlMs: options.tokenMaxTtlMs,
         policy: options.policy,
+        defaultPolicy: options.defaultPolicy ?? true,
       });
       return { roleId, secretId };
     },

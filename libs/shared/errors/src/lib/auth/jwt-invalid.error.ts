@@ -1,9 +1,11 @@
 /**
- * Error thrown when a JWT token is invalid (format, signature, etc.)
+ * Error thrown when an access token that was presented is not valid (format,
+ * signature, audience, subject, etc.). A request that presented none gets a
+ * `MissingAccessTokenError`.
  */
 export class JWTInvalidError extends Error {
   readonly statusCode = 401;
-  readonly code = 'JWT_INVALID';
+  readonly code = 'INVALID_ACCESS_TOKEN';
 
   constructor(message = 'Invalid JWT token') {
     super(message);

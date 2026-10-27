@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { isKeyCustodyError } from '@qauth-labs/server-keys';
-import { KEY_AAD_VERSION, type KeyAad } from '@qauth-labs/server-keys/custody';
+import { type KekWarning, KEY_AAD_VERSION, type KeyAad } from '@qauth-labs/server-keys/custody';
 import { createManualClock, type ManualClock } from '@qauth-labs/shared-testing';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
@@ -41,6 +41,10 @@ function vault(): { double: VaultDouble; clock: ManualClock } {
 
 function paths(double: VaultDouble, path: string) {
   return double.requests.filter((request) => request.path === path);
+}
+
+function transitRequests(double: VaultDouble, operation: string) {
+  return paths(double, `transit/${operation}/${DOUBLE_KEY}`);
 }
 
 /** Wait for the work a timer started, which runs on real I/O promises. */
@@ -236,6 +240,38 @@ describe('renewing the token', () => {
     expect(clock.pending()).toEqual([]);
   });
 
+  it('revokes the AppRole token it replaced at the maximum TTL, and a failed revocation fails nothing', async () => {
+    const { double, clock } = vault();
+    const provider = doubleProvider(double, {
+      env: appRoleEnv(double, files, { tokenTtlMs: 10 * MINUTE, tokenMaxTtlMs: 30 * MINUTE }).env,
+      clock,
+    });
+    const sealed = await provider.wrap(randomBytes(32), AAD);
+    const firstToken = transitRequests(double, 'encrypt')[0].token as string;
+
+    for (let step = 0; step < 35; step++) {
+      await clock.advanceBy(MINUTE);
+      await flush();
+    }
+
+    // 204: Vault still accepted the token, so it was revoked before it expired.
+    const revocations = paths(double, 'auth/token/revoke-self');
+    expect(revocations.map((request) => [request.token, request.status])).toEqual([
+      [firstToken, 204],
+    ]);
+
+    // Vault cannot revoke the next one: the re-login and the calls still succeed.
+    double.failNext({ status: 500 }, { times: 1_000, path: /revoke-self/ });
+    for (let step = 0; step < 35; step++) {
+      await clock.advanceBy(MINUTE);
+      await flush();
+    }
+    expect(paths(double, 'auth/approle/login').length).toBeGreaterThanOrEqual(3);
+    expect(paths(double, 'auth/token/revoke-self').length).toBeGreaterThan(1);
+    await provider.unwrap(sealed.wrapped, AAD, sealed.kekRef);
+    await provider.wrap(randomBytes(32), AAD);
+  });
+
   it('tries a renewal Vault could not answer again while the token lasts', async () => {
     const { double, clock } = vault();
     const login = tokenFileEnv(double, files, { ttlMs: HOUR, maxTtlMs: 24 * HOUR });
@@ -328,5 +364,116 @@ describe('the token session', () => {
 
     expect((await credentials.login(client)).ttlMs).toBe(1);
     expect((await credentials.login(client)).ttlMs).toBe(0);
+  });
+});
+
+describe('warnings about the token', () => {
+  it('warns once, naming the variable and not the token, about a root token that never expires', async () => {
+    const { double, clock } = vault();
+    const warnings: KekWarning[] = [];
+    const provider = doubleProvider(double, {
+      env: { KEK_VAULT_TOKEN_FILE: files.write(double.rootToken) },
+      clock,
+      warnings,
+    });
+
+    await provider.wrap(randomBytes(32), AAD);
+    await provider.wrap(randomBytes(32), AAD);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].variable).toBe('KEK_VAULT_TOKEN_FILE');
+    expect(warnings[0].message).toMatch(/has the root policy and never expires/);
+    expect(warnings[0].message).not.toContain(double.rootToken);
+  });
+
+  it('warns about a token without expiry, and not about a signer token with a TTL', async () => {
+    const { double, clock } = vault();
+    const warnings: KekWarning[] = [];
+    const forever = double.createToken({ ttlMs: 0, policy: signerPolicy(DOUBLE_KEY) });
+    await doubleProvider(double, {
+      env: { KEK_VAULT_TOKEN_FILE: files.write(forever) },
+      clock,
+      warnings,
+    }).wrap(randomBytes(32), AAD);
+    await doubleProvider(double, { env: tokenFileEnv(double, files).env, clock, warnings }).wrap(
+      randomBytes(32),
+      AAD
+    );
+    await doubleProvider(double, { env: appRoleEnv(double, files).env, clock, warnings }).wrap(
+      randomBytes(32),
+      AAD
+    );
+
+    expect(warnings.map((warning) => warning.message)).toEqual([
+      expect.stringMatching(/logged in with never expires/),
+    ]);
+  });
+});
+
+describe('a policy that denies lookup-self', () => {
+  it('counts every later 403 as the policy refusal once a fresh AppRole token is refused lookup-self', async () => {
+    const { double, clock } = vault();
+    const { roleId, secretId } = double.createAppRole({
+      tokenTtlMs: HOUR,
+      tokenMaxTtlMs: 24 * HOUR,
+      // No default policy, so no lookup-self; no decrypt either.
+      defaultPolicy: false,
+      policy: {
+        [`transit/keys/${DOUBLE_KEY}`]: ['read'],
+        [`transit/encrypt/${DOUBLE_KEY}`]: ['update'],
+      },
+    });
+    const provider = doubleProvider(double, {
+      env: { KEK_VAULT_ROLE_ID: roleId, KEK_VAULT_SECRET_ID_FILE: files.write(secretId) },
+      clock,
+    });
+
+    for (let call = 0; call < 5; call++) {
+      const error = await provider.wrap(randomBytes(32), AAD).catch((reason: unknown) => reason);
+      expect(isKeyCustodyError(error, 'KEK_ACCESS_DENIED')).toBe(true);
+    }
+
+    // One login, then one more to tell a dead token from the policy: no more.
+    expect(paths(double, 'auth/approle/login')).toHaveLength(2);
+    expect(paths(double, 'auth/token/lookup-self')).toHaveLength(2);
+  });
+});
+
+describe('closing the provider', () => {
+  it('stops the renewal and revokes an AppRole token', async () => {
+    const { double, clock } = vault();
+    const provider = doubleProvider(double, { env: appRoleEnv(double, files).env, clock });
+    await provider.wrap(randomBytes(32), AAD);
+    const token = transitRequests(double, 'encrypt')[0].token as string;
+    expect(clock.pending()).toHaveLength(1);
+
+    await provider.close?.();
+    await flush();
+
+    expect(clock.pending()).toEqual([]);
+    expect(paths(double, 'auth/token/revoke-self').map((request) => request.token)).toEqual([
+      token,
+    ]);
+    await expect(provider.wrap(randomBytes(32), AAD)).rejects.toBeDefined();
+  });
+
+  it('stops the renewal of a token from a file without revoking it, and a failed revocation is not thrown', async () => {
+    const { double, clock } = vault();
+    const login = tokenFileEnv(double, files);
+    const provider = doubleProvider(double, { env: login.env, clock });
+    await provider.wrap(randomBytes(32), AAD);
+
+    await provider.close?.();
+    await flush();
+
+    expect(clock.pending()).toEqual([]);
+    expect(paths(double, 'auth/token/revoke-self')).toEqual([]);
+
+    const appRole = doubleProvider(double, { env: appRoleEnv(double, files).env, clock });
+    await appRole.wrap(randomBytes(32), AAD);
+    double.failNext({ status: 403 }, { path: /revoke-self/ });
+    expect(() => appRole.close?.()).not.toThrow();
+    await flush();
+    expect(paths(double, 'auth/token/revoke-self').map((request) => request.status)).toEqual([403]);
   });
 });

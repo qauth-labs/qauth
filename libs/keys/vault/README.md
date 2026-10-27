@@ -62,8 +62,17 @@ its own key, so a wrapped data key copied to another realm or key does not open.
 context of a key that is not derived, without an error, which would drop that binding; the
 provider reads the key's settings before its first wrap or unwrap, and again every 15 minutes
 while it is used, and refuses such a key with `KEK_ACCESS_DENIED`. `chacha20-poly1305` is accepted
-too. A key with `exportable=true` or `allow_plaintext_backup=true` is refused the same way: either
-lets the KEK leave Vault.
+too. Every wrap is also decrypted once more under another context, which Vault must refuse, so
+each stored row proves the key derived, even between two checks.
+
+A key with `exportable=true` or `allow_plaintext_backup=true` lets the KEK leave Vault, and one
+with `deletion_allowed=true` can be deleted with every data key it wraps. Such a key wraps nothing:
+each wrap, and so `health()`, fails with `KEK_ACCESS_DENIED`. Unwraps go on, with a warning at each
+key check, because Vault cannot switch the first two off again and refusing unwraps would lock the
+stored keys out of the one key that opens them: move the KEK to a new derived key and re-wrap the
+rows with the KEK rotation (#545), or set `deletion_allowed=false`. A key imported into Transit
+(`imported_key=true`) only logs a warning: its material exists outside Vault too, so keep that copy
+as safe as the KEK.
 
 Choose the provider and the key before the first boot that stores keys. A row wrapped under one
 KEK opens only under that KEK: a deployment that changes `KEK_VAULT_TRANSIT_KEY`, the mount or the
@@ -87,7 +96,9 @@ vault:<namespace>/<mount>/keys/<name>#v<version>
 so the KEK rotation of #545 finds the rows wrapped before a Transit rotation and re-wraps them to
 the latest version. Raise the key's `min_decryption_version` only after that: a row whose version
 is below it no longer opens (`KEK_UNKNOWN_REF`). Transit's `auto_rotate_period` rotates the key on
-a schedule the same way.
+a schedule the same way. The key check reads every version from `min_decryption_version` on, and
+reads at most 1 MiB, some tens of thousands of versions: with a short `auto_rotate_period`, raise
+`min_decryption_version` once the rows are re-wrapped, so the key's settings stay small.
 
 ## Vault policy for the signer role
 
@@ -108,18 +119,24 @@ path "transit/decrypt/qauth-kek" {
   capabilities = ["update"]
 }
 
-# Read the key's settings once per process, to refuse a key that is not derived.
+# Read the key's settings before the first wrap or unwrap and every 15 minutes after, to
+# refuse a key that is not derived or that can leave Vault.
 path "transit/keys/qauth-kek" {
   capabilities = ["read"]
 }
 
-# Read the token's TTL and renew it. Vault's default policy grants both; list them
-# so a token created without the default policy works too.
+# Read the token's TTL, renew it, and revoke an AppRole token the provider no longer
+# uses. Vault's default policy grants all three; list them so a token created without
+# the default policy works too.
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
 
 path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+
+path "auth/token/revoke-self" {
   capabilities = ["update"]
 }
 ```
@@ -152,9 +169,13 @@ is written inside that namespace (`vault policy write -namespace=team-a ...`) wi
 login and asks Vault for its TTL (`auth/token/lookup-self`). Once two thirds of the TTL have
 passed it renews the token (`auth/token/renew-self`), in the background, so an idle signer keeps a
 valid token. When a renewal no longer extends the token, because it reached its maximum TTL, the
-provider reads the file once more; after that it reads it again only when the token is about to
+provider reads the file once more; after that it reads it again at its next use once it is about to
 expire, or after Vault refuses it. A Vault Agent with a file sink, or an orchestrator, should write
 a fresh token there before the old one expires. A token that does not expire is never renewed.
+
+A token with the root policy, or one that never expires, logs a warning at the login that brings
+it. A Vault dev server's root token works, but in production give the signer a token with only
+the policy above and a TTL.
 
 ```console
 vault token create -policy=qauth-signer -period=24h -orphan
@@ -175,6 +196,8 @@ vault write -f -field=secret_id auth/approle/role/qauth-signer/secret-id > /run/
 
 The provider logs in with the role ID and the secret ID, read from `KEK_VAULT_SECRET_ID_FILE` at
 each login, renews the token as above, and logs in again before the token reaches its maximum TTL.
+It then revokes the token it replaced (`auth/token/revoke-self`), and the token it holds when the
+server shuts down; a revocation that fails is ignored, and that token expires at its TTL.
 The secret ID is used for every login, so it must allow unlimited uses (`secret_id_num_uses=0`)
 and outlive the signer process, or be rewritten in the file before it expires. A login whose
 answer was lost is not sent again, so it does not spend uses, but a limited secret ID still runs
@@ -187,8 +210,15 @@ When Vault refuses a call with 403, the provider asks Vault whether the token st
 fails with `KEK_ACCESS_DENIED`, so a path the policy denies never mints new tokens. If it does not,
 the provider logs in again once and repeats the call. With AppRole that replaces a revoked token. A
 revoked token in a token file is refused again: the call fails with `KEK_ACCESS_DENIED`, nothing
-falls back to another credential, and the operation that needed the key fails closed. A boot step that has to wrap a key, such as importing a key variable
-the store does not hold yet, stops the boot.
+falls back to another credential, and the operation that needed the key fails closed. A boot step
+that has to wrap a key, such as importing a key variable the store does not hold yet, stops the
+boot.
+
+A policy without Vault's default policy may deny `lookup-self` itself. The provider finds that out
+at the first refusal: when Vault also refuses `lookup-self` to the token fresh from the new AppRole
+login, every later 403 counts as the policy's, so a denied path does not mint a token per call. A
+revoked token is then replaced only when its renewal fails or it expires. Keep
+`auth/token/lookup-self` in the policy, as above.
 
 Tokens and secret IDs are never logged and never appear in an error or in `health()`. Errors carry
 the HTTP status, the Vault operation and Vault's own messages.
@@ -209,9 +239,9 @@ Every Vault call is tried at most 3 times, with exponential backoff and jitter. 
 no answer within 5 s, connecting included, counts as a failed attempt, so one call gives up within
 about 16 s. Connection failures, timeouts, `412`, `429` and server faults (a sealed Vault answers
 `503`) are retried; a refusal is not. An AppRole login is repeated only when Vault cannot have
-served it: a connection that never opened, `429` or `503`. A wrap makes up to three calls (the key
-check, `encrypt`, `decrypt`), plus a login, so against a Vault that stops answering one wrap can
-take about a minute before it fails.
+served it: a connection that never opened, `429` or `503`. A wrap makes up to four calls (the key
+check, `encrypt` and two `decrypt`s), plus a login, so against a Vault that stops answering one
+wrap can take about a minute before it fails.
 
 During a Vault outage:
 
@@ -227,7 +257,8 @@ During a Vault outage:
   is replaced by a login when Vault answers again (AppRole, or a token file that was rewritten).
 
 `KEK_ACCESS_DENIED` means an operator has to act: the policy, the token or secret ID, the key
-(missing, not derived, or exportable), or Vault's TLS certificate. `KEY_DECRYPTION_FAILED` is a row that does not belong to that key and
+(missing or not derived, or for a wrap, able to leave Vault or be deleted), or Vault's TLS
+certificate. `KEY_DECRYPTION_FAILED` is a row that does not belong to that key and
 context; it is never retried.
 
 ## Installing
@@ -261,5 +292,5 @@ package has no runtime dependency outside QAuth's own libraries: it speaks to Va
 - `pnpm exec nx run keys-vault:test-integration` runs the contract against a Vault dev server in a
   container, with the policy above applied as written, plus a wrong context, a key that is not
   derived, a Transit key rotation and the re-wrap of a stored key to the new version, token
-  renewal, AppRole login at the maximum TTL and a revoked token. It needs Docker; CI's integration
+  renewal, a call after the AppRole token's maximum TTL and a revoked token. It needs Docker; CI's integration
   job runs it when the package is affected.

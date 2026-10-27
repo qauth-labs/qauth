@@ -452,6 +452,47 @@ describe('event deliveries integration (real Postgres)', () => {
       expect(await queue.claim({ ...pick, now: NOW + 10 * LEASE })).toEqual([]);
     });
 
+    it('gives back the attempt of a held row, keeps its last failure, and makes it due again', async () => {
+      await queued(['a'], 1);
+      const pick = { picks: [{ kind: 'test', id: 'a', limit: 5 }], leaseMs: LEASE, maxAttempts: 2 };
+      const [first] = await queue.claim({ ...pick, now: NOW });
+      await queue.record(
+        first,
+        { result: 'retry', nextAttemptAt: NOW + 10, statusCode: 503, errorClass: 'http_status' },
+        NOW + 1
+      );
+      // Held on its last attempt, again and again: never used up.
+      let at = NOW + 10;
+      for (let hold = 0; hold < 3; hold += 1) {
+        const [claim] = await queue.claim({ ...pick, now: at });
+        expect(claim.attempt).toBe(2);
+        expect(await queue.record(claim, { result: 'hold', nextAttemptAt: at + 30_000 }, at)).toBe(
+          true
+        );
+        expect((await queue.listForEvent(first.eventId))[0]).toMatchObject({
+          status: 'pending',
+          attemptCount: 1,
+          lastStatusCode: 503,
+          lastErrorClass: 'http_status',
+          lockedUntil: null,
+          nextAttemptAt: at + 30_000,
+        });
+        expect(await queue.claim({ ...pick, now: at + 29_999 })).toEqual([]);
+        // A claim that lost its row holds nothing.
+        expect(await queue.record(claim, { result: 'hold', nextAttemptAt: at }, at)).toBe(false);
+        at += 30_000;
+      }
+
+      const [last] = await queue.claim({ ...pick, now: at });
+      expect(last.attempt).toBe(2);
+      await queue.record(last, { result: 'delivered', statusCode: 202 }, at);
+      expect((await queue.listForEvent(first.eventId))[0]).toMatchObject({
+        status: 'delivered',
+        attemptCount: 2,
+        lastErrorClass: null,
+      });
+    });
+
     it('gives a released row back at once, the attempt counted', async () => {
       await queued(['a'], 1);
       const pick = { picks: [{ kind: 'test', id: 'a', limit: 5 }], leaseMs: LEASE, maxAttempts: 5 };

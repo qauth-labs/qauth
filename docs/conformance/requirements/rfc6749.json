@@ -1,5 +1,15 @@
 {
   "specId": "rfc6749",
-  "note": "Stub. RFC 6749 is registered in ../specs.json so its citations resolve to a stable id, but no requirement rows are written yet — increment 1 covers RFC 9207, RFC 8414, OpenID Connect Discovery 1.0 and the Basic-OP subset of OpenID Connect Core 1.0. The spec is unsealed, so citations that match no row are reported as orphans rather than failing the build.",
-  "requirements": []
+  "note": "Hand-authored, partial. `quote` is verbatim from https://www.rfc-editor.org/rfc/rfc6749 with line wrapping removed and nothing else changed. The first row is the authorization-code reuse checkbox of the certification runbook's Step 7 (#627); the rest of RFC 6749 is still to be written, so the spec stays unsealed and citations that match no row are reported as orphans rather than failing the build.",
+  "requirements": [
+    {
+      "id": "rfc6749-4_1_2-code-reuse",
+      "section": "4.1.2",
+      "level": "MUST",
+      "quote": "If an authorization code is used more than once, the authorization server MUST deny the request and SHOULD revoke (when possible) all tokens previously issued based on that authorization code.",
+      "applies": "POST /oauth/token, authorization_code grant. The MUST half: a spent code answers `invalid_grant`. The SHOULD half: a replay that is otherwise a valid request revokes the refresh-token family the first redemption started and the access tokens issued from the code or in that family (see the oauth-2_1 rows for the conditions and for when an access token cannot be revoked).",
+      "status": "covered",
+      "evidenceMatch": "revokes the refresh family|family revoked|revokes the access token"
+    }
+  ]
 }

@@ -378,6 +378,30 @@ describe('redirect_uri and resource reach the handler as sent (exactUrl)', () =>
 });
 
 /**
+ * ADR-017 Decision 10: whether a token request needs `redirect_uri` depends on
+ * the code, which the schema cannot see. So the schema lets a request without
+ * one, or with an empty one, through to the handler, which answers
+ * `invalid_grant` for a browser code instead of a validation error.
+ */
+describe('tokenExchangeAuthCodeBodySchema — redirect_uri', () => {
+  const body = { grant_type: 'authorization_code', code: 'c', code_verifier: 'A'.repeat(43) };
+
+  it.each([
+    ['absent', {}],
+    ['empty', { redirect_uri: '' }],
+    ['present', { redirect_uri: 'https://app.example.com/cb' }],
+  ])('accepts a request with the parameter %s', (_label, extra) => {
+    expect(tokenExchangeAuthCodeBodySchema.safeParse({ ...body, ...extra }).success).toBe(true);
+  });
+
+  it('still refuses a value that is not a string', () => {
+    expect(
+      tokenExchangeAuthCodeBodySchema.safeParse({ ...body, redirect_uri: ['a'] }).success
+    ).toBe(false);
+  });
+});
+
+/**
  * OIDC Core §3.1.2.1 `max_age` on `GET`/`POST /oauth/authorize`.
  *
  * `POST /oauth/authorize` also accepts a JSON body, so `max_age` can be any

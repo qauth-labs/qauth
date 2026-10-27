@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { InvalidClientError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -171,14 +171,17 @@ function isSupportedCimdGrantType(value: string): value is CimdGrantType {
  * for one bad URI (ANT-2026-D0XJAT8S follow-up). The rejection becomes an
  * {@link InvalidClientError}, like every other document failure, so the client
  * does not resolve (fail closed); its description keeps DCR's own
- * `invalid_redirect_uri: …` text for the audit log.
+ * `invalid_redirect_uri: …` code and text for the audit log.
  */
 function assertRegistrableRedirectUris(uris: readonly string[]): void {
   for (const uri of uris) {
     try {
       validateRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
     } catch (err) {
-      const detail = err instanceof Error ? err.message : 'invalid_redirect_uri';
+      const detail =
+        err instanceof InvalidRedirectUriError
+          ? `${err.message}: ${err.errorDescription ?? ''}`
+          : 'invalid_redirect_uri';
       throw new InvalidClientError(`CIMD document refused: ${detail}`);
     }
   }
@@ -466,6 +469,10 @@ export function toCimdClientInsert(
     provisionedByOperator: false,
     idJagTargets: [],
     dpopBoundAccessTokens: false,
+    // The document's `scope` grants nothing: a CIMD client's scopes are the
+    // operator's grant in the seed manifest (#770). A scope in QAuth's own
+    // `qauth:` namespace there is ignored like every other (#507); the
+    // manifest refuses to grant one.
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.
     isAgent: doc.is_agent ?? false,

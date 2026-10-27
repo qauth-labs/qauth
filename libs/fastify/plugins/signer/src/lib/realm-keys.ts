@@ -220,29 +220,33 @@ export async function createRealmKey(
   }
   const algorithm = resolveAlgorithm(input.algorithm);
   const kekProvider = await loadKekProvider({ env: deps.kekEnv, warn: deps.warn });
-  const realm = await createRealmsRepository(deps.db).findByName(input.realmName);
-  if (realm === undefined) {
-    throw new Error(`The realm "${input.realmName}" does not exist`);
-  }
+  try {
+    const realm = await createRealmsRepository(deps.db).findByName(input.realmName);
+    if (realm === undefined) {
+      throw new Error(`The realm "${input.realmName}" does not exist`);
+    }
 
-  const store = createRepositoryKeyStore(deps.db);
-  const factory = createKeyFactory({
-    store,
-    kekProvider,
-    enabledSignatureAlgorithms: deps.enabledSignatureAlgorithms,
-    hybridSigning: deps.hybridSigning,
-  });
-  return store.transaction(async (tx) => {
-    await store.lockRealm(realm.id, tx);
-    return factory.createKey({
-      realmId: realm.id,
-      purpose,
-      ...(algorithm === undefined ? {} : { algorithm }),
-      ...(input.scopeId === undefined ? {} : { scopeId: input.scopeId }),
-      ...(input.status === undefined ? {} : { status: input.status }),
-      tx,
+    const store = createRepositoryKeyStore(deps.db);
+    const factory = createKeyFactory({
+      store,
+      kekProvider,
+      enabledSignatureAlgorithms: deps.enabledSignatureAlgorithms,
+      hybridSigning: deps.hybridSigning,
     });
-  });
+    return await store.transaction(async (tx) => {
+      await store.lockRealm(realm.id, tx);
+      return factory.createKey({
+        realmId: realm.id,
+        purpose,
+        ...(algorithm === undefined ? {} : { algorithm }),
+        ...(input.scopeId === undefined ? {} : { scopeId: input.scopeId }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+        tx,
+      });
+    });
+  } finally {
+    await kekProvider.close?.();
+  }
 }
 
 function resolveAlgorithm(algorithm: string | undefined): KeyAlgorithm | undefined {

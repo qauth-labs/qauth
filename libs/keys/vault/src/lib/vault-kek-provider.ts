@@ -7,6 +7,7 @@ import {
   type KekProviderContext,
   type KekProviderHealth,
   type KekProviderModule,
+  type KekWarning,
   KEY_AAD_VERSION,
   type KeyAad,
   type WrappedDataKey,
@@ -22,6 +23,7 @@ import {
 } from './errors';
 import {
   createHttpsTransport,
+  MAX_KEY_READ_RESPONSE_BYTES,
   type VaultHttpResponse,
   type VaultTransport,
 } from './https-transport';
@@ -30,6 +32,7 @@ import {
   readVaultSettings,
   SECRET_ID_FILE_VARIABLE,
   TOKEN_FILE_VARIABLE,
+  TRANSIT_KEY_VARIABLE,
   VAULT_KEK_PROVIDER,
 } from './settings';
 import { formatCiphertext, parseCiphertext, transitContextOf } from './transit';
@@ -59,12 +62,15 @@ export interface VaultKekProviderOptions {
   readonly namespace: string | undefined;
   /** The clock the key check ages on. Defaults to the process clock. */
   readonly clock?: VaultClock;
+  /** Receives a warning about the key that does not stop an unwrap. Never a secret. */
+  readonly warn?: (warning: KekWarning) => void;
 }
 
 /**
  * How long a passed key check holds, in ms. The key's type and `derived` never
  * change, but the key can be deleted and created again under the same name,
- * and `exportable` can be switched on later.
+ * and `exportable`, `allow_plaintext_backup` and `deletion_allowed` can be
+ * switched on later.
  */
 export const KEY_CHECK_MAX_AGE_MS = 15 * 60_000;
 
@@ -73,6 +79,19 @@ export const KEY_CHECK_MAX_AGE_MS = 15 * 60_000;
  * that support key derivation.
  */
 const KEY_TYPES: ReadonlySet<string> = new Set(['aes256-gcm96', 'chacha20-poly1305']);
+
+/** The key settings that let the key leave Vault. */
+const LEAVING_FLAGS = ['exportable', 'allow_plaintext_backup'] as const;
+
+/** What the key check found that refuses a wrap, or is worth a warning. */
+interface KeyState {
+  /** The {@link LEAVING_FLAGS} that are on. */
+  readonly leaves: readonly string[];
+  /** `deletion_allowed`: deleting the key loses every data key it wraps. */
+  readonly deletable: boolean;
+  /** `imported_key`: the key material was made outside Vault. */
+  readonly imported: boolean;
+}
 
 /** The largest wrapped data key the provider sends to Vault, in bytes. */
 const MAX_WRAPPED_BYTES = 1024;
@@ -118,15 +137,22 @@ function healthReason(error: unknown): string {
  * - Before its first wrap or unwrap, and again once
  *   {@link KEY_CHECK_MAX_AGE_MS} has passed, the provider reads the key's
  *   settings (`<mount>/keys/<name>`) and refuses a key that is not `derived`,
- *   not an AES-256-GCM or ChaCha20-Poly1305 key, that cannot both encrypt and
- *   decrypt, or that can leave Vault (`exportable`, `allow_plaintext_backup`).
- *   Vault ignores the `context` of a key that is not derived, so such a key
- *   would open a wrapped data key under any associated data.
+ *   not an AES-256-GCM or ChaCha20-Poly1305 key, or that cannot both encrypt
+ *   and decrypt. Vault ignores the `context` of a key that is not derived, so
+ *   such a key would open a wrapped data key under any associated data.
+ * - A key that can leave Vault (`exportable`, `allow_plaintext_backup`) or be
+ *   deleted (`deletion_allowed`) refuses every wrap, but an unwrap goes on
+ *   with a warning: the first two cannot be switched off again, and refusing
+ *   unwraps would lock the stored keys out of the one key that opens them,
+ *   before the KEK rotation (#545) can move them. An imported key
+ *   (`imported_key`) only warns.
  * - `wrap` sends the data key to `<mount>/encrypt/<name>` with the key's
  *   associated data as the `context` (`transit.ts`), then decrypts the result
  *   once, which proves that this token can open what it stores before
- *   anything is stored. `kekRef` names the key and the version that wrapped
- *   it (`kek-ref.ts`).
+ *   anything is stored, and once more under another context, which Vault
+ *   must refuse: every stored row proves the key derived, even between two
+ *   key checks. `kekRef` names the key and the version that wrapped it
+ *   (`kek-ref.ts`).
  * - `unwrap` refuses a `kekRef` that names another key, without a call, then
  *   sends the ciphertext rebuilt from the stored bytes and the version to
  *   `<mount>/decrypt/<name>` under the context, and checks that the result is
@@ -169,10 +195,18 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
     }
   }
 
-  async function checkKey(): Promise<void> {
+  /**
+   * Read the key's settings. A key that cannot be a KEK at all throws, for
+   * wraps and unwraps alike; what refuses only a wrap is returned.
+   */
+  async function checkKey(): Promise<KeyState> {
     const data = dataOf(
       'read-key',
-      await call('read-key', { method: 'GET', path: `${transitMount}/keys/${keyName}` })
+      await call('read-key', {
+        method: 'GET',
+        path: `${transitMount}/keys/${keyName}`,
+        maxResponseBytes: MAX_KEY_READ_RESPONSE_BYTES,
+      })
     );
     if (data['derived'] !== true) {
       throw new VaultKeyRefusedError(
@@ -189,17 +223,17 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
         `The Transit key ${keyPath} must support both encryption and decryption.`
       );
     }
-    if (data['exportable'] === true || data['allow_plaintext_backup'] === true) {
-      throw new VaultKeyRefusedError(
-        `The Transit key ${keyPath} can leave Vault (exportable or allow_plaintext_backup): a KEK must not.`
-      );
-    }
+    return Object.freeze({
+      leaves: LEAVING_FLAGS.filter((flag) => data[flag] === true),
+      deletable: data['deletion_allowed'] === true,
+      imported: data['imported_key'] === true,
+    });
   }
 
   // A passed check holds for KEY_CHECK_MAX_AGE_MS; calls meanwhile share it.
-  // A failed check is tried again at the next call.
-  let keyChecked: { readonly at: number; readonly done: Promise<void> } | undefined;
-  function ensureKey(): Promise<void> {
+  // A failed check, and one that refuses a wrap, is tried again at the next call.
+  let keyChecked: { readonly at: number; readonly done: Promise<KeyState> } | undefined;
+  function currentCheck(): { readonly at: number; readonly done: Promise<KeyState> } {
     const now = clock.now();
     if (keyChecked === undefined || now - keyChecked.at >= KEY_CHECK_MAX_AGE_MS) {
       const entry = {
@@ -211,7 +245,75 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
       };
       keyChecked = entry;
     }
-    return keyChecked.done;
+    return keyChecked;
+  }
+
+  const warnedAt = new Map<string, number>();
+  /** Warn about the key, at most once per KEY_CHECK_MAX_AGE_MS for the same message. */
+  function warnOnce(message: string, everyCheck: boolean): void {
+    const now = clock.now();
+    const last = warnedAt.get(message);
+    if (last !== undefined && (!everyCheck || now - last < KEY_CHECK_MAX_AGE_MS)) return;
+    warnedAt.set(message, now);
+    options.warn?.({ variable: TRANSIT_KEY_VARIABLE, message });
+  }
+
+  /**
+   * Check the key before `operation`. A key that can leave Vault or be deleted
+   * refuses a wrap, so no new row depends on it; an unwrap goes on with a
+   * warning, because refusing it would lock the stored keys out of the one
+   * key that opens them, and the KEK rotation (#545) that moves them to a new
+   * key has to unwrap them first.
+   */
+  async function ensureKey(operation: 'wrap' | 'unwrap'): Promise<void> {
+    const entry = currentCheck();
+    const state = await entry.done;
+    if (state.imported) {
+      warnOnce(
+        `The Transit key ${keyPath} was imported (imported_key=true): its material exists outside Vault too, so that copy must be kept as safe as the KEK.`,
+        false
+      );
+    }
+    const reasons = [
+      ...(state.leaves.length > 0 ? [`can leave Vault (${state.leaves.join(', ')})`] : []),
+      ...(state.deletable ? ['can be deleted (deletion_allowed), losing every key it wraps'] : []),
+    ];
+    if (reasons.length === 0) return;
+    if (operation === 'unwrap') {
+      warnOnce(
+        `The Transit key ${keyPath} ${reasons.join(' and ')}. Unwraps go on so the stored keys still open, but every wrap is refused: ${
+          state.leaves.length > 0
+            ? 'move the KEK to a new derived Transit key that cannot leave Vault and re-wrap the stored keys (the KEK rotation, #545)'
+            : 'set deletion_allowed=false on the key'
+        }.`,
+        true
+      );
+      return;
+    }
+    if (keyChecked === entry) keyChecked = undefined;
+    throw new VaultKeyRefusedError(
+      `The Transit key ${keyPath} ${reasons.join(' and ')}: a KEK must not, so it wraps nothing.`
+    );
+  }
+
+  /**
+   * Decrypt the new wrap once more under another context, and require Vault
+   * to refuse it: a key that opens it ignores the context, so it is not
+   * derived, whatever its settings said at the last check.
+   */
+  async function proveDerived(bytes: Uint8Array, version: number, context: string): Promise<void> {
+    const other = Buffer.concat([Buffer.from(context, 'base64'), Buffer.of(0)]).toString('base64');
+    let opened: Buffer;
+    try {
+      opened = await decryptDataKey(bytes, version, other);
+    } catch (error) {
+      if (error instanceof VaultHttpError && error.status === 400) return;
+      throw error;
+    }
+    opened.fill(0);
+    throw new VaultKeyRefusedError(
+      `The Transit key ${keyPath} opened a data key under another context: it is not derived, so Vault ignores the context that binds each data key to its key. Create the key with derived=true.`
+    );
   }
 
   /** Decrypt `bytes` of key version `version` under `context`: a data key the caller owns. */
@@ -245,7 +347,7 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
     }
     const context = transitContextOf(aad);
     return custody(async () => {
-      await ensureKey();
+      await ensureKey('wrap');
       const data = dataOf(
         'encrypt',
         await call('encrypt', {
@@ -272,6 +374,7 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
       } finally {
         opened.fill(0);
       }
+      await proveDerived(ciphertext.bytes, ciphertext.version, context);
       return Object.freeze({
         wrapped: ciphertext.bytes,
         kekRef: formatKekRef(keyPath, ciphertext.version),
@@ -298,7 +401,7 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
         throw new KeyDecryptionError({ detail: 'malformed wrapped data key' });
       }
       return custody(async () => {
-        await ensureKey();
+        await ensureKey('unwrap');
         return decryptDataKey(wrapped, parsed.version, context);
       }, kekRef);
     },
@@ -317,6 +420,11 @@ export function createVaultKekProvider(options: VaultKekProviderOptions): KekPro
       } finally {
         probe.fill(0);
       }
+    },
+
+    /** Stop the token's renewal; an AppRole token is revoked, best effort. */
+    close(): void {
+      session.close();
     },
   });
 }
@@ -371,6 +479,7 @@ export function createKekProviderWith(
   const session = createTokenSession({
     client,
     credentials,
+    warn: context.warn,
     ...(dependencies.clock !== undefined ? { clock: dependencies.clock } : {}),
   });
   return createVaultKekProvider({
@@ -379,6 +488,7 @@ export function createKekProviderWith(
     transitMount: settings.transitMount,
     keyName: settings.keyName,
     namespace: settings.namespace,
+    warn: context.warn,
     ...(dependencies.clock !== undefined ? { clock: dependencies.clock } : {}),
   });
 }

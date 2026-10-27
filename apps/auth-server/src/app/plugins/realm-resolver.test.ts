@@ -141,11 +141,19 @@ describe('realm resolver plugin (#486)', () => {
 
         expect(response.statusCode).toBe(421);
         expect(response.headers['set-cookie']).toBeUndefined();
-        expect(response.json()).toEqual({
-          error: 'This server does not answer for the requested host',
-          statusCode: 421,
-          code: 'MISDIRECTED_REQUEST',
-        });
+        expect(response.headers['content-type']).toMatch(/^application\/problem\+json(?:;|$)/);
+        const body = response.json() as Record<string, unknown>;
+        expect(body).toMatchObject({ status: 421, code: 'misdirected_request' });
+        // The problem document's own members and nothing else: no realm data.
+        expect(Object.keys(body).sort()).toEqual([
+          'code',
+          'detail',
+          'instance',
+          'status',
+          'title',
+          'trace_id',
+          'type',
+        ]);
       }
       await app.close();
     });
@@ -160,6 +168,7 @@ describe('realm resolver plugin (#486)', () => {
         const response = await app.inject({ method: 'GET', url: '/api', headers: { host } });
 
         expect(response.statusCode).toBe(421);
+        expect(response.json()).toMatchObject({ code: 'misdirected_request' });
         expect(table.lookup).not.toHaveBeenCalled();
         await app.close();
       }
@@ -182,6 +191,7 @@ describe('realm resolver plugin (#486)', () => {
       });
 
       expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toMatchObject({ code: 'internal_error' });
       expect(failed.headers['set-cookie']).toBeUndefined();
       expect(retried.statusCode).toBe(200);
       await app.close();

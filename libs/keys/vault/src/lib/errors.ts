@@ -44,7 +44,8 @@ export type VaultOperation =
   | 'read-key'
   | 'approle-login'
   | 'token-lookup-self'
-  | 'token-renew-self';
+  | 'token-renew-self'
+  | 'token-revoke-self';
 
 /** At most this many of Vault's error messages are kept, each cut to {@link MAX_ERROR_LENGTH}. */
 const MAX_ERRORS = 5;

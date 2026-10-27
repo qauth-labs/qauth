@@ -127,13 +127,13 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Client registration
 
-| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                                                                                                                                          |
-| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                                                                                                                            |
-| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                                                                                                                             |
-| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only.                                                                                                            |
-| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes, separated by spaces or commas, copied into a realm's empty dynamic registration allowlist at its first client registration; a later change leaves that realm as it is.                                                                   |
-| `REDIRECT_URI_CUSTOM_SCHEMES`         | realm-seed: `registration.redirectUriCustomSchemes`         | empty                                 | 0.1.3 | Schemes without a period that a redirect URI may use besides `https`, loopback `http` and reverse-domain schemes, separated by spaces or commas, such as `cursor`; boot refuses one a browser or the operating system acts on, such as `javascript`. |
+| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                                                                                                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                                                                                                                                                        |
+| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                                                                                                                                                         |
+| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only.                                                                                                                                        |
+| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes, separated by spaces or commas, copied into a realm's empty dynamic registration allowlist at its first client registration; a later change leaves that realm as it is, and boot refuses a scope in the `qauth:` namespace, which is reserved for QAuth's own scopes. |
+| `REDIRECT_URI_CUSTOM_SCHEMES`         | realm-seed: `registration.redirectUriCustomSchemes`         | empty                                 | 0.1.3 | Schemes without a period that a redirect URI may use besides `https`, loopback `http` and reverse-domain schemes, separated by spaces or commas, such as `cursor`; boot refuses one a browser or the operating system acts on, such as `javascript`.                             |
 
 ### Enterprise-managed authorization (ID-JAG)
 
@@ -184,11 +184,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Events
 
-| Key                                  | Role       | Default | Since | Description                                                                                                                                 |
-| ------------------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVENT_DELIVERY_MAX_ATTEMPTS`        | deployment | `12`    | 0.2.0 | The attempts an event delivery to a webhook or another route gets before it ends `failed`; a failed delivery stays in the delivery history. |
-| `EVENT_DELIVERY_RETRY_INITIAL_DELAY` | deployment | `30`    | 0.2.0 | Seconds an event delivery waits after its first failed attempt; each later wait doubles, less up to 20% at random.                          |
-| `EVENT_DELIVERY_RETRY_MAX_DELAY`     | deployment | `21600` | 0.2.0 | The longest wait between two attempts of an event delivery, in seconds; at least `EVENT_DELIVERY_RETRY_INITIAL_DELAY`.                      |
+| Key                                  | Role       | Default | Since | Description                                                                                                                                                                                                             |
+| ------------------------------------ | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVENT_DELIVERY_MAX_ATTEMPTS`        | deployment | `12`    | 0.2.0 | The attempts an event delivery to a webhook or another route gets before it ends `failed`; a failed delivery stays in the delivery history.                                                                             |
+| `EVENT_DELIVERY_RETRY_INITIAL_DELAY` | deployment | `30`    | 0.2.0 | Seconds an event delivery waits after its first failed attempt; each later wait doubles, less up to 20% at random.                                                                                                      |
+| `EVENT_DELIVERY_RETRY_MAX_DELAY`     | deployment | `21600` | 0.2.0 | The longest wait between two attempts of an event delivery, in seconds; at least `EVENT_DELIVERY_RETRY_INITIAL_DELAY`.                                                                                                  |
+| `SSF_TRANSMITTER_ENABLED`            | deployment | `false` | 0.2.0 | Turn the Shared Signals Framework transmitter on (`/.well-known/ssf-configuration`, stream management under `/ssf/`, push delivery of Security Event Tokens) for each realm whose `ssf_transmitter_enabled` is also on. |
 
 ### Database and Redis
 
@@ -258,9 +259,9 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Mail
 
-| Key              | Role       | Default  | Since | Description                                                     |
-| ---------------- | ---------- | -------- | ----- | --------------------------------------------------------------- |
-| `EMAIL_BASE_URL` | deployment | required | 0.1.0 | The base URL of the links in mail, such as a verification link. |
+| Key              | Role       | Default | Since | Description                                                                                                                                                                                                                                            |
+| ---------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `EMAIL_BASE_URL` | deployment | unset   | 0.1.0 | Optional and not read since 0.2.0, because a link in mail, such as a verification link, starts at the issuer of the realm the account belongs to; still accepted, with a boot warning that it is ignored when it names another base than `JWT_ISSUER`. |
 
 ### Client registration
 

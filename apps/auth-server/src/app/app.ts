@@ -24,6 +24,7 @@ import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import { signerPlugin } from '@qauth-labs/fastify-plugin-signer';
+import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
@@ -35,7 +36,7 @@ import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
-import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
+import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
 import {
@@ -46,6 +47,8 @@ import {
 import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { realmIssuer } from './helpers/realm-url';
+import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import { defaultRealmPlugin } from './plugins/default-realm';
@@ -126,9 +129,9 @@ export interface AppOptions {
    */
   eventTelemetryLimits?: Partial<EventLogQueueLimits>;
   /**
-   * The event delivery routes (#460). None until the webhook (#538) and SSF
-   * (#410) routes land, and the delivery role then does nothing; a suite
-   * that watches the role passes a route of its own.
+   * Event delivery routes beside the server's own (#460): the SSF route
+   * while SSF_TRANSMITTER_ENABLED is on (#410), and the webhook route once it
+   * lands (#538). A suite that watches the role passes a route of its own.
    */
   eventDeliveryRoutes?: readonly DeliveryRoute[];
 }
@@ -259,10 +262,14 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // shared verifier over the cache plugin's Redis, which records used proofs.
   // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
   // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
-  // included) and the request path, the endpoint URL discovery publishes,
-  // never the `Host` header. A request to one of DEFAULT_REALM_ENDPOINT_HOSTS
-  // must therefore name the published URL in `htu` too.
-  await fastify.register(dpopPlugin, { enabled: env.DPOP_ENABLED, baseUrl: env.JWT_ISSUER });
+  // included) of the request's realm and the request path, the endpoint URL
+  // that realm's discovery publishes (ADR-019 Decision 1, #490), never the
+  // `Host` header. A request to one of the realm's endpoint hosts must
+  // therefore name the published URL in `htu` too.
+  await fastify.register(dpopPlugin, {
+    enabled: env.DPOP_ENABLED,
+    baseUrl: (request) => realmIssuer(requestRealm(request)),
+  });
 
   await fastify.register(passwordPlugin, {
     hashConfig: {
@@ -473,12 +480,24 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
   // For 'mock' provider, providerConfig is undefined (no config needed)
 
+  // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
+  // set to another base than the default realm's issuer, where the links went.
+  const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
+  if (emailBaseUrlIgnored !== undefined) {
+    fastify.log.warn(
+      { variable: 'EMAIL_BASE_URL', value: env.EMAIL_BASE_URL, issuer: env.JWT_ISSUER },
+      emailBaseUrlIgnored
+    );
+  }
+
   await fastify.register(emailPlugin, {
     provider: emailProvider,
     providerConfig,
     serviceConfig: {
       defaultFrom: env.EMAIL_FROM_ADDRESS,
-      baseUrl: env.EMAIL_BASE_URL,
+      // No link base here: a mail's links start at the issuer of the realm
+      // the account belongs to, passed with each mail (ADR-019 Decision 1,
+      // #490). EMAIL_BASE_URL is no longer read.
       // Same value the send routes use to compute `expiresAt`, so the copy in
       // the email cannot drift from the lifetime actually enforced (#334).
       verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
@@ -586,14 +605,28 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // propagation (#128) is registered above, ahead of the realm resolver.
   await fastify.register(metricsPlugin);
 
+  // The Shared Signals Framework transmitter (ADR-018 §3, #410). Off by
+  // default: `fastify.ssf` is null, no SSF route registers below, and the
+  // delivery role gets no SSF route, so no SSF delivery row is ever written.
+  // On, it builds the push route over the stream repository and the egress
+  // client; the routes, the metadata and the deliveries then serve each realm
+  // whose own switch is on.
+  await fastify.register(ssfPlugin, { enabled: env.SSF_TRANSMITTER_ENABLED });
+  const deliveryRoutes: readonly DeliveryRoute[] = [
+    ...(fastify.ssf === null ? [] : [fastify.ssf.deliveryRoute]),
+    ...(eventDeliveryRoutes ?? []),
+  ];
+
   // Background jobs (ADR-019 Decision 8): purge-expired, and event retention
   // (#536), which reads the delivery routes' enabled destinations and falls
-  // back to the retention seeds for a realm whose row is gone. The runner
-  // starts on `onReady` and stops on `onClose`, so it needs the database and
-  // metrics plugins above it; it registers no route, so nothing below depends
-  // on its position.
+  // back to the retention seeds for a realm whose row is gone. With the SSF
+  // transmitter off no node serves `ssf`, so an SSF position or delivery left
+  // from when it was on holds no event back. The runner starts on `onReady`
+  // and stops on `onClose`, so it needs the database and metrics plugins
+  // above it; it registers no route, so nothing below depends on its position.
   await fastify.register(jobsPlugin, {
-    deliveryRoutes: eventDeliveryRoutes ?? [],
+    deliveryRoutes,
+    unservedDeliveryKinds: fastify.ssf === null ? [SSF_DELIVERY_KIND] : [],
     eventRetentionFallback: {
       userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
@@ -606,14 +639,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // EVENT_DELIVERY_* keys set. It starts on `onReady` and stops on `onClose`
   // once its attempts in flight end, so it needs the database, the signer
   // and the metrics above it, and it signs only through a `delivery` handle
-  // of the signer. No route exists yet, so it does nothing but publish its
-  // metrics. It rides the default realm boot switch, as every database step
-  // at boot does: a boot without a database has no signer either.
+  // of the signer. Its routes are the SSF route while the transmitter is on
+  // and a test's own; with none it does nothing but publish its metrics. It
+  // rides the default realm boot switch, as every database step at boot
+  // does: a boot without a database has no signer either.
   if (defaultRealmBoot) {
     await fastify.register(eventDeliveryPlugin, {
       db: fastify.db,
       signer: fastify.signer,
-      routes: eventDeliveryRoutes ?? [],
+      routes: deliveryRoutes,
       registry: fastify.metrics.registry,
       settings: {
         maxAttempts: env.EVENT_DELIVERY_MAX_ATTEMPTS,

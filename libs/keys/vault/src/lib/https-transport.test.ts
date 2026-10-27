@@ -7,7 +7,12 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createHttpsTransport, MAX_RESPONSE_BYTES, type VaultHttpRequest } from './https-transport';
+import {
+  createHttpsTransport,
+  MAX_KEY_READ_RESPONSE_BYTES,
+  MAX_RESPONSE_BYTES,
+  type VaultHttpRequest,
+} from './https-transport';
 
 /**
  * The HTTPS transport against a local TLS server. The certificates are made
@@ -263,6 +268,20 @@ describe('the HTTPS transport to Vault', () => {
     );
 
     await expect(createHttpsTransport({ origin, ca })(REQUEST)).rejects.toMatchObject({
+      code: 'ERR_VAULT_RESPONSE_TOO_LARGE',
+    });
+  });
+
+  it('reads a larger answer for a request that sets its own cap, and drops one above it', async () => {
+    const body = JSON.stringify({ data: { keys: 'x'.repeat(MAX_RESPONSE_BYTES * 4) } });
+    const { origin } = await serve((_seen, reply) => reply(200, body));
+    const transport = createHttpsTransport({ origin, ca });
+
+    const answer = await transport({ ...REQUEST, maxResponseBytes: MAX_KEY_READ_RESPONSE_BYTES });
+
+    expect(answer.status).toBe(200);
+    expect(JSON.stringify(answer.body)).toBe(body);
+    await expect(transport({ ...REQUEST, maxResponseBytes: 1024 })).rejects.toMatchObject({
       code: 'ERR_VAULT_RESPONSE_TOO_LARGE',
     });
   });
