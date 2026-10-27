@@ -456,9 +456,9 @@ describe('POST /auth/register', () => {
         const { fastify } = await register(setup);
         const redis = fastify.redis as unknown as ReturnType<typeof createMemoryRedis>;
 
-        expect(redis.incr).toHaveBeenCalledWith(REDIS_KEYS.RESEND_RATE_LIMIT(ADDRESS));
+        expect(redis.incr).toHaveBeenCalledWith(REDIS_KEYS.RESEND_RATE_LIMIT(REALM.id, ADDRESS));
         expect(redis.set).toHaveBeenCalledWith(
-          REDIS_KEYS.LAST_EMAIL_SENT(ADDRESS),
+          REDIS_KEYS.LAST_EMAIL_SENT(REALM.id, ADDRESS),
           expect.any(String),
           'EX',
           60,
@@ -476,7 +476,7 @@ describe('POST /auth/register', () => {
       const { fastify, ctx } = await register((stub) => {
         addressTaken(stub);
         (stub.redis as unknown as ReturnType<typeof createMemoryRedis>).store.set(
-          REDIS_KEYS.LAST_EMAIL_SENT(ADDRESS),
+          REDIS_KEYS.LAST_EMAIL_SENT(REALM.id, ADDRESS),
           '1'
         );
       });
@@ -490,7 +490,7 @@ describe('POST /auth/register', () => {
       const { fastify, ctx } = await register((stub) => {
         addressTaken(stub);
         (stub.redis as unknown as ReturnType<typeof createMemoryRedis>).store.set(
-          REDIS_KEYS.RESEND_RATE_LIMIT(ADDRESS),
+          REDIS_KEYS.RESEND_RATE_LIMIT(REALM.id, ADDRESS),
           '3'
         );
       });
@@ -502,7 +502,7 @@ describe('POST /auth/register', () => {
     it('still sends a new account its verification mail when the caps are spent', async () => {
       const { fastify, ctx } = await register((stub) => {
         (stub.redis as unknown as ReturnType<typeof createMemoryRedis>).store.set(
-          REDIS_KEYS.LAST_EMAIL_SENT(ADDRESS),
+          REDIS_KEYS.LAST_EMAIL_SENT(REALM.id, ADDRESS),
           '1'
         );
       });

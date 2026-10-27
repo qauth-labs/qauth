@@ -126,6 +126,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   how to add it, the IAM policy of the signer role (`kms:Encrypt` and
   `kms:Decrypt` on the one key) and what happens during a KMS outage.
 
+- **The KEK in a Vault Transit key** ([#578], ADR-019 Decision 9). The optional
+  package `@qauth-labs/keys-vault` keeps the key-encryption key in a key of
+  Vault's Transit engine: `KEK_PROVIDER=vault` makes the signer load it, and it
+  sends data keys to Transit `encrypt` and `decrypt` with the key's associated
+  data as the Transit `context`. Signing stays local. The key must be created
+  with `derived=true`: Vault ignores the context of a key that is not derived,
+  so the provider refuses one, and every wrap is decrypted once more under
+  another context, which Vault must refuse. A key that can leave Vault
+  (`exportable`, `allow_plaintext_backup`) or be deleted (`deletion_allowed`)
+  wraps nothing; unwraps go on with a warning, so the stored keys still open
+  until the KEK rotation ([#545]) moves them. An imported key only warns.
+  `kekRef` is the key's path and version (`vault:transit/keys/qauth-kek#v2`), so
+  a Transit key rotation shows which rows to re-wrap. Settings are
+  `KEK_VAULT_ADDR` (`https` only), `KEK_VAULT_TRANSIT_KEY`, and optionally
+  `KEK_VAULT_TRANSIT_MOUNT`, `KEK_VAULT_NAMESPACE` and `KEK_VAULT_CA_CERT_FILE`;
+  the provider logs in with a token from `KEK_VAULT_TOKEN_FILE` or with AppRole
+  (`KEK_VAULT_ROLE_ID`, `KEK_VAULT_SECRET_ID_FILE`), never with a credential in
+  a variable. It renews the token before it expires and logs in again at its
+  maximum TTL, revoking the AppRole token it replaces; a revoked token fails
+  with `KEK_ACCESS_DENIED`, and a root token or one that never expires logs a
+  warning. `KekProvider` gains an optional `close()`, which the signer calls
+  when the server closes, so the token stops renewing. The auth server does not
+  depend on the package and its image does not carry it; the package's README
+  gives the exact Vault policy of the signer role, which the new container suite
+  applies to a Vault dev server.
+
 - **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
   ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
   URL (plain `http` only on `localhost`, for development) without a trailing
@@ -665,6 +691,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `realms.ssf_transmitter_enabled` (default off) and an index on
   `event_deliveries` that finds a destination's latest failed delivery ([#410]).
   Expand-only; the index build holds back delivery writes while it runs.
+- **The egress allowlist** ([#481], ADR-019 Decision 8). `EGRESS_ALLOWLIST_PATH`
+  names a JSON file of hosts and CIDR ranges, each for the realms it lists, that
+  the egress client may reach although they are not public. An entry applies
+  only to a destination the operator or a realm admin set, for a realm it names;
+  a destination that a client, an end user or a fetched document supplies never
+  uses it, and no entry opens an unspecified or multicast address or a cloud
+  metadata endpoint. A `cidr` entry may be no wider than `/8` (IPv4) or `/32`
+  (IPv6) and may not overlap a translation range (IPv4-mapped, NAT64, 6to4,
+  Teredo). The server reads the file once at boot: a file that cannot be read,
+  does not validate or others can write stops the boot, and one its group can
+  write, or that neither root nor the server's user owns, gives a warning. The
+  list is not in the database and no API edits it. A KEK custody adapter's calls
+  to its key service stay outside the egress client (ADR-019 amendment of
+  2026-10-27): their destination is deployment-wide, with no realm for the list
+  to name. Every egress call now names who set its destination (`source`), and
+  tests reach a local fixture server through `createTestEgressClient`, which
+  exists only under `NODE_ENV=test`. The configuration page lists removed keys.
 
 - **Admin scopes, the admin permission catalog and the built-in admin roles**
   ([#507], ADR-019 Decision 7). The admin API's scopes are `qauth:admin:read`,
@@ -727,6 +770,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JWT plugin's new `verifyRequestAccessToken(request, policy)` runs
   `requireJwt`'s checks under a route's issuer rule and `typ` requirement.
 
+- **Admin roles and grants, with the issuer-bound realm rule** ([#510], ADR-019
+  Decision 7). Migration 0043 adds `admin_roles` (a realm's custom roles: a
+  name and permission ids from the catalog, checked with `validateCustomRole`)
+  and `admin_grants` (an account, a built-in or custom role, one target realm
+  or every realm, who created it, and when it was created, revoked and last
+  changed in what it gives). Only an account of the operator realm holds a
+  grant on every realm or on another realm than its own, and a custom role is
+  granted only within its realm: the repositories refuse anything else, and so
+  does the trigger `admin_grants_realm_rule` for every writer. A grant is
+  revoked, never changed (the trigger `admin_grants_revoke_only`), and written
+  live at the database's time, never already revoked or dated back (the
+  trigger `admin_grants_insert_live`); a role is disabled, never deleted while
+  a grant names it. A grant is looked up by its id or its account's id only
+  within a realm ([#489]): the realm it covers, or its account's realm, and
+  revoked only from its account's realm. The
+  operator flag a realm carries, on which the realm rule rests, is written only
+  by the realms repository's `setOperator`, no longer by `update`. `resolveAdminAuthority({ iss, sub, scopes, targetRealmId })` decides what
+  an admin token may do to a realm, reading the grants on every request, never
+  from the token: an operator-realm admin needs a grant on the realm or on every
+  realm, a realm-local admin acts only on its own realm and never on the
+  operator realm, a realm outside the grants answers 404 exactly as a missing
+  one, and the grants' permissions are intersected with the token's scopes. So
+  a disabled account, a revoked grant or a disabled role counts from the next
+  request, with the same token. `RealmIssuerDirectory` (issuer to realm) and
+  `IssuerKeyResolver` are the seams per-realm issuers and keys replace
+  ([#491]); the defaults know only `JWT_ISSUER`, its realm and today's signing
+  key. No admin route uses them yet; the admin listener comes with [#511].
 - **The Interaction API v1 contract** ([#590], ADR-019 Decision 6, ADR-017
   Decision 3, ADR-018 §5). The API sign-in pages will use to reach the engine is
   written down before its handlers: one OpenAPI 3.1 document for
@@ -775,6 +845,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The typed client rejects a redirect a browser hides from `fetch` with
     `UnexpectedRedirectError` rather than as status 0.
 
+- **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
+  `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
+  unchanged single process, or as a comma-separated list of `web`, `api`,
+  `admin`, `signer` and `delivery`. A route manifest
+  (`apps/auth-server/src/app/route-manifest.ts`) replaces the folder autoload:
+  it names every route module with its roles, and a process registers only
+  the routes, plugins, repositories and jobs of its roles. `web` serves the
+  browser-session endpoints; `api` token, introspection, revocation,
+  userinfo, registration, discovery, JWKS, the account and developer APIs,
+  SSF and the legacy `/auth` routes, and runs `purge-expired`; `delivery`
+  runs the event delivery reader and event retention; every role answers
+  `/health` and `/metrics`. A read of a repository its roles leave unbuilt
+  throws, naming it, and the boot is refused for a route without a role.
+  Only a process with the `signer` role holds the KEK and the private keys:
+  any other refuses to boot when `KEK`, `KEK_PATH`, a KEK provider adapter, a
+  `JWT_*_PRIVATE_KEY*` or an `OID4VP_VERIFIER_SIGNING_KEY*` variable is set,
+  naming it, and needs `SIGNER_URL` and `INTERNAL_TLS_CERT_PATH`,
+  `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH` (advanced). The key
+  variables are refused before the configuration reads any key file. Until
+  the signer service ships, such a process answers a request that needs a
+  signature with `503` `temporarily_unavailable`, and its event deliveries wait
+  without spending attempts (the delivery role now holds a delivery whose
+  signer is unavailable). It verifies a realm's tokens, and serves its JWKS,
+  from the realm's published public keys (`realm_public_keys`), which it reads
+  without a KEK ([#491]): no public key variable is needed, and the
+  verification keys and JWKS are the signer's own. It refuses
+  `HYBRID_SIGNING_ENABLED=true`. `@fastify/autoload` is no longer a
+  dependency. The docs site's new **Service roles** page
+  (`operate/service-roles`) describes the split that works today. The egress
+  client (`fastify.egress`) is registered where a route makes an outbound call
+  (`web` and `api`); `GET /auth/verify`, the email verification page, and
+  `POST /ui/verify` are `web` routes, while `POST /auth/verify` stays on `api`.
+  A route tagged only with roles the process does not hold refuses the boot.
+  `SESSION_COOKIE_SECRET` is required in production only on a process holding
+  `web` or `api`, and the Swagger UI under `/docs` is served only on one
+  holding `api`. A delivery held because the signer is unavailable is logged at
+  `warn` when first held and every 15 minutes while it lasts, and the new
+  gauges `qauth_events_delivery_signer_held` and
+  `qauth_events_delivery_signer_held_oldest_seconds` show such holds.
+
+- **Security operations, defined by effect, as an enforced classification**
+  ([#508], ADR-019 Decision 7). The eleven effect tags (`credential-path`,
+  `token-content`, `issue-for-other`, `administration`, `import`,
+  `federation-operator`, `key-custody`, `realm-lifecycle`,
+  `authority-tree-power`, `posture-loosening`, `bulk-revocation`) are a closed
+  list in `@qauth-labs/shared-validation`. Every admin operation is defined once
+  with `defineOperation` (id, class, effects, permissions); the registry refuses
+  a `write` or `read` operation with an effect, a `security` operation without
+  one, a class other than the strictest class of its permissions and an unknown
+  member. An operation whose request decides what it needs declares the
+  security case and a pure `classify`; a `classify` that throws, meets an
+  unknown field or returns an unknown member, effect, class or permission, or
+  more than the declaration, gives the request the declared security
+  classification. The admin pipeline's classification stage
+  (`plugins/admin-operations.ts`, for the admin listener) loads only before any
+  route, refuses at boot a route that names no registered operation or whose
+  OpenAPI members differ from the registry, and on every request hands the
+  handler a frozen classification it cannot lower and freezes the parameters,
+  query and body it classified. A reserved table names, for each effect, the
+  operation ids later areas register; the registry refuses one registered with
+  a weaker classification, a case variant of one, and a `classify` on one whose
+  entry does not say the request decides. The API conventions check fails when
+  an admin operation of the OpenAPI document disagrees with the registry, and
+  the docs site's new **Security operations** page
+  (`reference/security-operations`) is generated from it. No admin operation is
+  registered yet.
+  - Each request-dependent reserved entry (`realms.policies.update`,
+    `clients.update`, `realms.imports.apply`) lists security cases; the registry
+    runs the operation's `classify` on them at boot and refuses one that gives a
+    case less than its effects or fails closed on it, so a `classify` that
+    answers `write` for everything cannot take the entry. By effect, lengthening
+    a token or session lifetime or the key rotation interval, and shortening or
+    switching off audit-event retention, are `posture-loosening`.
+    `mergePatchLeafPaths(body)` gives a merge patch's changed fields from the
+    body's own keys.
+  - An operation with `loadState` names the version of the state it read
+    (`stateVersion`); the classification carries it, the stage answers 428
+    (the new `PreconditionRequiredError`, `precondition_required`) when the
+    request has no `If-Match` and 412 (the new `PreconditionFailedError`,
+    `precondition_failed`) when it names another version, and the handler's
+    write must be conditional on it. The `posture-loosening` tag now names
+    lifetimes, the key rotation interval and audit-event retention.
+    The classification also carries the SHA-256 digest of a binary body
+    (`bodyDigest`), which cannot be frozen.
+  - The stage requires an `authorize(request, classification)` option and calls
+    it on every request right after classifying.
+  - Every admin route runs under a request ceiling: a listener that registers
+    the server's rate limit before the stage keeps it, and one that does not
+    gets the stage's own (`@fastify/rate-limit`, 100 requests a minute by
+    default, the `rateLimit` option).
+  - The reserved table adds realm roles and groups and their role mappings,
+    credentials an admin sets for an account (password, passkey, other
+    credential), and rotating a client's secret or registration access token.
+
 ### Changed
 
 - **BREAKING (relying parties and resource servers): tokens are signed and
@@ -821,6 +985,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `getJwks` and `getIdTokenSigningAlgValuesSupported` take the realm, and
   `getIssuer` is gone. The wallet verifier's crypto capability gate reads the
   default realm's stored token keys, not the key variables.
+- **BREAKING (clients that hold `qauth:admin:*` scopes or the admin audience)**:
+  the token endpoint issues an admin scope only when the client lists the admin
+  API's audience and the account holds a live admin grant whose role has a
+  permission of that scope's class, and the admin audience only to an account
+  that holds a live admin grant ([#510]), on the grants that sign an account
+  in at QAuth: authorization code and refresh token. A scope that fails is left out of the token
+  and the response's `scope` says so; when nothing is left of the scopes asked
+  for, the request is refused with `invalid_scope`. The audience is refused with
+  `invalid_target`. Grants are read at every issuance, so the refresh after a
+  revocation no longer carries what the grant gave. Neither ever reaches a
+  `client_credentials` token, which names no account (until service accounts
+  exist, [#522]), an ID-JAG minted for another authorization server, a token
+  of the jwt-bearer grant, whose authority comes from another identity
+  provider, or a delegated token of token exchange: an admin acts as itself,
+  never through an agent. `/auth/login` leaves the admin audience out of its token, whatever
+  the system client lists. No other scope of the reserved `qauth:` namespace is
+  ever issued. The admin family's
+  token guard also refuses a delegated token (an RFC 8693 `act` claim), as the
+  developer family's does; the account family accepts one, and its routes
+  decide per operation. **Action for operators**: no route needs these tokens
+  yet. Before the admin API ships, give each account that will use it an admin
+  grant.
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
   OAuth protocol endpoint answers an error with an RFC 9457 problem document,
@@ -1126,6 +1312,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards (`requireFamilyToken`) name the request realm's issuer, which since
   [#491] is the `iss` of every token the realm issues (below).
 
+- **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
+  The lookups by an id that a request, a token or a code carries now take the
+  realm of the request's host: users, clients, consents, API keys,
+  credentials, refresh tokens, authorization codes, email verification tokens
+  and a wallet's OID4VP state, encryption `kid` and Response Code. Browser
+  sessions, whose id a cookie carries, are not scoped yet ([#493]). The
+  repository methods take the realm id as a required first argument;
+  refresh tokens, codes and verification tokens, which have no realm column,
+  are found through their client's or credential's realm. A value of another
+  realm gets the answer an unknown value gets, leaves the same events and
+  changes nothing in its own realm:
+  - an authorization code or a refresh token issued in another realm answers
+    `invalid_grant`; presenting the refresh token there, or revoking it, revokes
+    no family;
+  - another realm's access token is `active: false` at introspection and 401
+    at userinfo, and revocation and `/auth/logout` ignore or refuse it: these
+    routes and token exchange check the token's `iss` against the request
+    realm's token issuer, and since [#491] verify it only with the request
+    realm's keys;
+  - a consent, client or API key id of another realm answers 404 at the
+    management API, and a verification token mailed for another realm's
+    account is an invalid token;
+  - a management token whose user belongs to another realm is now refused as a
+    token for an unknown user is ("Access token subject is not an active
+    user"), no longer with "Access token was not issued in this realm".
+
+  The verification-mail counters of `POST /auth/resend-verification` and
+  `POST /auth/register` (`rate-limit:resend:*`, `last-email-sent:*`) carry the
+  realm id, so an address has an allowance in each realm; they start from zero
+  after the upgrade, and during a rolling upgrade old and new nodes count
+  apart for one window. A deployment with one realm behaves as before. Tokens
+  are signed per realm ([#491], above), so each realm's host accepts its own
+  realm's tokens only: a `client_credentials` token of a same-named client in
+  another realm is `active: false` at the default realm's introspection, and
+  its revocation there denylists nothing.
+
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
   session service ([#469]): one `sessions` row with the realm, the user,
@@ -1288,6 +1510,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults `NODE_ENV` to `production`, so a local stack that needs one sets
   `NODE_ENV=development` in `.env`.
 
+- **BREAKING (security)**: `CIMD_ALLOW_PRIVATE_ADDRESSES` and
+  `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are removed ([#481]). Set to any value, in
+  any `NODE_ENV`, either one stops the boot with a message that names
+  `EGRESS_ALLOWLIST_PATH`. The CIMD document, client `jwks_uri` and ID-JAG
+  issuer fetches go through the egress client (ADR-019 Decision 8) instead of
+  the auth server's own fetcher. A metadata document or `jwks_uri` never reaches
+  a private address. A trusted ID-JAG issuer's discovery URL may, through an
+  allowlist entry naming the realm, but the `jwks_uri` its document names may
+  not, so an issuer whose keys are on a private network cannot be used yet. The
+  fetches now also refuse documentation and other reserved ranges
+  (`203.0.113.0/24` and the rest of the egress address table), send
+  `User-Agent: qauth-egress`, and run in the egress client's fetch processes: up
+  to 8, about 70 MB each while busy, exiting after a minute idle.
+
+  **Action for operators**: remove both variables. An operator-set private
+  destination goes into the allowlist file.
+
 - **BREAKING (ID-JAG; only with `ID_JAG_ENABLED`, which is off by default)**:
   a client's ID-JAG targets have a column of their own, `oauth_clients.id_jag_targets`
   (migration 0027, [#434], [ADR-011](./docs/adr/011-enterprise-managed-authorization.md)
@@ -1424,24 +1663,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#478]: https://github.com/qauth-labs/qauth/issues/478
 [#479]: https://github.com/qauth-labs/qauth/issues/479
 [#480]: https://github.com/qauth-labs/qauth/issues/480
+[#481]: https://github.com/qauth-labs/qauth/issues/481
 [#482]: https://github.com/qauth-labs/qauth/issues/482
 [#484]: https://github.com/qauth-labs/qauth/issues/484
 [#485]: https://github.com/qauth-labs/qauth/issues/485
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#489]: https://github.com/qauth-labs/qauth/issues/489
 [#490]: https://github.com/qauth-labs/qauth/issues/490
 [#491]: https://github.com/qauth-labs/qauth/issues/491
+[#493]: https://github.com/qauth-labs/qauth/issues/493
+[#495]: https://github.com/qauth-labs/qauth/issues/495
 [#507]: https://github.com/qauth-labs/qauth/issues/507
+[#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
+[#510]: https://github.com/qauth-labs/qauth/issues/510
+[#511]: https://github.com/qauth-labs/qauth/issues/511
 [#513]: https://github.com/qauth-labs/qauth/issues/513
+[#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
+[#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
@@ -1463,7 +1712,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the link changes nothing and reads nothing from the database, so a link
   scanner or a prefetch still cannot verify an account. The page sends
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the form has
-  the login pages' CSRF check and the JSON route's rate limit.
+  the login pages' CSRF check and the JSON route's rate limit. The link
+  verifies only at a host of its account's realm, whose issuer it names
+  ([#490]): at another realm's host its token is unknown ([#489]).
   `POST /auth/verify` is unchanged. This page is interim: the email-code step
   ([#638]) and the hosted account verification UI ([#644]) replace link
   verification.

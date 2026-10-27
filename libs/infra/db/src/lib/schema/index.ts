@@ -1,4 +1,5 @@
 export * from './admin-audit';
+export * from './admin-grants';
 export * from './audit';
 export * from './consents';
 export * from './core';

@@ -8,6 +8,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
+  TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
@@ -634,6 +635,60 @@ describe('the plugin holds no private key (#491)', () => {
       expect(privateKeys).toEqual([]);
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('a signer that only reads published keys (a process without the signer role, #495)', () => {
+  it("passes the signer's 503 on for every signature and still verifies the realm's tokens", async () => {
+    const realms = await createRealms();
+    const issuing = await buildTestApp(realms);
+    const token = await issuing.jwtUtils.signAccessToken(realms.a, {
+      sub: 'user-1',
+      clientId: 'client-1',
+    });
+    await issuing.close();
+
+    const refuse = (): Promise<never> =>
+      Promise.reject(
+        new TemporarilyUnavailableError(60, { reason: 'signer_service_not_reachable' })
+      );
+    const verifyOnly = await buildTestApp({
+      ...realms,
+      signer: {
+        ...realms.signer,
+        signer: {
+          signJws: refuse,
+          signHybrid: refuse,
+          getVerificationKeys: realms.signer.signer.getVerificationKeys,
+          getJwks: realms.signer.signer.getJwks,
+        } as unknown as TestSigner['signer'],
+      },
+    });
+    try {
+      await expect(
+        verifyOnly.jwtUtils.signAccessToken(realms.a, { sub: 'user-1', clientId: 'client-1' })
+      ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+      await expect(
+        verifyOnly.jwtUtils.signIdToken(realms.a, { sub: 'user-1', audience: 'client-1' })
+      ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+
+      await expect(verifyOnly.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toMatchObject({
+        sub: 'user-1',
+        iss: ISSUER_A,
+      });
+      await expect(verifyOnly.jwtUtils.verifyAccessToken(realms.b, token)).rejects.toBeInstanceOf(
+        JWTInvalidError
+      );
+      const response = await verifyOnly.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect((await verifyOnly.jwtUtils.getJwks(realms.a)).keys.length).toBeGreaterThan(0);
+    } finally {
+      await verifyOnly.close();
     }
   });
 });

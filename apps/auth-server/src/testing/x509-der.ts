@@ -32,9 +32,10 @@ import {
  *
  * Only what those fixtures exercise: ECDSA P-256 keys, `ecdsa-with-SHA256`, a
  * single-CN name, a validity window, `basicConstraints`, `keyUsage` and
- * `dNSName` SANs — plus one deliberately hostile shape, an unsigned certificate
- * whose key is slow to decode ({@link createExplicitCurveCertificate}). It is a
- * TEST helper and must not become a certificate-issuing utility.
+ * `dNSName` SANs. It is a TEST helper and must not become a
+ * certificate-issuing utility. The hostile certificate whose key is slow to
+ * decode (ANT-2026-3OJSXV7G) lives with the egress library's tests, in
+ * `libs/server/egress/src/testing/hostile-handshake.ts`.
  */
 
 /** ASN.1 tag numbers used below. */
@@ -83,18 +84,6 @@ function derInteger(value: number): Buffer {
   // A leading bit of 1 would make the INTEGER negative.
   if (((bytes[0] as number) & 0x80) !== 0) bytes.unshift(0x00);
   return der(TAG.INTEGER, Buffer.from(bytes));
-}
-
-/** DER INTEGER from a non-negative bigint. */
-function derBigInteger(value: bigint): Buffer {
-  let hex = value.toString(16);
-  if (hex.length % 2 === 1) hex = `0${hex}`;
-  const bytes = Buffer.from(hex, 'hex');
-  // A leading bit of 1 would make the INTEGER negative.
-  return der(
-    TAG.INTEGER,
-    ((bytes[0] as number) & 0x80) !== 0 ? Buffer.concat([Buffer.from([0x00]), bytes]) : bytes
-  );
 }
 
 /** Encode a dotted OID string as DER. */
@@ -299,92 +288,4 @@ export function createTestCertificate(options: CreateTestCertificateOptions): Te
 /** Export a private key as the PKCS#8 PEM an operator puts in an env variable. */
 export function toPkcs8Pem(key: KeyObject): string {
   return key.export({ type: 'pkcs8', format: 'pem' }).toString();
-}
-
-/** `base ** exponent mod modulus` over bigints. */
-function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  let result = 1n;
-  let b = base % modulus;
-  let e = exponent;
-  while (e > 0n) {
-    if ((e & 1n) === 1n) result = (result * b) % modulus;
-    b = (b * b) % modulus;
-    e >>= 1n;
-  }
-  return result;
-}
-
-/**
- * A 658-bit field prime of the form `15·2^654 + 1`. A modular square root
- * modulo it is Tonelli-Shanks with 654 rounds.
- */
-export const SLOW_SQUARE_ROOT_PRIME = 15n * 2n ** 654n + 1n;
-
-/**
- * DER of an UNSIGNED certificate (its signature is zeros) whose subject key is
- * an EC point on a curve spelled out in the key itself — explicit
- * `ECParameters` over the field prime `prime` (RFC 3279 §2.3.5) — rather than
- * a named curve.
- *
- * It exists to be expensive to READ, which is what ANT-2026-3OJSXV7G is about:
- * the curve's base point and the key are compressed points with x = 0 on
- * `y² = x³ + n²` (n the smallest quadratic non-residue), so OpenSSL decodes
- * them with a modular square root while it parses the certificate — before
- * anything is verified, so it does not matter that nobody signed it. Modulo
- * {@link SLOW_SQUARE_ROOT_PRIME} that costs a large fraction of a second per
- * certificate; modulo a prime that is 3 mod 4 it would cost next to nothing.
- */
-export function createExplicitCurveCertificate(prime: bigint): Buffer {
-  let nonResidue = 2n;
-  while (modPow(nonResidue, (prime - 1n) / 2n, prime) === 1n) nonResidue += 1n;
-
-  const fieldBytes = Math.ceil(prime.toString(2).length / 8);
-  const compressedPoint = Buffer.concat([
-    Buffer.from([2 + Number(nonResidue % 2n)]),
-    Buffer.alloc(fieldBytes),
-  ]);
-  const curveB = Buffer.alloc(2);
-  curveB.writeUInt16BE(Number(nonResidue * nonResidue));
-
-  const ecParameters = der(
-    TAG.SEQUENCE,
-    Buffer.concat([
-      derInteger(1),
-      der(TAG.SEQUENCE, Buffer.concat([derOid('1.2.840.10045.1.1'), derBigInteger(prime)])),
-      der(
-        TAG.SEQUENCE,
-        Buffer.concat([der(TAG.OCTET_STRING, Buffer.from([0x00])), der(TAG.OCTET_STRING, curveB)])
-      ),
-      der(TAG.OCTET_STRING, compressedPoint),
-      derInteger(7),
-    ])
-  );
-  const subjectPublicKeyInfo = der(
-    TAG.SEQUENCE,
-    Buffer.concat([
-      der(TAG.SEQUENCE, Buffer.concat([derOid('1.2.840.10045.2.1'), ecParameters])),
-      der(TAG.BIT_STRING, Buffer.concat([Buffer.from([0x00]), compressedPoint])),
-    ])
-  );
-
-  const ed25519 = der(TAG.SEQUENCE, derOid('1.3.101.112'));
-  const tbs = der(
-    TAG.SEQUENCE,
-    Buffer.concat([
-      contextConstructed(0, derInteger(2)),
-      derInteger(nextSerial++),
-      ed25519,
-      commonName('unsigned issuer'),
-      der(
-        TAG.SEQUENCE,
-        Buffer.concat([
-          utcTime(new Date(Date.now() - 3_600_000)),
-          utcTime(new Date(Date.now() + 3_600_000)),
-        ])
-      ),
-      commonName('unsigned subject'),
-      subjectPublicKeyInfo,
-    ])
-  );
-  return der(TAG.SEQUENCE, Buffer.concat([tbs, ed25519, der(TAG.BIT_STRING, Buffer.alloc(65))]));
 }

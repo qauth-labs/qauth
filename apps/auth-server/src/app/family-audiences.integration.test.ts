@@ -44,17 +44,14 @@ import { API_FAMILIES, API_FAMILY_AUDIENCES, type ApiFamily } from './api-conven
  * - A bad token gets the RFC 6750 challenge; a missing scope 403 `forbidden`
  *   with the `insufficient_scope` challenge.
  *
- * Only the network fetch of the metadata document is replaced (`ssrfSafeGet`).
+ * Only the network fetch of the metadata document is replaced (`egressGet`).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
-vi.mock('./helpers/ssrf-safe-fetch', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, ssrfSafeGet };
-});
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
+vi.mock('./helpers/egress-get', () => ({ egressGet }));
 
 const CLIENT_SECRET = 'family-client-secret-of-sufficient-length-42';
 const PROBE_SCOPE = 'probe:read';
@@ -124,7 +121,7 @@ describe('one audience per API family and a guard for each (#509, real container
       ctx.skip();
       return;
     }
-    ssrfSafeGet.mockReset();
+    egressGet.mockReset();
     await resetE2eState(booted.app);
   });
 
@@ -212,6 +209,21 @@ describe('one audience per API family and a guard for each (#509, real container
       for (const family of API_FAMILIES) {
         await seedMachineClient(familyClientId(family), [API_FAMILY_AUDIENCES[family]]);
         const response = await machineToken(familyClientId(family), API_FAMILY_AUDIENCES[family]);
+        if (family === 'admin') {
+          // A client_credentials token names no account, and only an account
+          // with an admin grant gets the admin audience (#510): the guard is
+          // tested here with a token signed directly.
+          expect(response.statusCode).toBe(400);
+          tokens[family] = await app().jwtUtils.signAccessToken(
+            { id: await realmId() },
+            {
+              sub: familyClientId(family),
+              clientId: familyClientId(family),
+              aud: API_FAMILY_AUDIENCES[family],
+            }
+          );
+          continue;
+        }
         expect(response.statusCode).toBe(200);
         const token = response.json<{ access_token: string }>().access_token;
         // The token endpoint maps the RFC 8707 resource value to the audience.
@@ -289,9 +301,9 @@ describe('one audience per API family and a guard for each (#509, real container
           provisionedByOperator: true,
         });
         await app().repositories.oauthConsents.upsertGrant(
+          realm,
           userId,
           client.id,
-          realm,
           ['openid'],
           [account]
         );
@@ -359,9 +371,9 @@ describe('one audience per API family and a guard for each (#509, real container
         provisionedByOperator: true,
       });
       await app().repositories.oauthConsents.upsertGrant(
+        realm,
         userId,
         client.id,
-        realm,
         ['openid'],
         [account]
       );
@@ -468,7 +480,7 @@ describe('one audience per API family and a guard for each (#509, real container
     });
 
     function serveDocument(extra: Record<string, unknown>) {
-      ssrfSafeGet.mockImplementation(async (url: string) => {
+      egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
         expect(url).toBe(CIMD_CLIENT_ID);
         return {
           status: 200,
@@ -515,7 +527,7 @@ describe('one audience per API family and a guard for each (#509, real container
         serveDocument(extra);
         const response = await authorizeCimd();
         expect(response.statusCode).not.toBe(400);
-        expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+        expect(egressGet).toHaveBeenCalledTimes(1);
         const { rows } = await app().dbPool.query<{ audience: unknown }>(
           'SELECT audience FROM oauth_clients WHERE client_id = $1',
           [CIMD_CLIENT_ID]
@@ -628,15 +640,15 @@ describe('one audience per API family and a guard for each (#509, real container
 
     it('resolves a client_credentials token as the client of that realm, by the same client_id', async () => {
       const b = await realmB();
-      const admin = API_FAMILY_AUDIENCES.admin;
+      const developer = API_FAMILY_AUDIENCES.developer;
       // `twin` in both realms: enabled in A, disabled in B.
-      await seedMachineClient('twin', [admin]);
-      await seedMachineClient('twin', [admin], { realmId: b, enabled: false });
-      const token = (await machineToken('twin', admin)).json<{ access_token: string }>()
+      await seedMachineClient('twin', [developer]);
+      await seedMachineClient('twin', [developer], { realmId: b, enabled: false });
+      const token = (await machineToken('twin', developer)).json<{ access_token: string }>()
         .access_token;
 
-      expect((await call(probePath('admin'), token)).statusCode).toBe(200);
-      const atB = await call(probePath('admin'), token, HOST_B);
+      expect((await call(probePath('developer'), token)).statusCode).toBe(200);
+      const atB = await call(probePath('developer'), token, HOST_B);
       expect(atB.statusCode).toBe(401);
       expect(atB.json()).toMatchObject({ code: 'invalid_access_token' });
     });
@@ -713,12 +725,14 @@ describe('one audience per API family and a guard for each (#509, real container
     );
 
     it('answers a token without the scope a route needs with 403 forbidden and the insufficient_scope challenge', async () => {
-      await seedMachineClient(familyClientId('admin'), [API_FAMILY_AUDIENCES.admin]);
-      const token = (await machineToken(familyClientId('admin'), API_FAMILY_AUDIENCES.admin)).json<{
+      await seedMachineClient(familyClientId('developer'), [API_FAMILY_AUDIENCES.developer]);
+      const token = (
+        await machineToken(familyClientId('developer'), API_FAMILY_AUDIENCES.developer)
+      ).json<{
         access_token: string;
       }>().access_token;
 
-      const response = await call(probePath('admin', 'scoped'), token);
+      const response = await call(probePath('developer', 'scoped'), token);
       expect(response.statusCode).toBe(403);
       expect(response.json()).toMatchObject({ status: 403, code: 'forbidden' });
       expect(response.headers['www-authenticate']).toBe(

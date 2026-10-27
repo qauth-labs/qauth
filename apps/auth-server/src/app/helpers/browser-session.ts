@@ -106,7 +106,7 @@ export async function resolveBrowserSession(
     return null;
   }
 
-  const user = await fastify.repositories.users.findById(session.userId);
+  const user = await fastify.repositories.users.findById(session.realmId, session.userId);
   if (!user || !user.enabled) {
     // The account behind the session is gone or disabled — end the session
     // so the cookie cannot keep using it, and treat it as no sign-in.

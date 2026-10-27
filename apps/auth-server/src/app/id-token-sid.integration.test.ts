@@ -97,7 +97,7 @@ describe('sid on ID tokens and authorization codes (#549, real containers)', () 
       requirePkce: true,
     });
     for (const userId of userIds) {
-      await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, SCOPES);
     }
     return client.id;
   }

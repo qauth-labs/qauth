@@ -1,3 +1,4 @@
+import { hasRepository } from '@qauth-labs/fastify-plugin-db';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 import { collectDefaultMetrics, Counter, Gauge, Registry } from 'prom-client';
@@ -140,9 +141,10 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
     // The event store's read lag (#457): how long the oldest committed event
     // has been held back from readers by an older transaction still open. It
     // is read from the database at each scrape, so it exists only when the
-    // database plugin, registered before this one in the app, is present. A
-    // failed read reports NaN, not a stale or a reassuring value.
-    if (fastify.hasDecorator('repositories')) {
+    // database plugin, registered before this one in the app, is present, and
+    // only on a process whose roles read the event store (#495: `delivery`).
+    // A failed read reports NaN, not a stale or a reassuring value.
+    if (fastify.hasDecorator('repositories') && hasRepository(fastify.repositories, 'events')) {
       new Gauge({
         name: 'qauth_events_oldest_unread_age_seconds',
         help: 'Seconds the oldest committed event has been held back from readers by an older open transaction; 0 when none is.',
@@ -162,8 +164,12 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
     // retention while the retention job keeps up, and growing past it when
     // the job stops or a destination holds events back. Read at each scrape,
     // through the retention repository, so it needs a database user that may
-    // read events; a failed read reports NaN.
-    if (fastify.hasDecorator('repositories')) {
+    // read events, on a process whose roles load it (#495: `delivery`); a
+    // failed read reports NaN.
+    if (
+      fastify.hasDecorator('repositories') &&
+      hasRepository(fastify.repositories, 'eventRetention')
+    ) {
       new Gauge({
         name: 'qauth_events_oldest_age_seconds',
         help: "Seconds since each category's oldest stored event was written; 0 when it has none.",

@@ -418,6 +418,9 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ sub: USER_ID, email: 'user@example.com' });
+      // The subject is looked up in the request's realm (#489).
+      const usersRepo = app.repositories.users as unknown as { findById: ReturnType<typeof vi.fn> };
+      expect(usersRepo.findById).toHaveBeenCalledWith(realm.id, USER_ID);
     } finally {
       await app.close();
     }

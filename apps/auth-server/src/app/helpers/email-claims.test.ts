@@ -9,6 +9,8 @@ import { resolveEmailClaims, resolveEmailClaimsForScopes } from './email-claims'
 import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
 
 const PROVENANCE = { issuer: 'https://issuer.example.com', issuer_key_resolution: 'x5c' };
+/** The account, as the caller read it in the request's realm (#489). */
+const USER = { id: 'user-1', realmId: 'realm-1' };
 
 function fastifyStub(rows: unknown[]) {
   return {
@@ -50,7 +52,7 @@ describe('resolveEmailClaims', () => {
       attrRow('wallet', 'wallet@example.com'),
     ]);
 
-    const claims = await resolveEmailClaims(fastify, 'user-1');
+    const claims = await resolveEmailClaims(fastify, USER);
 
     expect(claims).toEqual({ email: 'wallet@example.com', email_verified: true });
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).toHaveBeenCalledWith(
@@ -60,7 +62,7 @@ describe('resolveEmailClaims', () => {
   });
 
   it('returns an empty object — no keys at all — when no verified row exists', async () => {
-    const claims = await resolveEmailClaims(fastifyStub([]), 'user-1');
+    const claims = await resolveEmailClaims(fastifyStub([]), USER);
 
     // Omitted means the keys are ABSENT, not undefined-valued.
     expect(claims).toEqual({});
@@ -76,7 +78,7 @@ describe('resolveEmailClaims', () => {
       attrRow('self_reported', 'live@example.com'),
     ]);
 
-    const claims = await resolveEmailClaims(fastify, 'user-1');
+    const claims = await resolveEmailClaims(fastify, USER);
 
     expect(claims).toEqual({ email: 'live@example.com', email_verified: true });
     // Already out on expiry, so nothing is asked about it.
@@ -87,13 +89,9 @@ describe('resolveEmailClaims', () => {
     it('asks about the provenance the winning wallet row recorded', async () => {
       const fastify = fastifyStub([attrRow('wallet', 'wallet@example.com')]);
 
-      await resolveEmailClaims(fastify, 'user-1');
+      await resolveEmailClaims(fastify, USER);
 
-      expect(isWalletAttributeIssuerStillTrusted).toHaveBeenCalledWith(
-        fastify,
-        'user-1',
-        PROVENANCE
-      );
+      expect(isWalletAttributeIssuerStillTrusted).toHaveBeenCalledWith(fastify, USER, PROVENANCE);
     });
 
     it('falls to the next source when the issuer is no longer trusted', async () => {
@@ -103,7 +101,7 @@ describe('resolveEmailClaims', () => {
         attrRow('wallet', 'withdrawn@example.com'),
       ]);
 
-      const claims = await resolveEmailClaims(fastify, 'user-1');
+      const claims = await resolveEmailClaims(fastify, USER);
 
       expect(claims).toEqual({ email: 'self@example.com', email_verified: true });
     });
@@ -113,17 +111,14 @@ describe('resolveEmailClaims', () => {
 
       const claims = await resolveEmailClaims(
         fastifyStub([attrRow('wallet', 'withdrawn@example.com')]),
-        'user-1'
+        USER
       );
 
       expect(claims).toEqual({});
     });
 
     it('asks nothing when no wallet row wins', async () => {
-      await resolveEmailClaims(
-        fastifyStub([attrRow('self_reported', 'self@example.com')]),
-        'user-1'
-      );
+      await resolveEmailClaims(fastifyStub([attrRow('self_reported', 'self@example.com')]), USER);
 
       expect(isWalletAttributeIssuerStillTrusted).not.toHaveBeenCalled();
     });
@@ -139,7 +134,7 @@ describe('resolveEmailClaimsForScopes — release only under the email scope (AN
     const fastify = fastifyStub([attrRow('self_reported', 'self@example.com')]);
 
     for (const scopes of [[], ['openid'], ['openid', 'profile', 'offline_access'], ['emails']]) {
-      expect(await resolveEmailClaimsForScopes(fastify, 'user-1', scopes)).toEqual({});
+      expect(await resolveEmailClaimsForScopes(fastify, USER, scopes)).toEqual({});
     }
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
   });
@@ -147,11 +142,11 @@ describe('resolveEmailClaimsForScopes — release only under the email scope (AN
   it('resolves the trust-ordered pair under the email scope, from an array or a set', async () => {
     const fastify = fastifyStub([attrRow('self_reported', 'self@example.com')]);
 
-    expect(await resolveEmailClaimsForScopes(fastify, 'user-1', ['openid', 'email'])).toEqual({
+    expect(await resolveEmailClaimsForScopes(fastify, USER, ['openid', 'email'])).toEqual({
       email: 'self@example.com',
       email_verified: true,
     });
-    expect(await resolveEmailClaimsForScopes(fastify, 'user-1', new Set(['email']))).toEqual({
+    expect(await resolveEmailClaimsForScopes(fastify, USER, new Set(['email']))).toEqual({
       email: 'self@example.com',
       email_verified: true,
     });

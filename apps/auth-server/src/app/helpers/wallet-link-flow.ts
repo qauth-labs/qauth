@@ -357,8 +357,13 @@ export async function advanceWalletLinkFlow(
   // Read before the flow because the done-marker path below needs it too.
   const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
 
+  // A flow is resumed only at a host of the realm it was started in (#489):
+  // one of another realm is an unknown flow here, answered exactly as one,
+  // and left untouched for its own realm.
   const flow = await readWalletLoginFlow(fastify, handle);
-  if (flow === null) return resolveDoneMarker(fastify, request, reply, handle, binder, userId);
+  if (flow === null || flow.realmId !== requestRealm(request).id) {
+    return resolveDoneMarker(fastify, request, reply, handle, binder, userId);
+  }
 
   // A LOGIN flow may never be completed here. It carries no `linkUserId`, so
   // the check below would refuse it anyway — refused explicitly so the reason is

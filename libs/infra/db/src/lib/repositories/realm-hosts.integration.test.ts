@@ -355,9 +355,9 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
     it('refuses a second realm with is_operator = true', async () => {
       const first = await bareRealm();
       const second = await bareRealm();
-      await repo.update(first, { isOperator: true });
+      await repo.setOperator(first, true);
 
-      const promoted = repo.update(second, { isOperator: true });
+      const promoted = repo.setOperator(second, true);
       await expect(promoted).rejects.toBeInstanceOf(UniqueConstraintError);
       await expect(promoted).rejects.toMatchObject({ constraint: 'idx_realms_one_operator' });
       await expect(
@@ -369,11 +369,11 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
       const first = await bareRealm();
       const second = await bareRealm();
       await bareRealm();
-      await repo.update(first, { isOperator: true });
+      await repo.setOperator(first, true);
 
       await db().transaction(async (tx) => {
-        await repo.update(first, { isOperator: false }, tx);
-        await repo.update(second, { isOperator: true }, tx);
+        await repo.setOperator(first, false, tx);
+        await repo.setOperator(second, true, tx);
       });
       const { rows } = await pool().query(`SELECT id FROM realms WHERE is_operator`);
       expect(rows).toEqual([{ id: second }]);
@@ -691,8 +691,24 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
       const realmId = await bareRealm();
       await expect(repo.findOperator()).resolves.toBeUndefined();
 
-      await repo.update(realmId, { isOperator: true });
+      await repo.setOperator(realmId, true);
       await expect(repo.findOperator()).resolves.toMatchObject({ id: realmId, isOperator: true });
+    });
+
+    it('findByIssuer finds the realm by its exact issuer, or nothing (#510)', async () => {
+      const host = `${unique('iss')}.example.com`;
+      const realmId = await realmOn(host);
+      await bareRealm();
+
+      await expect(repo.findByIssuer(`https://${host}`)).resolves.toMatchObject({ id: realmId });
+      for (const other of [
+        `https://${host}/`,
+        `https://${host.toUpperCase()}`,
+        `http://${host}`,
+        '',
+      ]) {
+        await expect(repo.findByIssuer(other)).resolves.toBeUndefined();
+      }
     });
 
     it('lockProvisioning keeps a second transaction waiting until the first ends', async () => {

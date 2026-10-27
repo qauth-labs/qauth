@@ -1,6 +1,6 @@
 /**
  * QAuth's local Oxlint plugin: ESLint rules the workspace relies on that Oxlint
- * does not implement natively. `.oxlintrc.json` loads it through `jsPlugins`,
+ * does not implement natively, and QAuth's own rules. `.oxlintrc.json` loads it through `jsPlugins`,
  * so its rules are named `qauth/<rule>`.
  *
  * Oxlint's JS-plugin API mirrors ESLint's rule API (`context.options`,
@@ -56,6 +56,223 @@ const noRestrictedSyntax = {
         },
       });
     }, {});
+  },
+};
+
+/**
+ * The platform modules that open outbound connections, each with the exports
+ * that do. `all` marks a module that is a network client as a whole: any
+ * value imported from it is reported. Every other export (`STATUS_CODES`,
+ * `isIP`, types) passes.
+ */
+const NETWORK_MODULE_EXPORTS = new Map(
+  [
+    ['http', new Set(['request', 'get'])],
+    ['https', new Set(['request', 'get'])],
+    ['http2', new Set(['connect'])],
+    ['net', new Set(['connect', 'createConnection', 'Socket', 'Stream'])],
+    ['tls', new Set(['connect', 'TLSSocket'])],
+    ['undici', 'all'],
+  ].flatMap(([name, exports]) =>
+    name === 'undici'
+      ? [[name, exports]]
+      : [
+          [name, exports],
+          [`node:${name}`, exports],
+        ]
+  )
+);
+
+/** Whether `module` is one of {@link NETWORK_MODULE_EXPORTS}. */
+function isNetworkModule(module) {
+  return typeof module === 'string' && NETWORK_MODULE_EXPORTS.has(module);
+}
+
+/** Whether `name`, read from `module`, opens a connection. */
+function opensConnection(module, name) {
+  const exports = NETWORK_MODULE_EXPORTS.get(module);
+  return exports === 'all' || (exports !== undefined && exports.has(name));
+}
+
+/** Whether every value of `module` is a network client. */
+function isClientModule(module) {
+  return NETWORK_MODULE_EXPORTS.get(module) === 'all';
+}
+
+/** Names of the global object, on which `fetch` is reachable as a property too. */
+const GLOBAL_OBJECTS = new Set(['globalThis', 'global', 'window', 'self']);
+
+/** The name of a non-computed or string-keyed member access, or `undefined`. */
+function memberName(node) {
+  if (!node.computed && node.property.type === 'Identifier') return node.property.name;
+  if (
+    node.computed &&
+    node.property.type === 'Literal' &&
+    typeof node.property.value === 'string'
+  ) {
+    return node.property.value;
+  }
+  return undefined;
+}
+
+/** The module a `require('…')` call names, or `undefined`. */
+function requiredModule(node) {
+  if (
+    node?.type === 'CallExpression' &&
+    node.callee.type === 'Identifier' &&
+    node.callee.name === 'require' &&
+    node.arguments.length === 1 &&
+    node.arguments[0].type === 'Literal' &&
+    typeof node.arguments[0].value === 'string'
+  ) {
+    return node.arguments[0].value;
+  }
+  return undefined;
+}
+
+/** The name an import specifier imports, `default` included. */
+function importedName(specifier) {
+  const { imported } = specifier;
+  return imported.type === 'Identifier' ? imported.name : imported.value;
+}
+
+/**
+ * `no-direct-network` (ADR-019 Decision 8, issue #481): server code makes its
+ * outbound HTTP calls through the egress client, which checks every
+ * destination, and never through the platform's own clients. Reports:
+ *
+ * - the global `fetch`, read in any way: `fetch(url)`, `const f = fetch`,
+ *   `globalThis.fetch`. A local binding named `fetch` (a parameter) is not
+ *   the global one and passes, and so does a property of another object;
+ * - the exports of the platform's network modules that open a connection:
+ *   `request` and `get` of `node:http` and `node:https`, `connect` of
+ *   `node:http2`, `connect`, `createConnection` and `Socket` of `node:net`,
+ *   `connect` and `TLSSocket` of `node:tls`: a named import or re-export of
+ *   them, a read through the module object (`https.request`), however it was
+ *   imported or required, and a destructuring of it;
+ * - any value imported or required from `undici`, a network client as a whole;
+ * - a dynamic `import()` of those modules, and `export *` from them.
+ *
+ * `.oxlintrc.json` turns it on for server code outside the egress library.
+ * A module path assembled at run time still passes: this keeps honest code
+ * honest. `apps/auth-server/src/app/egress-rule.test.ts` lints samples with
+ * it.
+ */
+const noDirectNetwork = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow outbound HTTP calls that bypass the egress client' },
+    schema: [],
+    messages: {
+      direct:
+        '{{what}} bypasses the egress client. Server code makes outbound calls through `fastify.egress` (ADR-019 Decision 8), which checks every destination.',
+    },
+  },
+  create(context) {
+    /** Local names bound to a network module object, with the module each names. */
+    const modules = new Map();
+    const report = (node, what) => context.report({ node, messageId: 'direct', data: { what } });
+
+    return {
+      ImportDeclaration(node) {
+        const source = node.source.value;
+        if (node.importKind === 'type' || !isNetworkModule(source)) return;
+        for (const specifier of node.specifiers) {
+          if (specifier.type === 'ImportSpecifier' && specifier.importKind === 'type') continue;
+          if (isClientModule(source)) {
+            report(specifier, `An import from '${source}'`);
+          } else if (
+            specifier.type === 'ImportDefaultSpecifier' ||
+            specifier.type === 'ImportNamespaceSpecifier' ||
+            importedName(specifier) === 'default'
+          ) {
+            modules.set(specifier.local.name, source);
+          } else if (opensConnection(source, importedName(specifier))) {
+            report(specifier, `${importedName(specifier)} from '${source}'`);
+          }
+        }
+      },
+      ExportNamedDeclaration(node) {
+        const source = node.source?.value;
+        if (node.exportKind === 'type' || !isNetworkModule(source)) return;
+        for (const specifier of node.specifiers) {
+          const local =
+            specifier.local.type === 'Identifier' ? specifier.local.name : specifier.local.value;
+          if (specifier.exportKind !== 'type' && opensConnection(source, local)) {
+            report(specifier, `${local} from '${source}'`);
+          }
+        }
+      },
+      ExportAllDeclaration(node) {
+        if (node.exportKind !== 'type' && isNetworkModule(node.source.value)) {
+          report(node, `export * from '${node.source.value}'`);
+        }
+      },
+      CallExpression(node) {
+        const required = requiredModule(node);
+        if (required !== undefined && isClientModule(required)) {
+          report(node, `require('${required}')`);
+        }
+      },
+      ImportExpression(node) {
+        if (node.source.type === 'Literal' && isNetworkModule(node.source.value)) {
+          report(node, `A dynamic import of '${node.source.value}'`);
+        }
+      },
+      VariableDeclarator(node) {
+        const required = requiredModule(node.init);
+        const source =
+          required !== undefined && isNetworkModule(required)
+            ? required
+            : node.init?.type === 'Identifier'
+              ? modules.get(node.init.name)
+              : undefined;
+        // A client module's require call is reported as a call.
+        if (source === undefined || isClientModule(source)) return;
+        if (node.id.type === 'Identifier') {
+          if (required !== undefined) modules.set(node.id.name, source);
+          return;
+        }
+        if (node.id.type !== 'ObjectPattern') return;
+        for (const property of node.id.properties) {
+          if (property.type !== 'Property') continue;
+          const key = property.key.type === 'Identifier' ? property.key.name : property.key.value;
+          if (opensConnection(source, key)) report(property, `${key} from '${source}'`);
+        }
+      },
+      // As ESLint's `no-restricted-globals` finds a global: a reference that
+      // no scope declares (the global scope's `through`), or one to a global
+      // the configuration declares, which has no definition.
+      'Program:exit'(node) {
+        const globalScope = context.sourceCode.getScope(node);
+        const declared = globalScope.set.get('fetch');
+        const references = [
+          ...(declared !== undefined && declared.defs.length === 0 ? declared.references : []),
+          ...globalScope.through.filter((reference) => reference.identifier.name === 'fetch'),
+        ];
+        for (const reference of references) report(reference.identifier, 'The global fetch');
+      },
+      MemberExpression(node) {
+        const name = memberName(node);
+        if (name === undefined) return;
+        const { object } = node;
+        if (name === 'fetch' && object.type === 'Identifier' && GLOBAL_OBJECTS.has(object.name)) {
+          report(node, `${object.name}.fetch`);
+          return;
+        }
+        if (object.type === 'Identifier' && modules.has(object.name)) {
+          if (opensConnection(modules.get(object.name), name)) {
+            report(node, `${object.name}.${name}`);
+          }
+          return;
+        }
+        const source = requiredModule(object);
+        // A client module's require call is reported as a call.
+        if (source !== undefined && !isClientModule(source) && opensConnection(source, name)) {
+          report(node, `require('${source}').${name}`);
+        }
+      },
+    };
   },
 };
 
@@ -309,6 +526,7 @@ export default {
   meta: { name: 'qauth' },
   rules: {
     'no-restricted-syntax': noRestrictedSyntax,
+    'no-direct-network': noDirectNetwork,
     'no-request-authority': noRequestAuthority,
   },
 };

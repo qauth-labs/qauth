@@ -732,7 +732,7 @@ describe('assembled app — an over-long email is refused before any handler sto
  * invariant that does have a runtime signal (an autoloaded route's error shape)
  * and they are the stronger guard. These two have none:
  *
- *  - **`rateLimitPlugin` before the routes AutoLoad.** @fastify/rate-limit
+ *  - **`rateLimitPlugin` before the routes of the manifest.** @fastify/rate-limit
  *    applies the global ceiling and every per-route `config.rateLimit` through
  *    an `onRoute` hook, and `onRoute` is NOT retroactive — Fastify fires it as
  *    each route is added, so routes already registered when the plugin loads
@@ -776,7 +776,8 @@ describe('app.ts registration order — the invariants with no runtime signal (#
     'fastify.register(rateLimitPlugin)',
     'fastify.register(errorHandler)',
     'fastify.register(cors,',
-    'fastify.register(AutoLoad,',
+    // The route manifest's loop (#495), which replaced both AutoLoad calls.
+    'for (const { entry, plugin } of await routeModules)',
   ] as const;
 
   /**
@@ -818,8 +819,7 @@ describe('app.ts registration order — the invariants with no runtime signal (#
     // the wrong one, and `indexOf` would not notice.
     for (const marker of REQUIRED_ORDER) {
       const occurrences = source.split(marker).length - 1;
-      const expected = marker === 'fastify.register(AutoLoad,' ? 2 : 1;
-      expect(occurrences, `${marker} appears ${occurrences} times`).toBe(expected);
+      expect(occurrences, `${marker} appears ${occurrences} times`).toBe(1);
     }
   });
 
@@ -830,17 +830,13 @@ describe('app.ts registration order — the invariants with no runtime signal (#
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   });
 
-  it('puts the error handler ahead of BOTH AutoLoad calls, not merely the first', () => {
-    // The plugins AutoLoad and the routes AutoLoad are separate registrations
-    // and both mount route-bearing scopes.
+  it('registers no route-bearing scope but the manifest (#495)', () => {
+    // The folder autoload is gone: a module reaches the server only through
+    // the route manifest, whose one loop sits behind the error handler.
+    expect(source).not.toContain('AutoLoad');
     const handler = source.indexOf('fastify.register(errorHandler)');
-    const autoloads = [...source.matchAll(/fastify\.register\(AutoLoad,/g)].map(
-      (match) => match.index ?? -1
-    );
-
-    expect(autoloads).toHaveLength(2);
-    for (const autoload of autoloads) {
-      expect(handler).toBeLessThan(autoload);
-    }
+    const routes = source.indexOf('of await routeModules');
+    expect(handler).toBeGreaterThan(0);
+    expect(handler).toBeLessThan(routes);
   });
 });

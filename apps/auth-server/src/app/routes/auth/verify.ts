@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { verifyEmailAddress } from '../../helpers/email-verification';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
@@ -58,7 +59,13 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const { token, password } = request.body as VerifyBody;
 
-      const { email } = await verifyEmailAddress(fastify, request, reply, { token, password });
+      // The realm of the host the request named (#487): the token is looked up
+      // in it only (#489).
+      const { email } = await verifyEmailAddress(fastify, request, reply, {
+        realmId: requestRealm(request).id,
+        token,
+        password,
+      });
 
       return {
         message: 'Email verified successfully',

@@ -3,6 +3,7 @@ import {
   createRealmsRepository,
   type DbClient,
 } from '@qauth-labs/infra-db';
+import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
 import type {
   RealmKeyBootStore,
   SignerKeyStore,
@@ -40,6 +41,20 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
     // `signClientAssertion` finds no provider and signs nothing.
     findUpstreamClient: async () => undefined,
   } satisfies SignerKeyStore);
+}
+
+/**
+ * The realm's verification keys and JWKS, read from `realm_public_keys`
+ * alone (#495): the signer's public reads on a process that does not hold the
+ * signer role, which has no KEK and must not read `realm_keys`. It reads
+ * public material only, the same rows the in-process signer publishes, so a
+ * token verifies there exactly as on the signer's process.
+ */
+export function createRepositoryPublishedKeyReader(db: DbClient): PublishedKeyReader {
+  const keys = createRealmKeysRepository(db);
+  return createPublishedKeyReader({
+    listPublicKeys: (realmId: string) => keys.listPublicByRealm(realmId),
+  });
 }
 
 /**

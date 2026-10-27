@@ -561,8 +561,13 @@ async function advanceWalletLoginFlow(
   // path below needs it too.
   const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
 
+  // A flow is resumed only at a host of the realm it was started in (#489):
+  // one of another realm is an unknown flow here, answered exactly as one,
+  // and left untouched for its own realm.
   const flow = await readWalletLoginFlow(fastify, handle);
-  if (flow === null) return resolveDoneMarker(fastify, request, reply, handle, binder);
+  if (flow === null || flow.realmId !== requestRealm(request).id) {
+    return resolveDoneMarker(fastify, request, reply, handle, binder);
+  }
 
   if (!binder || !csrfTokensEqual(flow.binder, binder)) {
     fastify.log.warn(
@@ -665,7 +670,8 @@ async function advanceWalletLoginFlow(
   // The `enabled` gate, exactly as the password login applies it: a valid
   // credential for a disabled account is still a refused sign-in, and it must
   // look like every other refusal.
-  const user = await fastify.repositories.users.findById(resolution.userId);
+  // In the flow's realm, where the presentation was resolved to the account.
+  const user = await fastify.repositories.users.findById(flow.realmId, resolution.userId);
   if (!user || !user.enabled) {
     fastify.log.warn(
       { userId: resolution.userId },
@@ -698,7 +704,7 @@ async function advanceWalletLoginFlow(
         : null,
   });
 
-  await fastify.repositories.users.updateLastLogin(user.id);
+  await fastify.repositories.users.updateLastLogin(flow.realmId, user.id);
   await emitUserEvent(
     request,
     'urn:qauth:event:user.signed_in:v1-rc.0',
@@ -1366,8 +1372,10 @@ export default async function (fastify: FastifyInstance) {
         return sendHtml(reply, refusalPage(), 200);
       }
 
-      // (2) Burn. The code is spent by this statement whatever follows.
+      // (2) Burn. The code is spent by this statement whatever follows; a code
+      // of another realm's request is not matched, and so not spent (#489).
       const redeemed = await fastify.repositories.oid4vpRequestStates.redeemResponseCode(
+        requestRealm(request).id,
         hashOid4vpResponseCode(code)
       );
       if (redeemed === undefined) {

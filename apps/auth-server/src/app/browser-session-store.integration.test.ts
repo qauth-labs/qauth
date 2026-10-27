@@ -207,7 +207,7 @@ describe('browser sessions on the session service (#488, real containers)', () =
     const { app, realm, userId } = await boot();
     const client = await app.repositories.oauthClients.findByClientId(realm.id, CLIENT_ID);
     if (!client) throw new Error('client not seeded');
-    await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, SCOPES);
+    await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, SCOPES);
     const jar = await signIn(app);
     const [session] = await sessionRows(app);
     const lookups = vi.spyOn(app.sessionService, 'get');

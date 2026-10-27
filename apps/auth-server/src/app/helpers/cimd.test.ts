@@ -1,7 +1,7 @@
 import { InvalidClientError } from '@qauth-labs/shared-errors';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
-const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
+const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
     CIMD_ENABLED: true,
     CIMD_TRUST_POLICY: 'accept-any-https' as 'accept-any-https' | 'allowlist',
@@ -10,19 +10,16 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
     REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
-  ssrfSafeGet: vi.fn(),
+  egressGet: vi.fn(),
 }));
 
 vi.mock('../../config/env', () => ({ env: ENV }));
 
-vi.mock('./ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('./ssrf-safe-fetch')>('./ssrf-safe-fetch');
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('./egress-get', () => ({ egressGet }));
 
+import { blockedEgress } from '../../testing/egress';
 import {
   cimdDocumentSchema,
   fetchAndValidateCimdDocument,
@@ -61,7 +58,7 @@ function ok(body: unknown, headers: Record<string, string> = {}) {
 }
 
 beforeEach(() => {
-  ssrfSafeGet.mockReset();
+  egressGet.mockReset();
   ENV.CIMD_ENABLED = true;
   ENV.CIMD_TRUST_POLICY = 'accept-any-https';
   ENV.CIMD_TRUSTED_DOMAINS = [];
@@ -136,21 +133,29 @@ describe('resolveCacheTtlSeconds', () => {
 describe('fetchAndValidateCimdDocument', () => {
   it('happy path: fetches, validates, caches, and returns the document', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'max-age=600' }));
+    egressGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'max-age=600' }));
 
     const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
 
     expect(doc.client_id).toBe(CLIENT_ID);
     expect(doc.client_name).toBe('Example MCP Client');
     expect(doc.redirect_uris).toEqual(['https://app.example.com/callback']);
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledTimes(1);
+    // The client names its own URL: a `client` destination, which the
+    // deployment allowlist never opens (ADR-019 Decision 8).
+    expect(egressGet).toHaveBeenCalledWith(fastify, CLIENT_ID, {
+      purpose: 'cimd',
+      source: 'client',
+      timeoutMs: 5000,
+      maxBytes: 65536,
+    });
     // Cached with the clamped max-age (600 < max 3600).
     expect((fastify.redis.set as Mock).mock.calls[0][3]).toBe(600);
   });
 
   it('rejects when the document client_id does not equal the URL (impersonation)', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc({ client_id: 'https://evil.example/other.json' })));
+    egressGet.mockResolvedValue(ok(validDoc({ client_id: 'https://evil.example/other.json' })));
 
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
@@ -159,7 +164,7 @@ describe('fetchAndValidateCimdDocument', () => {
 
   it('rejects a document missing required fields', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok({ client_id: CLIENT_ID })); // no client_name / redirect_uris
+    egressGet.mockResolvedValue(ok({ client_id: CLIENT_ID })); // no client_name / redirect_uris
 
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
@@ -168,7 +173,7 @@ describe('fetchAndValidateCimdDocument', () => {
 
   it('rejects invalid JSON', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue({ status: 200, body: '<<not json>>', headers: {} });
+    egressGet.mockResolvedValue({ status: 200, body: '<<not json>>', headers: {} });
 
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
@@ -177,8 +182,7 @@ describe('fetchAndValidateCimdDocument', () => {
 
   it('surfaces an SSRF-blocked target as invalid_client and never caches it', async () => {
     const fastify = fastifyStub();
-    const { SsrfBlockedError } = await import('./ssrf-safe-fetch');
-    ssrfSafeGet.mockRejectedValue(new SsrfBlockedError('resolves to 169.254.169.254'));
+    egressGet.mockRejectedValue(blockedEgress('resolves to 169.254.169.254'));
 
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
@@ -188,7 +192,7 @@ describe('fetchAndValidateCimdDocument', () => {
 
   it('rejects a non-200 fetch', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+    egressGet.mockResolvedValue({ status: 404, body: '', headers: {} });
 
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
@@ -197,57 +201,57 @@ describe('fetchAndValidateCimdDocument', () => {
 
   it('serves a cached document without re-fetching (cache-header behaviour)', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'max-age=600' }));
+    egressGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'max-age=600' }));
 
     await fetchAndValidateCimdDocument(fastify, CLIENT_ID); // populate cache
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledTimes(1);
 
     const second = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
     expect(second.client_id).toBe(CLIENT_ID);
     // No second network fetch — served from cache.
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT cache when the response says no-store (re-fetches next time)', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'no-store' }));
+    egressGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'no-store' }));
 
     await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
     await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
 
     expect(fastify.redis.set).not.toHaveBeenCalled();
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(2);
+    expect(egressGet).toHaveBeenCalledTimes(2);
   });
 
   it('rejects when CIMD is disabled', async () => {
     ENV.CIMD_ENABLED = false;
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc()));
+    egressGet.mockResolvedValue(ok(validDoc()));
 
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
     );
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('enforces the allowlist trust policy', async () => {
     ENV.CIMD_TRUST_POLICY = 'allowlist';
     ENV.CIMD_TRUSTED_DOMAINS = ['trusted.example'];
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc()));
+    egressGet.mockResolvedValue(ok(validDoc()));
 
     // app.example.com is not allowlisted → rejected before any fetch.
     await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
       InvalidClientError
     );
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('accepts a wildcard-allowlisted subdomain', async () => {
     ENV.CIMD_TRUST_POLICY = 'allowlist';
     ENV.CIMD_TRUSTED_DOMAINS = ['*.example.com'];
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc()));
+    egressGet.mockResolvedValue(ok(validDoc()));
 
     const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
     expect(doc.client_id).toBe(CLIENT_ID);
@@ -255,7 +259,7 @@ describe('fetchAndValidateCimdDocument', () => {
 
   it('recognises the is_agent indicator in the metadata document (ADR-007 §2)', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(ok(validDoc({ is_agent: true })));
+    egressGet.mockResolvedValue(ok(validDoc({ is_agent: true })));
 
     const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
     expect(doc.is_agent).toBe(true);
@@ -299,14 +303,14 @@ describe('toCimdClientInsert — the reserved urn:qauth:aud: namespace (#509)', 
 
   it('resolves such a document through the cache too', async () => {
     const fastify = fastifyStub();
-    ssrfSafeGet.mockResolvedValue(
+    egressGet.mockResolvedValue(
       ok(validDoc({ resource: 'urn:qauth:aud:developer:v1-rc.0' }), {
         'cache-control': 'max-age=600',
       })
     );
     await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
     const cached = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
-    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledTimes(1);
     expect(() => toCimdClientInsert('realm-1', CLIENT_ID, cached, 'sentinel')).not.toThrow();
   });
 });

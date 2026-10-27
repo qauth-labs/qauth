@@ -240,12 +240,17 @@ describe('GET /api/clients route', () => {
     const request = {
       jwtPayload: { sub: DEV_A },
       headers: { authorization: 'Bearer token' },
+      realm: REALM,
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
 
     await ctx.handler!(request, reply);
 
-    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith(DEV_A);
+    // The caller's clients in the request's realm (#489).
+    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith(
+      'realm-1',
+      DEV_A
+    );
     expect(state.body).toEqual({
       clients: [
         {
@@ -285,6 +290,7 @@ describe('GET /api/clients route', () => {
     const request = {
       jwtPayload: { sub: DEV_A },
       headers: { authorization: 'Bearer token' },
+      realm: REALM,
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
 
@@ -300,7 +306,7 @@ describe('GET /api/clients route', () => {
     // The repository is the isolation boundary: it is queried with the
     // caller's own developer id and returns only that developer's rows.
     (fastify.repositories.oauthClients.listByDeveloper as unknown as Mock).mockImplementation(
-      async (developerId: string) =>
+      async (_realmId: string, developerId: string) =>
         developerId === DEV_A ? [makeClientRow({ developerId: DEV_A })] : []
     );
 
@@ -308,13 +314,20 @@ describe('GET /api/clients route', () => {
     const request = {
       jwtPayload: { sub: DEV_B },
       headers: { authorization: 'Bearer token' },
+      realm: REALM,
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
 
     await ctx.handler!(request, reply);
 
-    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith(DEV_B);
-    expect(fastify.repositories.oauthClients.listByDeveloper).not.toHaveBeenCalledWith(DEV_A);
+    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith(
+      'realm-1',
+      DEV_B
+    );
+    expect(fastify.repositories.oauthClients.listByDeveloper).not.toHaveBeenCalledWith(
+      'realm-1',
+      DEV_A
+    );
     expect(state.body).toEqual({ clients: [] });
   });
 
@@ -329,6 +342,7 @@ describe('GET /api/clients route', () => {
     const request = {
       jwtPayload: { sub: 'app-123' },
       headers: { authorization: 'Bearer token' },
+      realm: REALM,
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
 
@@ -565,7 +579,7 @@ describe('POST /api/clients (create) — #86', () => {
         makeClientRow({ developerId: DEV_A })
       );
       (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-        async (_id: string, data: Record<string, unknown>) =>
+        async (_realmId: string, _id: string, data: Record<string, unknown>) =>
           makeClientRow({ developerId: DEV_A, ...data })
       );
       const create = () =>
@@ -601,7 +615,7 @@ describe('POST /api/clients (create) — #86', () => {
         .calls[0][0];
       expect(created.redirectUris).toEqual([cursorCallback]);
       const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-        .calls[0][1];
+        .calls[0][2];
       expect(updateArg.redirectUris).toEqual(['https://app.example.com/cb', cursorCallback]);
     });
 
@@ -684,6 +698,11 @@ describe('GET /api/clients/:id (get one) — #87', () => {
 
     const body = (await route(ctx, 'GET /:id').handler(request, reply)) as Record<string, unknown>;
 
+    // Looked up in the request's realm (#489).
+    expect(fastify.repositories.oauthClients.findById).toHaveBeenCalledWith(
+      'realm-1',
+      '0190a000-0000-7000-8000-000000000001'
+    );
     expect(body.id).toBe('0190a000-0000-7000-8000-000000000001');
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain('clientSecretHash');
@@ -716,6 +735,36 @@ describe('GET /api/clients/:id (get one) — #87', () => {
     await expect(route(ctx, 'GET /:id').handler(request, reply)).rejects.toThrow(NotFoundError);
   });
 
+  it("answers another realm's client id with the same 404 as an unknown id (#489)", async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    // The developer owns this client, but in realm-2: the realm-scoped lookup
+    // of the request's realm (realm-1) does not find it.
+    const otherRealmClient = makeClientRow({
+      id: '0190a000-0000-7000-8000-000000000002',
+      realmId: 'realm-2',
+      developerId: DEV_A,
+    });
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockImplementation(
+      async (realmId: string, id: string) =>
+        realmId === otherRealmClient.realmId && id === otherRealmClient.id
+          ? otherRealmClient
+          : undefined
+    );
+
+    const answer = (id: string) =>
+      route(ctx, 'GET /:id').handler(authedRequest({ params: { id } }), createReply().reply);
+    const notFound = { name: 'NotFoundError', statusCode: 404, code: 'NOT_FOUND' };
+
+    await expect(answer(otherRealmClient.id)).rejects.toMatchObject(notFound);
+    await expect(answer('0190a000-0000-7000-8000-000000000099')).rejects.toMatchObject(notFound);
+    expect(fastify.repositories.oauthClients.findById).toHaveBeenCalledWith(
+      'realm-1',
+      otherRealmClient.id
+    );
+  });
+
   it('returns 404 without a DB hit for a non-UUID subject', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
@@ -740,7 +789,7 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
       makeClientRow({ developerId: DEV_A })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
 
@@ -755,8 +804,18 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
       unknown
     >;
 
+    // Looked up in the request's realm, written in the client's (#489).
+    expect(fastify.repositories.oauthClients.findById).toHaveBeenCalledWith(
+      'realm-1',
+      '0190a000-0000-7000-8000-000000000001'
+    );
+    expect(fastify.repositories.oauthClients.update).toHaveBeenCalledWith(
+      'realm-1',
+      '0190a000-0000-7000-8000-000000000001',
+      expect.any(Object)
+    );
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-      .calls[0][1];
+      .calls[0][2];
     expect(updateArg).toEqual({ name: 'Renamed', enabled: false });
     expect(body.name).toBe('Renamed');
     expect(JSON.stringify(body)).not.toContain('clientSecretHash');
@@ -770,7 +829,7 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
       makeClientRow({ developerId: DEV_A, enabled: false })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
 
@@ -784,7 +843,7 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     >;
 
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-      .calls[0][1];
+      .calls[0][2];
     expect(updateArg).toEqual({ enabled: true });
     expect(body.enabled).toBe(true);
   });
@@ -799,7 +858,10 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     const suspendedRow = makeClientRow({ developerId: DEV_A, enabled: false, suspended: true });
     (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(suspendedRow);
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) => ({ ...suspendedRow, ...data })
+      async (_realmId: string, _id: string, data: Record<string, unknown>) => ({
+        ...suspendedRow,
+        ...data,
+      })
     );
 
     const request = authedRequest({
@@ -812,7 +874,7 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     >;
 
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-      .calls[0][1];
+      .calls[0][2];
     expect(updateArg).toEqual({ enabled: true });
     expect(updateArg).not.toHaveProperty('suspended');
     expect(updateArg).not.toHaveProperty('suspendedAt');
@@ -827,7 +889,7 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     const row = makeClientRow({ developerId: DEV_A });
     (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(row);
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) => ({ ...row, ...data })
+      async (_realmId: string, _id: string, data: Record<string, unknown>) => ({ ...row, ...data })
     );
 
     const request = authedRequest({
@@ -837,7 +899,7 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     await route(ctx, 'PATCH /:id').handler(request, createReply().reply);
 
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-      .calls[0][1];
+      .calls[0][2];
     expect(updateArg).toEqual({ name: 'Renamed' });
   });
 
@@ -903,7 +965,12 @@ describe('DELETE /api/clients/:id — #89', () => {
     await route(ctx, 'DELETE /:id').handler(request, reply);
 
     expect(state.statusCode).toBe(204);
+    expect(fastify.repositories.oauthClients.findById).toHaveBeenCalledWith(
+      'realm-1',
+      '0190a000-0000-7000-8000-000000000001'
+    );
     expect(fastify.repositories.oauthClients.delete).toHaveBeenCalledWith(
+      'realm-1',
       '0190a000-0000-7000-8000-000000000001'
     );
   });
@@ -933,7 +1000,7 @@ describe('POST /api/clients/:id/regenerate-secret — #90', () => {
       makeClientRow({ developerId: DEV_A, tokenEndpointAuthMethod: 'client_secret_post' })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
 
@@ -948,8 +1015,13 @@ describe('POST /api/clients/:id/regenerate-secret — #90', () => {
     expect(typeof body.clientSecret).toBe('string');
     expect((body.clientSecret as string).length).toBe(64);
 
+    expect(fastify.repositories.oauthClients.update).toHaveBeenCalledWith(
+      'realm-1',
+      '0190a000-0000-7000-8000-000000000001',
+      expect.any(Object)
+    );
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-      .calls[0][1];
+      .calls[0][2];
     expect(updateArg.clientSecretHash).toContain('argon2id$');
     // Only the hash is persisted, never the plaintext.
     expect(updateArg.clientSecretHash).not.toBe(body.clientSecret);
@@ -1188,7 +1260,8 @@ describe('scope allowlist enforcement (#86/#88)', () => {
       makeClientRow({ developerId: DEV_A, scopes: ['openid', 'legacy:read', 'qauth:admin:read'] })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) => makeClientRow({ ...data })
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
+        makeClientRow({ ...data })
     );
 
     const kept = authedRequest({
@@ -1197,6 +1270,7 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     await route(ctx, 'PATCH /:id').handler(kept, createReply().reply);
     expect(fastify.repositories.oauthClients.update).toHaveBeenCalledWith(
+      'realm-1',
       '0190a000-0000-7000-8000-000000000001',
       expect.objectContaining({
         name: 'Renamed',
@@ -1211,6 +1285,7 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     });
     await route(ctx, 'PATCH /:id').handler(narrowed, createReply().reply);
     expect(fastify.repositories.oauthClients.update).toHaveBeenLastCalledWith(
+      'realm-1',
       '0190a000-0000-7000-8000-000000000001',
       expect.objectContaining({ scopes: ['legacy:read'] })
     );
@@ -1239,7 +1314,8 @@ describe('scope allowlist enforcement (#86/#88)', () => {
       makeClientRow({ developerId: DEV_A })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) => makeClientRow({ ...data })
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
+        makeClientRow({ ...data })
     );
 
     await route(ctx, 'POST /').handler(
@@ -1262,7 +1338,7 @@ describe('scope allowlist enforcement (#86/#88)', () => {
 
     const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
     expect(created.scopes).toEqual(['openid', 'email']);
-    const updated = (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][1];
+    const updated = (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][2];
     expect(updated.scopes).toEqual(['email', 'openid']);
   });
 });
@@ -1286,7 +1362,11 @@ describe('clients per developer (MAX_CLIENTS_PER_DEVELOPER)', () => {
     await expect(
       route(ctx, 'POST /').handler(createRequest(), createReply().reply)
     ).rejects.toThrow(ForbiddenError);
-    expect(fastify.repositories.oauthClients.countByDeveloper).toHaveBeenCalledWith(DEV_A);
+    // Counted in the request's realm (#489).
+    expect(fastify.repositories.oauthClients.countByDeveloper).toHaveBeenCalledWith(
+      'realm-1',
+      DEV_A
+    );
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
@@ -1433,7 +1513,7 @@ describe('client-management events', () => {
       makeClientRow({ developerId: DEV_A })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
 
@@ -1459,7 +1539,7 @@ describe('client-management events', () => {
       makeClientRow({ developerId: DEV_A, tokenEndpointAuthMethod: 'client_secret_post' })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
 
@@ -1521,7 +1601,7 @@ describe('client-management events are best-effort (one-time secret must survive
       makeClientRow({ developerId: DEV_A, tokenEndpointAuthMethod: 'client_secret_post' })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
     emitUserEventMock.mockRejectedValueOnce(new Error('event store down'));
@@ -1548,14 +1628,14 @@ describe('PATCH and the operator-provisioned marker (ANT-2026-O8U3P920)', () => 
       makeClientRow({ developerId: DEV_A, ...existing })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...existing, ...data })
     );
     await route(ctx, 'PATCH /:id').handler(
       authedRequest({ params: { id: '0190a000-0000-7000-8000-000000000001' }, body }),
       createReply().reply
     );
-    return (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][1];
+    return (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][2];
   }
 
   it('clears the marker when the owner changes the redirect URIs the operator vouched for', async () => {
@@ -1592,7 +1672,7 @@ describe('PATCH silently drops immutable fields (#88, Nit 8)', () => {
       makeClientRow({ developerId: DEV_A })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
-      async (_id: string, data: Record<string, unknown>) =>
+      async (_realmId: string, _id: string, data: Record<string, unknown>) =>
         makeClientRow({ developerId: DEV_A, ...data })
     );
 
@@ -1614,7 +1694,7 @@ describe('PATCH silently drops immutable fields (#88, Nit 8)', () => {
     await route(ctx, 'PATCH /:id').handler(request, reply);
 
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
-      .calls[0][1];
+      .calls[0][2];
     expect(updateArg).toEqual({ name: 'Renamed' });
     expect(updateArg.developerId).toBeUndefined();
     expect(updateArg.clientId).toBeUndefined();

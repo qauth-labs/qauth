@@ -265,12 +265,19 @@ export default async function (fastify: FastifyInstance) {
         // failed decrypt would leave the row live for the next attempt, which
         // turns an unauthenticated POST into a retry oracle against a key QAuth
         // itself published.
+        //
+        // Redeemed in the request's realm only (#489): a state or `kid` of
+        // another realm's request is not matched, so it is neither consumed
+        // nor answered differently from an unknown one.
+        const realmId = requestRealm(request).id;
         const redeemed = isEncryptedDirectPostRequest(body)
           ? await fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid(
+              realmId,
               readEncryptedResponseKid(body.response),
               responseCode
             )
           : await fastify.repositories.oid4vpRequestStates.redeem(
+              realmId,
               hashOid4vpState(body.state),
               responseCode
             );

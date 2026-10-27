@@ -75,6 +75,7 @@ The auth-server's source for each option is named in parentheses.
   `retired` keys. A token with no `kid`, from before tokens named their key, is tried against each
   of the realm's Ed25519 keys.
 - `getJwks(realm)` is the realm's JWKS as the signer serves it.
+- On a process without the `signer` role (#495), the auth-server's `signer` refuses every signature with 503 `temporarily_unavailable`, and reads each realm's verification keys and JWKS from its published public keys, without a KEK. The plugin passes the 503 on, and still verifies the realm's tokens.
 
 See [Keys](https://docs.qauth.dev/operate/keys/) and the
 [PQC verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).

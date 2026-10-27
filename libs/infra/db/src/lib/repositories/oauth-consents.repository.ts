@@ -11,6 +11,28 @@ import { oauthConsents } from '../schema/consents';
 import { oauthClients } from '../schema/core';
 
 /**
+ * The active consent of one (user, client) pair in one realm. The realm is
+ * part of every read (#489): a consent of another realm is no consent.
+ */
+function activeConsentOf(realmId: string, userId: string, oauthClientId: string) {
+  return and(
+    eq(oauthConsents.realmId, realmId),
+    eq(oauthConsents.userId, userId),
+    eq(oauthConsents.oauthClientId, oauthClientId),
+    isNull(oauthConsents.revokedAt)
+  );
+}
+
+/** The active consents a user of the realm holds. */
+function activeConsentsOf(realmId: string, userId: string) {
+  return and(
+    eq(oauthConsents.realmId, realmId),
+    eq(oauthConsents.userId, userId),
+    isNull(oauthConsents.revokedAt)
+  );
+}
+
+/**
  * Factory for the oauth_consents repository.
  *
  * Consent rows are write-once from the user's perspective: a grant creates a
@@ -28,6 +50,7 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
     },
 
     async findActive(
+      realmId: string,
       userId: string,
       oauthClientId: string,
       tx?: DbClient
@@ -36,18 +59,13 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
       const [row] = await invoker
         .select()
         .from(oauthConsents)
-        .where(
-          and(
-            eq(oauthConsents.userId, userId),
-            eq(oauthConsents.oauthClientId, oauthClientId),
-            isNull(oauthConsents.revokedAt)
-          )
-        )
+        .where(activeConsentOf(realmId, userId, oauthClientId))
         .limit(1);
       return row;
     },
 
     async findActiveForShare(
+      realmId: string,
       userId: string,
       oauthClientId: string,
       tx: DbClient
@@ -58,28 +76,26 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
       const [row] = await tx
         .select()
         .from(oauthConsents)
-        .where(
-          and(
-            eq(oauthConsents.userId, userId),
-            eq(oauthConsents.oauthClientId, oauthClientId),
-            isNull(oauthConsents.revokedAt)
-          )
-        )
+        .where(activeConsentOf(realmId, userId, oauthClientId))
         .limit(1)
         .for('share');
       return row;
     },
 
-    async listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]> {
+    async listActiveForUser(
+      realmId: string,
+      userId: string,
+      tx?: DbClient
+    ): Promise<OAuthConsent[]> {
       const invoker = tx ?? defaultDb;
       return invoker
         .select()
         .from(oauthConsents)
-        .where(and(eq(oauthConsents.userId, userId), isNull(oauthConsents.revokedAt)))
+        .where(activeConsentsOf(realmId, userId))
         .orderBy(desc(oauthConsents.grantedAt));
     },
 
-    async listActiveForUserWithClient(userId: string, tx?: DbClient) {
+    async listActiveForUserWithClient(realmId: string, userId: string, tx?: DbClient) {
       const invoker = tx ?? defaultDb;
       const rows = await invoker
         .select({
@@ -89,7 +105,7 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
         })
         .from(oauthConsents)
         .innerJoin(oauthClients, eq(oauthConsents.oauthClientId, oauthClients.id))
-        .where(and(eq(oauthConsents.userId, userId), isNull(oauthConsents.revokedAt)))
+        .where(activeConsentsOf(realmId, userId))
         .orderBy(desc(oauthConsents.grantedAt));
 
       return rows.map((r) => ({
@@ -100,9 +116,9 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
     },
 
     async upsertGrant(
+      realmId: string,
       userId: string,
       oauthClientId: string,
-      realmId: string,
       scopes: string[],
       resources: readonly string[] = [],
       tx?: DbClient
@@ -117,13 +133,7 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
         const [existing] = await invoker
           .select()
           .from(oauthConsents)
-          .where(
-            and(
-              eq(oauthConsents.userId, userId),
-              eq(oauthConsents.oauthClientId, oauthClientId),
-              isNull(oauthConsents.revokedAt)
-            )
-          )
+          .where(activeConsentOf(realmId, userId, oauthClientId))
           .limit(1)
           .for('update');
 
@@ -165,14 +175,20 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
       return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
     },
 
-    async revoke(id: string, tx?: DbClient): Promise<OAuthConsent> {
+    async revoke(realmId: string, id: string, tx?: DbClient): Promise<OAuthConsent> {
       const invoker = tx ?? defaultDb;
       const now = Date.now();
 
       const [row] = await invoker
         .update(oauthConsents)
         .set({ revokedAt: now })
-        .where(and(eq(oauthConsents.id, id), isNull(oauthConsents.revokedAt)))
+        .where(
+          and(
+            eq(oauthConsents.realmId, realmId),
+            eq(oauthConsents.id, id),
+            isNull(oauthConsents.revokedAt)
+          )
+        )
         .returning();
 
       if (!row) {

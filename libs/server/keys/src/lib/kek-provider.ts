@@ -46,6 +46,14 @@ export interface KekProvider {
    * `ok: false` and a reason when the backend cannot be used.
    */
   health(): Promise<KekProviderHealth>;
+
+  /**
+   * Release what the provider holds open, such as a backend session it keeps
+   * renewing. Optional: a provider without one has nothing to release. Its
+   * owner calls it once, when it is done with the provider, and makes no call
+   * after it.
+   */
+  close?(): Promise<void> | void;
 }
 
 /** What {@link KekProvider.wrap} returns. Both values are stored with the key. */
@@ -88,7 +96,11 @@ export type KekEnv = Readonly<Record<string, string | undefined>>;
 /** What a provider factory receives. */
 export interface KekProviderContext {
   readonly env: KekEnv;
-  /** Receives each configuration warning once, while the provider is created. */
+  /**
+   * Receives each configuration warning once, while the provider is created,
+   * and a warning the provider finds later about its backend that does not
+   * stop the call, such as a Vault key that can leave Vault.
+   */
   readonly warn: (warning: KekWarning) => void;
 }
 

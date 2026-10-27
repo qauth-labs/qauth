@@ -40,6 +40,14 @@ export {
   STANDARD_REALM_KEY_PURPOSES,
 } from './lib/key-purposes';
 export {
+  createPublishedKeyReader,
+  DEFAULT_PUBLISHED_KEY_CACHE_SIZE,
+  DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS,
+  type PublishedKeyReader,
+  type PublishedKeyReaderOptions,
+  type PublishedKeyStore,
+} from './lib/published-keys';
+export {
   type CookieSecret,
   type CookieSecrets,
   type DecryptRequest,

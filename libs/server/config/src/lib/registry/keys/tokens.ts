@@ -88,7 +88,7 @@ export const TOKEN_KEYS = defineKeys([
     default: { computed: 'none; the key store holds the signing keys' },
     since: '0.1.0',
     secret: true,
-    docs: "An Ed25519 private key, PEM, imported into the default realm's key store when the store lacks it, where it replaces the active Ed25519 token key; tokens are signed with the stored key.",
+    docs: "An Ed25519 private key, PEM, imported into the default realm's key store when the store lacks it, where it replaces the active Ed25519 token key; tokens are signed with the stored key; only a process that holds the `signer` role may have it.",
   },
   {
     name: 'JWT_PRIVATE_KEY_PATH',
@@ -106,7 +106,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'key-custody',
     default: null,
     since: '0.1.0',
-    docs: "The Ed25519 public key, PEM; derived from the private key when unset, and refused at boot when it is not the private key's public half.",
+    docs: "The Ed25519 public key, PEM; derived from the private key when unset, and refused at boot when it is not the private key's public half; a process without the `signer` role does not need it, as it verifies tokens with the realm's published keys.",
   },
   {
     name: 'JWT_PUBLIC_KEY_PATH',

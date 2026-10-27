@@ -91,7 +91,6 @@ function resetMockEnv(): void {
     ID_JAG_JWKS_REFRESH_COOLDOWN: 30,
     ID_JAG_JWKS_NEGATIVE_CACHE_TTL: 30,
     ID_JAG_MAX_DOCUMENT_BYTES: 65536,
-    ID_JAG_ALLOW_PRIVATE_ADDRESSES: false,
     ID_JAG_CLOCK_SKEW_LEEWAY: 60,
     ID_JAG_MAX_ASSERTION_LIFETIME: 300,
     ID_JAG_ISSUED_LIFETIME: 300,
@@ -101,19 +100,14 @@ resetMockEnv();
 
 vi.mock('../../../config/env', () => ({ env: mockEnv }));
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
 
-vi.mock('../../helpers/ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
-    '../../helpers/ssrf-safe-fetch'
-  );
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
 import { createFakeSessionService } from '../../../testing/browser-sessions';
+import { blockedEgress } from '../../../testing/egress';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { recordGrantAccessToken, revokeGrantAccessTokens } from '../../helpers/grant-access-tokens';
-import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
 import { emitUserEvent, userEventFor } from '../../helpers/user-events';
 import tokenRoute from './token';
 
@@ -133,6 +127,26 @@ const IN_REQUEST_REALM = expect.objectContaining({ id: REALM.id });
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
 
+/** A live admin grant of a built-in role on every realm, as `adminGrants.listLive` lists it (#510). */
+function liveBuiltInGrant(role: string) {
+  return {
+    grant: {
+      id: `grant-${role}`,
+      userId: 'granted-user',
+      builtInRole: role,
+      roleId: null,
+      targetRealmId: null,
+      createdBy: null,
+      createdAt: 0,
+      revokedAt: null,
+      lastSecurityChangeAt: 0,
+    },
+    role: null,
+  };
+}
+
+const ADMIN_API_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+
 /** The `data` of every event of the given type the route emitted. */
 function emittedData(type: string): unknown[] {
   return emitUserEventMock.mock.calls.filter(([, t]) => t === type).map(([, , data]) => data);
@@ -146,7 +160,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetMockEnv();
-  ssrfSafeGet.mockReset();
+  egressGet.mockReset();
 });
 
 interface TestContext {
@@ -245,6 +259,15 @@ function createFastifyStub() {
         // Deny-by-default: no stored consent means no refresh token on the
         // authorization_code grant, so those tests opt IN by overriding this.
         findActive: vi.fn().mockResolvedValue(undefined),
+      },
+      // The admin issuance gate (#510) reads these only when a token would
+      // carry a `qauth:` scope or the admin audience. Deny-by-default: no
+      // live grant, so the tests of that gate opt IN by overriding them.
+      realms: {
+        findById: vi.fn().mockResolvedValue({ id: 'realm-1', isOperator: true }),
+      },
+      adminGrants: {
+        listLive: vi.fn().mockResolvedValue([]),
       },
     },
     passwordHasher: {
@@ -360,6 +383,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
   describe('a QAuth API audience (#509)', () => {
     const ADMIN_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+    const ACCOUNT_AUDIENCE = 'urn:qauth:aud:account:v1-rc.0';
 
     async function issue(client: Record<string, unknown>, resource?: string[]) {
       const { fastify, ctx } = createFastifyStub();
@@ -392,14 +416,35 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     it('maps the resource value to the audience of a client that lists it', async () => {
       const { fastify, result } = await issue(
-        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
-        [ADMIN_AUDIENCE]
+        { clientId: 'family-client', audience: [ACCOUNT_AUDIENCE, 'https://api.example.com'] },
+        [ACCOUNT_AUDIENCE]
       );
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
         IN_REQUEST_REALM,
-        expect.objectContaining({ aud: ADMIN_AUDIENCE })
+        expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
+    });
+
+    // Admin grants belong to accounts, and a client_credentials token names
+    // none (#510): the admin audience is refused even to a client that lists
+    // it, asked for or in its default, and nothing reads a grant.
+    it.each([
+      ['asked for with resource', [ADMIN_AUDIENCE]],
+      ['in the default audience', undefined],
+    ])('refuses the admin audience %s', async (_label, resource) => {
+      const { fastify, result } = await issue(
+        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
+        resource
+      );
+      await expect(result).rejects.toThrow(InvalidTargetError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        expect.objectContaining({
+          error: 'invalid_target',
+          reason: 'admin_audience_without_grant',
+        }),
+      ]);
     });
 
     it('never falls back to a client id in the reserved namespace', async () => {
@@ -413,12 +458,12 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     it("keeps a listed family audience in the client's default audience", async () => {
       const { fastify, result } = await issue({
         clientId: 'family-client',
-        audience: [ADMIN_AUDIENCE, 'https://api.example.com'],
+        audience: [ACCOUNT_AUDIENCE, 'https://api.example.com'],
       });
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
         IN_REQUEST_REALM,
-        expect.objectContaining({ aud: [ADMIN_AUDIENCE, 'https://api.example.com'] })
+        expect.objectContaining({ aud: [ACCOUNT_AUDIENCE, 'https://api.example.com'] })
       );
     });
 
@@ -1445,6 +1490,17 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     if (!handler) throw new Error('Handler missing');
     const result = await handler(request, reply);
 
+    // The code, its user and the consent are all read in the request's realm
+    // (#489).
+    expect(
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed
+    ).toHaveBeenCalledExactlyOnceWith(REALM.id, 'auth-code-plain');
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, user.id);
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      REALM.id,
+      user.id,
+      client.id
+    );
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       IN_REQUEST_REALM,
       expect.objectContaining({
@@ -1595,7 +1651,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     const result = await handler(baseRequest(), createReply());
 
-    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(user.id, client.id);
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      REALM.id,
+      user.id,
+      client.id
+    );
     expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
     expect(result).not.toHaveProperty('refresh_token');
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
@@ -2176,6 +2236,63 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
       { grantType: 'authorization_code', error: 'invalid_grant', reason: 'code_invalid' },
     ]);
+  });
+
+  it('answers a code issued in another realm exactly as an unknown code (#489)', async () => {
+    // Codes carry no realm column: `findByCodeIncludingUsed` joins the client
+    // and filters on its realm, so a code of another realm is no row in the
+    // request's — the same `undefined` an unknown code gets, and so the same
+    // answer. A spent one too: its replay revokes nothing here.
+    async function redeem(codeRealmId: string | null, fields: Record<string, unknown> = {}) {
+      emitUserEventMock.mockClear();
+      const stub = setupAuthCodeStub();
+      (
+        stub.fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockImplementation(async (realmId: string, code: string) =>
+        realmId === codeRealmId && code === 'auth-code-plain'
+          ? { ...stub.authCode, ...fields }
+          : undefined
+      );
+      await tokenRoute(stub.fastify);
+      if (!stub.ctx.handler) throw new Error('Handler missing');
+      const error = await stub.ctx.handler(baseRequest(), createReply()).then(
+        () => undefined,
+        (err: unknown) => err
+      );
+      // Every event but its request, which differs per run.
+      const events = emitUserEventMock.mock.calls.map(([, ...rest]) => rest);
+      return { fastify: stub.fastify, error, events };
+    }
+
+    const unknown = await redeem(null);
+    const foreign = await redeem('realm-other');
+
+    expect(
+      foreign.fastify.repositories.authorizationCodes.findByCodeIncludingUsed
+    ).toHaveBeenCalledExactlyOnceWith(REALM.id, 'auth-code-plain');
+    expect(foreign.error).toBeInstanceOf(InvalidGrantError);
+    expect(foreign.error).toEqual(unknown.error);
+    expect(foreign.events).toEqual(unknown.events);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'code_invalid' }),
+    ]);
+    expect(foreign.fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(foreign.fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+    expect(foreign.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+
+    // Another realm's SPENT code is no replay here: unknown, and no family of
+    // its realm is revoked.
+    const foreignSpent = await redeem('realm-other', { used: true, usedAt: Date.now() - 1_000 });
+    expect(foreignSpent.error).toEqual(unknown.error);
+    expect(foreignSpent.events).toEqual(unknown.events);
+    expect(
+      foreignSpent.fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode
+    ).not.toHaveBeenCalled();
+
+    // The control: the same code in the request's realm is redeemed.
+    const own = await redeem(REALM.id);
+    expect(own.error).toBeUndefined();
+    expect(own.fastify.jwtUtils.signAccessToken).toHaveBeenCalledOnce();
   });
 
   it('rejects an unspent code past its expiry like an unknown one, and revokes nothing', async () => {
@@ -3260,6 +3377,11 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     const result = await handler(refreshRequest(), reply);
 
+    // The token and its user are read in the request's realm (#489).
+    expect(
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked
+    ).toHaveBeenCalledExactlyOnceWith(REALM.id, `hash:${REFRESH_TOKEN_HEX}`);
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, user.id);
     // Old token revoked as 'rotated' BEFORE new token persisted, through the
     // compare-and-set. Third arg is the tx handle propagated from
     // fastify.db.transaction.
@@ -4107,6 +4229,65 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     ).rejects.toThrow(InvalidGrantError);
   });
 
+  it("answers another realm's refresh token exactly as an unknown one, and revokes no family (#489)", async () => {
+    // A REVOKED token: found, it would be a replay and revoke its family. The
+    // lookup joins the client and filters on its realm, so another realm's
+    // token is no row in the request's and never reaches the replay logic —
+    // presenting it here cannot revoke that realm's family.
+    async function refresh(tokenRealmId: string | null) {
+      emitUserEventMock.mockClear();
+      const stub = setupRefreshStub();
+      (stub.fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        stub.confidentialClient
+      );
+      (
+        stub.fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockImplementation(async (realmId: string, hash: string) =>
+        realmId === tokenRealmId && hash === `hash:${REFRESH_TOKEN_HEX}`
+          ? { ...stub.storedToken, revoked: true }
+          : undefined
+      );
+      (stub.fastify.repositories.refreshTokens.revokeFamily as unknown as Mock).mockResolvedValue(
+        3
+      );
+      await tokenRoute(stub.fastify);
+      if (!stub.ctx.handler) throw new Error('Handler missing');
+      const error = await stub.ctx.handler(refreshRequest(), createReply()).then(
+        () => undefined,
+        (err: unknown) => err
+      );
+      // Every event but its request, which differs per run.
+      const events = emitUserEventMock.mock.calls.map(([, ...rest]) => rest);
+      return { fastify: stub.fastify, storedToken: stub.storedToken, error, events };
+    }
+
+    const unknown = await refresh(null);
+    const foreign = await refresh('realm-other');
+
+    expect(
+      foreign.fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked
+    ).toHaveBeenCalledExactlyOnceWith(REALM.id, `hash:${REFRESH_TOKEN_HEX}`);
+    expect(foreign.error).toBeInstanceOf(InvalidGrantError);
+    expect(foreign.error).toEqual(unknown.error);
+    expect(foreign.events).toEqual(unknown.events);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'refresh_token_unknown' },
+    ]);
+    expect(foreign.fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+    expect(foreign.fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(foreign.fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+    expect(foreign.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+
+    // The control: the same revoked token in the request's realm IS a replay.
+    const own = await refresh(REALM.id);
+    expect(own.error).toBeInstanceOf(InvalidGrantError);
+    expect(own.fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+      own.storedToken.familyId,
+      'replay_detected',
+      expect.anything()
+    );
+  });
+
   it('rejects with invalid_grant when the refresh token is expired', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -4561,6 +4742,61 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     });
   });
 
+  // #510: an admin acts as itself, never through an exchanged token. The
+  // delegated token gets no admin scope and no admin audience, whatever grants
+  // the user holds, whatever the agent lists and whatever the subject token
+  // carried: decided as for a token that names no account, as jwt-bearer does.
+  describe('admin scopes and the admin audience (#510)', () => {
+    const SUBJECT_SCOPE = 'read:docs qauth:admin:read qauth:admin:write';
+
+    function grants(fastify: FastifyInstance, ...roles: string[]) {
+      (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue(
+        roles.map(liveBuiltInGrant)
+      );
+    }
+
+    it.each([
+      ['a viewer grant, an agent that lists the admin audience', ['viewer'], true],
+      ['an editor grant, an agent that lists it', ['editor'], true],
+      ['an editor grant, an agent that does not list it', ['editor'], false],
+      ['no grant', [], true],
+    ] as const)('with %s, issues no admin scope', async (_label, roles, listsAdmin) => {
+      const { fastify, ctx, client } = setupExchangeStub({ subjectScope: SUBJECT_SCOPE });
+      if (listsAdmin) client.audience = [ADMIN_API_AUDIENCE] as never;
+      grants(fastify, ...roles);
+      const result = (await invoke(fastify, ctx, exchangeRequest())) as Record<string, unknown>;
+      expect(result['scope']).toBe('read:docs');
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ scope: 'read:docs' })
+      );
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+    });
+
+    it('refuses the admin audience, with a live grant too', async () => {
+      for (const roles of [[], ['viewer']]) {
+        emitUserEventMock.mockClear();
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ADMIN_API_AUDIENCE,
+          subjectScope: SUBJECT_SCOPE,
+        });
+        client.audience = [ADMIN_API_AUDIENCE] as never;
+        grants(fastify, ...roles);
+        await expect(
+          invoke(fastify, ctx, exchangeRequest({ audience: [ADMIN_API_AUDIENCE] }))
+        ).rejects.toThrow(InvalidTargetError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          expect.objectContaining({
+            error: 'invalid_target',
+            reason: 'admin_audience_without_grant',
+          }),
+        ]);
+      }
+    });
+  });
+
   it('rejects a resource/audience outside the subject token audience (invalid_target)', async () => {
     const { fastify, ctx } = setupExchangeStub({ subjectAud: 'https://api.example.com/v1' });
     await expect(
@@ -4906,7 +5142,7 @@ async function wireTrustedIdp(): Promise<CryptoKey> {
   const publicKey = await importSPKI(IDP_KEYS.publicKeyPem, 'EdDSA');
   const jwk = await exportJWK(publicKey);
 
-  ssrfSafeGet.mockImplementation(async (url: string) => {
+  egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
     if (url === `${IDP_ISSUER}/.well-known/openid-configuration`) {
       return {
         status: 200,
@@ -5071,6 +5307,55 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     expect(result).not.toHaveProperty('issued_token_type');
   });
 
+  // #510: an admin token comes only from a sign-in at QAuth itself, never
+  // from another identity provider's assertion, whatever grants the user holds.
+  it('never issues an admin scope, whatever the grants (#510)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({
+      scopes: ['chat.read', 'qauth:admin:read', 'qauth:admin:write'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
+      liveBuiltInGrant('viewer'),
+    ]);
+
+    const result = (await invoke(
+      fastify,
+      ctx,
+      bearerRequest(
+        await signIdJag(idpKey, { scope: 'chat.read qauth:admin:read qauth:admin:write' })
+      )
+    )) as Record<string, unknown>;
+    expect(result['scope']).toBe('chat.read');
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ scope: 'chat.read', aud: MCP_SERVER })
+    );
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+  });
+
+  it('refuses the admin audience, whatever the grants (#510)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({
+      idJagTargets: [ADMIN_API_AUDIENCE],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { scope: 'chat.read', resource: ADMIN_API_AUDIENCE }))
+      )
+    ).rejects.toThrow(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toContainEqual(
+      expect.objectContaining({ error: 'invalid_target', reason: 'admin_audience_without_grant' })
+    );
+  });
+
   it('carries the email claims only under the email scope (ANT-2026-2O0T72HY)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
@@ -5169,7 +5454,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidGrantError);
     // Fail-closed BEFORE any network call.
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects an issuer that is not on the allowlist, without fetching anything', async () => {
@@ -5180,7 +5465,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { iss: 'https://evil.example' })))
     ).rejects.toBeInstanceOf(InvalidGrantError);
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects an `aud` that is not this authorization server', async () => {
@@ -5232,7 +5517,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(
       invoke(fastify, ctx, bearerRequest(`${header}.${payload}.`))
     ).rejects.toBeInstanceOf(InvalidGrantError);
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects a MAC-algorithm assertion', async () => {
@@ -5256,7 +5541,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(invoke(fastify, ctx, bearerRequest(macAssertion))).rejects.toBeInstanceOf(
       InvalidGrantError
     );
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('rejects a REPLAYED assertion (same jti twice)', async () => {
@@ -5712,6 +5997,53 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(claims).not.toHaveProperty('email');
     // An ID-JAG is NOT an access token: no access token was signed on this path.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  // #510: QAuth's own `qauth:` scopes never go to another authorization
+  // server, whatever grants the user holds.
+  it('never puts a qauth: scope in an assertion, whatever the grants (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'chat.read qauth:admin:read qauth:admin:security',
+      scopes: ['chat.read', 'qauth:admin:read', 'qauth:admin:security'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
+      liveBuiltInGrant('security-admin'),
+    ]);
+
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+    expect(result['scope']).toBe('chat.read');
+    expect(decodeJwt(result['access_token'] as string)['scope']).toBe('chat.read');
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assertion that would carry only qauth: scopes (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'qauth:admin:read',
+      scopes: ['qauth:admin:read'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_scope', reason: 'admin_scope_without_grant' }),
+    ]);
+  });
+
+  it('refuses an assertion for the admin audience to a user with no live grant (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      idJagTargets: [ADMIN_API_AUDIENCE, MCP_SERVER],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+
+    await expect(
+      invoke(fastify, ctx, mintRequest({ audience: [ADMIN_API_AUDIENCE] }))
+    ).rejects.toThrow(InvalidTargetError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_target', reason: 'admin_audience_without_grant' }),
+    ]);
   });
 
   it("caps the assertion at the subject token's remaining lifetime (never outlives its authority)", async () => {
@@ -6498,8 +6830,8 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       pkjwtClient({ jwks: null, jwksUri: 'https://internal.example/jwks.json' })
     );
-    ssrfSafeGet.mockRejectedValue(
-      new SsrfBlockedError('CIMD host resolves to a non-public address (10.9.8.7)')
+    egressGet.mockRejectedValue(
+      blockedEgress('CIMD host resolves to a non-public address (10.9.8.7)')
     );
 
     const error = await runToken(handler, {

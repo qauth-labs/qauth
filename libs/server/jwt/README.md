@@ -17,7 +17,7 @@ The `@qauth-labs/server-jwt` library provides:
 
 ## Where the keys come from
 
-This library takes imported keys as arguments and reads no configuration. In the auth-server, [`@qauth-labs/fastify-plugin-jwt`](../../fastify/plugins/jwt/README.md) imports them from the `JWT_*` key variables. At boot the auth-server also imports those keys into the default realm's encrypted key store. Tokens are still signed with the variables until token signing moves onto the store (#491). See [Keys](https://docs.qauth.dev/operate/keys/) for generating each key.
+This library takes imported keys as arguments and reads no configuration. In the auth-server, [`@qauth-labs/fastify-plugin-jwt`](../../fastify/plugins/jwt/README.md) signs every token through the signer with the keys of its realm, and verifies with the public keys the realm publishes (#491); the `JWT_*` key variables reach only the default realm's key boot step, which imports them into the encrypted key store. See [Keys](https://docs.qauth.dev/operate/keys/) for generating each key.
 
 ## Installation
 

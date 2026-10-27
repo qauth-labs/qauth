@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
+const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
     CIMD_ENABLED: true,
     CIMD_TRUST_POLICY: 'accept-any-https' as const,
@@ -9,19 +9,15 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
-  ssrfSafeGet: vi.fn(),
+  egressGet: vi.fn(),
 }));
 vi.mock('../../config/env', () => ({ env: ENV }));
 
 // Mock only the network layer; exercise the REAL CIMD resolver + the REAL
 // pre-registered → CIMD priority logic. Errors thus originate inside cimd.ts,
 // not the test file.
-vi.mock('./ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('./ssrf-safe-fetch')>('./ssrf-safe-fetch');
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('./egress-get', () => ({ egressGet }));
 
 import {
   cimdSentinelSecretHash,
@@ -72,7 +68,7 @@ function fastifyStub() {
 }
 
 beforeEach(() => {
-  ssrfSafeGet.mockReset();
+  egressGet.mockReset();
   ENV.CIMD_ENABLED = true;
 });
 
@@ -85,7 +81,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     const { client } = await resolveClient(fastify, 'realm-1', 'app-123');
 
     expect(client).toBe(preReg);
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('a pre-registered URL client_id still wins over a re-fetch (priority 1)', async () => {
@@ -96,7 +92,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
 
     expect(client).toBe(preReg);
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 
   // ADR-012 §3: the metadata document is the management surface. A
@@ -112,7 +108,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     async function materialise() {
       const stub = fastifyStub();
       stub.fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
-      ssrfSafeGet.mockResolvedValue(ok(DOC));
+      egressGet.mockResolvedValue(ok(DOC));
       const { client } = await resolveClient(stub.fastify, 'realm-1', CIMD_ID);
       expect(client).not.toBeNull();
       // From here on the row exists, exactly as after a first authorize.
@@ -124,7 +120,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
 
     it('applies an edited document (new redirect_uris) to the stored client', async () => {
       const { fastify } = await materialise();
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockResolvedValue(
         ok({ ...DOC, redirect_uris: ['https://app.example.com/new-cb'] })
       );
 
@@ -136,7 +132,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
 
     it('writes nothing when the document is unchanged', async () => {
       const { fastify, upserted } = await materialise();
-      ssrfSafeGet.mockResolvedValue(ok(DOC));
+      egressGet.mockResolvedValue(ok(DOC));
 
       const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
 
@@ -167,7 +163,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
         tokenEndpointAuthMethod: 'private_key_jwt',
         jwks: { keys: [storedJwk] },
       });
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockResolvedValue(
         ok({
           ...DOC,
           token_endpoint_auth_method: 'private_key_jwt',
@@ -211,7 +207,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     // materialised from its earlier version stops resolving (fail closed).
     it('fails closed once the document lists a redirect_uri registration would refuse', async () => {
       const { fastify } = await materialise();
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockResolvedValue(
         ok(
           { ...DOC, redirect_uris: [...DOC.redirect_uris, 'http://app.example.com/plain'] },
           { 'cache-control': 'no-store' }
@@ -229,7 +225,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
 
     it('fails closed when the document can no longer be fetched', async () => {
       const { fastify } = await materialise();
-      ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+      egressGet.mockResolvedValue({ status: 404, body: '', headers: {} });
 
       const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
 
@@ -242,7 +238,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
         ...upserted[0],
         enabled: false,
       });
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockResolvedValue(
         ok({ ...DOC, redirect_uris: ['https://app.example.com/new-cb'] })
       );
 
@@ -259,7 +255,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       const { fastify, upserted } = await materialise();
       const suspendedRow = { ...upserted[0], suspended: true, suspendedAt: 1_700 };
       fastify.repositories.oauthClients.findByClientId.mockResolvedValue(suspendedRow);
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockResolvedValue(
         ok({
           ...DOC,
           client_name: 'Renamed by its host',
@@ -278,7 +274,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       const { fastify, upserted } = await materialise();
       const suspendedRow = { ...upserted[0], suspended: true, suspendedAt: 1_700 };
       fastify.repositories.oauthClients.findByClientId.mockResolvedValue(suspendedRow);
-      ssrfSafeGet.mockResolvedValue(ok(DOC));
+      egressGet.mockResolvedValue(ok(DOC));
 
       const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
 
@@ -290,7 +286,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
   it('materialises a CIMD client when not pre-registered (priority 2)', async () => {
     const { fastify, upserted } = fastifyStub();
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
-    ssrfSafeGet.mockResolvedValue(
+    egressGet.mockResolvedValue(
       ok({
         client_id: CIMD_ID,
         client_name: 'Example',
@@ -315,7 +311,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
   it('does NOT run Argon2id on the unauthenticated CIMD path (DoS guard)', async () => {
     const { fastify, upserted } = fastifyStub();
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
-    ssrfSafeGet.mockResolvedValue(
+    egressGet.mockResolvedValue(
       ok({
         client_id: CIMD_ID,
         client_name: 'Example',
@@ -334,7 +330,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     const { fastify } = fastifyStub();
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
     // Document claims a different client_id than the URL it was fetched from.
-    ssrfSafeGet.mockResolvedValue(
+    egressGet.mockResolvedValue(
       ok({
         client_id: 'https://evil.example/other.json',
         client_name: 'Impostor',
@@ -365,7 +361,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
 
     expect(client).toBeNull();
     expect(reason).toBe('invalid_client');
-    expect(ssrfSafeGet).not.toHaveBeenCalled();
+    expect(egressGet).not.toHaveBeenCalled();
   });
 });
 

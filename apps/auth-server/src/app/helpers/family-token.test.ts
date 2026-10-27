@@ -70,7 +70,11 @@ const CLIENTS = new Map([
   [`${REALM_A.id}/held`, { clientId: 'held', enabled: true, suspended: true }],
 ]);
 
-const findUserById = vi.fn(async (id: string) => USERS.get(id));
+/** Realm-scoped as the repository is (#489): a user of another realm is no row. */
+const findUserById = vi.fn(async (realmId: string, id: string) => {
+  const user = USERS.get(id);
+  return user?.realmId === realmId ? user : undefined;
+});
 const findClientByClientId = vi.fn(async (realmId: string, clientId: string) =>
   CLIENTS.get(`${realmId}/${clientId}`)
 );
@@ -320,25 +324,24 @@ describe('requireFamilyToken (#509)', () => {
   describe('a delegated token (RFC 8693 act claim)', () => {
     const act: ActClaim = { sub: 'agent-client' };
 
-    it('is refused on the developer family', async () => {
+    // #510: an agent's exchanged token never stands for an admin's passkey
+    // sign-in, nor manages a developer's clients.
+    it.each(['developer', 'admin'] as const)('is refused on the %s family', async (family) => {
       const response = await call(
-        probePath('developer'),
-        await mint({ aud: API_FAMILY_AUDIENCES.developer, act })
+        probePath(family),
+        await mint({ aud: API_FAMILY_AUDIENCES[family], act })
       );
       expect(response.statusCode).toBe(401);
       expect(response.headers['www-authenticate']).toContain('error="invalid_token"');
     });
 
-    it.each(['admin', 'account'] as const)(
-      'is left to the %s routes, which decide per operation',
-      async (family) => {
-        const response = await call(
-          probePath(family),
-          await mint({ aud: API_FAMILY_AUDIENCES[family], act })
-        );
-        expect(response.statusCode).toBe(200);
-      }
-    );
+    it('is left to the account routes, which decide per operation', async () => {
+      const response = await call(
+        probePath('account'),
+        await mint({ aud: API_FAMILY_AUDIENCES.account, act })
+      );
+      expect(response.statusCode).toBe(200);
+    });
   });
 
   it.each(API_FAMILIES)(
@@ -655,7 +658,7 @@ describe('requireFamilyToken (#509)', () => {
         expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
       }
       // A subject that is no UUID never reaches the users table.
-      expect(findUserById).not.toHaveBeenCalledWith('not-a-uuid');
+      expect(findUserById).not.toHaveBeenCalledWith(expect.anything(), 'not-a-uuid');
     });
 
     it('resolves a client_credentials token as the client of the request realm', async () => {

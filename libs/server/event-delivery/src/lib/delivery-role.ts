@@ -116,6 +116,23 @@ export interface DeliverySettings {
  */
 export const DELIVERY_HOLD_INTERVAL_MS = 30_000;
 
+/**
+ * How often the role warns again about a delivery it still holds because the
+ * signer is unavailable (#495), in milliseconds. It warns at the first hold,
+ * then at this interval while the hold lasts. A delivery this node has not
+ * held for this long, because another node claimed it or it ended, is
+ * forgotten.
+ */
+export const SIGNER_HOLD_WARN_INTERVAL_MS = 15 * 60_000;
+
+/** The deliveries a node holds because the signer is unavailable, for `/metrics`. */
+export interface SignerHeldDeliveries {
+  /** How many this node holds. */
+  readonly count: number;
+  /** Seconds since this node first held the oldest of them; 0 when it holds none. */
+  readonly oldestSeconds: number;
+}
+
 /** The settings a role runs with when it is given none. */
 export const DEFAULT_DELIVERY_SETTINGS: DeliverySettings = Object.freeze({
   maxAttempts: 12,
@@ -159,6 +176,11 @@ export interface DeliveryRole {
   /** The settings it runs with. */
   readonly settings: DeliverySettings;
   /**
+   * The deliveries this node holds because the signer is unavailable: a
+   * hold without an end spends no attempt, so this is where it shows.
+   */
+  signerHeld(): SignerHeldDeliveries;
+  /**
    * Stop claiming, let the attempts in flight finish up to the shutdown
    * limit, then abort and release the rest. Resolves once the role has
    * stopped; safe to call more than once.
@@ -173,6 +195,18 @@ export class DeliveryAttemptTimeoutError extends Error {
   constructor() {
     super('The event delivery attempt reached its time limit');
   }
+}
+
+/**
+ * Whether a route threw a `503` `TemporarilyUnavailableError` of
+ * `@qauth-labs/shared-errors`: what a signer that cannot be reached throws.
+ * Read by its fields, since the error may come from another copy of the
+ * module.
+ */
+function isTemporarilyUnavailable(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const { statusCode, code } = error as { statusCode?: unknown; code?: unknown };
+  return statusCode === 503 && code === 'TEMPORARILY_UNAVAILABLE';
 }
 
 /** The abort reason of an attempt the role gave up on when it stopped. */
@@ -326,6 +360,14 @@ class Runner implements DeliveryRole {
   private rotation = 0;
   /** Destinations already reported as invalid, so each is logged once. */
   private readonly reported = new Set<string>();
+  /**
+   * The deliveries held because the signer is unavailable, by id: when this
+   * node first held each, last warned about it and last held it.
+   */
+  private readonly signerHolds = new Map<
+    string,
+    { readonly since: number; warnedAt: number; seenAt: number }
+  >();
 
   constructor(options: DeliveryRoleOptions) {
     const routes = new Map<string, DeliveryRoute>();
@@ -591,6 +633,7 @@ class Runner implements DeliveryRole {
     });
 
     let timedOut = false;
+    let signerHeld = false;
     const timer = this.clock.setTimeout(() => {
       timedOut = true;
       controller.abort(new DeliveryAttemptTimeoutError());
@@ -608,6 +651,16 @@ class Runner implements DeliveryRole {
     } catch (error) {
       if (timedOut) return { ok: false, errorClass: DELIVERY_ERROR_CLASSES.timeout };
       if (controller.signal.aborted) return 'abandoned';
+      if (isTemporarilyUnavailable(error)) {
+        // The signer cannot be reached from this process (#495, #497): the
+        // receiver was never called, so the delivery waits like a held one
+        // and spends no attempt, instead of failing for good while it lasts.
+        // A hold without an end must not stay quiet: warned at the first
+        // hold and again at an interval while it lasts.
+        signerHeld = true;
+        this.noteSignerHold(route.kind, claim);
+        return { ok: false, hold: true };
+      }
       this.log.warn(
         { err: error, kind: route.kind, deliveryId: claim.id, attempt: claim.attempt },
         'a delivery route threw; the attempt counts as failed'
@@ -615,7 +668,47 @@ class Runner implements DeliveryRole {
       return { ok: false, errorClass: DELIVERY_ERROR_CLASSES.routeError };
     } finally {
       this.clock.clearTimeout(timer);
+      if (!signerHeld) this.signerHolds.delete(claim.id);
     }
+  }
+
+  /** Record a hold for an unavailable signer, warning at the first and at an interval. */
+  private noteSignerHold(kind: string, claim: ClaimedDelivery): void {
+    const now = this.clock.now();
+    this.forgetStaleSignerHolds(now);
+    const fields = { kind, deliveryId: claim.id, attempt: claim.attempt };
+    const known = this.signerHolds.get(claim.id);
+    if (known === undefined) {
+      this.signerHolds.set(claim.id, { since: now, warnedAt: now, seenAt: now });
+      this.log.warn(
+        fields,
+        'the signer is unavailable; the delivery is held and spends no attempt'
+      );
+      return;
+    }
+    known.seenAt = now;
+    if (now - known.warnedAt >= SIGNER_HOLD_WARN_INTERVAL_MS) {
+      known.warnedAt = now;
+      this.log.warn(
+        { ...fields, heldForSeconds: Math.floor((now - known.since) / 1000) },
+        'the signer is still unavailable; the delivery is still held'
+      );
+    }
+  }
+
+  /** Forget the holds this node has not seen for a warning interval. */
+  private forgetStaleSignerHolds(now: number): void {
+    for (const [id, hold] of this.signerHolds) {
+      if (now - hold.seenAt >= SIGNER_HOLD_WARN_INTERVAL_MS) this.signerHolds.delete(id);
+    }
+  }
+
+  signerHeld(): SignerHeldDeliveries {
+    const now = this.clock.now();
+    this.forgetStaleSignerHolds(now);
+    let oldest = now;
+    for (const hold of this.signerHolds.values()) oldest = Math.min(oldest, hold.since);
+    return { count: this.signerHolds.size, oldestSeconds: Math.max(0, (now - oldest) / 1000) };
   }
 
   /** What a route returned, as an outcome the store accepts. */

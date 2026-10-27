@@ -17,6 +17,12 @@ import { recordSuccessfulLogin, registerLoginAttempt } from './failed-login';
 
 /** What a verification request carries: the mailed token and the account's password. */
 export interface EmailVerificationInput {
+  /**
+   * The id of the realm the request's host named (`requestRealm`, #487). The
+   * token, its credential and its user are looked up in this realm only (#489):
+   * a token mailed for another realm's account is an unknown token here.
+   */
+  readonly realmId: string;
   /** The 64-hex-character token from the verification mail, already format-checked. */
   readonly token: string;
   /** The password chosen at registration. */
@@ -68,10 +74,13 @@ export interface RetryAfterReply {
  * count against the account, and an account locked on either login route is
  * locked here too.
  *
- * The realm is the account's, not the request's: the token names the
- * credential, and the lockout is counted in that credential's realm (#487), as
- * the login routes count it. A link built before the link named its realm's
- * host (#870) reaches the default realm's host, and still verifies.
+ * The realm is the request's (#489): the token, its credential and its user
+ * are found in the realm the request's host named, so a token mailed for
+ * another realm's account answers as an unknown token. The account is then of
+ * that realm, and the lockout is counted in it (#487), as the login routes
+ * count it. So a link verifies only at a host of its account's realm, the
+ * issuer the link names (#870); at another realm's host its token is
+ * unknown.
  *
  * @throws InvalidTokenError (400) for an unknown, expired or used token, a
  *   token of a disabled account, a missing credential or malformed credential
@@ -85,7 +94,7 @@ export async function verifyEmailAddress(
   fastify: FastifyInstance,
   request: ClientAddressSource,
   reply: RetryAfterReply,
-  { token, password }: EmailVerificationInput
+  { realmId, token, password }: EmailVerificationInput
 ): Promise<EmailVerificationResult> {
   // Token format already validated by the caller's Zod schema (64-char hex
   // string). This prevents CVE-2025-12374 style attacks at schema level.
@@ -94,8 +103,10 @@ export async function verifyEmailAddress(
   const tokenHash = fastify.emailVerificationTokenUtils.hashToken(token);
 
   // 2. Find token in database (returns undefined if not found, expired, or used)
-  const verificationToken =
-    await fastify.repositories.emailVerificationTokens.findByTokenHash(tokenHash);
+  const verificationToken = await fastify.repositories.emailVerificationTokens.findByTokenHash(
+    realmId,
+    tokenHash
+  );
 
   if (!verificationToken) {
     // Generic error to prevent token enumeration (security: don't reveal why it failed)
@@ -107,6 +118,7 @@ export async function verifyEmailAddress(
   // unconditional; a genuinely missing credential fails closed with the
   // generic token error (no enumeration signal).
   const credential = await fastify.repositories.userCredentials.findById(
+    realmId,
     verificationToken.credentialId
   );
   if (!credential) {
@@ -116,7 +128,7 @@ export async function verifyEmailAddress(
   // 3b. A disabled account must not change its verified state or have its
   // password checked: same generic token error, and the token is left
   // unconsumed so it still works if the operator enables the account again.
-  const user = await fastify.repositories.users.findById(credential.userId);
+  const user = await fastify.repositories.users.findById(realmId, credential.userId);
   if (!user || !user.enabled) {
     throw new InvalidTokenError('Invalid or expired token');
   }

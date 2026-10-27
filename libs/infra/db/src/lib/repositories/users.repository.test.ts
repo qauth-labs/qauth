@@ -34,6 +34,8 @@ function createRecordingDb(): { db: DbClient; queries: CapturedQuery[] } {
   return { db: drizzle(client as unknown as Pool) as unknown as DbClient, queries };
 }
 
+const REALM_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b';
+
 const MALFORMED_IDS = [
   'reporting-service',
   'https://app.example.com/client.json',
@@ -46,7 +48,7 @@ describe('createUsersRepository — malformed ids', () => {
   it.each(MALFORMED_IDS)('findById(%j) answers undefined without querying', async (id) => {
     const { db, queries } = createRecordingDb();
 
-    await expect(createUsersRepository(db).findById(id)).resolves.toBeUndefined();
+    await expect(createUsersRepository(db).findById(REALM_ID, id)).resolves.toBeUndefined();
 
     expect(queries).toEqual([]);
   });
@@ -56,7 +58,7 @@ describe('createUsersRepository — malformed ids', () => {
     async (id) => {
       const { db, queries } = createRecordingDb();
 
-      await expect(createUsersRepository(db).findByIdOrThrow(id)).rejects.toBeInstanceOf(
+      await expect(createUsersRepository(db).findByIdOrThrow(REALM_ID, id)).rejects.toBeInstanceOf(
         NotFoundError
       );
 
@@ -68,11 +70,13 @@ describe('createUsersRepository — malformed ids', () => {
     const { db, queries } = createRecordingDb();
     const users = createUsersRepository(db);
 
-    await expect(users.update('reporting-service', { firstName: 'x' })).rejects.toBeInstanceOf(
+    await expect(
+      users.update(REALM_ID, 'reporting-service', { firstName: 'x' })
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(users.updateLastLogin(REALM_ID, 'reporting-service')).rejects.toBeInstanceOf(
       NotFoundError
     );
-    await expect(users.updateLastLogin('reporting-service')).rejects.toBeInstanceOf(NotFoundError);
-    await expect(users.delete('reporting-service')).resolves.toBe(false);
+    await expect(users.delete(REALM_ID, 'reporting-service')).resolves.toBe(false);
 
     expect(queries).toEqual([]);
   });
@@ -85,13 +89,15 @@ describe('createUsersRepository — malformed ids', () => {
     '11111111-1111-1111-1111-111111111111',
     // PostgreSQL reads uuid input case-insensitively.
     'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11',
-  ])('findById(%j) queries the users table', async (id) => {
+  ])('findById(%j) queries the users table of the realm', async (id) => {
     const { db, queries } = createRecordingDb();
 
-    await createUsersRepository(db).findById(id);
+    await createUsersRepository(db).findById(REALM_ID, id);
 
     expect(queries).toHaveLength(1);
     expect(queries[0]?.text).toContain('from "users"');
+    expect(queries[0]?.text).toContain('"users"."realm_id" = $');
     expect(queries[0]?.values).toContain(id);
+    expect(queries[0]?.values).toContain(REALM_ID);
   });
 });

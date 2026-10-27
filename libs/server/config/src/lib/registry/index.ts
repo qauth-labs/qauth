@@ -11,6 +11,12 @@ export {
 } from './keys';
 export { CONFIGURATION_PAGE_PATH, describeDefault, renderConfigurationPage } from './page';
 export {
+  refuseRemovedKeys,
+  REMOVED_CONFIG_KEYS,
+  type RemovedConfigKey,
+  RemovedConfigKeyError,
+} from './removed';
+export {
   type ConfigKey,
   type ConfigKeyInput,
   type ConfigWarning,

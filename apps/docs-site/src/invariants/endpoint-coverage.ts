@@ -76,8 +76,9 @@ function toOpenApiPath(fastifyPath: string): string {
 
 /**
  * Statically extract every route Fastify would register under `routesRoot`,
- * without booting the app. `@fastify/autoload` derives each plugin's path
- * prefix from its DIRECTORY, not the file — `routes/auth/login.ts`
+ * without booting the app. The route manifest (`route-manifest.ts`, #495)
+ * registers each module under its DIRECTORY's prefix, as the folder autoload
+ * it replaced did, and its test pins that — `routes/auth/login.ts`
  * registering `'/login'` serves `/auth/login` — with one override: a
  * directory whose entry file exports `autoPrefix` (see
  * `routes/clients/index.ts`) uses that instead of its directory name, and

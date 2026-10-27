@@ -35,7 +35,11 @@ service instead, for example `KEK_PROVIDER=aws-kms` with
 unwrapped while signing stays in QAuth. Its
 [guide](https://github.com/qauth-labs/qauth/blob/main/libs/keys/aws-kms/README.md)
 gives the settings, the IAM policy of the signer role and what happens when
-KMS is unavailable. Choose the provider before the first boot that stores keys:
+KMS is unavailable. `KEK_PROVIDER=vault` with `@qauth-labs/keys-vault` keeps it
+in a Vault Transit key instead, logging in with a token file or AppRole; its
+[guide](https://github.com/qauth-labs/qauth/blob/main/libs/keys/vault/README.md)
+gives the settings, the Vault policy of the signer role and the token renewal.
+Choose the provider before the first boot that stores keys:
 a key wrapped under one KEK does not open under another until the KEK rotation
 (#545) can re-wrap it.
 
@@ -284,3 +288,4 @@ Verified against `libs/server/config/src/lib/schemas/jwt.ts` and
 - [Docker](/operate/docker/) — where these keys get mounted into the stack.
 - [Upgrades](/operate/upgrades/) — key material is unaffected by the ADR-002 migration, but back up before any destructive migration regardless.
 - [PQC Verifier Guide](/operate/pqc-verifier-guide/) — the ML-DSA key from a verifier's perspective.
+- [Service roles](/operate/service-roles/) — which processes may hold these keys once the roles run apart.

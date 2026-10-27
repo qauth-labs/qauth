@@ -51,21 +51,27 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
   `requireAccessTokenTyp` is set to;
 - its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
   accepts only the token issuer of the request's realm (ADR-019 Decision 1): `JWT_ISSUER` as
-  written for the realm whose issuer it is, and the realm's own issuer for any other realm;
+  written for the realm whose issuer it is, and the realm's own issuer for any other realm. The
+  admin family's hook accepts the issuer of an enabled realm, and only a token that verifies with
+  that realm's keys ([Admin authority](#admin-authority));
 - it carries `sub`, `exp` and `jti`, with `sub` and `jti` non-empty strings;
 - its `aud` holds exactly one value, the family's audience. A token with several audiences is
   refused even when one of them is the family's;
-- on the developer family, it carries no `act` claim: a delegated token (RFC 8693) never manages a
-  developer's clients;
+- on the developer and admin families, it carries no `act` claim. A delegated token (RFC 8693)
+  never manages a developer's clients, and never stands for an admin's passkey sign-in: automation
+  reaches the admin API as a service account. The account family accepts one, and an account route
+  that changes a credential, an identifier, the contact address or a linked account, or deletes the
+  account, refuses it itself (ADR-019 Decision 7);
 - its subject is one the route admits (the required `subjects` option: `user`, `client` or both)
   and is active in the realm of the request (ADR-019 Decision 1). A `client_credentials` token,
   whose `sub` is its own `client_id`, must name a client of that realm that is enabled and not
   suspended; any other token must name a user of that realm who is enabled;
 - it carries every scope the route lists.
 
-A family audience reads the same in every realm. Every token still carries `JWT_ISSUER` until
-tokens are signed per realm (#491), so under the default issuer rule only the realm whose issuer
-that is admits a token, and any other realm refuses every token until then. The subject is checked
+A family audience reads the same in every realm. Tokens are signed per realm (#491): a token
+verifies only with the keys of the request's realm and, under the default issuer rule, only when
+its `iss` is that realm's issuer, so a realm admits its own tokens and refuses every other
+realm's. The subject is checked
 in the request's realm as well, whatever issuer rule a family uses: a user's token is refused in
 every realm but the user's, and a `client_credentials` token in every realm whose client of that
 `client_id` is missing, disabled or suspended.
@@ -83,6 +89,47 @@ gets a `DPoP` challenge instead (RFC 9449 §7.1). A family route therefore lists
 What a route does for its subject beyond that, such as reading the user's row again or checking a
 role, is its own.
 
+### Admin authority
+
+An admin route decides what the token may do to the realm it names with
+`resolveAdminAuthority({ iss, sub, scopes, targetRealmId })` in
+`apps/auth-server/src/app/helpers/admin-authority.ts`
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decision 7). It
+reads the admin grants and roles from the database on every request, never from token claims, so
+a disabled account, a revoked grant or a disabled role counts from the next request, with the
+same token.
+
+1. The realm whose issuer is the token's `iss` must be enabled. Otherwise the token is refused
+   with 401.
+2. The subject must be an enabled account of that realm. Otherwise the token is refused with 401.
+3. A token of the operator realm needs a live grant whose target is the requested realm or every
+   realm.
+4. Any other token is realm-local: the requested realm must be the issuer's own, with a live grant
+   on it. The operator realm is never its target.
+5. The permissions of the matching grants' roles, intersected with the token's scopes, are the
+   permissions the request may use. The operation's own check answers 403 `forbidden` when the one
+   it needs is missing.
+
+A realm outside the caller's grants answers 404 `not_found`, exactly as a realm that does not
+exist, so the answer never confirms that a realm exists.
+
+Admin grants and custom admin roles live in `admin_grants` and `admin_roles`. A grant names a
+built-in role or a custom role, and one realm or every realm. Only an account of the operator realm
+holds a grant on every realm or on another realm than its own; the repository and the database
+trigger `admin_grants_realm_rule` both refuse anything else. A custom role is defined in one realm
+and granted only to that realm's accounts or for that realm. A grant is written live, at the
+database's time (the trigger `admin_grants_insert_live`), revoked, never changed (the trigger
+`admin_grants_revoke_only`), and a role is disabled, never deleted while a grant names it. A grant
+is looked up by its id, or by its account's id, only within a realm: the realm it covers, or its
+account's realm. It is revoked only from its account's realm, so a realm sees an operator-realm
+admin's grant on it but cannot revoke it. A realm's operator flag, on which the rule rests, is written only by the realms
+repository's `setOperator`, which the default realm's boot step calls.
+
+Until each realm has its own issuer, the realm `JWT_ISSUER` names is the only realm whose tokens an
+admin route accepts: `RealmIssuerDirectory` maps an issuer to its realm, and `IssuerKeyResolver`
+verifies a token with that realm's keys, and both know only the deployment's issuer and today's
+signing key.
+
 ### Issuing a family audience
 
 - A client gets a family audience only when an operator lists it in the client's `audience`. The
@@ -95,6 +142,21 @@ role, is its own.
   `resource` names it, in the request or bound to the code, so the consent the user gave covers
   it: a client's default audience leaves it out. A `client_credentials` token keeps the client's
   default.
+- The admin audience is also issued only to an account whose live admin grants give a
+  permission; otherwise the request is refused with `invalid_target`.
+- An admin scope (`qauth:admin:read`, `qauth:admin:write`, `qauth:admin:security`) is issued only
+  when the client lists the admin audience and the account holds a live admin grant whose role has
+  a permission of that scope's class. Otherwise the token is issued without it, and the response's
+  `scope` says so (RFC 6749 §3.3); when nothing is left of the scopes asked for, the request is
+  refused with `invalid_scope`. No other scope of the reserved `qauth:` namespace is ever issued.
+  Grants are read at every issuance, so the next refresh after a revocation no longer carries what
+  the grant gave.
+- Neither the admin audience nor an admin scope ever reaches a `client_credentials` token, which
+  names no account, an ID-JAG that QAuth mints for another authorization server, or a token of the
+  jwt-bearer grant, whose authority comes from another identity provider, or a delegated token of
+  token exchange: an admin acts as itself, never through an agent, so a token exchange that names
+  the admin audience is refused with `invalid_target` whatever grants the user holds. The token
+  `/auth/login` mints leaves the admin audience out, whatever the system client lists.
 - The legacy Bearer path of `/oauth/authorize` never issues one: a request on it that names a
   family audience, or a client whose default audience holds one, is refused with `access_denied`.
 - A family audience never makes a client authoritative at introspection: QAuth is the only
@@ -282,7 +344,7 @@ protocol endpoint.
 | -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
 | `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                                                                                      |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                              |
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
 
@@ -295,22 +357,69 @@ that changes only a write field needs `qauth:admin:write`, one that changes a se
 case, so a security operation never hides behind a write class and always carries its effects and
 the two-admin marker.
 
-A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
+Every admin operation is defined once, in the admin operation registry
+([Security operations](/reference/security-operations/)), with its class, effects and permissions.
+The document's `operationId` must name a registered operation, and its `x-qauth-class`,
+`x-qauth-permission` and `x-qauth-effects` must be the registry's; the conventions check fails
+otherwise. A route of the admin listener names its operation in its route config (`operation`) and
+takes these members from the registry (`operationSchemaExtensions`), and the listener refuses to
+boot a route that names no registered operation or whose members differ.
+
+A request-dependent operation classifies each request (`classify`). By effect, a policy change
+that lengthens an access-token, refresh-token or session lifetime or the key rotation interval, or
+shortens or switches off audit-event retention, is `posture-loosening` and needs the security
+class; shortening a lifetime or lengthening retention is a write. A field `classify` has no rule
+for fails closed only when `classify` takes a merge patch's changed fields from the body with
+`mergePatchLeafPaths(body)` and classifies them with `classifyByField`, which throws on a field its
+table does not hold; a request-dependent merge-patch operation uses that pattern, since a
+`classify` that reads only the fields it expects never sees the others.
+
+An operation that reads the current state to classify (`loadState`) names the version of what it
+read (`stateVersion`), which the route sends quoted as its `ETag`. The listener puts the version on
+the classification and answers `428` when the request has no `If-Match` and `412` when it names
+another version. The route still declares `If-Match` required in its header schema, so the
+OpenAPI document says so; the listener checks for it before validation, so a request without it
+gets `428`, not the `400` of a failed schema. The handler's write must be conditional on `classification.stateVersion` (an update that
+matches the stored version, `412` when none does), or load, classify and write in one transaction
+under `SELECT … FOR UPDATE`: otherwise a change made between the classification and the write runs
+under a classification of other state.
+
+A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation. On
+the admin API the operation is defined once in the registry, and the route names it in its config
+and spreads the registry's members into its schema:
 
 ```ts
+// helpers/admin-operations.ts, listed in ADMIN_OPERATIONS
+export const REALM_POLICIES_UPDATE = defineOperation({
+  id: 'realms.policies.update',
+  class: 'security',
+  effects: ['credential-path', 'token-content', 'posture-loosening', 'administration'],
+  permissions: ['realms.policies.write', 'realms.policies.security'],
+  description: "Change a realm's policies.",
+  loadState: loadRealmPolicies,
+  stateVersion: (policies) => policies.version,
+  classify: classifyByField({
+    changedFields: (request) => mergePatchLeafPaths(request.body),
+    fields: POLICY_FIELDS,
+    unchanged: WRITE,
+  }),
+});
+
+// the route, on the admin listener
 fastify.patch(
   '/admin/v1-rc.0/realms/:realmId/policies',
   {
+    config: { operation: REALM_POLICIES_UPDATE.id },
     schema: {
-      operationId: 'realms.policies.update',
+      // operationId, x-qauth-class, x-qauth-permission, x-qauth-effects and
+      // x-qauth-two-admin, from the registry
+      ...operationSchemaExtensions(REALM_POLICIES_UPDATE),
       security: [{ bearerAuth: [] }],
-      'x-qauth-class': 'security',
-      'x-qauth-permission': ['realms.policies.write', 'realms.policies.security'],
-      'x-qauth-effects': ['credential-path'],
-      'x-qauth-two-admin': 'recommended',
       'x-qauth-stability': 'stable',
       consumes: ['application/merge-patch+json'],
       params: z.object({ realmId: z.uuid() }),
+      // Required, so the OpenAPI document says so. A request without it gets
+      // 428 from the listener, which checks before validation, not 400.
       headers: z.looseObject({ 'if-match': z.string() }),
       body: realmPoliciesPatchSchema,
       response: { 200: realmSchema, ...problemResponses(400, 401, 403, 404, 412, 422, 428) },

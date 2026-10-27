@@ -131,6 +131,7 @@ function emptyDatabase(): {
       host: { host: 'auth.example.com', realmId: created.id, kind: 'primary', createdAt: 0 },
     })),
     update: vi.fn(async (_id: string, data: Partial<RealmRow>) => ({ ...created, ...data })),
+    setOperator: vi.fn(async (_id: string, isOperator: boolean) => ({ ...created, isOperator })),
     setWebAuthnRpId: vi.fn(async (_id: string, webauthnRpId: string | null) => ({
       ...created,
       webauthnRpId,

@@ -51,21 +51,26 @@ export const jobsPlugin = fp<JobsPluginOptions>(
       }
     }
 
+    const roles = options.roles ?? SERVICE_ROLES;
     const runner = new JobRunner({
       jobs:
         options.jobs ??
-        serverJobs(fastify, {
-          ...(options.deliveryRoutes === undefined
-            ? {}
-            : { deliveryRoutes: options.deliveryRoutes }),
-          ...(options.unservedDeliveryKinds === undefined
-            ? {}
-            : { unservedDeliveryKinds: options.unservedDeliveryKinds }),
-          ...(options.eventRetentionFallback === undefined
-            ? {}
-            : { eventRetentionFallback: options.eventRetentionFallback }),
-        }),
-      roles: options.roles ?? SERVICE_ROLES,
+        serverJobs(
+          fastify,
+          {
+            ...(options.deliveryRoutes === undefined
+              ? {}
+              : { deliveryRoutes: options.deliveryRoutes }),
+            ...(options.unservedDeliveryKinds === undefined
+              ? {}
+              : { unservedDeliveryKinds: options.unservedDeliveryKinds }),
+            ...(options.eventRetentionFallback === undefined
+              ? {}
+              : { eventRetentionFallback: options.eventRetentionFallback }),
+          },
+          roles
+        ),
+      roles,
       lock: options.lock ?? createAdvisoryJobLock(fastify.dbPool, fastify.log),
       log: fastify.log,
       runs: fastify.metrics.jobRuns,

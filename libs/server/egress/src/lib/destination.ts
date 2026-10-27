@@ -1,7 +1,8 @@
 import type { LookupAddress } from 'node:dns';
 import { isIP } from 'node:net';
 
-import { addressKind } from './address';
+import { type AddressKind, addressKind, isCloudMetadataAddress } from './address';
+import type { AddressPermit } from './allowlist';
 import { EgressFailure } from './errors';
 
 /** A URL that passed the checks that need no network. */
@@ -45,12 +46,30 @@ export function hostForLog(url: string | URL): string | undefined {
 }
 
 /**
- * The checks of a destination that need no network: an `https` URL, without
- * credentials, whose host — when it is an IP literal — is public. The WHATWG
- * URL parser has already turned the other IPv4 spellings (`0x7f.1`,
- * `2130706433`) into dotted quads.
+ * Whether a non-public `address` of `hostname` may be dialled for this call:
+ * when `permit` says so, and never when it is unspecified (`0.0.0.0` connects
+ * to the local host), multicast or a cloud metadata endpoint, whatever an
+ * allowlist names.
  */
-export function checkUrl(input: string | URL): CheckedUrl {
+function permitted(
+  hostname: string,
+  address: string,
+  kind: AddressKind,
+  permit: AddressPermit | undefined
+): boolean {
+  if (permit === undefined) return false;
+  if (kind === 'unspecified' || kind === 'multicast' || kind === 'invalid') return false;
+  if (isCloudMetadataAddress(address)) return false;
+  return permit(hostname, address);
+}
+
+/**
+ * The checks of a destination that need no network: an `https` URL, without
+ * credentials, whose host — when it is an IP literal — is public, or one
+ * `permit` lets the call reach. The WHATWG URL parser has already turned the
+ * other IPv4 spellings (`0x7f.1`, `2130706433`) into dotted quads.
+ */
+export function checkUrl(input: string | URL, permit?: AddressPermit): CheckedUrl {
   let url: URL;
   try {
     url = new URL(input);
@@ -77,7 +96,7 @@ export function checkUrl(input: string | URL): CheckedUrl {
   const literalFamily = family === 4 || family === 6 ? family : 0;
   if (literalFamily !== 0) {
     const kind = addressKind(hostname);
-    if (kind !== 'public') {
+    if (kind !== 'public' && !permitted(hostname, hostname, kind, permit)) {
       throw new EgressFailure(
         'address',
         'blocked',
@@ -89,15 +108,17 @@ export function checkUrl(input: string | URL): CheckedUrl {
 }
 
 /**
- * Every address of the checked URL's host, each of them public. An IP literal
- * is its own address. A name is resolved once, and the whole name is refused
- * when any of its addresses is not public: the client would otherwise dial
+ * Every address of the checked URL's host, each of them public or one
+ * `permit` lets the call reach. An IP literal is its own address, checked by
+ * {@link checkUrl}. A name is resolved once, and the whole name is refused
+ * when any of its addresses is refused: the client would otherwise dial
  * whichever one the connection happened to pick.
  */
 export async function resolveCheckedAddresses(
   target: CheckedUrl,
   resolveHost: ResolveHost,
-  options: { timeoutMs: number; signal: AbortSignal }
+  options: { timeoutMs: number; signal: AbortSignal },
+  permit?: AddressPermit
 ): Promise<LookupAddress[]> {
   if (target.literalFamily !== 0) {
     return [{ address: target.hostname, family: target.literalFamily }];
@@ -124,7 +145,7 @@ export async function resolveCheckedAddresses(
   }
   for (const { address } of addresses) {
     const kind = addressKind(address);
-    if (kind !== 'public') {
+    if (kind !== 'public' && !permitted(target.hostname, address, kind, permit)) {
       throw new EgressFailure(
         'address',
         'blocked',

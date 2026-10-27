@@ -27,10 +27,14 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import consentsApiRoute, { autoPrefix } from './index';
 
 const emitUserEventMock = vi.mocked(emitUserEvent);
+
+/** The realm the request resolved to; every consent lookup is scoped to it (#489). */
+const REALM = testRealm({ id: 'realm-1' });
 
 beforeEach(() => {
   emitUserEventMock.mockClear();
@@ -82,7 +86,7 @@ const CONSENT_ROW = {
   scopes: ['openid', 'profile'],
   grantedAt: 1_700_000_000_000,
   oauthClientId: 'client-row-1',
-  realmId: 'realm-1',
+  realmId: REALM.id,
 };
 
 function makeFastify() {
@@ -120,6 +124,7 @@ function makeFastify() {
 function request(overrides: Record<string, unknown> = {}) {
   return {
     jwtPayload: { sub: 'user-1' },
+    realm: REALM,
     params: {},
     ip: '127.0.0.1',
     headers: { 'user-agent': 'vitest' },
@@ -151,6 +156,7 @@ describe('/api/consents', () => {
     const result = (await ctx.get!(request(), reply)) as { consents: unknown[] };
 
     expect(fastify.repositories.oauthConsents.listActiveForUserWithClient).toHaveBeenCalledWith(
+      REALM.id,
       'user-1'
     );
     expect(state.headers['Cache-Control']).toBe('no-store');
@@ -172,7 +178,16 @@ describe('/api/consents', () => {
 
     await ctx.delete!(request({ params: { id: CONSENT_ROW.id } }), reply);
 
-    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(CONSENT_ROW.id, 'tx');
+    // Owned in the request's realm, and revoked there (#489).
+    expect(fastify.repositories.oauthConsents.listActiveForUserWithClient).toHaveBeenCalledWith(
+      REALM.id,
+      'user-1'
+    );
+    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(
+      REALM.id,
+      CONSENT_ROW.id,
+      'tx'
+    );
     expect(state.statusCode).toBe(204);
     // In the revocation's transaction; the client by its public client_id.
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
@@ -251,6 +266,38 @@ describe('/api/consents', () => {
     await expect(ctx.delete!(request({ params: { id: CONSENT_ROW.id } }), reply)).rejects.toThrow(
       NotFoundError
     );
+    expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
+    expect(emitUserEventMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes the listing and the revoke to the request's realm (#489)", async () => {
+    // The same subject id at another realm's host is looked up in THAT realm:
+    // a consent of realm-1 is not in realm-2's listing, so it answers 404 like
+    // an unknown id and is never revoked.
+    const { fastify, ctx } = makeFastify();
+    const otherRealm = testRealm({ id: 'realm-2' });
+    const listing = fastify.repositories.oauthConsents
+      .listActiveForUserWithClient as unknown as Mock;
+    listing.mockImplementation(async (realmId: string) =>
+      realmId === REALM.id ? [CONSENT_ROW] : []
+    );
+    await consentsApiRoute(fastify);
+
+    const { reply: listReply } = createReply();
+    const result = (await ctx.get!(request({ realm: otherRealm }), listReply)) as {
+      consents: unknown[];
+    };
+    expect(result.consents).toEqual([]);
+
+    const { reply } = createReply();
+    await expect(
+      ctx.delete!(request({ realm: otherRealm, params: { id: CONSENT_ROW.id } }), reply)
+    ).rejects.toThrow(NotFoundError);
+
+    expect(listing.mock.calls).toEqual([
+      ['realm-2', 'user-1'],
+      ['realm-2', 'user-1'],
+    ]);
     expect(fastify.repositories.oauthConsents.revoke).not.toHaveBeenCalled();
     expect(emitUserEventMock).not.toHaveBeenCalled();
   });

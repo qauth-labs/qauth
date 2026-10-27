@@ -19,7 +19,7 @@ beforeEach(() => {
   emitUserEventMock.mockClear();
 });
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -39,18 +39,12 @@ vi.mock('../../../config/env', () => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
     REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
 // Mock only the network layer so CIMD resolution runs against a fixture doc.
-vi.mock('../../helpers/ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
-    '../../helpers/ssrf-safe-fetch'
-  );
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
 import { env } from '../../../config/env';
 import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
@@ -154,8 +148,8 @@ function makeFastify() {
         findActive,
         // The locked re-read in the code-insert transaction sees what the
         // first read saw, unless a test says otherwise.
-        findActiveForShare: vi.fn((userId: string, oauthClientId: string) =>
-          findActive(userId, oauthClientId)
+        findActiveForShare: vi.fn((realmId: string, userId: string, oauthClientId: string) =>
+          findActive(realmId, userId, oauthClientId)
         ),
       },
       authorizationCodes: {
@@ -167,9 +161,9 @@ function makeFastify() {
         recordClient: vi.fn().mockResolvedValue(true),
       },
       // Both the session path and the Bearer fallback accept only a user who is
-      // still enabled; the Bearer fallback, only a user of the request's realm.
+      // still enabled, looked up in the request's realm (#489).
       users: {
-        findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })),
+        findById: vi.fn(async (realmId: string, id: string) => ({ id, enabled: true, realmId })),
       },
     },
     // A nested `transaction()` is a savepoint of the same transaction, as in
@@ -313,7 +307,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0];
     expect(tx).toMatchObject({ tx: true });
+    // Both consent reads are in the request's realm (#489).
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      REALM.id,
+      'user-1',
+      CLIENT.id
+    );
     expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledWith(
+      REALM.id,
       'user-1',
       CLIENT.id,
       tx
@@ -455,6 +456,13 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
       'realm-tenant',
       CLIENT.clientId
+    );
+    // So are the session's user and its consent (#489).
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('realm-tenant', 'user-1');
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      'realm-tenant',
+      'user-1',
+      CLIENT.id
     );
     expect(emitUserEventMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -1050,8 +1058,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   }
 
   it('rejects when redirect_uri is not in the CIMD document (mismatch)', async () => {
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/other-cb']));
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://app.example.com/other-cb']));
 
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
@@ -1094,8 +1102,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   ])(
     'refuses a CIMD document that lists a non-loopback http redirect_uri, even for %s',
     async (_label, requested) => {
-      ssrfSafeGet.mockReset();
-      ssrfSafeGet.mockResolvedValue(
+      egressGet.mockReset();
+      egressGet.mockResolvedValue(
         cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
       );
 
@@ -1136,8 +1144,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   );
 
   it('happy path: resolves CIMD client, materialises it, and proceeds to login/consent', async () => {
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
 
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
@@ -1170,8 +1178,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   it('prompt=none with no session: shows login_required on the issuer instead of redirecting (RFC 9700 §4.11.2)', async () => {
     // Anyone who can host a document names a CIMD client's redirect URI; the
     // AS has no reason to trust it as an automatic redirect target.
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://login-qauth.attacker.example/sign-in']));
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://login-qauth.attacker.example/sign-in']));
 
     const { fastify, ctx } = makeCimdFastify();
     await authorizeRoute(fastify);
@@ -1809,6 +1817,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      REALM.id,
       BEARER_USER,
       DANGEROUS_CLIENT.id
     );
@@ -2132,7 +2141,8 @@ describe('GET /oauth/authorize — disabled user', () => {
     );
 
     expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(BEARER_USER);
+    // Looked up in the request's realm (#489).
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, BEARER_USER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });

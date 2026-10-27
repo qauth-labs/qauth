@@ -246,6 +246,43 @@ function userFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe('POST /auth/login', () => {
+  // #510: this sign-in checks no admin grant, so its token never names the
+  // admin API, whatever the system client's row lists.
+  it("leaves the admin API's audience out of the token", async () => {
+    for (const [audience, aud] of [
+      [['urn:qauth:aud:admin:v1-rc.0', 'https://auth.example.com'], 'https://auth.example.com'],
+      [['urn:qauth:aud:admin:v1-rc.0'], 'system'],
+    ] as const) {
+      const { fastify, ctx } = createFastifyStub();
+      await loginRoute(fastify);
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'sc-uuid',
+        clientId: 'system',
+        audience: [...audience],
+      });
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+      if (!ctx.handler) throw new Error('Handler missing');
+      await ctx.handler(
+        {
+          body: { email: 'user@example.com', password: 'p' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+          log: requestLog(),
+        },
+        createReply()
+      );
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'realm-1' }),
+        expect.objectContaining({ aud })
+      );
+    }
+  });
+
   it('signs access token with aud resolved from the system client and sets Cache-Control: no-store', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
