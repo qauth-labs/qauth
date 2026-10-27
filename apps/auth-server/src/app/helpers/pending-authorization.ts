@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 
 import { PENDING_AUTHORIZATION_MAX_URL_BYTES, PENDING_AUTHORIZATION_TTL_MS } from '../constants';
@@ -182,7 +182,7 @@ export function normalizeInternalAuthorizeUrl(value: unknown): string | null {
  * @throws {Error} when the URL is not an internal authorize URL — a
  *   programming error, and one that must never silently become a redirect
  *   target.
- * @throws {BadRequestError} when the URL exceeds
+ * @throws {InvalidRequestError} when the URL exceeds
  *   {@link PENDING_AUTHORIZATION_MAX_URL_BYTES}. A 400 rather than a throw
  *   because it is caller-driven, not a bug: the request is too large to be
  *   served through the login round-trip at all (a proxy would reject the
@@ -222,7 +222,7 @@ export async function stashPendingAuthorization(
  */
 function assertPendingAuthorizationSize(authorizeUrl: string): void {
   if (Buffer.byteLength(authorizeUrl, 'utf8') > PENDING_AUTHORIZATION_MAX_URL_BYTES) {
-    throw new BadRequestError('invalid_request: authorization request is too large');
+    throw new InvalidRequestError('authorization request is too large');
   }
 }
 

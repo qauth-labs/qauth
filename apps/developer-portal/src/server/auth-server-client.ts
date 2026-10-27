@@ -11,14 +11,6 @@ export type Result<T> =
       error: { code: string; message: string; details?: string | string[]; status: number };
     };
 
-interface AuthServerErrorBody {
-  error: string;
-  statusCode: number;
-  code?: string;
-  feedback?: string[];
-  constraint?: string;
-}
-
 /**
  * The body of `POST /auth/register`'s `202 Accepted`.
  *
@@ -207,36 +199,154 @@ export interface UpdateClientInput {
   enabled?: boolean;
 }
 
-function mapErrorCode(body: AuthServerErrorBody, httpStatus: number): string {
-  if (httpStatus === 429) return 'RATE_LIMITED';
-  if (httpStatus === 404) return 'NOT_FOUND';
-  switch (body.code) {
-    case 'INVALID_CREDENTIALS':
-      return 'INVALID_CREDENTIALS';
-    case 'WEAK_PASSWORD':
-      return 'WEAK_PASSWORD';
-    case 'UNIQUE_CONSTRAINT_VIOLATION':
-      // A generic conflict. Registration never answers with it: an address
-      // that already has an account gets the same 202 as a free one.
-      return 'CONFLICT';
-    case 'INVALID_TOKEN':
-      return 'INVALID_TOKEN';
-    case 'EMAIL_ALREADY_VERIFIED':
-      return 'EMAIL_ALREADY_VERIFIED';
-    case 'VALIDATION_ERROR':
+/** The error of a failed {@link Result}. */
+type ResultError = Extract<Result<unknown>, { ok: false }>['error'];
+
+/** RFC 9457 §3: the media type of a problem details document in JSON. */
+const PROBLEM_MEDIA_TYPE = 'application/problem+json';
+
+/**
+ * The portal's code for each problem `code` the auth-server answers on the
+ * routes the portal calls (#513). Every auth-server route but the OAuth
+ * protocol endpoints answers an error as an RFC 9457 problem document, whose
+ * `code` is lower-case snake_case. A code missing here is classified by the
+ * HTTP status ({@link codeForStatus}): the auth-server may add codes in a
+ * minor release, and a client treats one it does not know by its status.
+ */
+const PROBLEM_CODE_MAP: Readonly<Record<string, string>> = {
+  invalid_credentials: 'INVALID_CREDENTIALS',
+  weak_password: 'WEAK_PASSWORD',
+  // A generic conflict. Registration never answers with it: an address that
+  // already has an account gets the same 202 as a free one.
+  already_exists: 'CONFLICT',
+  conflict: 'CONFLICT',
+  // An email verification token, not an access token.
+  invalid_verification_token: 'INVALID_TOKEN',
+  email_already_verified: 'EMAIL_ALREADY_VERIFIED',
+  // Login refuses an unverified account with `invalid_credentials`; a 403
+  // elsewhere is the generic refusal it always was here.
+  email_not_verified: 'FORBIDDEN',
+  validation_error: 'VALIDATION_ERROR',
+  bad_request: 'VALIDATION_ERROR',
+  invalid_request: 'VALIDATION_ERROR',
+  invalid_redirect_uri: 'VALIDATION_ERROR',
+  invalid_client_metadata: 'VALIDATION_ERROR',
+  invalid_scope: 'VALIDATION_ERROR',
+  // The environment gate on API-key minting (ADR-008 §6) — a staging /
+  // production client is refused here and steered to client_credentials.
+  forbidden: 'FORBIDDEN',
+  // An access token that is missing, expired, not valid or names no active
+  // user: the session is over.
+  unauthorized: 'UNAUTHENTICATED',
+  invalid_access_token: 'UNAUTHENTICATED',
+  access_token_expired: 'UNAUTHENTICATED',
+  not_found: 'NOT_FOUND',
+  too_many_requests: 'RATE_LIMITED',
+};
+
+/**
+ * The portal's code for each `error` an OAuth protocol endpoint answers
+ * (RFC 6749 §5.2, RFC 6750 §3.1). The portal calls one: userinfo. A value
+ * missing here (`temporarily_unavailable` for a 429 and a 503 alike,
+ * `server_error`) is classified by the HTTP status.
+ */
+const OAUTH_ERROR_MAP: Readonly<Record<string, string>> = {
+  // The access token, not a one-time token: the session is over.
+  invalid_token: 'UNAUTHENTICATED',
+  insufficient_scope: 'FORBIDDEN',
+  access_denied: 'FORBIDDEN',
+  invalid_request: 'VALIDATION_ERROR',
+};
+
+/** The portal's code for an answer it can read nothing but the status of. */
+function codeForStatus(httpStatus: number): string {
+  switch (httpStatus) {
+    case 400:
       return 'VALIDATION_ERROR';
-    case 'FORBIDDEN':
-      // The environment gate on API-key minting (ADR-008 §6) — a staging /
-      // production client is refused here and steered to client_credentials.
+    case 401:
+      return 'UNAUTHENTICATED';
+    case 403:
       return 'FORBIDDEN';
+    case 404:
+      return 'NOT_FOUND';
+    case 429:
+      return 'RATE_LIMITED';
     default:
-      // No domain code: classify by status. The `/api/clients` routes return
-      // bare `401`/`400`s; login etc. carry a `code` handled above.
-      if (httpStatus === 401) return 'UNAUTHENTICATED';
-      if (httpStatus === 403) return 'FORBIDDEN';
-      if (httpStatus === 400) return 'VALIDATION_ERROR';
       return 'UNKNOWN';
   }
+}
+
+/** A non-empty string, or `undefined`. */
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/** The portal code `map` holds for `key`, else the code of `httpStatus`. */
+function mapCode(
+  map: Readonly<Record<string, string>>,
+  key: string | undefined,
+  httpStatus: number
+): string {
+  return key !== undefined && Object.hasOwn(map, key) ? map[key] : codeForStatus(httpStatus);
+}
+
+/**
+ * The error of a problem document: its `code` mapped to the portal's, its
+ * `detail` (else its `title`) as the message, and the message of each entry
+ * of `errors` as the details. A weak password's feedback arrives as entries
+ * under `/password`. Neither the `title` nor the `detail` is branched on.
+ */
+function problemError(body: Record<string, unknown>, httpStatus: number): ResultError {
+  const entries = Array.isArray(body['errors']) ? (body['errors'] as unknown[]) : [];
+  const details = entries
+    .map((entry) =>
+      typeof entry === 'object' && entry !== null
+        ? nonEmptyString((entry as Record<string, unknown>)['message'])
+        : undefined
+    )
+    .filter((message): message is string => message !== undefined);
+  return {
+    code: mapCode(PROBLEM_CODE_MAP, nonEmptyString(body['code']), httpStatus),
+    message:
+      nonEmptyString(body['detail']) ?? nonEmptyString(body['title']) ?? `HTTP ${httpStatus}`,
+    ...(details.length > 0 ? { details } : {}),
+    status: httpStatus,
+  };
+}
+
+/** The error of an OAuth error body: `error` mapped, `error_description` (else `error`) as the message. */
+function oauthError(error: string, body: Record<string, unknown>, httpStatus: number): ResultError {
+  return {
+    code: mapCode(OAUTH_ERROR_MAP, error, httpStatus),
+    message: nonEmptyString(body['error_description']) ?? error,
+    status: httpStatus,
+  };
+}
+
+/**
+ * Read a failed answer of the auth-server into the portal's error (#513).
+ *
+ * - `application/problem+json`: an RFC 9457 problem document, what every
+ *   route the portal calls answers but userinfo.
+ * - Any other JSON object with an `error` string: the OAuth error body of an
+ *   OAuth protocol endpoint (RFC 6749 §5.2).
+ * - Anything else (no body, not JSON, not an object): classified by status.
+ */
+async function readError(res: Response): Promise<ResultError> {
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch {
+    parsed = undefined;
+  }
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    const body = parsed as Record<string, unknown>;
+    const mediaType = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    if (mediaType === PROBLEM_MEDIA_TYPE) return problemError(body, res.status);
+    const error = nonEmptyString(body['error']);
+    if (error !== undefined) return oauthError(error, body, res.status);
+  }
+  return { code: codeForStatus(res.status), message: `HTTP ${res.status}`, status: res.status };
 }
 
 /**
@@ -267,30 +377,7 @@ async function apiRequestNoContent(
 
     if (res.ok) return { ok: true, data: null };
 
-    let parsed: unknown;
-    try {
-      parsed = await res.json();
-    } catch {
-      return {
-        ok: false,
-        error: {
-          code: mapErrorCode({ error: '', statusCode: res.status }, res.status),
-          message: `HTTP ${res.status}`,
-          status: res.status,
-        },
-      };
-    }
-    const body = (
-      typeof parsed === 'object' && parsed !== null ? parsed : {}
-    ) as AuthServerErrorBody;
-    return {
-      ok: false,
-      error: {
-        code: mapErrorCode(body, res.status),
-        message: body.error || `HTTP ${res.status}`,
-        status: res.status,
-      },
-    };
+    return { ok: false, error: await readError(res) };
   } catch (err) {
     return {
       ok: false,
@@ -366,34 +453,7 @@ async function apiRequest<T>(
       return { ok: true, data };
     }
 
-    let parsed: unknown;
-    try {
-      parsed = await res.json();
-    } catch {
-      return {
-        ok: false,
-        error: { code: 'UNKNOWN', message: `HTTP ${res.status}`, status: res.status },
-      };
-    }
-
-    if (typeof parsed !== 'object' || parsed === null) {
-      return {
-        ok: false,
-        error: { code: 'UNKNOWN', message: `HTTP ${res.status}`, status: res.status },
-      };
-    }
-
-    const body = parsed as AuthServerErrorBody;
-    const details = body.feedback ?? body.constraint ?? undefined;
-    return {
-      ok: false,
-      error: {
-        code: mapErrorCode(body, res.status),
-        message: body.error,
-        ...(details !== undefined ? { details } : {}),
-        status: res.status,
-      },
-    };
+    return { ok: false, error: await readError(res) };
   } catch (err) {
     return {
       ok: false,
@@ -455,7 +515,10 @@ export const authServerClient = {
   },
 
   userinfo(accessToken: string): Promise<Result<UserInfoData>> {
-    return apiRequest<UserInfoData>('/userinfo', {
+    // The OIDC userinfo endpoint is served under `/oauth` (its discovery
+    // `userinfo_endpoint`); a bare `/userinfo` is a 404, which signed every
+    // portal user out on their first page.
+    return apiRequest<UserInfoData>('/oauth/userinfo', {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,

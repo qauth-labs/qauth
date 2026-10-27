@@ -1,25 +1,19 @@
 QAuth
-Copyright 2025 QAuth Labs
+Copyright 2025-2026 QAuth Labs
 
-This product includes software developed by QAuth Labs
-and its contributors.
-
-================================================================================
-
-This project is inspired by and incorporates learnings from the following
-open-source projects:
-
-- Keycloak (https://www.keycloak.org/) - Apache License 2.0
-- Ory (https://www.ory.sh/) - Apache License 2.0
-- Supabase Auth (https://supabase.com/) - Apache License 2.0
-- Auth0 (https://auth0.com/) - Proprietary/MIT components
-- Clerk (https://clerk.dev/) - Proprietary
-
-We are grateful to these projects and their communities for their contributions
-to the open-source ecosystem.
+This product includes software developed by QAuth Labs and its contributors.
 
 ================================================================================
 
-This project uses various open-source libraries and components. For a complete
-list of dependencies and their licenses, please refer to the package.json file
-and the respective project documentation.
+This product includes software from third parties, under their own licences:
+
+- The email template components in
+  libs/server/email/src/lib/templates/components, vendored from React Email.
+  Copyright 2024 Plus Five Five, Inc. MIT License; the full text is in the
+  LICENSE file of that directory.
+
+================================================================================
+
+This product depends on third-party open-source packages, each under its own
+licence. The package manifests (package.json and Cargo.toml files) and the
+lockfiles list them.

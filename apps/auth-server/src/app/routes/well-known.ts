@@ -1,12 +1,14 @@
 import { buildTransmitterMetadata } from '@qauth-labs/fastify-plugin-ssf';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
 import { JWKS_CACHE_CONTROL } from '../constants';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
+import { realmIssuer } from '../helpers/realm-url';
 import { requestRealm } from '../helpers/request-realm';
-import { realmRunsTransmitter, SsfNotFoundError } from '../helpers/ssf-receiver';
+import { SsfNotFoundError } from '../helpers/ssf-errors';
+import { realmRunsTransmitter } from '../helpers/ssf-receiver';
 
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
@@ -37,8 +39,10 @@ export default async function (fastify: FastifyInstance) {
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
 
-  const buildInput = () => ({
-    issuer: fastify.jwtUtils.getIssuer(),
+  const buildInput = (request: FastifyRequest) => ({
+    // ADR-019 Decision 1 (#490): the issuer of the realm the request's host
+    // names, from its row. Every endpoint URL below is built on it.
+    issuer: realmIssuer(requestRealm(request)),
     // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
     clientIdMetadataDocumentSupported: env.CIMD_ENABLED,
     // ADR-011 §4: gates the jwt-bearer grant type and the ID-JAG grant profile.
@@ -68,11 +72,11 @@ export default async function (fastify: FastifyInstance) {
       },
       config: { surface: 'meta' },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildAuthorizationServerMetadata(buildInput()));
+      return reply.send(buildAuthorizationServerMetadata(buildInput(request)));
     }
   );
 
@@ -87,11 +91,11 @@ export default async function (fastify: FastifyInstance) {
       },
       config: { surface: 'meta' },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildOpenIdConfiguration(buildInput()));
+      return reply.send(buildOpenIdConfiguration(buildInput(request)));
     }
   );
 
@@ -136,18 +140,20 @@ export default async function (fastify: FastifyInstance) {
             'Shared Signals Framework transmitter metadata (SSF 1.0 §7): the stream management endpoints, push delivery, and the transmitter’s own JWKS (`/ssf/jwks.json`), which verifies the realm’s Security Event Tokens. 404 for a realm that does not run the transmitter.',
           tags: ['Discovery', 'Shared Signals'],
           'x-qauth-stability': 'experimental',
+          // SSF 1.0 §7 defines no error body: the 404 is the `not_found`
+          // problem document (#513).
+          'x-qauth-errors': [404],
         },
         config: { surface: 'meta' },
       },
       async (request, reply) => {
-        const realm = requestRealm(request);
-        if (!realmRunsTransmitter(request) || realm.issuer === null) {
-          throw new SsfNotFoundError();
-        }
+        if (!realmRunsTransmitter(request)) throw new SsfNotFoundError();
         reply
           .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
           .header('Content-Type', 'application/json; charset=utf-8');
-        return reply.send(buildTransmitterMetadata(realm.issuer));
+        // The realm's issuer from its row (ADR-019 Decision 1, #490), as the
+        // other discovery documents build their URLs.
+        return reply.send(buildTransmitterMetadata(realmIssuer(requestRealm(request))));
       }
     );
   }

@@ -684,8 +684,8 @@ question below.
     is a check nobody can pass. _Decided 2026-10-09 (maintainer):_ the
     powers go to realm-local admins, through the permission catalog of
     ADR-019. Revoke-by-agent and disabling a
-    transmitter need `admin:security` and a passkey approval per operation.
-    The view the public profile withholds needs `admin:read`.
+    transmitter need `qauth:admin:security` and a passkey approval per operation.
+    The view the public profile withholds needs `qauth:admin:read`.
 11. **Sign-out and an agent client's family with no `tree_id` yet.** Options:
     end it, as ADR-014 decision 1's text does; spare it, as "agents survive
     the browser logout" reads. **Default:** end it; the option would change

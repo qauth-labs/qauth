@@ -50,6 +50,21 @@ export const REDIS_KEYS = {
    */
   REVOKED_ACCESS_TOKEN: (jti: string) => `revoked-access-token:${jti}`,
   /**
+   * The access tokens issued by redeeming one authorization code (#627): a
+   * hash of `jti` to `exp`, so a second redemption of the code can put them on
+   * the {@link REDIS_KEYS.REVOKED_ACCESS_TOKEN} denylist (OAuth 2.1 §4.1.3).
+   * Expires with the last token in it. The component is the code row's UUID.
+   */
+  CODE_ACCESS_TOKENS: (authorizationCodeId: string) => `code-access-tokens:${authorizationCodeId}`,
+  /**
+   * The access tokens issued in one refresh-token family, at the redemption
+   * that started it and at every rotation (#627): a hash of `jti` to `exp`, so
+   * a replay of the family's code or of one of its refresh tokens can put the
+   * live ones on the denylist. Expires with the last token in it. The
+   * component is the family's UUID.
+   */
+  REFRESH_FAMILY_ACCESS_TOKENS: (familyId: string) => `refresh-family-access-tokens:${familyId}`,
+  /**
    * Set of the hosted browser session ids (`sid`) of one user, so
    * `/auth/logout` can end every session the user holds, not only one whose
    * cookie happens to accompany the request. Expires with the newest session

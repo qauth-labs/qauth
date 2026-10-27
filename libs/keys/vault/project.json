@@ -1,0 +1,42 @@
+{
+  "name": "keys-vault",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/keys/vault/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:kek-adapter"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "oxlint", "@nx/oxlint", "nx", "typescript"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/.oxlintrc.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `boundaries.test.ts` runs Nx's module-boundaries rule through Oxlint with the options of `.oxlintrc.json`, so a change to `.oxlintrc.json`, to Oxlint, @nx/oxlint, Nx or TypeScript must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared."
+      }
+    },
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts libs/keys/vault",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run the KEK provider contract and the token, rotation and policy suites against a Vault dev server in a container (testcontainers). Requires a running Docker daemon. CI's integration job runs it when the project is affected."
+    }
+  },
+  "// targets": "to see all targets run: nx show project keys-vault --web"
+}

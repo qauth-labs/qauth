@@ -6,6 +6,7 @@ import {
   ID_JAG_GRANT_PROFILE,
   JWT_BEARER_GRANT_TYPE,
 } from '../schemas/oauth';
+import { ADMIN_SCOPE_LIST } from './admin-scopes';
 import {
   buildAuthorizationServerMetadata,
   buildOpenIdConfiguration,
@@ -189,6 +190,19 @@ describe('buildAuthorizationServerMetadata', () => {
     });
 
     expect(meta['scopes_supported']).toEqual(['openid', 'custom:read']);
+  });
+
+  // #507: QAuth's own scopes (the qauth: namespace) are never advertised;
+  // other servers' admin: scopes are ordinary scopes.
+  it('never advertises a scope in the qauth: namespace, whatever list it is given', () => {
+    expect(DEFAULT_SCOPES_SUPPORTED.filter((scope) => scope.startsWith('qauth:'))).toEqual([]);
+    const input = {
+      issuer: ISSUER,
+      scopesSupported: ['openid', ...ADMIN_SCOPE_LIST, 'QAuth:other', 'admin:org', 'agent:admin'],
+    };
+    for (const meta of [buildAuthorizationServerMetadata(input), buildOpenIdConfiguration(input)]) {
+      expect(meta['scopes_supported']).toEqual(['openid', 'admin:org', 'agent:admin']);
+    }
   });
 
   it('strips a trailing slash on the issuer so URLs are not double-slashed', () => {

@@ -22,9 +22,15 @@ import { subjectIdentifierSchema } from './subjects';
  * QAuth holds (§8.1.1.3, §8.1.1.4), and is otherwise refused.
  */
 
-/** A request QAuth refuses with `400`; the message says why, without echoing values. */
+/**
+ * A request QAuth refuses with `400`; the message says why, without echoing
+ * values. It carries its status, so it reaches the caller as a `400` wherever
+ * it is thrown: the auth server answers it with the `bad_request` problem
+ * document, its message as the `detail` (#513).
+ */
 export class SsfRequestError extends Error {
   override readonly name = 'SsfRequestError';
+  readonly statusCode = 400;
 }
 
 const streamIdSchema = z.string().min(1).max(255).describe('The `stream_id`.');

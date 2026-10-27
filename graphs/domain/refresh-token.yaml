@@ -24,6 +24,7 @@ entities:
         revokedAt: null
         revokedReason: null
         cnfJkt: null
+        authorizationCodeId: null # /auth/login redeems no authorization code
         createdAt: 1792918800000
         lastUsedAt: null
       # the same token after POST /auth/logout (revokeAllForUser with the reason logout)
@@ -40,13 +41,14 @@ entities:
         revokedAt: 1792920600000
         revokedReason: logout
         cnfJkt: null
+        authorizationCodeId: null
         createdAt: 1792918800000
         lastUsedAt: null
 
 actions:
   RefreshToken.revokeAllForUser:
     # internal: invoked by core.logout, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:254
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:326
     body:
       type: object
       required: [userId]

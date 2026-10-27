@@ -245,11 +245,9 @@ describe('client-secret checks under a burst (real containers)', () => {
       }
       for (const { response } of shed) {
         expect(response.headers['retry-after']).toBe('1');
-        expect(response.json()).toEqual({
-          statusCode: 503,
-          error: 'temporarily_unavailable',
-          code: 'TEMPORARILY_UNAVAILABLE',
-        });
+        // The OAuth error body and nothing else (#513): a 5xx carries no
+        // description.
+        expect(response.json()).toEqual({ error: 'temporarily_unavailable' });
       }
 
       // Counted, logged at warn with its reason, and recorded once as a

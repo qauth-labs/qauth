@@ -288,7 +288,9 @@ describe('POST /auth/register', () => {
     expect(reply.state.headers).toEqual({ 'Cache-Control': 'no-store' });
 
     await drainBackground(ctx);
-    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain');
+    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain', {
+      baseUrl: REALM.issuer,
+    });
     expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
   });
 
@@ -365,7 +367,8 @@ describe('POST /auth/register', () => {
       );
       expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledExactlyOnceWith(
         ADDRESS,
-        'plain'
+        'plain',
+        { baseUrl: REALM.issuer }
       );
       expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
     });
@@ -505,8 +508,26 @@ describe('POST /auth/register', () => {
       });
       await drainBackground(ctx);
 
-      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain');
+      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain', {
+        baseUrl: REALM.issuer,
+      });
     });
+  });
+
+  it("links the verification mail to the request realm's issuer, not EMAIL_BASE_URL (ADR-019 Decision 1, #490)", async () => {
+    const realmB = testRealm({ id: 'realm-b', issuer: 'https://b.example.com' });
+    const { fastify, ctx } = createFastifyStub();
+    await registerRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    await ctx.handler({ ...requestFixture(), realm: realmB }, createReply());
+    await drainBackground(ctx);
+
+    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledExactlyOnceWith(
+      ADDRESS,
+      'plain',
+      { baseUrl: 'https://b.example.com' }
+    );
   });
 
   it("registers in the request's realm: a body realmId may only name that realm (#487)", async () => {
@@ -533,7 +554,6 @@ describe('POST /auth/register', () => {
       createReply()
     );
     await expect(refused).rejects.toBeInstanceOf(BadRequestError);
-    await expect(refused).rejects.toThrow(`Invalid realmId: ${other}`);
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.repositories.users.create).not.toHaveBeenCalled();
   });

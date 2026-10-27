@@ -126,6 +126,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   how to add it, the IAM policy of the signer role (`kms:Encrypt` and
   `kms:Decrypt` on the one key) and what happens during a KMS outage.
 
+- **The KEK in a Vault Transit key** ([#578], ADR-019 Decision 9). The optional
+  package `@qauth-labs/keys-vault` keeps the key-encryption key in a key of
+  Vault's Transit engine: `KEK_PROVIDER=vault` makes the signer load it, and it
+  sends data keys to Transit `encrypt` and `decrypt` with the key's associated
+  data as the Transit `context`. Signing stays local. The key must be created
+  with `derived=true`: Vault ignores the context of a key that is not derived,
+  so the provider refuses one, and every wrap is decrypted once more under
+  another context, which Vault must refuse. A key that can leave Vault
+  (`exportable`, `allow_plaintext_backup`) or be deleted (`deletion_allowed`)
+  wraps nothing; unwraps go on with a warning, so the stored keys still open
+  until the KEK rotation ([#545]) moves them. An imported key only warns.
+  `kekRef` is the key's path and version (`vault:transit/keys/qauth-kek#v2`), so
+  a Transit key rotation shows which rows to re-wrap. Settings are
+  `KEK_VAULT_ADDR` (`https` only), `KEK_VAULT_TRANSIT_KEY`, and optionally
+  `KEK_VAULT_TRANSIT_MOUNT`, `KEK_VAULT_NAMESPACE` and `KEK_VAULT_CA_CERT_FILE`;
+  the provider logs in with a token from `KEK_VAULT_TOKEN_FILE` or with AppRole
+  (`KEK_VAULT_ROLE_ID`, `KEK_VAULT_SECRET_ID_FILE`), never with a credential in
+  a variable. It renews the token before it expires and logs in again at its
+  maximum TTL, revoking the AppRole token it replaces; a revoked token fails
+  with `KEK_ACCESS_DENIED`, and a root token or one that never expires logs a
+  warning. `KekProvider` gains an optional `close()`, which the signer calls
+  when the server closes, so the token stops renewing. The auth server does not
+  depend on the package and its image does not carry it; the package's README
+  gives the exact Vault policy of the signer role, which the new container suite
+  applies to a Vault dev server.
+
 - **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
   ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
   URL (plain `http` only on `localhost`, for development) without a trailing
@@ -510,6 +536,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Postgres reads and last-seen writes. The browser sign-in and the session
   lookup use it ([#488], under Changed).
 
+- **`sid` on ID tokens** ([#549], ADR-019 Decisions 3 and 4). The ID token from
+  the authorization code exchange carries `sid`, the id of the browser session
+  the user signed in with (the `sessions` row the session cookie names), which
+  back-channel logout will name. Migration 0042 adds
+  `authorization_codes.session_id`, a nullable foreign key to `sessions` that a
+  deleted session sets to null. `/oauth/authorize` and the consent form store
+  it on the code and, in the same transaction, record the client in
+  `session_clients`, once per session and client. The sessions repository
+  looks that registry up by session, by user and by client, listing live
+  sessions only, and revoking a session deletes its rows and returns them: the
+  clients back-channel logout will notify. Revoking a session also spends the
+  codes minted under it that are not yet redeemed, so none becomes an ID token
+  naming an ended session; a later redemption of one is refused as a replay
+  that revokes nothing. A code from the legacy Bearer path
+  of `/oauth/authorize` has no browser session and its ID token no `sid`, nor
+  does a code minted before the upgrade. Access tokens, introspection
+  responses, refresh tokens and discovery are unchanged. If a sign-out commits
+  while a code is being minted for that session, no code is issued: the
+  browser goes back to the sign-in page, or the client gets `login_required`
+  under `prompt=none`, and a consent the user asked to remember is not stored
+  either: it commits with the code. The migration is additive; it locks
+  `sessions` and then `authorization_codes` while it runs (see the upgrade
+  guide). During a rolling upgrade the previous release writes codes without a
+  session, and a session it revokes keeps its registry rows, which the lookups
+  skip, and its codes unspent.
+
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
   the default realm's step and under an advisory lock on the realm, the
@@ -642,7 +694,214 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `event_deliveries` that finds a destination's latest failed delivery ([#410]).
   Expand-only; the index build holds back delivery writes while it runs.
 
+- **Admin scopes, the admin permission catalog and the built-in admin roles**
+  ([#507], ADR-019 Decision 7). The admin API's scopes are `qauth:admin:read`,
+  `qauth:admin:write` and `qauth:admin:security`, one per permission class, and
+  no scope implies another. A permission registry (`definePermission`) gives
+  each permission id exactly one class; a security permission never shares an
+  id with a write permission. The built-in roles `viewer`, `editor` and
+  `security-admin` follow the catalog by class and cannot be edited, and a
+  custom role may not take a name that reads as one of theirs (compared after
+  folding case, white space, dashes and compatibility forms).
+  `effectivePermissions` keeps a role's permission only when the token carries
+  its class's scope, and `validateCustomRole` refuses an unknown or retired id.
+  The catalog starts with `realms.read`, `realms.export`, `realms.import.plan`,
+  `realms.policies.write`, `realms.policies.security`, `approvals.read` and
+  `approvals.approve`. A removed permission is retired and keeps its id; like
+  every QAuth-defined identifier, the ids are promised from 1.0.0 on (ADR-018
+  §5). The docs site's new **Admin permissions** page
+  (`reference/admin-permissions`) is generated from the registry, and so is a
+  new stable surface, `apps/docs-site/public/schemas/admin-permissions.json`
+  (`auth-server:admin-permissions-export`): the stable-surface check reports a
+  removed permission or a changed class as a break. The API conventions check
+  refuses an admin operation whose `x-qauth-permission` names a permission the
+  catalog cannot grant, or whose `x-qauth-class` is not the strictest class
+  among them. No admin API route reads the catalog yet.
+
+- **One audience per API family, and a token guard for each** ([#509], ADR-019
+  Decision 7). The admin, account and developer APIs have the audiences
+  `urn:qauth:aud:admin:v1-rc.0`, `urn:qauth:aud:account:v1-rc.0` and
+  `urn:qauth:aud:developer:v1-rc.0`, and `requireFamilyToken(family, options)`
+  guards a family route: it requires `typ: at+jwt` whatever
+  `requireAccessTokenTyp` says, an `iss` its `IssuerResolver` hook accepts (by
+  default only `JWT_ISSUER`), `sub`, `exp` and a non-empty `jti`, an `aud`
+  holding exactly the family's audience, and, on the developer family, no
+  `act` claim. Its required `subjects` option names the subjects a route
+  admits, and the guard resolves the subject in the realm of the request
+  (ADR-019 Decision 1): a user of that realm who is enabled, or for a
+  `client_credentials` token a client of that realm that is enabled and not
+  suspended, so a user's token is refused in every other realm. It answers a
+  problem document, as every family route does ([#513]): a request with no
+  token gets 401 `unauthorized` with a challenge that names no error, a refused
+  token 401 `invalid_access_token` (or `access_token_expired`) with the RFC 6750
+  `invalid_token` challenge, and a token that lacks a route's scope 403
+  `forbidden` with the `insufficient_scope` challenge, whose `scope` names the
+  scopes. `ForbiddenError`'s `requiredScope` takes a list for that, joined with
+  spaces in the challenge. No route uses the guards yet; the developer and
+  account routes move under their prefixes in [#524]. The token endpoint issues
+  an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
+  `audience` lists it, on every grant (`invalid_target` otherwise, at
+  `/oauth/authorize` and `/ui/consent` too); a code refused this way is not
+  spent. A client resolved from a Client ID Metadata Document or registered at
+  `/oauth/register` lists none, whatever its row holds. On a user's grant
+  (authorization code and refresh token) a family audience is issued only when a
+  `resource` names it, so a client's default audience leaves it out there. The
+  Bearer path of `/oauth/authorize` refuses `access_denied` when the request or
+  the client's default audience holds one, and a family audience never makes a
+  client authoritative at introspection. Self-registration never obtains one,
+  by the rule the reserved `qauth:` scopes follow: dynamic registration and a
+  Client ID Metadata Document ignore it in `audience` or `resource` metadata,
+  and the seed manifest refuses it in a `cimd_clients` entry's `audience`. The
+  JWT plugin's new `verifyRequestAccessToken(request, policy)` runs
+  `requireJwt`'s checks under a route's issuer rule and `typ` requirement.
+
+- **The Interaction API v1 contract** ([#590], ADR-019 Decision 6, ADR-017
+  Decision 3, ADR-018 §5). The API sign-in pages will use to reach the engine is
+  written down before its handlers: one OpenAPI 3.1 document for
+  `/interaction/v1-rc.0` and one JSON Schema per step, published on the docs
+  site under `/interaction/v1-rc.0/` and served by the auth server at
+  `GET /interaction/v1-rc.0/openapi.json`. It has four operations: read the
+  current step with the interaction id alone (no personal data), read the step's
+  personal data with the flow cookie, answer the step as JSON or as a plain form
+  post with the flow cookie and the step's CSRF value, and cancel. It reserves
+  `/interaction/v1-rc.0/wallet/` for the wallet return leg. Its 17 steps are the
+  nine of ADR-017 and eight only the Interaction API serves, each named
+  `urn:qauth:ia:<name>:v1-rc.0`, with its params, answer fields, closed error
+  set, `amr` and an example. Every step read carries the realm's brand block.
+  Errors are problem documents with a `code` and a `trace_id` and no prose,
+  whose `type` and `title` are their code's entry on the problem types page; the
+  registry gains `invalid_answer` (400) and `interaction_expired` (410).
+  The versioning rules are in the document and on the new **Interaction API**
+  reference page. A typed client generated from the document lives in
+  `libs/shared/interaction-client`. The operations themselves are not served
+  yet.
+  - Every params, personal-data and envelope object is closed
+    (`additionalProperties: false`); only the two maps keyed by step name and
+    the problem document stay open, and a test holds every schema a response
+    reaches to that. The versioning rules say so: a later version may add
+    members, so a client never validates a response strictly against an older
+    schema.
+  - Before a first factor succeeds, an identifier comes back exactly as the
+    person gave it, after the one normalisation; the form the account holds
+    appears only after authentication.
+  - A reset of an unknown address gets a phantom `email_code` with the same
+    `expires_in`, `resend_after` and error sequence as a real one.
+  - `email_code`'s purpose `verify_address` is `verify_account`, here and in
+    ADR-017.
+  - A `consent` step always names its client, and an `unverified` client's
+    `redirect`; `params` always holds the current step's own params;
+    `alternatives` holds no step twice.
+  - `ClientDisplay` refuses another kind's members: `federation` on a `cimd`
+    or `admin_registered` client, `verifiedDomain` on a `federation` one.
+  - Answer and cancel name the same-origin check: `Sec-Fetch-Site:
+    same-origin`, or, without it, an `Origin` equal to the realm origin (`null`
+    refused). The personal-data read gains a 403 for a `Sec-Fetch-Site` or an
+    `Origin` that names another origin, and allows a request with neither.
+  - The step read's `alternatives` after a first factor are documented as an
+    accepted exposure (methods, not identity), and a device's network name is
+    marked as declared.
+  - The typed client rejects a redirect a browser hides from `fetch` with
+    `UnexpectedRedirectError` rather than as status 0.
+
 ### Changed
+
+- **BREAKING (clients of the non-OAuth routes)**: every route that is not an
+  OAuth protocol endpoint answers an error with an RFC 9457 problem document,
+  `application/problem+json` ([#513], ADR-019 Decision 7): `type`, `title`,
+  `status`, `detail`, `instance`, a stable lower-case `code` and `trace_id`
+  (the request id), plus `errors[]` with a `pointer` and a `message` for a
+  validation failure and for weak-password feedback under `/password`. The old
+  `{ error, statusCode, code, feedback, details }` body is gone, from the
+  `/auth`, `/api`, `/consents` and `/ui` routes, the well-known documents, the
+  wallet-link API, the 404 for a path no route serves, the router's own refusals
+  (a path that is not valid percent-encoding, 400; an over-long path parameter,
+  414 `uri_too_long`) and a request that cannot be read (400, 408
+  `request_timeout`, 431 `request_header_fields_too_large`). Each code has its own
+  problem type, listed on the docs site's new **Problem types** page
+  (`reference/problem-types`), and one registry maps every class of
+  `@qauth-labs/shared-errors`, and every error class a route defines, to its
+  code. A 401 or 403 on a bearer-protected route also carries a
+  `WWW-Authenticate` challenge; a 403 says `insufficient_scope` only when a
+  wider token would be let through. A request that presents no credentials
+  answers `unauthorized`, and its challenge names no error (RFC 6750 §3.1); a
+  token that was presented and refused answers `invalid_access_token` or
+  `access_token_expired`, with `error="invalid_token"` in the challenge. A
+  one-time email verification token that is refused answers
+  `invalid_verification_token`, and a duplicate `already_exists`.
+  `POST /api/clients` and `PATCH /api/clients/{id}` refuse client metadata
+  with the codes dynamic registration answers: `invalid_client_metadata` for a
+  scope outside the realm's allowlist, a grant and response type that do not
+  fit together or a public `client_credentials` client, and
+  `invalid_redirect_uri` for a missing `redirect_uris`. The root's own answers
+  carry the request id in `X-Request-Id` (`REQUEST_ID_HEADER`) too, as its
+  `trace_id`, and a missing Swagger UI file under `/docs` answers the
+  `not_found` document. `GET /consents` and `DELETE
+  /consents/{id}` answer a request without a browser session with the 401
+  `unauthorized` problem document too, with no challenge (they answered
+  `{ "consents": [] }` and an empty body). The SSF transmitter's routes
+  ([#410]) answer problem documents as well, SSF 1.0 defining no error body:
+  a realm that does not run the transmitter gets the `not_found` document of a
+  path no route serves, and a token without `ssf:stream` a 403 whose challenge
+  names that scope.
+- **BREAKING (OAuth clients that read QAuth's own members)**: the OAuth protocol
+  endpoints (token, authorize, introspect, revoke, register, userinfo and the
+  wallet-facing OID4VP endpoints) answer only the members their specification
+  defines, `error` and `error_description` ([#513]). `code`, `statusCode`,
+  `feedback` and `retryAfter` are gone; the `Retry-After` and
+  `WWW-Authenticate` headers stay. Two shapes are fixed on the way: an unknown
+  `grant_type` answers `unsupported_grant_type` (RFC 6749 §5.2) instead of a
+  validation error, and dynamic registration answers `invalid_client_metadata`
+  or `invalid_redirect_uri` bare in `error`, with the text in
+  `error_description` (RFC 7591 §3.2.2), also for a body its schema refuses. A
+  validation failure answers `invalid_request`, the rate limiter's 429
+  `temporarily_unavailable`, and a 5xx `server_error`. At `/oauth/authorize`, a
+  `client_id` that names no client answers `invalid_request` (it was
+  `invalid_client`). Redeeming a code whose user has been deleted answers 400
+  `invalid_grant`, as for a disabled user (it was a 404 naming the user's id),
+  and so does a code or refresh token another request spent or revoked first
+  (it was a 404 `invalid_request`). The `authorization.failed` event of a
+  `client_id` that names no client records `error: "invalid_request"`, the
+  code the caller is answered (it recorded `invalid_client`). More shapes that
+  change at these endpoints:
+  - userinfo answers every 401 with `error: "invalid_token"` (it was prose in
+    `error`); a request without a token gets a challenge with no error code;
+  - `/oauth/register` answers a developer token that is not valid with 401
+    `invalid_token`, and the developer's client limit with 403
+    `access_denied` (both were prose in `error`); RFC 7591 defines no error
+    for the limit;
+  - a 421 (a host no realm answers for) answers `invalid_request`, as do a body
+    too large (413), an unsupported media type (415) and any other refusal
+    Fastify raises before the route runs;
+  - a validation failure carries no `details[]` any more; `error_description`
+    names the fields.
+- A refusal that several routes raise now reads one way everywhere ([#513]): an
+  access token whose subject is not an active user answers `invalid_access_token` on a
+  problem route and `invalid_token` at userinfo, in one wording that does not
+  say whether the account was deleted or disabled; a `subject_token` naming no
+  active user answers `invalid_request` in one wording; the consent page refuses
+  an unknown client, a refused redirect URI and a malformed `dpop_jkt` with the
+  same code as `/oauth/authorize`, and a disabled or suspended client with
+  `unauthorized_client` (it was `invalid_client`); a CSRF mismatch answers
+  `invalid_csrf_token`.
+- The OpenAPI documents list each operation's error responses, referencing the
+  shared `Problem` schema, or `OAuthError` on an OAuth protocol endpoint
+  ([#513]). Neither schema refuses members it does not name: RFC 9457 §3.2
+  and RFC 6749 §5.2 let a type or an extension add some, and a client ignores
+  those it does not know.
+
+  **Action for clients**: branch on `code` and the status of a problem document,
+  or on `error` and the status of an OAuth body, never on `title`, `detail` or
+  `error_description`. The developer portal ships updated with this release.
+
+- **The developer portal's token: the developer audience is accepted** ([#509]).
+  `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
+  `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
+  the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, beside
+  today's token, whose `aud` is the system client's id. Nothing mints it in
+  this release: `/auth/login` still mints today's token and the system client's
+  row is left as it is. [#524] mints it. Expand, then contract (ADR-018 §5): a
+  node of the previous release accepts every portal token this release mints,
+  so the upgrade is safe to roll. See **Upgrades** (`operate/upgrades`).
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
@@ -655,6 +914,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public API, and a test keeps it in step with both entry points. A new
   `scope:sdk` boundary rule lets an SDK library import no workspace library.
   Behaviour is unchanged.
+- **BREAKING (operators with scopes in the `qauth:` namespace)**: every scope
+  that starts with `qauth:`, in any case, is QAuth's own ([#507]); the admin
+  API's scopes live there. Other servers' `admin:` scopes, such as `admin:org`,
+  are ordinary scopes. A realm's dynamic registration allowlist cannot hold a
+  `qauth:` scope: the boot refuses `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` when it
+  names one, and the realms repository refuses one with `400`. So dynamic
+  registration drops one like any scope outside the allowlist and registers the
+  client with the rest; a Client ID Metadata Document's `scope` is never stored,
+  so one there is ignored; the developer API (`POST /api/clients`,
+  `PATCH /api/clients/{id}`) refuses one as a scope the realm does not allow,
+  with the 400 `invalid_client_metadata` problem document ([#513]); discovery
+  never lists one in `scopes_supported`; and the seed manifest refuses one in a
+  `cimd_clients` entry's `scopes`. Migration 0040 removes such entries from
+  every realm's `dynamic_registration_allowed_scopes`, keeping the others in
+  their order, then adds the CHECK
+  `realms_dynamic_registration_scopes_not_qauth`. An empty allowlist is filled
+  from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` at the next registration, so where
+  the removal would leave a list empty, or the value is not a list, the
+  migration stops before changing anything and names the realms. Clients that
+  already hold such a scope keep it.
+
+  **Action for operators**: none unless a scope of yours starts with `qauth:`.
+  Rename it. Remove it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` before the
+  upgrade, or the new release does not boot. If migration 0040 stops, set each
+  realm it names to the list of scopes dynamic registration should allow, as
+  its hint shows, and run the migrations again.
+
+- `PATCH /api/clients/{id}` checks only the scopes it adds against the realm's
+  allowlist ([#507]). A client keeps a scope the realm no longer allows, or one
+  an operator gave it, while its owner renames it or sends its scopes back
+  unchanged; before, such a request was refused.
+
 - **BREAKING (operators who read `audit_logs`)**: the auth server records what
   a person or a client did as events in the event store ([#458], ADR-019
   Decision 8) and writes no `audit_logs` row. One emitter, `emitUserEvent`,
@@ -781,6 +1072,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the database. The failed-login and rate-limit counters start from zero
   after the upgrade, as their Redis keys now carry the realm id.
 
+- **BREAKING (deployments whose `EMAIL_BASE_URL` is not `JWT_ISSUER`)**: the
+  link in a verification mail starts at the issuer of the account's realm
+  ([#490], ADR-019 Decisions 1 and 6), `<issuer>/auth/verify?token=…`, never at
+  `EMAIL_BASE_URL`. For the default realm that issuer is `JWT_ISSUER` without a
+  trailing slash, so a deployment that set `EMAIL_BASE_URL` to another base sees
+  its links move, and the boot logs a warning saying so. With the shipped
+  defaults the two are equal and the link is unchanged.
+  - The link now lands on the auth server's own `GET /auth/verify` page (see
+    Fixed below). Only an operator's own page or proxy that answered
+    `GET /auth/verify` on the `EMAIL_BASE_URL` host made the old link work, and
+    such a deployment now gets QAuth's page instead.
+  - `EMAIL_BASE_URL` is optional and no longer read. It is still accepted, and
+    the boot warns when it is set to another base than `JWT_ISSUER`.
+  - The verification token of such a link is censored in every log line, the
+    request line and the unknown-route line included.
+  - The mail library's `sendVerificationEmail` takes the link base with each
+    mail instead of from its configuration.
+
+- **Every URL comes from the realm row** ([#490], ADR-019 Decision 1). The
+  issuer and endpoint URLs in discovery and in the SSF transmitter metadata,
+  the RFC 9207 `iss` of an authorization response, the userinfo audience, the
+  client-assertion audience, both sides of ID-JAG, the wallet `response_uri`,
+  `request_uri` and same-device return URI, the link in a verification mail and
+  the base a DPoP proof's `htu` is checked against are built on the issuer of
+  the realm the request's host named. After boot nothing reads `JWT_ISSUER`,
+  `EMAIL_BASE_URL` or the `Host` header to build a URL. A lint rule refuses
+  reading the request's authority outside the realm resolver, through type
+  assertions too: `request.host`, `.hostname`, `.port`, `.protocol` and
+  `.rawHeaders`, the `Host`, `:authority` and `Forwarded` headers,
+  `X-Forwarded-*` and a socket's `encrypted`. A deployment with one realm sees
+  the same URLs as before, mail links aside (above).
+
+  The issuer pins of introspection, revocation, logout, the token-exchange
+  subject token, the Bearer path of `/oauth/authorize` and the API family
+  guards (`requireFamilyToken`) name the realm's token issuer: `JWT_ISSUER` as
+  written for the realm whose issuer it is, the realm's own issuer for any other
+  realm.
+
+  No route creates a second realm yet. Until tokens are signed per realm
+  ([#491]), every token carries `JWT_ISSUER`, so a second realm:
+  - names its own issuer in discovery, `iss`, mail links and wallet URLs, and a
+    DPoP proof sent to it must name its own endpoint URL;
+  - refuses its own tokens: introspection reports them inactive,
+    `/oauth/revoke` answers `200` without denylisting them, `/auth/logout`
+    answers `401` so the user's sessions stay, and the token-exchange subject
+    token, the Bearer path of `/oauth/authorize` and the family guards refuse
+    them;
+  - has its tokens accepted by the default realm, whose issuer they name:
+    introspection there reports them active and revocation there denylists
+    them, when their `client_id` also names a client of the default realm.
+
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
   session service ([#469]): one `sessions` row with the realm, the user,
@@ -838,14 +1180,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `family_created_at` for every row of `refresh_tokens` in one statement,
   inside the runner's transaction, with the table locked until it commits.
   Measured on a 12-vCPU virtual machine against a default `postgres:18-alpine`
-  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. See the upgrade
-  guide (`operate/upgrades`) before upgrading a large deployment.
+  container: 5.7 s for 100,000 rows, 100 s for 1,000,000. It first locks
+  `authorization_codes` and then `refresh_tokens`, the order a code redemption
+  takes them in, so a redemption in flight waits for it instead of deadlocking
+  with it; minting and redeeming codes wait for the same pause. A database
+  that ran 0038 from `main` before its locks moved to the start is unaffected:
+  the change only reorders its locks. See the upgrade guide
+  (`operate/upgrades`) before upgrading a large deployment.
 
   **Action for operators**: none for a realm without `sso_max_lifespan`. In a
   realm that sets it, a family already older than the limit ends at its next
   refresh after the upgrade, and its client sends the user through
   `/oauth/authorize` again. Nodes of the previous release do not enforce the
   limit, so it applies once the last of them is gone.
+
+- **A replayed authorization code revokes the tokens it issued** ([#627],
+  ADR-017 Decision 10). A second redemption of a code was refused with
+  `invalid_grant` but revoked nothing, because the token endpoint could not
+  tell a spent code from an unknown one. It now reads spent codes too, and a
+  second redemption that is otherwise a valid request (the code's own client,
+  its `redirect_uri`, the right `code_verifier`, the DPoP key the code is bound
+  to, a `resource` inside its binding) answers `invalid_grant` and revokes
+  every refresh token descended from the first redemption, rotations included,
+  and every access token issued from the code or in that family (OAuth 2.1
+  §4.1.3, RFC 6749 §4.1.2). Each access token's `jti` and `exp` are recorded
+  in Redis when it is issued; the replay puts the unexpired ones on the
+  revocation denylist, so userinfo, introspection, token exchange and the
+  bearer-protected routes refuse them. An access token issued while Redis
+  could not record it, or a replay while Redis cannot be written, leaves the
+  token valid until it expires; both are logged, and issuance does not wait on
+  a Redis failure to succeed. The `token.request_failed` event's reason is
+  `code_replay`; its new optional members `refreshFamilyId` and
+  `revokedRefreshCount` name the family and how many of its tokens the replay
+  revoked, and the event commits in the transaction of that revocation. A
+  replay that fails
+  any of those checks answers `invalid_grant` as before, with that check as its
+  reason, and revokes nothing, so whoever saw a code without the client's
+  credentials or verifier cannot end the client's tokens (OAuth 2.1 §7.5.3). A
+  redemption that loses the race to a concurrent one is the same replay, and
+  revokes the family the winner started. A refusal that burns the code (user
+  disabled, agent scope cap) and loses that race keeps its own answer,
+  `invalid_grant` or `invalid_scope`. A replay is recognised until the hourly
+  purge job deletes the code, at the
+  earliest when it expires (`AUTHORIZATION_CODE_TTL_MS`, 5 minutes); after
+  that the code is unknown and revokes nothing. `code_replay` is also the
+  reason for a code that a logout, a consent revocation or a refused
+  redemption (user disabled, agent scope cap) had spent: the server records no
+  difference, and such a code started no family, so nothing is revoked for it.
+  Migration 0041 adds the link that makes
+  this possible, `refresh_tokens.authorization_code_id` (nullable, set on the
+  first token of each family, `ON DELETE SET NULL` when the purge job deletes
+  the code). Families started before the upgrade, or by a node of the previous
+  release during a rolling upgrade, have no link, so a replay of their code is
+  refused but revokes nothing. The conformance matrix's RFC 9700 waiver for
+  this becomes a covered row, beside new OAuth 2.1 and RFC 6749 rows.
+  Migration 0041 locks `authorization_codes` and then `refresh_tokens` before
+  it changes them, the order a redemption takes them in, so a redemption in
+  flight during the upgrade waits for it instead of deadlocking with it.
+- **A replayed refresh token also revokes the access tokens of its family**
+  ([#627]). Presenting a refresh token that is no longer live revoked the
+  family's refresh tokens (RFC 9700 §4.14.2); every access token issued in the
+  family that has not expired is now put on the denylist too, as for a
+  replayed code. The `token.request_failed` event (reason `refresh_replay`)
+  carries `refreshFamilyId` and `revokedRefreshCount`, and commits with the
+  revocation.
+- **`POST /oauth/token`: an authorization code presented without
+  `redirect_uri` answers `invalid_grant`** ([#627], ADR-017 Decision 10). The
+  request schema required the parameter, so a missing one was refused as a
+  malformed request (`400 VALIDATION_ERROR` in v0.1, `invalid_request` with
+  the RFC 6749 error bodies of [#513]). Every code QAuth issues came through a
+  browser redirect and still needs the URI the authorization request named, so
+  a missing or empty value is now a mismatch: `400 invalid_grant`, like a
+  different value, with the `error_description` `redirect_uri is required for
+  this code`, and the code is not spent. A client that follows OAuth 2.1 alone,
+  which drops the parameter, is still refused, and the description tells it
+  what to send.
+- Every authorization code is minted by one helper, `mintAuthorizationCode`
+  ([#627], ADR-017 Decision 10), which refuses to write a code without an S256
+  PKCE challenge of 43 to 128 unreserved characters (RFC 7636 §4.2) in every
+  environment. `/oauth/authorize` validated the challenge that way already. The
+  consent screen's form checked only its length, so a hand-built
+  `POST /ui/consent` with a challenge outside that character set was given a
+  code that could never be redeemed; it now answers a `400` `validation_error`
+  problem document ([#513]). A consent screen the server rendered always
+  carries a valid challenge, so nothing a browser sends changes. The published
+  OpenAPI document gains the same `pattern` on that form's `code_challenge`, an
+  approved stable-surface break.
 
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
@@ -1006,14 +1426,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#490]: https://github.com/qauth-labs/qauth/issues/490
+[#491]: https://github.com/qauth-labs/qauth/issues/491
+[#507]: https://github.com/qauth-labs/qauth/issues/507
+[#509]: https://github.com/qauth-labs/qauth/issues/509
+[#513]: https://github.com/qauth-labs/qauth/issues/513
+[#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#545]: https://github.com/qauth-labs/qauth/issues/545
+[#549]: https://github.com/qauth-labs/qauth/issues/549
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
+[#578]: https://github.com/qauth-labs/qauth/issues/578
+[#590]: https://github.com/qauth-labs/qauth/issues/590
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#627]: https://github.com/qauth-labs/qauth/issues/627
 [#827]: https://github.com/qauth-labs/qauth/issues/827
+
+### Fixed
+
+- **The verification email's link works again.** Since 42c4d1e4 (2026-09-25)
+  the auth server verified an account only on `POST /auth/verify`, with the
+  token and the account's password in a JSON body, but the mail still links to
+  `/auth/verify?token=…`, which a mail client opens with GET.
+  That GET was a `404`, and with `REQUIRE_VERIFIED_ACCOUNT` on by default a new
+  password account could not verify from the mail and so could not sign in.
+  `GET /auth/verify` is now a server-rendered page: it holds the token in a
+  hidden field and asks for the password, and its form posts to the new
+  `POST /ui/verify`, which verifies through the same code as
+  `POST /auth/verify` and answers each outcome with the same status. Opening
+  the link changes nothing and reads nothing from the database, so a link
+  scanner or a prefetch still cannot verify an account. The page sends
+  `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the form has
+  the login pages' CSRF check and the JSON route's rate limit.
+  `POST /auth/verify` is unchanged. This page is interim: the email-code step
+  ([#638]) and the hosted account verification UI ([#644]) replace link
+  verification.
+
+[#638]: https://github.com/qauth-labs/qauth/issues/638
+[#644]: https://github.com/qauth-labs/qauth/issues/644
 
 ## [0.1.3] - 2026-10-21
 

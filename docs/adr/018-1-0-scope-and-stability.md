@@ -214,9 +214,9 @@ deliveries are made.
 
 - A paired sandbox realm that a live realm can have, with its own host, issuer and keys. ADR-019
   Decision 11 defines it. Decided 2026-10-10 (maintainer).
-- A two-admin approval rule. The admin console recommends it for every `admin:security` operation,
-  and a realm chooses where it is mandatory. ADR-019 Decision 7 defines it. Decided 2026-10-10
-  (maintainer).
+- A two-admin approval rule. The admin console recommends it for every `qauth:admin:security`
+  operation, and a realm chooses where it is mandatory. ADR-019 Decision 7 defines it. Decided
+  2026-10-10 (maintainer).
 
 **Logout**
 

@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/webauthn_create.json",
+  "title": "urn:qauth:ia:webauthn_create:v1-rc.0",
+  "description": "Passkey enrolment. `options` is the WebAuthn Level 3 creation options as JSON without `user` and `excludeCredentials`, which are the account’s own data and come with the personal data; the page joins the two for `PublicKeyCredential.parseCreationOptionsFromJSON()`. The RP ID is the realm’s host and locks at the first enrolment (ADR-019 Decision 2). Enrolment adds no `amr` value. Needs JavaScript.",
+  "x-qauth-transports": [
+    "interaction",
+    "fipa"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:webauthn_create:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:webauthn_create:v1-rc.0",
+      "params": {
+        "optional": true,
+        "options": {
+          "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+          "rp": {
+            "id": "auth.example.com",
+            "name": "Example"
+          },
+          "pubKeyCredParams": [
+            {
+              "type": "public-key",
+              "alg": -8
+            },
+            {
+              "type": "public-key",
+              "alg": -7
+            },
+            {
+              "type": "public-key",
+              "alg": -257
+            }
+          ],
+          "timeout": 300000,
+          "authenticatorSelection": {
+            "residentKey": "required",
+            "userVerification": "required"
+          },
+          "attestation": "none"
+        }
+      },
+      "answer": {
+        "webauthn_response": "{\"id\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"rawId\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"type\":\"public-key\",\"response\":{\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0\",\"attestationObject\":\"o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjE\",\"transports\":[\"internal\",\"hybrid\"]},\"authenticatorAttachment\":\"platform\",\"clientExtensionResults\":{}}"
+      },
+      "personal": {
+        "identifier": "alice@example.com",
+        "user": {
+          "id": "b2Zmc2V0LXVzZXItaGFuZGxl",
+          "name": "alice@example.com",
+          "displayName": "alice@example.com"
+        },
+        "excludeCredentials": []
+      },
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "optional": {
+          "type": "boolean",
+          "description": "Whether this is an offer the person may decline: an answer with no `webauthn_response` declines it."
+        },
+        "options": {
+          "type": "object",
+          "properties": {
+            "challenge": {
+              "type": "string",
+              "minLength": 43,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]{43,128}$",
+              "description": "The challenge, at least 32 random bytes."
+            },
+            "rp": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253,
+                  "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                  "description": "The relying party ID: the realm’s host."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                  "x-qauth-display": "realm",
+                  "description": "The realm’s display name."
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "pubKeyCredParams": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "description": "The COSE algorithms the server accepts, preferred first.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "const": "public-key"
+                  },
+                  "alg": {
+                    "type": "integer",
+                    "enum": [
+                      -8,
+                      -7,
+                      -257
+                    ],
+                    "description": "EdDSA, ES256 or RS256."
+                  }
+                },
+                "required": [
+                  "type",
+                  "alg"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 600000,
+              "description": "How long the ceremony may take, in milliseconds."
+            },
+            "authenticatorSelection": {
+              "type": "object",
+              "properties": {
+                "residentKey": {
+                  "const": "required",
+                  "description": "A passkey is discoverable."
+                },
+                "userVerification": {
+                  "const": "required"
+                }
+              },
+              "required": [
+                "residentKey",
+                "userVerification"
+              ],
+              "additionalProperties": false
+            },
+            "attestation": {
+              "const": "none",
+              "description": "QAuth asks for no attestation and claims nothing about the key store."
+            }
+          },
+          "required": [
+            "challenge",
+            "rp",
+            "pubKeyCredParams",
+            "authenticatorSelection",
+            "attestation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "optional",
+        "options"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "optional": true,
+          "options": {
+            "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+            "rp": {
+              "id": "auth.example.com",
+              "name": "Example"
+            },
+            "pubKeyCredParams": [
+              {
+                "type": "public-key",
+                "alg": -8
+              },
+              {
+                "type": "public-key",
+                "alg": -7
+              },
+              {
+                "type": "public-key",
+                "alg": -257
+              }
+            ],
+            "timeout": 300000,
+            "authenticatorSelection": {
+              "residentKey": "required",
+              "userVerification": "required"
+            },
+            "attestation": "none"
+          }
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "webauthn_response": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 16384,
+          "contentMediaType": "application/json",
+          "contentSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "rawId": {
+                "type": "string"
+              },
+              "type": {
+                "const": "public-key"
+              },
+              "response": {
+                "type": "object",
+                "properties": {
+                  "clientDataJSON": {
+                    "type": "string"
+                  },
+                  "attestationObject": {
+                    "type": "string"
+                  },
+                  "transports": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "clientDataJSON",
+                  "attestationObject"
+                ]
+              },
+              "authenticatorAttachment": {
+                "type": "string"
+              },
+              "clientExtensionResults": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "rawId",
+              "type",
+              "response",
+              "clientExtensionResults"
+            ]
+          },
+          "description": "The registration response, `PublicKeyCredential.toJSON()` (WebAuthn Level 3), as a JSON string. It is a string on both transports, so a form post carries it in one field (ADR-017 Decision 3)."
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "webauthn_response": "{\"id\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"rawId\":\"mC1lKXgSi0S3vW2mU1Nwhg\",\"type\":\"public-key\",\"response\":{\"clientDataJSON\":\"eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0\",\"attestationObject\":\"o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjE\",\"transports\":[\"internal\",\"hybrid\"]},\"authenticatorAttachment\":\"platform\",\"clientExtensionResults\":{}}"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+          "x-qauth-display": "account",
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 86,
+              "pattern": "^[A-Za-z0-9_-]{1,86}$",
+              "description": "The user handle: an opaque id, at most 64 bytes."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+              "x-qauth-display": "account",
+              "description": "The account name the authenticator shows."
+            },
+            "displayName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+              "x-qauth-display": "account",
+              "description": "The display name the authenticator shows."
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "displayName"
+          ],
+          "additionalProperties": false
+        },
+        "excludeCredentials": {
+          "type": "array",
+          "description": "The account’s passkeys, so the authenticator does not make a second one.",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "public-key"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1366,
+                "pattern": "^[A-Za-z0-9_-]{1,1366}$",
+                "description": "The credential id."
+              },
+              "transports": {
+                "type": "array",
+                "maxItems": 6,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ble",
+                    "hybrid",
+                    "internal",
+                    "nfc",
+                    "smart-card",
+                    "usb"
+                  ],
+                  "description": "How the authenticator is reached."
+                }
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "user",
+        "excludeCredentials"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "identifier": "alice@example.com",
+          "user": {
+            "id": "b2Zmc2V0LXVzZXItaGFuZGxl",
+            "name": "alice@example.com",
+            "displayName": "alice@example.com"
+          },
+          "excludeCredentials": []
+        }
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "invalid_credentials"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

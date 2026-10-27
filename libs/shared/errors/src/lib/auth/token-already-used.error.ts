@@ -1,9 +1,10 @@
 /**
- * Error thrown when a token has already been used (CVE-2025-12421 prevention)
+ * Error thrown when an email verification token has already been used
+ * (CVE-2025-12421 prevention).
  */
 export class TokenAlreadyUsedError extends Error {
   readonly statusCode = 409;
-  readonly code = 'TOKEN_ALREADY_USED';
+  readonly code = 'VERIFICATION_TOKEN_USED';
 
   constructor(message = 'Token has already been used') {
     super(message);

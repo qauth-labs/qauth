@@ -1,11 +1,17 @@
-import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  InvalidRequestError,
+  JWTExpiredError,
+  JWTInvalidError,
+  MissingAccessTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
-import errorHandler from '../../plugins/error-handler';
+import errorHandler, { type ErrorFormat } from '../../plugins/error-handler';
 import userinfoRoute from './userinfo';
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
@@ -35,6 +41,27 @@ vi.mock('../../../config/env', () => ({
 }));
 
 const ISSUER = 'http://localhost:3000';
+
+/** The realm the realm resolver (#486) decorated every request with. */
+const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
+
+type Handler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+
+/** One wrapper per handler, so GET and POST still share one handler reference. */
+const realmWrappers = new WeakMap<Handler, Handler>();
+
+/** A request keeps the realm it names; any other gets {@link REALM}. */
+function withRequestRealm(handler: Handler): Handler {
+  let wrapped = realmWrappers.get(handler);
+  if (wrapped === undefined) {
+    wrapped = (request, reply) => {
+      request.realm ??= REALM;
+      return handler(request, reply);
+    };
+    realmWrappers.set(handler, wrapped);
+  }
+  return wrapped;
+}
 const USERINFO_URL = `${ISSUER}/oauth/userinfo`;
 /**
  * The audience of a token from a client's own code flow with no `resource`:
@@ -47,10 +74,12 @@ interface TestContext {
   handler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   options?: {
     preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    config?: { errorFormat?: ErrorFormat };
   };
   postHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   postOptions?: {
     preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    config?: { errorFormat?: ErrorFormat };
   };
 }
 
@@ -89,7 +118,7 @@ function createFastifyStub() {
           opts: TestContext['options'],
           handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
         ) => {
-          ctx.handler = handler;
+          ctx.handler = withRequestRealm(handler);
           ctx.options = opts;
           return route;
         },
@@ -98,7 +127,7 @@ function createFastifyStub() {
           opts: TestContext['postOptions'],
           handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
         ) => {
-          ctx.postHandler = handler;
+          ctx.postHandler = withRequestRealm(handler);
           ctx.postOptions = opts;
           return route;
         },
@@ -147,6 +176,37 @@ function createFastifyStub() {
   return { fastify, ctx };
 }
 
+/**
+ * The error format the real `GET /oauth/userinfo` route declares, for the
+ * stand-in routes below that answer through the real error handler (#513).
+ */
+async function userinfoErrorConfig(): Promise<{ errorFormat?: ErrorFormat }> {
+  const { fastify, ctx } = createFastifyStub();
+  await userinfoRoute(fastify);
+  return { errorFormat: ctx.options?.config?.errorFormat };
+}
+
+/**
+ * An RFC 6750 §3.1 `invalid_token` refusal as it reaches the wire: a 401 with
+ * the Bearer challenge, and the OAuth body, `error` and nothing QAuth adds.
+ */
+function expectInvalidTokenAnswer(response: {
+  statusCode: number;
+  headers: Record<string, unknown>;
+  json: () => unknown;
+}): void {
+  expect(response.statusCode).toBe(401);
+  expect(response.headers['content-type']).toMatch(/^application\/json(?:;|$)/);
+  expect(response.headers['www-authenticate']).toMatch(
+    /^Bearer realm="OAuth", error="invalid_token"(?:,|$)/
+  );
+  const json = response.json() as Record<string, unknown>;
+  expect(json).toMatchObject({ error: 'invalid_token' });
+  for (const member of ['code', 'statusCode']) {
+    expect(json).not.toHaveProperty(member);
+  }
+}
+
 describe('GET /userinfo route', () => {
   it('registers route with requireJwt as preHandler', async () => {
     const { fastify, ctx } = createFastifyStub();
@@ -155,6 +215,15 @@ describe('GET /userinfo route', () => {
 
     expect(ctx.handler).toBeDefined();
     expect(ctx.options?.preHandler).toBe(fastify.requireJwt);
+  });
+
+  it('answers errors in the OAuth format on GET and POST (RFC 6750 §3, #513)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+
+    await userinfoRoute(fastify);
+
+    expect(ctx.options?.config?.errorFormat).toBe('oauth');
+    expect(ctx.postOptions?.config?.errorFormat).toBe('oauth');
   });
 
   it('returns userinfo for existing user and jwt payload — `sub` is unconditional (OIDC Core §5.3.2)', async () => {
@@ -405,9 +474,7 @@ describe('GET /userinfo route', () => {
 
     // A deleted user's token: not a 404, which RFC 6750 §3.1 does not define
     // for a protected resource, but the invalid-token refusal.
-    await expect(handler(request, reply)).rejects.toThrow(
-      new JWTInvalidError('Access token subject is not a user')
-    );
+    await expect(handler(request, reply)).rejects.toBeInstanceOf(JWTInvalidError);
 
     // An unconfirmed subject is not the event's subject: it names no user.
     expect(emitUserEventMock).toHaveBeenCalledWith(
@@ -549,6 +616,7 @@ describe('GET /userinfo route', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: await userinfoErrorConfig(),
         preHandler: async () => {
           throw new JWTInvalidError('Invalid JWT token');
         },
@@ -566,14 +634,7 @@ describe('GET /userinfo route', () => {
         },
       });
 
-      expect(response.statusCode).toBe(401);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        error: expect.any(String),
-        code: 'JWT_INVALID',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }
@@ -589,6 +650,7 @@ describe('GET /userinfo route', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: await userinfoErrorConfig(),
         preHandler: async () => {
           throw new JWTExpiredError('JWT token has expired');
         },
@@ -606,20 +668,16 @@ describe('GET /userinfo route', () => {
         },
       });
 
-      expect(response.statusCode).toBe(401);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        error: 'JWT token has expired',
-        code: 'JWT_EXPIRED',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }
   });
 
-  it('returns 401 for missing token', async () => {
+  // RFC 6750 §3.1: a request that "lacks any authentication information" is
+  // answered with no error code in the challenge. The body of an OAuth
+  // protected resource still needs an `error`: `invalid_token`.
+  it('returns 401 for missing token, with a challenge that names no error', async () => {
     const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -629,8 +687,10 @@ describe('GET /userinfo route', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: await userinfoErrorConfig(),
+        // What `requireJwt` throws for a request without a credential.
         preHandler: async () => {
-          throw new JWTInvalidError('Missing or malformed Authorization header');
+          throw new MissingAccessTokenError('Missing or malformed Authorization header');
         },
       },
       async () => ({ sub: 'user-1' })
@@ -646,12 +706,10 @@ describe('GET /userinfo route', () => {
       });
 
       expect(response.statusCode).toBe(401);
-
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        error: 'Missing or malformed Authorization header',
-        code: 'JWT_INVALID',
+      expect(response.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+      expect(response.json()).toEqual({
+        error: 'invalid_token',
+        error_description: 'Missing or malformed Authorization header',
       });
     } finally {
       await app.close();
@@ -853,7 +911,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
  * the token it was handed (`docs/security/threat-model.md`, RFC 8707).
  */
 describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () => {
-  async function callWith(jwtPayload: Record<string, unknown>) {
+  async function callWith(jwtPayload: Record<string, unknown>, realm = REALM) {
     const { fastify, ctx } = createFastifyStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: 'user-1',
@@ -868,6 +926,7 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
       jwtPayload: { sub: 'user-1', scope: 'openid email', ...jwtPayload },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+      realm,
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
     return { fastify, run: () => handler(request, reply) };
@@ -927,10 +986,33 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     });
   });
 
-  it('accepts the developer portal token from /auth/login (`aud` = `client_id` = system)', async () => {
+  it('accepts the developer portal token from /auth/login before #509 (`aud` = `client_id` = system)', async () => {
     const { run } = await callWith({ clientId: 'system', aud: 'system', scope: undefined });
 
     await expect(run()).resolves.toEqual({ sub: 'user-1' });
+  });
+
+  it('accepts the developer portal token from /auth/login, with the developer audience (#509)', async () => {
+    const { run } = await callWith({
+      clientId: 'system',
+      aud: 'urn:qauth:aud:developer:v1-rc.0',
+      scope: undefined,
+    });
+
+    await expect(run()).resolves.toEqual({ sub: 'user-1' });
+  });
+
+  it.each(['urn:qauth:aud:developer:v1-rc.0', 'urn:qauth:aud:account:v1-rc.0'])(
+    'refuses an API family token (%s) issued to any client but the system client',
+    async (aud) => {
+      const { run } = await callWith({ clientId: 'client-1', aud });
+      await expect(run()).rejects.toThrow(JWTInvalidError);
+    }
+  );
+
+  it('refuses a system client token for another family', async () => {
+    const { run } = await callWith({ clientId: 'system', aud: 'urn:qauth:aud:account:v1-rc.0' });
+    await expect(run()).rejects.toThrow(JWTInvalidError);
   });
 
   it('accepts a token whose audience lists the userinfo endpoint beside a resource server', async () => {
@@ -949,6 +1031,20 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     });
 
     await expect(run()).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it("takes the userinfo URL from the request realm's issuer, not JWT_ISSUER (#490)", async () => {
+    const realmB = testRealm({ id: 'realm-b', issuer: 'https://b.example.com' });
+
+    const accepted = await callWith(
+      { clientId: 'client-1', aud: 'https://b.example.com/oauth/userinfo' },
+      realmB
+    );
+    await expect(accepted.run()).resolves.toMatchObject({ sub: 'user-1' });
+
+    const refused = await callWith({ clientId: 'client-1', aud: USERINFO_URL }, realmB);
+    await expect(refused.run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(refused.fastify);
   });
 
   it('refuses the userinfo URL of another issuer', async () => {
@@ -1040,7 +1136,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
       aud: 'reporting-service',
     });
 
-    await expect(run()).rejects.toThrow(new JWTInvalidError('Access token subject is not a user'));
+    await expect(run()).rejects.toBeInstanceOf(JWTInvalidError);
     expectRefusedAsNoUser(fastify, 'reporting-service');
   });
 
@@ -1112,6 +1208,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
     app.get(
       '/oauth/userinfo',
       {
+        config: { errorFormat: ctx.options?.config?.errorFormat },
         preHandler: async (request) => {
           (request as unknown as { jwtPayload: unknown }).jwtPayload = {
             sub: 'reporting-service',
@@ -1130,15 +1227,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
         headers: { authorization: 'Bearer machine.token' },
       });
 
-      expect(response.statusCode).toBe(401);
-      expect(response.headers['www-authenticate']).toBe(
-        'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not a user"'
-      );
-      expect(response.json()).toMatchObject({
-        statusCode: 401,
-        error: 'Access token subject is not a user',
-        code: 'JWT_INVALID',
-      });
+      expectInvalidTokenAnswer(response);
     } finally {
       await app.close();
     }

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/device_code.json",
+  "title": "urn:qauth:ia:device_code:v1-rc.0",
+  "description": "Code entry for the OAuth 2.0 device authorization grant (RFC 8628 §3.3). Unknown, expired and used codes give the same `invalid_user_code`. Entry is rate-limited per code, per session and per address. A person who arrives through `verification_uri_complete` skips this step and still confirms on `device_confirm` (ADR-020 §3). Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:device_code:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:device_code:v1-rc.0",
+      "params": {
+        "length": 8
+      },
+      "answer": {
+        "user_code": "wdjb-mjht"
+      },
+      "personal": {},
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "length": {
+          "type": "integer",
+          "enum": [
+            8
+          ],
+          "description": "How many characters the code has, without the dash."
+        }
+      },
+      "required": [
+        "length"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "length": 8
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "user_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[A-Za-z -]+$",
+          "description": "The code as typed. The server ignores case, spaces and dashes (RFC 8628 §6.1)."
+        }
+      },
+      "required": [
+        "user_code"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "user_code": "wdjb-mjht"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "invalid_user_code"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

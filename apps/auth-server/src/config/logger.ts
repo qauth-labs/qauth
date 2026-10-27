@@ -52,13 +52,21 @@ export const LOG_REDACT_PATHS = [
  * Fastify's request log line carries `req.url` verbatim — path AND query
  * string — and pino's path-based `redact` works on object keys, so a bearer
  * secret that arrives as a query parameter would reach the sink in the clear
- * even though `LOG_REDACT_PATHS` names it. QAuth puts exactly one such secret
- * in a query string: the same-device Response Code the wallet's browser brings
- * back to `/ui/wallet-login/return?response_code=…` (OID4VP 1.0 §8.2 and
- * §14.2, #405, ADR-013). The code is single-use and short-lived, but a log
- * line outlives both, and a value that must "ensure only the receiver of the
- * redirect can fetch and process the Authorization Response" has no business
- * in a log shipper.
+ * even though `LOG_REDACT_PATHS` names it. QAuth puts two such secrets in a
+ * query string:
+ *
+ * - `response_code`: the same-device Response Code the wallet's browser brings
+ *   back to `/ui/wallet-login/return?response_code=…` (OID4VP 1.0 §8.2 and
+ *   §14.2, #405, ADR-013). The code is single-use and short-lived, but a log
+ *   line outlives both, and a value that must "ensure only the receiver of the
+ *   redirect can fetch and process the Authorization Response" has no
+ *   business in a log shipper.
+ * - `token`: the email verification token in the link a verification mail
+ *   carries, `<issuer>/auth/verify?token=…` (#490). Opening the link sends a
+ *   GET with the token in the query (`routes/auth/verify-page.ts`), logged by
+ *   the request line; with the account's password it verifies the account
+ *   until it is used or expires (a day by default). Censored on every path,
+ *   so a link pasted onto a wrong path is censored too.
  *
  * Names are matched case-sensitively, as query parameter names are, and in
  * every spelling the route would accept: Fastify's querystring parser
@@ -78,9 +86,10 @@ export const LOG_REDACT_PATHS = [
  * `req` serializer below, and the global error handler
  * (`plugins/error-handler.ts`) does on the plain `url` key of its own lines —
  * a 429 from `@fastify/rate-limit` is thrown from an `onRequest` hook BEFORE the
- * return route runs, so on that line the code is not even spent yet.
+ * return route runs, so on that line the code is not even spent yet. So does
+ * the unknown-route line (`helpers/request-bounds.ts`).
  */
-export const LOG_REDACTED_QUERY_PARAMETERS = ['response_code'] as const;
+export const LOG_REDACTED_QUERY_PARAMETERS = ['response_code', 'token'] as const;
 
 /**
  * Query parameter names this module knows how to spell tolerantly: the RFC
@@ -280,6 +289,12 @@ interface SerializedErrorForLog {
  * since on an unwrapped query error it is an own field and would be copied
  * verbatim.
  *
+ * `err.rawPacket` is dropped for the same reason. Node's HTTP parser attaches
+ * the bytes it could not parse to its client errors (`HPE_*`), and those
+ * bytes are the request as sent: its `Cookie` and `Authorization` headers
+ * included. Copied as an own field, a malformed request would put the
+ * caller's session cookie or access token in the log.
+ *
  * A duplicate registration was the everyday case: every second
  * `POST /auth/register` for an address fails inside the credential insert,
  * AFTER the password was hashed — and when it is the account holder retrying,
@@ -330,9 +345,11 @@ function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErr
   }
   for (const [key, value] of Object.entries(err)) {
     // `cause` is already folded into `message` and `stack`; `errors` into
-    // `aggregateErrors`; a failed query's `params` are the secret.
+    // `aggregateErrors`; a failed query's `params` are the secret, and so are
+    // the raw request bytes a parser error carries in `rawPacket`.
     if (
       key === 'cause' ||
+      key === 'rawPacket' ||
       (key === 'errors' && Array.isArray(errors)) ||
       (key === 'params' && isFailedQueryError(err))
     ) {

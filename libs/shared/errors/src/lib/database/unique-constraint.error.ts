@@ -4,7 +4,7 @@
  */
 export class UniqueConstraintError extends Error {
   public readonly statusCode = 409;
-  public readonly code = 'UNIQUE_CONSTRAINT_VIOLATION';
+  public readonly code = 'ALREADY_EXISTS';
 
   constructor(
     public readonly constraint: string,

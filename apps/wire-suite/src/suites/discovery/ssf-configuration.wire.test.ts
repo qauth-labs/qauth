@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { serverPath, wireConfig } from '../../config';
-import { expectStandardError } from '../../helpers/error-shape';
+import { expectProblem } from '../../helpers/error-shape';
 import { getJsonObject } from '../../helpers/http';
 
 const { baseUrl, ssfTransmitter } = wireConfig();
@@ -24,13 +24,22 @@ const ENDPOINTS = [
  * SSF 1.0 §7 — the transmitter metadata at `/.well-known/ssf-configuration`.
  * A default deployment runs no transmitter and answers 404; a target whose
  * realm runs one (`QAUTH_WIRE_SSF_TRANSMITTER=1`) must serve valid metadata.
+ * SSF defines no error body, so the 404 is the `not_found` problem document of
+ * a path no route serves (RFC 9457, #513).
  */
 describe('SSF 1.0 §7 — the transmitter metadata', () => {
   const url = serverPath(baseUrl, '/.well-known/ssf-configuration');
 
-  it.runIf(!ssfTransmitter)('answers 404 while the transmitter is off', async () => {
-    await expectStandardError(await fetch(url, { redirect: 'manual' }), { status: 404 });
-  });
+  it.runIf(!ssfTransmitter)(
+    'answers a 404 not_found problem while the transmitter is off',
+    async () => {
+      const problem = await expectProblem(await fetch(url, { redirect: 'manual' }), {
+        status: 404,
+        code: 'not_found',
+      });
+      expect(problem.instance).toBe('/.well-known/ssf-configuration');
+    }
+  );
 
   it.runIf(ssfTransmitter)(
     'serves the metadata as JSON, naming the issuer (§7.1, §7.2)',

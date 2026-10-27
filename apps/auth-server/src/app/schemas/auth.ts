@@ -37,16 +37,25 @@ export const registerResponseSchema = z.object({
 export type RegisterResponse = z.infer<typeof registerResponseSchema>;
 
 /**
+ * The email verification token: a 64-character hex string (a 256-bit random
+ * value). One schema for every place that takes it — the JSON body of
+ * POST /auth/verify, the `token` query parameter of the emailed link
+ * (GET /auth/verify) and the hidden field of the verification form
+ * (POST /ui/verify) — so all three accept exactly the same values.
+ */
+export const verificationTokenSchema = z
+  .string()
+  .length(64, 'Token must be exactly 64 characters')
+  .regex(/^[0-9a-fA-F]{64}$/, 'Token must be a valid hex string');
+
+/**
  * Email verification request body schema (POST /auth/verify)
  * Token must be a 64-character hex string (256-bit random value). The password
  * is the one chosen at registration: the token proves the mailbox, the password
  * proves the registrant, and verification needs both to be the same person.
  */
 export const verifyBodySchema = z.object({
-  token: z
-    .string()
-    .length(64, 'Token must be exactly 64 characters')
-    .regex(/^[0-9a-fA-F]{64}$/, 'Token must be a valid hex string'),
+  token: verificationTokenSchema,
   password: passwordSchema.min(1),
 });
 

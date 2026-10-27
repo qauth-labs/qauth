@@ -8,9 +8,11 @@
  * decision about where it may answer.
  *
  * - `browser` — reads or sets the browser session cookie: `/oauth/authorize`,
- *   the `/ui/*` ceremony pages, `/consents` and `/auth/link/wallet`. Answers
- *   on the realm's primary host only; on an endpoint host it is `421`, because
- *   the session belongs to the realm host (ADR-019 Decision 3).
+ *   the `/ui/*` ceremony pages, `/consents` and `/auth/link/wallet`; and the
+ *   page the verification mail links to (`GET /auth/verify`), which sets the
+ *   login-CSRF cookie its form (`POST /ui/verify`) checks. Answers on the
+ *   realm's primary host only; on an endpoint host it is `421`, because the
+ *   session belongs to the realm host (ADR-019 Decision 3).
  * - `api` — called by a client or a server with its own credentials: token,
  *   introspection, revocation, userinfo, registration, the OID4VP request and
  *   response endpoints a wallet calls, the management and legacy `/auth/*`

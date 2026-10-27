@@ -14,6 +14,9 @@ builds no graph tooling (ADR-021, amendment of 2026-10-22).
 
 ## Layout
 
+This is the target layout. `bindings/`, `fixtures/` and `kits/` do not exist yet; each arrives
+with the first graph that needs it.
+
 ```text
 graphs/
   domain/                the domain graph (kind: domain): entities, fields and edges generated

@@ -218,6 +218,7 @@ export default async function (fastify: FastifyInstance) {
           'Renders the session-cookie login page. `return_to` is a relative path to redirect to after a successful sign-in. Issue #150.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         // No `error` parameter: the page never shows caller-supplied text.
         // The server's own refusals are fixed strings rendered by the POST.
         querystring: z.object({
@@ -259,6 +260,7 @@ export default async function (fastify: FastifyInstance) {
         description: 'Submit the session-cookie login form. Sets __Host-qauth_session on success.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [400],
         body: loginFormSchema,
       },
       config: {

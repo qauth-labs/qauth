@@ -376,7 +376,8 @@
       "excludeFiles": [
         "libs/server/keys/**",
         "libs/fastify/plugins/signer/**",
-        "libs/keys/aws-kms/**"
+        "libs/keys/aws-kms/**",
+        "libs/keys/vault/**"
       ],
       "rules": {
         // Import and export declarations, `import x = require()` and a dynamic
@@ -465,6 +466,31 @@
             "message": "DEFAULT_REALM_NAME only names the default realm at boot (ADR-019 Decision 1). A request's realm is request.realm: use requestRealm(request)."
           }
         ]
+      }
+    },
+
+    // URLs from the realm row (ADR-019 Decision 1, #490). No URL is built from
+    // the request: the issuer, every endpoint URL, the links in mail and the
+    // URLs a wallet is handed come from the realm the request was resolved to
+    // (`realmIssuer`, `buildRealmUrl` in helpers/realm-url.ts). The realm
+    // resolver is the one reader of the request's authority, so
+    // `qauth/no-request-authority` refuses `request.host`, `.hostname`,
+    // `.port`, `.protocol`, the `Host` header and every `X-Forwarded-*` name in
+    // the auth server and the libraries it loads. Tests are left out: they send
+    // spoofed hosts on purpose. A rule no other block sets, since a second block
+    // setting a rule replaces its options for the files both match.
+    // apps/auth-server/src/app/request-authority-rule.test.ts lints samples
+    // with this block.
+    {
+      "files": ["apps/auth-server/**", "libs/fastify/**", "libs/server/**"],
+      "excludeFiles": [
+        "apps/auth-server/src/app/plugins/realm-resolver.ts",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/testing/**"
+      ],
+      "rules": {
+        "qauth/no-request-authority": "error"
       }
     },
 
