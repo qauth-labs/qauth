@@ -37,13 +37,13 @@ describe('cryptoEnvSchema (HYBRID_SIGNING_ENABLED coupling — #245)', () => {
     ).toThrow(/ed25519\+ml-dsa-65/);
   });
 
-  it('enabling requires a configured ML-DSA key (fail-fast)', () => {
-    expect(() =>
-      cryptoEnvSchema.parse({
-        HYBRID_SIGNING_ENABLED: 'true',
-        SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65',
-      })
-    ).toThrow(/ML-DSA key/);
+  it('enabling needs no ML-DSA key variable: the key store holds the pair (#491)', () => {
+    const parsed = cryptoEnvSchema.parse({
+      HYBRID_SIGNING_ENABLED: 'true',
+      SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65',
+    });
+    expect(parsed.HYBRID_SIGNING_ENABLED).toBe(true);
+    expect(parsed.JWT_MLDSA_PRIVATE_KEY).toBeUndefined();
   });
 
   it('accepts a fully-coherent hybrid configuration', () => {

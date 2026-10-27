@@ -2,7 +2,9 @@ import {
   createRealmKeysRepository,
   createRealmsRepository,
   type DbClient,
+  type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
+import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
 import type {
   RealmKeyBootStore,
   SignerKeyStore,
@@ -43,6 +45,23 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
 }
 
 /**
+ * The realm's verification keys and JWKS, read from `realm_public_keys`
+ * alone (#495): the signer's public reads on a process that does not hold the
+ * signer role, which has no KEK and must not read `realm_keys`. It reads
+ * public material only, the same rows the in-process signer publishes, so a
+ * token verifies there exactly as on the signer's process.
+ *
+ * @param realmPublicKeys - the database plugin's `realmPublicKeys` repository
+ */
+export function createRepositoryPublishedKeyReader(
+  realmPublicKeys: Pick<RealmPublicKeysRepository, 'listByRealm'>
+): PublishedKeyReader {
+  return createPublishedKeyReader({
+    listPublicKeys: (realmId: string) => realmPublicKeys.listByRealm(realmId),
+  });
+}
+
+/**
  * The store the key factory and the key boot step write through
  * (`createKeyFactory`, `bootRealmKeys`). A transaction runs on `db`, or as a
  * savepoint inside the caller's `outer` transaction, so a realm and its keys
@@ -61,6 +80,11 @@ export function createRepositoryKeyStore(db: DbClient): RealmKeyBootStore<DbClie
     updateStatus: keys.updateStatus,
     deleteByScope: keys.deleteByScope,
     lockRealm: keys.lockRealm,
+    anotherRealmPublishes: (
+      realmId: string,
+      identity: Readonly<Record<string, string>>,
+      tx: DbClient
+    ) => keys.anotherRealmPublishes(realmId, identity, tx),
     async listPublicKeys(realmId: string, tx: DbClient): Promise<readonly StoredPublicKey[]> {
       const rows = await keys.listPublicByRealm(realmId, tx);
       return rows.map(({ kid, purpose, status, publicJwk }) => ({

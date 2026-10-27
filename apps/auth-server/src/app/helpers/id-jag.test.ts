@@ -1,10 +1,21 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 
 import { importPublicSigningKey } from '@qauth-labs/core-crypto';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
+import { createTestSigner } from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import Fastify from 'fastify';
-import { type CryptoKey, decodeJwt, decodeProtectedHeader, importPKCS8, SignJWT } from 'jose';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  createLocalJWKSet,
+  type CryptoKey,
+  decodeJwt,
+  decodeProtectedHeader,
+  importJWK,
+  importPKCS8,
+  type JWK,
+  jwtVerify,
+  SignJWT,
+} from 'jose';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** A fresh Ed25519 pair in the PKCS#8 / SPKI PEM form the config carries. */
 function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
@@ -15,8 +26,6 @@ function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
   return { privateKeyPem: privateKey, publicKeyPem: publicKey };
 }
 
-const SERVER_KEYS = generateEd25519Pem();
-
 const { ENV } = vi.hoisted(() => ({
   ENV: {
     ID_JAG_ENABLED: true,
@@ -24,10 +33,8 @@ const { ENV } = vi.hoisted(() => ({
     ID_JAG_CLOCK_SKEW_LEEWAY: 60,
     ID_JAG_MAX_ASSERTION_LIFETIME: 300,
     ID_JAG_ISSUED_LIFETIME: 300,
-    JWT_PRIVATE_KEY: '',
   },
 }));
-ENV.JWT_PRIVATE_KEY = SERVER_KEYS.privateKeyPem;
 
 vi.mock('../../config/env', () => ({ env: ENV }));
 
@@ -42,9 +49,34 @@ import type { IdJagIssuerKeyResolver } from './id-jag-issuer-keys';
 
 const AS_ISSUER = 'https://auth.example.com';
 /** The realm the request was resolved to: its issuer is this server's issuer (#490). */
-const REALM = { issuer: AS_ISSUER };
-/** Another realm of the same server, on its own issuer. */
-const REALM_B = { issuer: 'https://b.example.com' };
+const REALM = { id: randomUUID(), issuer: AS_ISSUER };
+/** Another realm of the same server, on its own issuer and keys. */
+const REALM_B = { id: randomUUID(), issuer: 'https://b.example.com' };
+
+/**
+ * The real in-process signer over both realms' keys (#491): a minted ID-JAG
+ * carries a genuine signature by the realm's EdDSA `token_signing` key.
+ */
+const SIGNER = createTestSigner();
+
+beforeAll(async () => {
+  await SIGNER.addRealm(REALM);
+  await SIGNER.addRealm(REALM_B);
+});
+
+/** The realm's JWKS, as `/.well-known/jwks.json` of the realm serves it. */
+async function realmJwks(realm: { readonly id: string }): Promise<{ keys: JWK[] }> {
+  const jwks = await SIGNER.signer.getJwks('local', realm.id);
+  return { keys: [...jwks.keys] };
+}
+
+/** The `kid` of the realm's active EdDSA `token_signing` key, as the signer lists it. */
+async function realmEdDsaKid(realm: { readonly id: string }): Promise<string> {
+  const keys = await SIGNER.signer.getVerificationKeys('local', realm.id, 'token_signing');
+  const active = keys.filter((key) => key.algorithm === 'EdDSA' && key.status === 'active');
+  expect(active).toHaveLength(1);
+  return active[0].kid;
+}
 const IDP_ISSUER = 'https://idp.example.com';
 const CLIENT_ID = 'mcp-client-1';
 const MCP_SERVER = 'https://mcp.example.com/';
@@ -127,6 +159,7 @@ function fastifyStub() {
     redis,
     fastify: {
       redis,
+      signer: SIGNER.signer,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
@@ -606,9 +639,12 @@ describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
   it('refuses an ID-JAG this server minted for itself, end to end', async () => {
     ENV.ID_JAG_TRUSTED_ISSUERS = [AS_ISSUER];
     const { fastify } = fastifyStub();
-    const serverPublicKey = await importPublicSigningKey(SERVER_KEYS.publicKeyPem, 'EdDSA');
-    const resolver = trustEverything(serverPublicKey);
-    const minted = await mintIdJag(REALM, {
+    // The realm's genuine public key, from its JWKS: only gate 5 refuses it.
+    const kid = await realmEdDsaKid(REALM);
+    const realmKey = (await realmJwks(REALM)).keys.find((key) => key.kid === kid);
+    expect(realmKey).toBeDefined();
+    const resolver = trustEverything((await importJWK(realmKey as JWK, 'EdDSA')) as CryptoKey);
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-1',
       audience: AS_ISSUER,
       resource: MCP_SERVER,
@@ -787,7 +823,8 @@ describe('validateIdJagAssertion — replay protection', () => {
 
 describe('mintIdJag', () => {
   it('mints an assertion with exactly the ID-JAG claim set', async () => {
-    const minted = await mintIdJag(REALM, {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -795,7 +832,12 @@ describe('mintIdJag', () => {
       scope: 'chat.read chat.history',
     });
 
-    expect(decodeProtectedHeader(minted.assertion)).toEqual({ alg: 'EdDSA', typ: ID_JAG_TYP });
+    // Signed by the signer with the realm's EdDSA key, which the header names (#491).
+    expect(decodeProtectedHeader(minted.assertion)).toEqual({
+      alg: 'EdDSA',
+      kid: await realmEdDsaKid(REALM),
+      typ: ID_JAG_TYP,
+    });
 
     const claims = decodeJwt(minted.assertion) as Record<string, unknown>;
     expect(Object.keys(claims).sort()).toEqual(
@@ -803,16 +845,51 @@ describe('mintIdJag', () => {
     );
     expect(claims['iss']).toBe(AS_ISSUER);
     expect(claims['sub']).toBe('user-uuid-1');
+    // Single-valued: a string, never a one-element array.
     expect(claims['aud']).toBe('https://auth.chat.example');
     expect(claims['resource']).toBe('https://mcp.chat.example/');
     expect(claims['client_id']).toBe(CLIENT_ID);
     expect(claims['scope']).toBe('chat.read chat.history');
     expect(minted.expiresIn).toBe(300);
+    expect((claims['exp'] as number) - (claims['iat'] as number)).toBe(300);
     expect(minted.jti).toBe(claims['jti']);
   });
 
+  it("is a genuine signature that verifies with the realm's published JWKS, and only that realm's", async () => {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
+      subject: 'user-uuid-1',
+      audience: 'https://auth.chat.example',
+      resource: 'https://mcp.chat.example/',
+      clientId: CLIENT_ID,
+    });
+
+    // What the target AS does: verify against the realm's JWKS, pinning the
+    // issuer it allowlisted, the `typ` and the audience (itself).
+    const { payload, protectedHeader } = await jwtVerify(
+      minted.assertion,
+      createLocalJWKSet(await realmJwks(REALM)),
+      {
+        issuer: AS_ISSUER,
+        audience: 'https://auth.chat.example',
+        typ: ID_JAG_TYP,
+        algorithms: ['EdDSA'],
+      }
+    );
+    expect(payload.jti).toBe(minted.jti);
+    expect(protectedHeader.kid).toBe(await realmEdDsaKid(REALM));
+
+    // Another realm's keys do not verify it.
+    await expect(
+      jwtVerify(minted.assertion, createLocalJWKSet(await realmJwks(REALM_B)), {
+        algorithms: ['EdDSA'],
+      })
+    ).rejects.toThrow();
+  });
+
   it('omits `scope` entirely when nothing was granted', async () => {
-    const minted = await mintIdJag(REALM, {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -823,7 +900,8 @@ describe('mintIdJag', () => {
   });
 
   it('releases NO identity claims into the foreign trust domain', async () => {
-    const minted = await mintIdJag(REALM, {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -839,7 +917,8 @@ describe('mintIdJag', () => {
 
   it('honours ID_JAG_ISSUED_LIFETIME', async () => {
     ENV.ID_JAG_ISSUED_LIFETIME = 60;
-    const minted = await mintIdJag(REALM, {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -852,7 +931,8 @@ describe('mintIdJag', () => {
   });
 
   it('never outlives the authority it was minted from (maxLifetimeSeconds)', async () => {
-    const minted = await mintIdJag(REALM, {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -866,7 +946,8 @@ describe('mintIdJag', () => {
   });
 
   it('keeps ID_JAG_ISSUED_LIFETIME when the authority lives longer', async () => {
-    const minted = await mintIdJag(REALM, {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -874,11 +955,14 @@ describe('mintIdJag', () => {
       maxLifetimeSeconds: 3600,
     });
 
+    const claims = decodeJwt(minted.assertion);
     expect(minted.expiresIn).toBe(300);
+    expect((claims.exp as number) - (claims.iat as number)).toBe(300);
   });
 
-  it("stamps the request realm's issuer as `iss`, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
-    const minted = await mintIdJag(REALM_B, {
+  it("stamps the request realm's issuer as `iss` and signs with its key (ADR-019 Decision 1, #490, #491)", async () => {
+    const { fastify } = fastifyStub();
+    const minted = await mintIdJag(fastify, REALM_B, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -886,29 +970,37 @@ describe('mintIdJag', () => {
     });
 
     expect(decodeJwt(minted.assertion).iss).toBe(REALM_B.issuer);
+    expect(decodeProtectedHeader(minted.assertion).kid).toBe(await realmEdDsaKid(REALM_B));
+    await expect(
+      jwtVerify(minted.assertion, createLocalJWKSet(await realmJwks(REALM_B)), {
+        issuer: REALM_B.issuer,
+        typ: ID_JAG_TYP,
+        algorithms: ['EdDSA'],
+      })
+    ).resolves.toBeDefined();
   });
 });
 
 describe('a minted ID-JAG is never an access token (ADR-011 §3)', () => {
-  // The REAL JWT plugin, with the very key that signed the assertion. The
-  // signature is genuine, so only the verifier's own `typ` gate stands in the
-  // way. Run with the rollout switch both ways: a WRONG `typ` is refused even
-  // when an absent one would be tolerated.
+  // The REAL JWT plugin over the very signer and realm key that signed the
+  // assertion. The signature is genuine, so only the verifier's own `typ` gate
+  // stands in the way. Run with the rollout switch both ways: a WRONG `typ` is
+  // refused even when an absent one would be tolerated.
   it.each([false, true])(
     'is refused by verifyAccessToken (requireAccessTokenTyp=%s)',
     async (requireAccessTokenTyp) => {
       const app = Fastify({ logger: false });
       await app.register(jwtPlugin, {
-        privateKey: SERVER_KEYS.privateKeyPem,
-        publicKey: SERVER_KEYS.publicKeyPem,
-        issuer: AS_ISSUER,
+        signer: SIGNER.signer,
+        requestRealm: () => REALM,
         accessTokenLifespan: 900,
         refreshTokenLifespan: 3600,
         requireAccessTokenTyp,
       });
       await app.ready();
       try {
-        const minted = await mintIdJag(REALM, {
+        const { fastify } = fastifyStub();
+        const minted = await mintIdJag(fastify, REALM, {
           subject: 'user-1',
           audience: IDP_ISSUER,
           resource: MCP_SERVER,
@@ -916,17 +1008,13 @@ describe('a minted ID-JAG is never an access token (ADR-011 §3)', () => {
           scope: 'chat.read',
         });
 
-        // Plain, with the issuer pinned, and with the audience the assertion names:
-        // none of the optional checks may be what saves us.
-        for (const options of [
-          undefined,
-          { issuer: AS_ISSUER },
-          { audience: IDP_ISSUER },
-          { issuer: AS_ISSUER, audience: IDP_ISSUER },
-        ]) {
-          await expect(app.jwtUtils.verifyAccessToken(minted.assertion, options)).rejects.toThrow(
-            /typ is not at\+jwt/
-          );
+        // The realm pins the issuer on every verification; plain, and with the
+        // audience the assertion names: none of the optional checks may be what
+        // saves us.
+        for (const options of [undefined, { audience: IDP_ISSUER }]) {
+          await expect(
+            app.jwtUtils.verifyAccessToken(REALM, minted.assertion, options)
+          ).rejects.toThrow(/typ is not at\+jwt/);
         }
       } finally {
         await app.close();

@@ -15,18 +15,16 @@
  * token. The token's scopes only narrow what the grants give
  * (`effectivePermissions`).
  *
- * Two seams stand for what per-realm issuers and keys will change (#491):
+ * Two seams bind a token to its realm, now that every realm signs its tokens
+ * with its own keys under its own issuer (#491):
  *
  * - {@link RealmIssuerDirectory} maps a token's `iss` to its realm. The
- *   default, {@link deploymentRealmIssuerDirectory}, knows one issuer: the
- *   deployment's `JWT_ISSUER`, which names the default realm.
+ *   default, {@link deploymentRealmIssuerDirectory}, finds the realm whose
+ *   stored issuer the `iss` is.
  * - {@link IssuerKeyResolver} verifies a token with the keys of the realm its
- *   `iss` names. The default, {@link deploymentIssuerKeyResolver}, holds
- *   today's signing key, for that realm only.
- *
- * Until #491 every realm's tokens carry `JWT_ISSUER`, so a token of another
- * realm reads as the default realm's, and its subject, which lives in another
- * realm, is refused.
+ *   `iss` names. The default, {@link deploymentIssuerKeyResolver}, verifies
+ *   with that realm's published keys and pins its issuer, so a token signed
+ *   by another realm's key never passes as this realm's.
  */
 import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
 import { JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
@@ -40,8 +38,8 @@ import {
   type BuiltInRoleName,
   effectivePermissions,
 } from './admin-roles';
-import { resolveIssuerIdentifier } from './discovery';
 import type { IssuerResolver } from './family-token';
+import { tokenRealm } from './realm-url';
 import type { RealmRow } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
 
@@ -58,7 +56,7 @@ export type LiveAdminGrant = LiveAdminGrants[number];
 
 /**
  * Maps an issuer to its realm (ADR-019 Decision 1): the realm whose issuer a
- * token's `iss` names. Replaced when realms get their own issuers (#491).
+ * token's `iss` names.
  */
 export interface RealmIssuerDirectory {
   /** The realm `issuer` names, or `undefined` for an issuer of no realm here. */
@@ -67,47 +65,45 @@ export interface RealmIssuerDirectory {
 
 /**
  * Verifies a token with the keys of the realm its issuer names (ADR-019
- * Decisions 1 and 9). Replaced when tokens are signed per realm (#491).
+ * Decisions 1 and 9, #491).
  */
 export interface IssuerKeyResolver {
   /**
    * Verify `token`'s signature with the keys of `realm`, its expiry, and that
    * its `iss` is that realm's.
    *
-   * @throws JWTInvalidError when this server holds no key of the realm, or the
-   *   token does not verify under one
+   * @throws JWTInvalidError when no key of the realm verifies the token, or
+   *   its `iss` is not the realm's
    */
   verifyAccessToken(realm: IssuerRealm, token: string): Promise<JWTPayload>;
 }
 
 /**
- * The default {@link RealmIssuerDirectory}: the deployment's `JWT_ISSUER`, as
- * written, names the realm whose stored issuer it is, which the default
- * realm's boot step set (#484). Any other issuer names no realm.
+ * The default {@link RealmIssuerDirectory}: an issuer names the realm whose
+ * stored issuer it is, exactly as the realm's tokens carry it (#491; issuers
+ * are stored without a trailing slash). Any other issuer names no realm.
  */
 export function deploymentRealmIssuerDirectory(fastify: FastifyInstance): RealmIssuerDirectory {
   return {
     async realmForIssuer(issuer) {
-      const deployment = fastify.jwtUtils.getIssuer();
-      if (issuer !== deployment) return undefined;
-      return fastify.repositories.realms.findByIssuer(resolveIssuerIdentifier(deployment));
+      const realm = await fastify.repositories.realms.findByIssuer(issuer);
+      return realm !== undefined && realm.issuer === issuer ? realm : undefined;
     },
   };
 }
 
 /**
- * The default {@link IssuerKeyResolver}: today's signing key, which signs
- * every token this server issues, verifies the tokens of the realm the
- * deployment's issuer names, and of no other realm.
+ * The default {@link IssuerKeyResolver}: the realm's own keys, as the signer
+ * lists them, verify its tokens, with its issuer pinned (#491). A realm
+ * without an issuer has no tokens, and none verifies.
  */
 export function deploymentIssuerKeyResolver(fastify: FastifyInstance): IssuerKeyResolver {
   return {
     async verifyAccessToken(realm, token) {
-      const deployment = fastify.jwtUtils.getIssuer();
-      if (realm.issuer !== resolveIssuerIdentifier(deployment)) {
-        throw new JWTInvalidError('No key of the realm the access token names is held here');
+      if (realm.issuer === null) {
+        throw new JWTInvalidError('The realm the access token names has no issuer');
       }
-      return fastify.jwtUtils.verifyAccessToken(token, { issuer: deployment });
+      return fastify.jwtUtils.verifyAccessToken(tokenRealm(realm), token);
     },
   };
 }
@@ -126,9 +122,10 @@ export interface AdminAuthorityOptions {
  * The issuer rule of the admin family's token guard (`requireFamilyToken`,
  * #509): the token's `iss` must name an enabled realm in the directory, and
  * the token must verify with that realm's keys. The guard has verified the
- * signature with the server's own key before; today that is the same key, and
- * once realms sign with their own (#491) this is the check that binds a
- * token's issuer to its realm's keys.
+ * signature with the request realm's keys before; this is the check that binds
+ * a token's issuer to its own realm's keys (#491), so an issuer rule that
+ * accepts another realm's issuer never accepts a token that realm's keys did
+ * not sign.
  */
 export function adminIssuerResolver(options: AdminAuthorityOptions = {}): IssuerResolver {
   return async (issuer, request) => {

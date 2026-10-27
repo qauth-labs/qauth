@@ -1,4 +1,4 @@
-import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { InvalidClientError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -74,7 +74,6 @@ function createFastifyStub() {
     jwtUtils: {
       verifyAccessToken: vi.fn(),
       hashRefreshToken: (t: string) => `hash:${t}`,
-      getIssuer: () => ISSUER,
     },
     redis: {
       setex: vi.fn().mockResolvedValue('OK'),
@@ -195,7 +194,9 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     // Not a JWT, so the hinted access-token lookup finds nothing.
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(new Error('bad jwt'));
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+      new JWTInvalidError('bad jwt')
+    );
     (
       fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
     ).mockResolvedValue({
@@ -247,7 +248,9 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
       familyId: 'fam-2',
     });
     // Not a JWT either, so the access-token fallback verify rejects.
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(new Error('bad'));
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+      new JWTInvalidError('bad')
+    );
 
     const { reply } = makeReply();
     await ctx.handler!(
@@ -272,7 +275,9 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
     (
       fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
     ).mockResolvedValue(undefined);
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(new Error('bad jwt'));
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+      new JWTInvalidError('bad jwt')
+    );
 
     const { reply } = makeReply();
     await ctx.handler!(
@@ -286,6 +291,32 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
 
     expect(reply.statusCode).toBe(200);
     expect(fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+    expect(fastify.redis.setex).not.toHaveBeenCalled();
+  });
+
+  it('fails, rather than answering 200, when the access token could not be checked (#491)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await revokeRoute(fastify);
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(undefined);
+    // Verification reads the realm's keys from the key store; it is down.
+    const outage = new Error('connection refused');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(outage);
+
+    const { reply } = makeReply();
+    await expect(
+      ctx.handler!(
+        {
+          body: { token: 'a.b.c', client_id: client.clientId, client_secret: 'secret' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        reply
+      )
+    ).rejects.toBe(outage);
     expect(fastify.redis.setex).not.toHaveBeenCalled();
   });
 
@@ -322,6 +353,11 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
     );
 
     expect(reply.statusCode).toBe(200);
+    // Verified in the request's realm: its keys, its issuer pinned (#490, #491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: 'realm-1', issuer: ISSUER },
+      'access-token'
+    );
     expect(fastify.redis.setex).toHaveBeenCalledTimes(1);
     const [key, ttl] = (fastify.redis.setex as unknown as Mock).mock.calls[0];
     expect(key).toBe('revoked-access-token:jti-123');

@@ -4,7 +4,7 @@ import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
 import { calculateJwkThumbprint } from 'jose';
 import { describe, expect, it } from 'vitest';
 
-import { type KeyVariableConfig, keyVariableSettings, thumbprintKid } from './key-variables';
+import { type KeyVariableConfig, keyVariableSettings, kidlessTokenKeyIds } from './key-variables';
 
 const ED25519 = generateKeyPairSync('ed25519');
 const ED25519_PEM = ED25519.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -89,21 +89,27 @@ describe('keyVariableSettings', () => {
   });
 });
 
-describe('thumbprintKid', () => {
-  it('is the RFC 7638 thumbprint of the public key', async () => {
+describe('kidlessTokenKeyIds (#491)', () => {
+  it("is the RFC 7638 thumbprint of the variable's Ed25519 key, from the private or the public key", async () => {
     const expected = await calculateJwkThumbprint(
       createPublicKey(ED25519_PUBLIC_PEM).export({ format: 'jwk' }),
       'sha256'
     );
-
-    await expect(thumbprintKid(ED25519_PEM)).resolves.toBe(expected);
+    await expect(kidlessTokenKeyIds({ JWT_PRIVATE_KEY: ED25519_PEM })).resolves.toEqual([expected]);
+    await expect(kidlessTokenKeyIds({ JWT_PUBLIC_KEY: ED25519_PUBLIC_PEM })).resolves.toEqual([
+      expected,
+    ]);
+    await expect(
+      kidlessTokenKeyIds({ JWT_PRIVATE_KEY: ED25519_PEM, JWT_PUBLIC_KEY: ED25519_PUBLIC_PEM })
+    ).resolves.toEqual([expected]);
   });
 
-  it('is the same from the public key alone, as a process without the signer has it (#495)', async () => {
-    await expect(thumbprintKid(ED25519_PUBLIC_PEM)).resolves.toBe(await thumbprintKid(ED25519_PEM));
-  });
-
-  it('is undefined for a value that is not a PEM key', async () => {
-    await expect(thumbprintKid('not a key')).resolves.toBeUndefined();
+  it('names no key without a variable, for a value that is not a key, or for another key type', async () => {
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 })
+      .privateKey.export({ type: 'pkcs8', format: 'pem' })
+      .toString();
+    await expect(kidlessTokenKeyIds({})).resolves.toEqual([]);
+    await expect(kidlessTokenKeyIds({ JWT_PRIVATE_KEY: 'not a key' })).resolves.toEqual([]);
+    await expect(kidlessTokenKeyIds({ JWT_PRIVATE_KEY: rsa })).resolves.toEqual([]);
   });
 });

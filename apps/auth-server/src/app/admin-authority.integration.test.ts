@@ -12,6 +12,7 @@ import {
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  provisionRealmKeys,
   registerPasswordAccount,
   resetE2eState,
   signInWithPassword,
@@ -153,9 +154,16 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
     return (await app().repositories.users.create({ realmId })).id;
   }
 
-  /** An admin token of the deployment's issuer for `userId`. */
-  function adminToken(userId: string, scope = ALL_ADMIN_SCOPES): Promise<string> {
-    return app().jwtUtils.signAccessToken({
+  /** The default realm as the JWT plugin takes it: its id and its issuer (#491). */
+  async function defaultTokenRealm(): Promise<{ id: string; issuer: string }> {
+    const realm = await app().repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm?.issuer) throw new Error('default realm missing');
+    return { id: realm.id, issuer: realm.issuer };
+  }
+
+  /** An admin token of the default realm, signed with its keys, for `userId`. */
+  async function adminToken(userId: string, scope = ALL_ADMIN_SCOPES): Promise<string> {
+    return app().jwtUtils.signAccessToken(await defaultTokenRealm(), {
       sub: userId,
       clientId: 'admin-console',
       aud: ADMIN,
@@ -171,11 +179,11 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
     });
   }
 
-  /** `resolveAdminAuthority` called directly, for a token of JWT_ISSUER, on the real rows. */
+  /** `resolveAdminAuthority` called directly, for a token of the default realm, on the real rows. */
   async function authorityFor(userId: string, targetRealmId: string) {
     const { resolveAdminAuthority } = await import('./helpers/admin-authority');
     return resolveAdminAuthority(app(), {
-      iss: app().jwtUtils.getIssuer(),
+      iss: (await defaultTokenRealm()).issuer,
       sub: userId,
       scopes: ALL_ADMIN_SCOPES,
       targetRealmId,
@@ -399,25 +407,44 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
   });
 
   describe('a token the admin API does not accept', () => {
-    it("is refused for another realm's account under JWT_ISSUER, and when an agent holds it", async () => {
+    it("is refused for another realm's account under the default realm's issuer, for another realm's token, and when an agent holds it", async () => {
       const operator = await defaultRealmId();
       const a = await tenant('alpha');
       const admin = await account(operator);
       await grant(admin, null, 'security-admin');
-      // Until realms have their own issuers (#491) every token carries
-      // JWT_ISSUER: a realm-A account's token reads as the default realm's,
-      // and its subject lives elsewhere.
+      // A realm-A account in a token of the default realm: its subject lives
+      // elsewhere.
       const ofA = await account(a);
       await grant(ofA, a);
       expect((await probe(a, await adminToken(ofA))).statusCode).toBe(401);
       // The guard refused it for the request's realm; the authority refuses it
-      // too, since the realm JWT_ISSUER names is not the account's.
+      // too, since the realm the issuer names is not the account's.
       await expect(authorityFor(ofA, a)).resolves.toEqual({
         allowed: false,
         refusal: 'account_inactive',
       });
 
-      const delegated = await app().jwtUtils.signAccessToken({
+      // Realm A signs its own tokens, under its own issuer (#491). Its admin's
+      // token names an enabled realm, but it verifies with none of the keys of
+      // the realm whose host it is sent to, nor would a token signed with the
+      // default realm's keys pass under realm A's issuer.
+      await provisionRealmKeys(app(), 'alpha');
+      const realmA = await app().repositories.realms.findById(a);
+      if (!realmA?.issuer) throw new Error('realm alpha missing');
+      const ofAToken = await app().jwtUtils.signAccessToken(
+        { id: realmA.id },
+        { sub: ofA, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+      );
+      expect((await probe(a, ofAToken)).statusCode).toBe(401);
+      const { deploymentIssuerKeyResolver } = await import('./helpers/admin-authority');
+      const keys = deploymentIssuerKeyResolver(app());
+      await expect(keys.verifyAccessToken(realmA, ofAToken)).resolves.toMatchObject({
+        iss: realmA.issuer,
+        sub: ofA,
+      });
+      await expect(keys.verifyAccessToken(realmA, await adminToken(admin))).rejects.toThrow();
+
+      const delegated = await app().jwtUtils.signAccessToken(await defaultTokenRealm(), {
         sub: admin,
         clientId: 'agent',
         aud: ADMIN,

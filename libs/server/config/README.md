@@ -183,8 +183,10 @@ Global rate limiting configuration.
 
 ### jwtEnvSchema
 
-EdDSA signing keys and token lifetimes (`JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`,
-`JWT_ISSUER`, access/refresh lifespans).
+The default realm's issuer, the key variables the key boot step imports into
+the realm's key store (`JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`, the RS256 keys, all
+optional: tokens are signed with the stored keys) and token lifetimes
+(`JWT_ISSUER`, access/refresh lifespans).
 
 ### emailEnvSchema
 
@@ -208,8 +210,8 @@ Post-quantum hybrid signing ([ADR-005](../../../docs/adr/005-pqc-hybrid-signing.
 | Variable                 | Type    | Default     | Description                                                                     |
 | ------------------------ | ------- | ----------- | ------------------------------------------------------------------------------- |
 | `SIGNING_ALGORITHM_MODE` | enum    | `ed25519`   | `ed25519` or `ed25519+ml-dsa-65`                                                |
-| `HYBRID_SIGNING_ENABLED` | boolean | `false`     | Live hybrid issuance. Requires an ML-DSA key, or registration throws            |
-| `JWT_MLDSA_PRIVATE_KEY`  | string  | —           | base64url 32-byte ML-DSA-65 seed (or `JWT_MLDSA_PRIVATE_KEY_PATH`)              |
+| `HYBRID_SIGNING_ENABLED` | boolean | `false`     | Live hybrid issuance. The realm's key store must hold the pair, or boot refuses |
+| `JWT_MLDSA_PRIVATE_KEY`  | string  | —           | Optional base64url 32-byte ML-DSA-65 seed to import (or `_PATH`)                |
 | `JWT_MLDSA_KID`          | string  | —           | `kid` for the ML-DSA key published in JWKS                                      |
 | `PQC_TOKEN_DELIVERY`     | enum    | `reference` | `reference` (introspection-first) or `self-contained`                           |
 | `PQC_SELF_CONTAINED_ACK` | boolean | `false`     | Required to select `self-contained` — acknowledges the ~4.4 KB signature budget |

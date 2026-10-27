@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
@@ -126,8 +126,8 @@ describe('service roles (#495)', () => {
 
   /**
    * The environment of a process with `serviceRoles`: the test deployment's,
-   * and for a process without the signer, no KEK and no private key but the
-   * signer service settings and the public key.
+   * and for a process without the signer, no KEK and no key variable but the
+   * signer service settings. It verifies with the realm's published keys.
    */
   function environmentFor(serviceRoles: string): Record<string, string> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
@@ -235,32 +235,21 @@ describe('service roles (#495)', () => {
     ).rejects.toThrow(/JWT_PRIVATE_KEY_PATH is set, but SERVICE_ROLES=api/);
   });
 
-  it('publishes the RS256 public key on SERVICE_ROLES=api, as the signer does', async () => {
-    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    const { app } = await boot('api', {
-      JWT_RS256_PUBLIC_KEY: rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
-      JWT_RS256_KID: 'rs-roles',
-    });
-    const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
-    expect(jwks.json<{ keys: { kid?: string; kty: string }[] }>().keys).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kty: 'RSA', kid: 'rs-roles' })])
-    );
-  });
-
   it('refuses to boot SERVICE_ROLES=api without SIGNER_URL', async () => {
     const environment = environmentFor('api');
     delete environment['SIGNER_URL'];
     await expect(bootAuthServer(environment)).rejects.toThrow(/SIGNER_URL is required/);
   });
 
-  it('answers token issuance on a process without the signer with 503, failing closed', async () => {
-    const { app } = await boot('api');
-    const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
+  it("answers token issuance on a process without the signer with 503, failing closed, and still verifies the signer's tokens", async () => {
+    // The signer's process provisions the realm's keys and signs a token.
+    const { app: signerApp } = await boot('all');
+    const realm = await signerApp.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('the default realm was not booted');
-    await app.repositories.oauthClients.create({
+    await signerApp.repositories.oauthClients.create({
       realmId: realm.id,
       clientId: MACHINE_CLIENT_ID,
-      clientSecretHash: await app.passwordHasher.hashPassword(MACHINE_SECRET),
+      clientSecretHash: await signerApp.passwordHasher.hashPassword(MACHINE_SECRET),
       tokenEndpointAuthMethod: 'client_secret_post',
       name: 'Roles machine client',
       redirectUris: [],
@@ -268,25 +257,53 @@ describe('service roles (#495)', () => {
       grantTypes: ['client_credentials'],
       enabled: true,
     });
+    const clientCredentials = new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: MACHINE_SCOPE,
+      client_id: MACHINE_CLIENT_ID,
+      client_secret: MACHINE_SECRET,
+    }).toString();
+    const issued = await signerApp.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: FORM,
+      payload: clientCredentials,
+    });
+    expect(issued.statusCode).toBe(200);
+    const accessToken = issued.json<{ access_token: string }>().access_token;
+    const signerJwks = await signerApp.inject({ method: 'GET', url: '/.well-known/jwks.json' });
 
+    const { app } = await boot('api');
+
+    // Signing needs a key this process does not hold: 503, never a token.
     const token = await app.inject({
       method: 'POST',
       url: '/oauth/token',
       headers: FORM,
-      payload: new URLSearchParams({
-        grant_type: 'client_credentials',
-        scope: MACHINE_SCOPE,
-        client_id: MACHINE_CLIENT_ID,
-        client_secret: MACHINE_SECRET,
-      }).toString(),
+      payload: clientCredentials,
     });
     expect(token.json()).toMatchObject({ error: 'temporarily_unavailable' });
     expect(token.statusCode).toBe(503);
 
-    // Verification and the JWKS read public material only, and still answer.
+    // The JWKS and verification read the realm's published keys, public
+    // material only (#491): the same JWKS as the signer's, and its token is
+    // active here.
     const jwks = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
     expect(jwks.statusCode).toBe(200);
     expect(jwks.json<{ keys: unknown[] }>().keys.length).toBeGreaterThan(0);
+    expect(jwks.json()).toEqual(signerJwks.json());
+    const introspection = await app.inject({
+      method: 'POST',
+      url: '/oauth/introspect',
+      headers: FORM,
+      payload: new URLSearchParams({
+        token: accessToken,
+        client_id: MACHINE_CLIENT_ID,
+        client_secret: MACHINE_SECRET,
+      }).toString(),
+    });
+    expect(introspection.statusCode).toBe(200);
+    expect(introspection.json()).toMatchObject({ active: true, iss: realm.issuer });
   });
 
   it('holds a delivery a process without the signer cannot sign, spending no attempt', async () => {
@@ -357,5 +374,67 @@ describe('service roles (#495)', () => {
     expect(() => app.repositories.users).toThrow(/The users repository is not loaded/);
     expect(() => app.repositories.oauthClients).toThrow(/not loaded/);
     await expect(app.repositories.realms.findByName(E2E_REALM_NAME)).resolves.toBeDefined();
+    // Every role reads the realms' published keys (#491), and only them: the
+    // signer's own key table is no repository at all.
+    expect(app.repositories.realmPublicKeys).toBeDefined();
+    expect('realmKeys' in app.repositories).toBe(false);
+  });
+
+  // Last: it gives the realm a new hybrid pair.
+  it("boots a process without the signer with hybrid signing on, verifying the signer's hybrid tokens and refusing to sign one (#491)", async () => {
+    const HYBRID = {
+      HYBRID_SIGNING_ENABLED: 'true',
+      SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65',
+    };
+    // The signer imports a new pair: an Ed25519 key and an ML-DSA-65 seed.
+    const pair = await generateJwtPem();
+    const { app: signerApp } = await boot('all', {
+      ...HYBRID,
+      JWT_PRIVATE_KEY: pair.privateKey,
+      JWT_PUBLIC_KEY: pair.publicKey,
+      JWT_MLDSA_PRIVATE_KEY: randomBytes(32).toString('base64url'),
+    });
+    const realm = await signerApp.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm?.issuer) throw new Error('the default realm was not booted');
+    const tokenRealm = { id: realm.id, issuer: realm.issuer };
+    const clientId = `hybrid-${randomUUID()}`;
+    const hybrid = await signerApp.jwtUtils.signHybridAccessToken(tokenRealm, {
+      sub: clientId,
+      clientId,
+    });
+
+    // The switch on, no key: the process boots.
+    const { app } = await boot('api', HYBRID);
+    await expect(
+      app.jwtUtils.verifyHybridAccessToken(tokenRealm, hybrid, { requirePqc: true })
+    ).resolves.toMatchObject({ sub: clientId, iss: realm.issuer });
+    await expect(
+      app.jwtUtils.signHybridAccessToken(tokenRealm, { sub: clientId, clientId })
+    ).rejects.toMatchObject({ name: 'TemporarilyUnavailableError' });
+
+    // Its bearer half introspects active here, as the client it was issued to.
+    const secret = 'secret-of-the-hybrid-client-0123456789';
+    await app.repositories.oauthClients.create({
+      realmId: realm.id,
+      clientId,
+      clientSecretHash: await signerApp.passwordHasher.hashPassword(secret),
+      tokenEndpointAuthMethod: 'client_secret_post',
+      name: 'Roles hybrid client',
+      redirectUris: [],
+      scopes: [MACHINE_SCOPE],
+      grantTypes: ['client_credentials'],
+      enabled: true,
+    });
+    const introspection = await app.inject({
+      method: 'POST',
+      url: '/oauth/introspect',
+      headers: FORM,
+      payload: new URLSearchParams({
+        token: hybrid.token,
+        client_id: clientId,
+        client_secret: secret,
+      }).toString(),
+    });
+    expect(introspection.json()).toMatchObject({ active: true, client_id: clientId });
   });
 });

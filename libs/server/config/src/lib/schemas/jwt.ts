@@ -2,8 +2,6 @@ import { readFileSync } from 'node:fs';
 
 import { z } from 'zod';
 
-import { serviceRolesEnvSchema } from './service-roles';
-
 /**
  * Helper function to read key from file path
  */
@@ -54,27 +52,29 @@ function resolveKey(
  * JWT environment configuration schema
  * JWT token generation and validation settings
  *
- * Supports both environment variables and file paths:
- * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (one required on a process that
- *   holds the `signer` role; see below)
- * - JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH (both optional)
+ * Tokens are signed with each realm's keys in the encrypted key store (ADR-019
+ * Decision 9, #491). The key variables are read only by the default realm's
+ * key boot step, which imports a key the store lacks: at the first boot after
+ * the upgrade, or to replace a stored key until rotation through the store
+ * ships. All of them are optional; a fresh deployment without them generates
+ * its keys.
  *
- * The private key is required only where the signer runs (ADR-019 Decision 9,
- * issue #495): with `SERVICE_ROLES` unset or `all`, as before, or with a list
- * that names `signer`. A process without the signer must not hold one; the
- * auth server refuses to boot such a process and names the variable.
+ * Supports both environment variables and file paths:
+ * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (both optional)
+ * - JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH (both optional)
  */
 export const jwtEnvSchema = z
   .object({
     /**
-     * EdDSA private key in PEM format (optional if JWT_PRIVATE_KEY_PATH is provided)
-     * Used to sign JWT tokens
+     * EdDSA private key in PEM format (optional). The key boot step imports it
+     * into the default realm's key store when the store lacks it; tokens are
+     * signed with the stored key.
      */
     JWT_PRIVATE_KEY: z.string().optional(),
 
     /**
-     * Path to EdDSA private key file in PEM format (optional if JWT_PRIVATE_KEY is provided)
-     * Used to sign JWT tokens
+     * Path to EdDSA private key file in PEM format (optional). Takes precedence
+     * over JWT_PRIVATE_KEY.
      */
     JWT_PRIVATE_KEY_PATH: z.string().optional(),
 
@@ -166,38 +166,11 @@ export const jwtEnvSchema = z
      * Refresh token expiration in seconds (default: 604800 = 7 days)
      */
     REFRESH_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(604800),
-
-    /**
-     * The roles of this process (#495), read here only to decide whether the
-     * private key is required. `serviceRolesEnvSchema` owns the key.
-     */
-    SERVICE_ROLES: serviceRolesEnvSchema.shape.SERVICE_ROLES,
-  })
-  .superRefine((data, ctx) => {
-    // Validate that at least one private key source is provided, on a process
-    // that holds the signer
-    const hasPrivateKey = data.JWT_PRIVATE_KEY && data.JWT_PRIVATE_KEY.trim().length > 0;
-    const hasPrivateKeyPath = !!data.JWT_PRIVATE_KEY_PATH;
-
-    if (data.SERVICE_ROLES.includes('signer') && !hasPrivateKey && !hasPrivateKeyPath) {
-      ctx.addIssue({
-        code: 'custom',
-        message:
-          'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH',
-        path: ['JWT_PRIVATE_KEY'],
-      });
-    }
   })
   .transform((data) => {
-    // Resolve private key: prefer file path, fallback to direct key
+    // Resolve the OPTIONAL private key: prefer file path, fallback to direct key.
+    // Undefined when unconfigured: the key store holds the realm's keys.
     const privateKey = resolveKey(data.JWT_PRIVATE_KEY, data.JWT_PRIVATE_KEY_PATH);
-
-    // Defined after superRefine validation wherever the signer runs
-    if (!privateKey && data.SERVICE_ROLES.includes('signer')) {
-      throw new Error(
-        'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH'
-      );
-    }
 
     // Resolve public key: prefer file path, fallback to direct key
     const publicKey = resolveKey(data.JWT_PUBLIC_KEY, data.JWT_PUBLIC_KEY_PATH);

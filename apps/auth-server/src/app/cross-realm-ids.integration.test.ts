@@ -1,7 +1,8 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import { type CompactJWSHeaderParameters, CompactSign, decodeProtectedHeader } from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -16,6 +17,7 @@ import {
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  provisionRealmKeys,
   registerPasswordAccount,
   resetE2eState,
   signInWithPassword,
@@ -38,11 +40,10 @@ import type { RealmRow } from './helpers/request-realm';
  * within a tolerance, to take the same time. Where it matters, the value is
  * then shown still good in realm A, so the refusal at B changed nothing there.
  *
- * The last rows go the other way, a realm-B user's token to the default realm.
- * Until tokens are signed per realm (#491) every token carries `JWT_ISSUER`,
- * which is the default realm's issuer, so that token verifies there and only
- * the realm-scoped user lookup refuses it; it is compared with the token of a
- * deleted user of the default realm, the answer an unknown subject gets.
+ * The last rows go the other way, a realm-B token to the default realm.
+ * Tokens are signed per realm (#491), so such a token verifies with none of
+ * the default realm's keys: it is compared with the same token signed by a key
+ * no realm holds, the answer a forged token gets.
  *
  * Where an earlier check (client ownership, the user a consent belongs to)
  * would refuse a realm-A value at B by itself, the row seeds a realm-A row that
@@ -67,7 +68,6 @@ const REDIRECT_URI = 'https://client.example.com/callback';
 const SCOPES = ['openid', 'email'];
 const ALICE = 'alice@example.com';
 const BOB = 'bob@example.com';
-const ERIN = 'erin@example.com';
 /** How many times each side of a comparison is timed, after one warm-up pair; medians are compared. */
 const TIMING_SAMPLES = 5;
 
@@ -87,11 +87,6 @@ interface World {
   readonly bobId: string;
   /** Bob's management token at realm B (`/auth/login`). */
   readonly bobTokenB: string;
-  /**
-   * The management token of erin, a user of realm A deleted after signing in:
-   * a token that verifies at realm A and names no user there.
-   */
-  readonly deletedUserTokenA: string;
 }
 
 /**
@@ -203,6 +198,17 @@ async function expectSameAnswerAsUnknown(
   return foreignAnswer as { status: number; body: unknown };
 }
 
+/**
+ * `token` with its header and claims as they are, signed by a fresh Ed25519
+ * key that no realm holds: a forgery that names the same key.
+ */
+async function forgedLike(token: string): Promise<string> {
+  const [, payload] = token.split('.');
+  return new CompactSign(Buffer.from(payload, 'base64url'))
+    .setProtectedHeader(decodeProtectedHeader(token) as CompactJWSHeaderParameters)
+    .sign(generateKeyPairSync('ed25519').privateKey);
+}
+
 describe('an id from another realm is an unknown id (#489)', () => {
   let infra: E2eInfrastructure | undefined;
   let jwt: PemKeyPair | undefined;
@@ -259,6 +265,8 @@ describe('an id from another realm is an unknown id (#489)', () => {
       { name: 'beta', issuer: `https://${HOST_B}`, enabled: true },
       HOST_B
     );
+    // A realm signs its tokens only with its own keys (#491).
+    await provisionRealmKeys(app, 'beta');
 
     const clientA = await seedClient(app, realmA, SECRET_A);
     await seedClient(app, realmB, SECRET_B);
@@ -275,10 +283,6 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const bob = await registerPasswordAccount(app, BOB, E2E_PASSWORD, { host: HOST_B });
     const bobTokenB = await managementToken(app, HOST_B, BOB);
 
-    const erin = await registerPasswordAccount(app, ERIN);
-    const deletedUserTokenA = await managementToken(app, HOST_A, ERIN);
-    expect(await app.repositories.users.delete(realmA.id, erin)).toBe(true);
-
     world = {
       app,
       realmA,
@@ -289,7 +293,6 @@ describe('an id from another realm is an unknown id (#489)', () => {
       jarA,
       bobId: bob,
       bobTokenB,
-      deletedUserTokenA,
     };
     return world;
   }
@@ -564,7 +567,7 @@ describe('an id from another realm is an unknown id (#489)', () => {
     expect(listed.body).not.toContain(crossed.id);
   });
 
-  it("a realm-B user's token at the default realm's userinfo is answered as a deleted user's", async () => {
+  it("a realm-B user's token at the default realm's userinfo is answered as a forged one (#491)", async () => {
     const w = await setUp();
 
     const answer = await expectSameAnswerAsUnknown(
@@ -577,15 +580,16 @@ describe('an id from another realm is an unknown id (#489)', () => {
           headers: { host: HOST_A, authorization: `Bearer ${token}` },
         }),
       w.bobTokenB,
-      w.deletedUserTokenA
+      await forgedLike(w.bobTokenB)
     );
     expect(answer).toMatchObject({ status: 401, body: { error: 'invalid_token' } });
   });
 
-  it("a realm-B user's token at the default realm's introspection is inactive, as a deleted user's is", async () => {
+  it("a realm-B user's token at the default realm's introspection is inactive, as a forged one is (#491)", async () => {
     const w = await setUp();
     // A resource server of the default realm that is authoritative for the
-    // portal token's audience, so the token reaches the subject lookup.
+    // portal token's audience: were the token verified, the audience would
+    // admit it there.
     const audience = decodeJwtClaims(w.bobTokenB)['aud'];
     const secret = 'secret-of-the-introspecting-client-0123';
     await w.app.repositories.oauthClients.create({
@@ -617,21 +621,115 @@ describe('an id from another realm is an unknown id (#489)', () => {
           }).toString(),
         }),
       w.bobTokenB,
-      w.deletedUserTokenA
+      await forgedLike(w.bobTokenB)
     );
     expect(answer).toEqual({ status: 200, body: { active: false } });
   });
 
-  // A known gap until tokens are signed per realm (#491, PR #886). Every
-  // realm's tokens carry `iss = JWT_ISSUER`, the default realm's token issuer,
-  // and a client_credentials token names no user, so no realm-scoped user
-  // lookup stands between it and the default realm: introspection's audience
-  // rule (`audAuthoritative`) admits it on an audience match alone, and
-  // revocation denylists it, with no client_id shared between the realms.
-  // #886 gives each realm's tokens their own `iss` and turns this into a test.
-  it.todo(
-    "a realm-B client_credentials token, for an audience a resource server of the default realm is authoritative for, is inactive at the default realm's introspection and not denylisted by its revocation (#491)"
-  );
+  it("a realm-B client_credentials token, for an audience a resource server of the default realm is authoritative for, is inactive at the default realm's introspection and not denylisted by its revocation (#491)", async () => {
+    const w = await setUp();
+    // A client_credentials token names no user, so no realm-scoped user
+    // lookup stands between it and the default realm: only its realm's keys
+    // and issuer do. The same client_id in both realms, so client ownership
+    // does not refuse it either.
+    const audience = 'https://rs.cross-realm.example.com';
+    const machine = 'cross-realm-machine';
+    const secrets = {
+      a: 'secret-of-the-machine-in-a-0123456',
+      b: 'secret-of-the-machine-in-b-0123456',
+    };
+    for (const [realm, secret] of [
+      [w.realmA, secrets.a],
+      [w.realmB, secrets.b],
+    ] as const) {
+      await w.app.repositories.oauthClients.create({
+        realmId: realm.id,
+        clientId: machine,
+        clientSecretHash: await w.app.passwordHasher.hashPassword(secret),
+        tokenEndpointAuthMethod: 'client_secret_post',
+        name: 'E2E cross-realm machine',
+        redirectUris: [],
+        scopes: ['read'],
+        grantTypes: ['client_credentials'],
+        audience: [audience],
+        enabled: true,
+        requirePkce: false,
+      });
+    }
+    const introspectorSecret = 'secret-of-the-authoritative-rs-0123';
+    await w.app.repositories.oauthClients.create({
+      realmId: w.realmA.id,
+      clientId: 'cross-realm-rs',
+      clientSecretHash: await w.app.passwordHasher.hashPassword(introspectorSecret),
+      tokenEndpointAuthMethod: 'client_secret_post',
+      name: 'E2E authoritative resource server',
+      redirectUris: [],
+      scopes: [],
+      grantTypes: ['client_credentials'],
+      audience: [audience],
+      enabled: true,
+      requirePkce: false,
+    });
+
+    const issued = await w.app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: { ...FORM, host: HOST_B },
+      payload: new URLSearchParams({
+        grant_type: 'client_credentials',
+        scope: 'read',
+        client_id: machine,
+        client_secret: secrets.b,
+      }).toString(),
+    });
+    expect(issued.statusCode, issued.body).toBe(200);
+    const token = issued.json<{ access_token: string }>().access_token;
+    expect(decodeJwtClaims(token)).toMatchObject({ iss: `https://${HOST_B}`, aud: audience });
+
+    const introspect = (host: string, clientId: string, secret: string) =>
+      w.app.inject({
+        method: 'POST',
+        url: '/oauth/introspect',
+        headers: { ...FORM, host },
+        payload: new URLSearchParams({
+          token,
+          client_id: clientId,
+          client_secret: secret,
+        }).toString(),
+      });
+    // At the default realm: inactive for the authoritative resource server
+    // and for the same-named client alike.
+    for (const [clientId, secret] of [
+      ['cross-realm-rs', introspectorSecret],
+      [machine, secrets.a],
+    ] as const) {
+      const atA = await introspect(HOST_A, clientId, secret);
+      expect(atA.statusCode).toBe(200);
+      expect(atA.json(), clientId).toEqual({ active: false });
+    }
+
+    // Revoked at the default realm by the same-named client: 200, as RFC 7009
+    // §2.2 answers any token, and nothing is denylisted.
+    const revoked = await w.app.inject({
+      method: 'POST',
+      url: '/oauth/revoke',
+      headers: { ...FORM, host: HOST_A },
+      payload: new URLSearchParams({
+        token,
+        client_id: machine,
+        client_secret: secrets.a,
+      }).toString(),
+    });
+    expect(revoked.statusCode).toBe(200);
+
+    // Still active where it was issued.
+    const atB = await introspect(HOST_B, machine, secrets.b);
+    expect(atB.json()).toMatchObject({
+      active: true,
+      client_id: machine,
+      iss: `https://${HOST_B}`,
+    });
+  });
 
   it('a user id of realm A names no user at realm B', async () => {
     const w = await setUp();

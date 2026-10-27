@@ -316,8 +316,8 @@ const result = await bootRealmKeys({
 - A signing key the store lacks, while the realm has an active key of its algorithm, replaces that
   key: the stored key, and its hybrid partner, are retired and unpublished at once (`replaced`).
   Until rotation through the store ships (manual rotation #544, emergency retirement #551),
-  changing the variable is how a deployment replaces a signing key. Tokens are still signed with the
-  variables until #491, so the store follows what signs.
+  changing the variable is how a deployment replaces a signing key. Tokens are signed with the
+  stored keys (#491), so the replacement is what signs from then on.
 - A variable that holds a key the store keeps, but not as its active key (one a replacement
   retired), changes nothing; it is reported in `inactive`.
 - It all runs in one transaction under `lockRealm`, a transaction-level advisory lock: nodes that
@@ -374,10 +374,10 @@ What the signer guarantees:
   before signing, so what is checked is what is signed.
 - **Each purpose signs its own token types only** (`JWS_TYP_BY_PURPOSE`). Any other pair is refused.
 
-  | Purpose         | `typ`                        |
-  | --------------- | ---------------------------- |
-  | `token_signing` | `at+jwt`, `JWT` (ID token)   |
-  | `event_signing` | `secevent+jwt`, `logout+jwt` |
+  | Purpose         | `typ`                                                   |
+  | --------------- | ------------------------------------------------------- |
+  | `token_signing` | `at+jwt`, `JWT` (ID token), `oauth-id-jag+jwt` (ID-JAG) |
+  | `event_signing` | `secevent+jwt`, `logout+jwt`                            |
 
 - **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
   `SignerAccessDeniedError`. Every role may read public keys.

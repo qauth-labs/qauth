@@ -39,7 +39,7 @@ export default async function (fastify: FastifyInstance) {
   // discovery members its registry entry lists; an item that is off adds none.
   const experimentalItems = listEnabledExperimental();
 
-  const buildInput = (request: FastifyRequest) => ({
+  const buildInput = async (request: FastifyRequest) => ({
     // ADR-019 Decision 1 (#490): the issuer of the realm the request's host
     // names, from its row. Every endpoint URL below is built on it.
     issuer: realmIssuer(requestRealm(request)),
@@ -50,11 +50,13 @@ export default async function (fastify: FastifyInstance) {
     // not empty. With an empty list the token endpoint rejects every assertion,
     // so advertising the grant would be a false capability claim.
     idJagEnabled: env.ID_JAG_ENABLED && env.ID_JAG_TRUSTED_ISSUERS.length > 0,
-    // #309: advertise exactly the ID-token signing algorithms the plugin can
-    // produce keys for — `['RS256','EdDSA']` when an RS256 key is configured,
-    // else `['EdDSA']`. Sourced from the plugin so discovery never drifts from
-    // the JWKS the same plugin serves.
-    idTokenSigningAlgValuesSupported: fastify.jwtUtils.getIdTokenSigningAlgValuesSupported(),
+    // #309: advertise exactly the ID-token signing algorithms the realm has
+    // keys for — `['RS256','EdDSA']` when its key store holds an RS256 key,
+    // else `['EdDSA']` (#491). Sourced from the plugin so discovery never
+    // drifts from the JWKS the same plugin serves.
+    idTokenSigningAlgValuesSupported: await fastify.jwtUtils.getIdTokenSigningAlgValuesSupported(
+      requestRealm(request)
+    ),
     // RFC 9449 §5.1 (#480): the DPoP proof algorithms, only while DPOP_ENABLED
     // is on (`fastify.dpop` is null otherwise).
     ...(fastify.dpop ? { dpopSigningAlgValuesSupported: fastify.dpop.algorithms } : {}),
@@ -76,7 +78,7 @@ export default async function (fastify: FastifyInstance) {
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildAuthorizationServerMetadata(buildInput(request)));
+      return reply.send(buildAuthorizationServerMetadata(await buildInput(request)));
     }
   );
 
@@ -95,7 +97,7 @@ export default async function (fastify: FastifyInstance) {
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildOpenIdConfiguration(buildInput(request)));
+      return reply.send(buildOpenIdConfiguration(await buildInput(request)));
     }
   );
 
@@ -104,25 +106,27 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'JSON Web Key Set (RFC 7517) containing the active EdDSA public signing key(s). Used by clients and resource servers to verify JWT signatures.',
+          'JSON Web Key Set (RFC 7517) of the realm the request host names: its published token signing keys (EdDSA, RS256 and, with hybrid signing, ML-DSA-65), each under its own `kid`. Used by clients and resource servers to verify JWT signatures.',
         tags: ['Discovery'],
         'x-qauth-stability': 'stable',
       },
       config: { surface: 'meta' },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.
       // `application/jwk-set+json` is the registered media type.
       //
-      // MIXED KEY TYPES (#246, ADR-005): the `keys` array is EdDSA-only (`kty:
-      // "OKP"`) by default. When hybrid signing is enabled it ALSO includes the
-      // ML-DSA-65 public key as `kty: "AKP"` (with a base64url `pub` member).
-      // A classical Ed25519-only verifier does not understand `AKP` and simply
-      // ignores that entry — mixed-key clients pick the key they need by `kty`.
+      // The keys of the realm the request's host names (ADR-019 Decisions 1
+      // and 9, #491), each under its own `kid`: its Ed25519 key (`kty: "OKP"`),
+      // its RS256 key when it has one (#309) and, when hybrid signing is
+      // enabled, its ML-DSA-65 key as `kty: "AKP"` (with a base64url `pub`
+      // member, #246, ADR-005). A classical verifier that does not understand
+      // `AKP` simply ignores that entry — mixed-key clients pick the key they
+      // need by `kid` and `kty`.
       reply
         .header('Cache-Control', JWKS_CACHE_CONTROL)
         .header('Content-Type', 'application/jwk-set+json; charset=utf-8');
-      const jwks = await fastify.jwtUtils.getJwks();
+      const jwks = await fastify.jwtUtils.getJwks(requestRealm(request));
       return reply.send(jwks);
     }
   );

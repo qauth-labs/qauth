@@ -132,8 +132,12 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   },
 };
 
-/** The repositories every process reads: the realm resolver's and the default realm boot step's. */
-export const CORE_REPOSITORIES: readonly RepositoryName[] = ['realms'];
+/**
+ * The repositories every process reads: the realm resolver's and the default
+ * realm boot step's, and the realms' published keys, public material with
+ * which every process verifies a realm's tokens (#491).
+ */
+export const CORE_REPOSITORIES: readonly RepositoryName[] = ['realms', 'realmPublicKeys'];
 
 /** The plugins another plugin needs: the JWT plugin reads `fastify.dpop`. */
 const PLUGIN_DEPENDENCIES: Readonly<Partial<Record<RolePlugin, readonly RolePlugin[]>>> = {
@@ -210,8 +214,6 @@ export interface ServiceRoleSettings {
   readonly INTERNAL_TLS_CERT_PATH?: string | undefined;
   readonly INTERNAL_TLS_KEY_PATH?: string | undefined;
   readonly INTERNAL_TLS_CA_PATH?: string | undefined;
-  /** The parsed public key; only a process without the signer that verifies tokens needs it. */
-  readonly JWT_PUBLIC_KEY?: string | undefined;
 }
 
 /** What the role checks found: refusals, and lines for the boot log. */
@@ -235,9 +237,11 @@ const INTERNAL_TLS_SETTINGS = [
  * - holds no key material: each variable {@link isKeyMaterialVariable} names
  *   is a problem that names it;
  * - reaches the signer service: `SIGNER_URL` and the internal TLS files are
- *   required;
- * - verifies tokens with the public key when it registers the JWT plugin, so
- *   `JWT_PUBLIC_KEY` (or `JWT_PUBLIC_KEY_PATH`) is required there.
+ *   required.
+ *
+ * It needs no public key variable: it verifies a realm's tokens with the keys
+ * the realm publishes in its key store (`realm_public_keys`, #491), which its
+ * signer reads without a KEK.
  *
  * A process with the signer signs in-process, and a `SIGNER_URL` it is given
  * is reported as ignored.
@@ -283,16 +287,9 @@ export function checkServiceRoles(
     }
   }
 
-  if (pluginsFor(roles).has('jwt') && settings.JWT_PUBLIC_KEY === undefined) {
-    problems.push({
-      variable: 'JWT_PUBLIC_KEY',
-      message: `JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH is required: ${named} verifies access tokens and holds no private key to derive the public key from`,
-    });
-  }
-
   warnings.push({
     variable: 'SERVICE_ROLES',
-    message: `${named} signs through the signer service, which this release cannot call yet: until it can, a request that needs a signature answers 503 on this process, and an event delivery waits`,
+    message: `${named} signs through the signer service, which this release cannot call yet: until it can, a request that needs a signature, an encryption or a cookie secret answers 503 on this process, and an event delivery waits; tokens still verify, with the realm's published keys`,
   });
 
   return { problems, warnings };

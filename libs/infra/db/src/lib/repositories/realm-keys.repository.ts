@@ -16,6 +16,7 @@ import type {
 } from '../../types';
 import { DbClient } from '../db';
 import { realmKeys, realmPublicKeys } from '../schema/keys';
+import { createRealmPublicKeysRepository } from './realm-public-keys.repository';
 
 /**
  * Every `realm_keys` column except the wrapped material (`ciphertext`, `iv`,
@@ -134,16 +135,26 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
     },
 
     async listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]> {
+      return createRealmPublicKeysRepository(defaultDb).listByRealm(realmId, tx);
+    },
+
+    async anotherRealmPublishes(
+      realmId: string,
+      identity: Readonly<Record<string, string>>,
+      tx?: DbClient
+    ): Promise<boolean> {
       const invoker = tx ?? defaultDb;
-      return invoker
-        .select()
+      const [found] = await invoker
+        .select({ kid: realmPublicKeys.kid })
         .from(realmPublicKeys)
-        .where(eq(realmPublicKeys.realmId, realmId))
-        .orderBy(
-          asc(realmPublicKeys.purpose),
-          asc(realmPublicKeys.publishAt),
-          asc(realmPublicKeys.kid)
-        );
+        .where(
+          and(
+            sql`${realmPublicKeys.realmId} <> ${realmId}`,
+            sql`${realmPublicKeys.publicJwk} @> ${JSON.stringify(identity)}::jsonb`
+          )
+        )
+        .limit(1);
+      return found !== undefined;
     },
 
     async lockRealm(realmId: string, tx: DbClient): Promise<void> {

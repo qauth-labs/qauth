@@ -84,6 +84,24 @@ describe('hybrid jwt-service (#245)', () => {
     expect(claims['sub']).toBe('user-1');
   });
 
+  it('verifyHybridAccessToken refuses a hybrid ID token signed by the same pair (RFC 9068 typ)', async () => {
+    const { signing, verify } = await hybridKeys();
+    const idToken = await signHybridIdToken(
+      { sub: 'u', audience: 'client-1' },
+      signing,
+      ISSUER,
+      900,
+      PQC_BACKEND
+    );
+    await expect(
+      verifyHybridAccessToken(idToken, verify, {
+        issuer: ISSUER,
+        requirePqc: true,
+        ...PQC_BACKEND,
+      })
+    ).rejects.toThrow('not an access token');
+  });
+
   it('signHybridIdToken stamps token_use=id and echoes nonce', async () => {
     const { signing, edPublic } = await hybridKeys();
     const hybrid = await signHybridIdToken(

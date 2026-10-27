@@ -54,11 +54,11 @@ of these is set:
 A process without the signer reaches the signer service over mutual TLS, so it
 needs `SIGNER_URL` (an `https` URL) and the internal TLS files
 `INTERNAL_TLS_CERT_PATH`, `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH`,
-or it refuses to boot. A process with the `web` or `api` role verifies access
-tokens with the public key, so it needs `JWT_PUBLIC_KEY` or
-`JWT_PUBLIC_KEY_PATH` too, and publishes `JWT_RS256_PUBLIC_KEY` when it is set,
-so its JWKS and discovery match the signer's. A process that holds the signer
-ignores `SIGNER_URL` and warns.
+or it refuses to boot. It needs no public key variable: a process with the
+`web` or `api` role verifies each realm's tokens with the keys the realm
+publishes in its key store (`realm_public_keys`), public material it reads
+without a KEK, so its JWKS and discovery are the signer's own. A process that
+holds the signer ignores `SIGNER_URL` and warns.
 
 The check is by variable name. It cannot see the credentials a KEK provider
 adapter takes from its cloud SDK's own settings or from the machine's identity:
@@ -73,23 +73,24 @@ The signer service and the internal listener it answers on are not built yet.
 Until they are, a process without the signer cannot sign anything, and warns
 at boot:
 
-- a request that needs a signature, such as token issuance or an ID-JAG
-  assertion, answers `503` with `temporarily_unavailable`, and so does
-  `/ssf/jwks.json`, which reads its keys through the signer;
+- a request that needs a signature, an encryption or a cookie secret, such as
+  token issuance or an ID-JAG assertion, answers `503` with
+  `temporarily_unavailable`;
 - an event delivery waits: the `delivery` role holds it without spending an
   attempt and offers it again every 30 seconds, until a signer answers.
 
-Token verification, the realm JWKS, discovery and the endpoints that sign
-nothing keep working. Hybrid signing (`HYBRID_SIGNING_ENABLED=true`) needs the
-ML-DSA-65 key wherever tokens are signed or verified, so a process without the
-signer refuses to boot with it on.
+Token verification (with each realm's published keys), the realm JWKS,
+`/ssf/jwks.json`, discovery and the endpoints that sign nothing keep working.
+Hybrid signing (`HYBRID_SIGNING_ENABLED=true`) describes what the signer
+issues, so every process of a hybrid deployment sets it: a process without the
+signer verifies hybrid tokens with the realm's published ML-DSA-65 keys, and
+answers `503` when asked to sign one.
 
 So the split that works today keeps every signing role together:
 
 ```bash
 # Browser-facing nodes: no KEK, no private key.
 SERVICE_ROLES=web
-JWT_PUBLIC_KEY_PATH=/run/secrets/qauth-ed25519.pub
 SIGNER_URL=https://signer.internal:3443
 INTERNAL_TLS_CERT_PATH=/run/secrets/web.crt
 INTERNAL_TLS_KEY_PATH=/run/secrets/web.key

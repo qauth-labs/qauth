@@ -68,9 +68,10 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
   suspended; any other token must name a user of that realm who is enabled;
 - it carries every scope the route lists.
 
-A family audience reads the same in every realm. Every token still carries `JWT_ISSUER` until
-tokens are signed per realm (#491), so under the default issuer rule only the realm whose issuer
-that is admits a token, and any other realm refuses every token until then. The subject is checked
+A family audience reads the same in every realm. Tokens are signed per realm (#491): a token
+verifies only with the keys of the request's realm and, under the default issuer rule, only when
+its `iss` is that realm's issuer, so a realm admits its own tokens and refuses every other
+realm's. The subject is checked
 in the request's realm as well, whatever issuer rule a family uses: a user's token is refused in
 every realm but the user's, and a `client_credentials` token in every realm whose client of that
 `client_id` is missing, disabled or suspended.

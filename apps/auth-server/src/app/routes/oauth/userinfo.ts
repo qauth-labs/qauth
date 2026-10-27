@@ -10,7 +10,7 @@ import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { systemClientId } from '../../helpers/oauth-client';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
-import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
+import { realmIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { inactiveSubjectError } from '../../helpers/token-subject';
@@ -113,14 +113,15 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
 
     const realm = requestRealm(request);
 
-    // The issuer first: `requireJwt` pins the deployment's issuer, and a
-    // token is valid only at the realm whose issuer it names (#489). A token
-    // of another realm is refused before any user lookup, in the words the
+    // The issuer first: a token is valid only at the realm whose issuer it
+    // names (#489). `requireJwt` already verified it with the request realm's
+    // keys under that realm's issuer (#491); this check stays as defence in
+    // depth. A token of another realm is refused before any user lookup, in the words the
     // verifier uses for any other issuer, so introspection, revocation, logout
     // and this endpoint answer it alike (401, RFC 6750 §3.1 `invalid_token`).
     // The `iss` is readable in the token itself, so naming the mismatch tells
     // its holder nothing new.
-    if (payload.iss !== realmTokenIssuer(fastify, realm)) {
+    if (payload.iss !== realmIssuer(realm)) {
       throw withEventReason(new JWTInvalidError(FOREIGN_ISSUER_DESCRIPTION), 'issuer_mismatch');
     }
 

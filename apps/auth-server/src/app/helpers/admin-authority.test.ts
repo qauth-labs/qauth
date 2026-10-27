@@ -90,16 +90,15 @@ function grant(
 /** A server stub: realms, users and live grants as given. */
 function server(
   grants: LiveAdminGrant[] = [],
-  options: { users?: typeof USERS; realms?: typeof REALMS; issuer?: string } = {}
+  options: { users?: typeof USERS; realms?: typeof REALMS } = {}
 ) {
   const realms = options.realms ?? REALMS;
   const users = options.users ?? USERS;
-  const issuer = options.issuer ?? ISSUER;
   const fastify = {
     jwtUtils: {
-      getIssuer: vi.fn(() => issuer),
-      verifyAccessToken: vi.fn(async (_token: string, verify?: { issuer?: string }) => ({
-        iss: verify?.issuer,
+      // Per realm (#491): a token verifies with the realm's keys, under its issuer.
+      verifyAccessToken: vi.fn(async (realm: { id: string; issuer: string }, _token: string) => ({
+        iss: realm.issuer,
         sub: OPERATOR_ADMIN,
       })),
       extractCredentialFromHeader: vi.fn((header: string | undefined) =>
@@ -153,28 +152,47 @@ const EVERY_ISSUER = {
 };
 
 describe('deploymentRealmIssuerDirectory', () => {
-  it("names the realm whose stored issuer is JWT_ISSUER's, for JWT_ISSUER as written only", async () => {
-    const fastify = server([], { issuer: `${ISSUER}/` });
+  it('names the realm whose stored issuer the iss is, exactly as written (#491)', async () => {
+    const fastify = server();
     const directory = deploymentRealmIssuerDirectory(fastify);
-    await expect(directory.realmForIssuer(`${ISSUER}/`)).resolves.toBe(REALMS[OPERATOR]);
-    expect(fastify.repositories.realms.findByIssuer).toHaveBeenCalledWith(ISSUER);
-    for (const other of [ISSUER, REALMS[REALM_A].issuer as string, 'https://evil.example']) {
+    for (const id of [OPERATOR, REALM_A, REALM_B]) {
+      const issuer = REALMS[id].issuer as string;
+      await expect(directory.realmForIssuer(issuer)).resolves.toBe(REALMS[id]);
+      expect(fastify.repositories.realms.findByIssuer).toHaveBeenLastCalledWith(issuer);
+    }
+    for (const other of [`${ISSUER}/`, 'https://evil.example', '']) {
       await expect(directory.realmForIssuer(other)).resolves.toBeUndefined();
     }
   });
 });
 
 describe('deploymentIssuerKeyResolver', () => {
-  it("verifies with today's key, pinned to the deployment issuer, for that realm only", async () => {
+  it('verifies with the keys of the realm the issuer names, its issuer pinned, for every realm (#491)', async () => {
     const fastify = server();
     const keys = deploymentIssuerKeyResolver(fastify);
-    await expect(keys.verifyAccessToken(REALMS[OPERATOR], 'token')).resolves.toMatchObject({
-      iss: ISSUER,
-    });
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('token', { issuer: ISSUER });
+    for (const id of [OPERATOR, REALM_A]) {
+      const realm = REALMS[id];
+      await expect(keys.verifyAccessToken(realm, 'token')).resolves.toMatchObject({
+        iss: realm.issuer,
+      });
+      expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenLastCalledWith(
+        { id: realm.id, issuer: realm.issuer },
+        'token'
+      );
+    }
+  });
 
+  it('passes a refusal of the realm keys on, and verifies nothing for a realm without an issuer', async () => {
+    const fastify = server();
+    const keys = deploymentIssuerKeyResolver(fastify);
+    fastify.jwtUtils.verifyAccessToken.mockRejectedValueOnce(new JWTInvalidError('another key'));
     await expect(keys.verifyAccessToken(REALMS[REALM_A], 'token')).rejects.toThrow(JWTInvalidError);
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledTimes(1);
+
+    const calls = fastify.jwtUtils.verifyAccessToken.mock.calls.length;
+    await expect(
+      keys.verifyAccessToken(realmRow(MISSING, { issuer: null } as Partial<IssuerRealm>), 'token')
+    ).rejects.toThrow(JWTInvalidError);
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledTimes(calls);
   });
 });
 

@@ -1,22 +1,22 @@
 ---
 title: Keys
-description: Generating and configuring QAuth's signing keys — EdDSA (required), RS256 (optional), and the ML-DSA seed (hybrid signing only) — and the PKCS#8 pitfall that wastes an afternoon.
+description: How QAuth keeps its signing keys in the realm's key store, and how to import your own — EdDSA, RS256 and the ML-DSA seed (hybrid signing only) — with the PKCS#8 pitfall that wastes an afternoon.
 sidebar:
   order: 2
-lastVerified: '2026-10-24'
+lastVerified: '2026-10-26'
 ---
 
-QAuth can use up to three signing key types. This page covers generating and
-configuring each. What QAuth actually imports is verified against
-`libs/core/crypto/src/lib/key-management.ts` and
-`libs/server/jwt/src/lib/key-management.ts` — the format requirements below
-come from those importers, not from convention.
+QAuth signs with up to three signing key types, each realm with its own keys
+in its encrypted key store. This page covers how the store gets them and how
+to generate and import your own. What QAuth actually imports is verified
+against `libs/server/keys/src/lib/environment-keys.ts` — the format
+requirements below come from that importer, not from convention.
 
-| Key             | Required?                                                      | Signs                                                 |
-| --------------- | -------------------------------------------------------------- | ----------------------------------------------------- |
-| EdDSA (Ed25519) | **Yes**                                                        | Access tokens always; ID tokens when RS256 is absent  |
-| RS256           | No — only for OIDF Basic/Config OP certification               | ID tokens, when configured (access tokens stay EdDSA) |
-| ML-DSA-65 seed  | No — only when `HYBRID_SIGNING_ENABLED=true` (default `false`) | The post-quantum half of a hybrid access token        |
+| Key             | Variable needed?                                              | Signs                                                           |
+| --------------- | ------------------------------------------------------------- | --------------------------------------------------------------- |
+| EdDSA (Ed25519) | No — generated for a fresh realm                              | Access tokens always; ID tokens when the realm has no RS256 key |
+| RS256           | No — generated for a fresh realm; import one to keep yours    | ID tokens, when the realm has one (access tokens stay EdDSA)    |
+| ML-DSA-65 seed  | No — generated with the Ed25519 key when hybrid signing is on | The post-quantum half of a hybrid access token                  |
 
 ## The key store
 
@@ -57,9 +57,8 @@ together do it once:
 2. It creates the keys the realm still lacks: the event-signing and
    data-at-rest keys, and the cookie key when `SESSION_COOKIE_SECRET` is unset.
    A realm that neither holds nor imports a signing key gets an Ed25519 and an
-   RS256 signing key. That needs a deployment without `JWT_PRIVATE_KEY`, which
-   the server still requires until token signing moves onto the key store
-   (#491), so today every deployment imports its signing key.
+   RS256 signing key (and, with hybrid signing on, the ML-DSA-65 key of the
+   pair), so a fresh deployment needs no key variable at all.
 3. It logs a warning for each key variable that is still set, naming it.
 
 Each imported key keeps `JWT_RS256_KID` or `JWT_MLDSA_KID` as its `kid` when
@@ -78,12 +77,46 @@ The boot stops, and names the variable, when:
   names a stored key: a new key needs a new `kid`;
 - with hybrid signing on, only one of `JWT_PRIVATE_KEY` and
   `JWT_MLDSA_PRIVATE_KEY` holds a new key: the two keys of a pair are stored,
-  and replaced, together.
+  and replaced, together;
+- with hybrid signing on, the realm's active Ed25519 signing key has no
+  ML-DSA-65 key beside it: tokens would be signed classical-only. Set
+  `JWT_PRIVATE_KEY` and `JWT_MLDSA_PRIVATE_KEY` to a new pair, or turn hybrid
+  signing off.
 
-**For now, keep the key variables set.** Tokens are still signed with them
-until token signing moves onto the key store (#491), and the session cookie
-until #493, and the warning says so. The upgrade guide (#501) says when to
-remove them.
+### Tokens are signed through the key store
+
+Every access token, ID token and hybrid token is signed with the keys of the
+realm it is issued in, by the signer
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
+Decision 9). The token's `iss` is the realm's issuer, and its protected header
+names the key that signed it in `kid` (a hybrid token also names its ML-DSA-65
+key in `pqc_kid`). Each realm publishes its own keys at its own
+`/.well-known/jwks.json`, and the server verifies a token only with the keys of
+the realm the request is for, so a token one realm issued is refused by
+another. A token issued before the upgrade carries no `kid`; it still verifies,
+but only against the Ed25519 key that `JWT_PRIVATE_KEY` holds (or
+`JWT_PUBLIC_KEY`, on a process without the signer role), the key that signed it,
+never against a key the store generated. Keep that variable set until the
+tokens issued before the upgrade have expired (`ACCESS_TOKEN_LIFESPAN`): the
+next release removes this path, and refuses every token without a `kid`.
+
+A key variable never holds a key another realm stores: the key boot step refuses
+to import one, naming the variable, so a token signed by one realm's key never
+verifies as another realm's.
+
+If `JWT_ISSUER` ends with a slash, the tokens now name the issuer without it,
+as discovery does, while the previous release names it with the slash. Upgrade
+such a deployment all at once rather than node by node: in a mixed fleet each
+release refuses the other's access tokens until they expire. A relying party
+that compares `iss` with the slashed form must drop the slash.
+
+The token key variables are read only by the key step above: once the store
+holds a key, the variable no longer signs anything, and a new key in it is how
+you replace the stored one (below). The server boots without them. Remove them
+once you no longer need to roll back to a release that signs with them; each
+boot warns about every one still set. The session cookie is still signed with
+`SESSION_COOKIE_SECRET` until #493, so keep that one set. The upgrade guide
+(#501) says when to remove it.
 
 ### Replacing a signing key
 
@@ -100,9 +133,9 @@ they did before. Each node logs a warning with the new and the retired `kid`.
   together. Turning hybrid signing on after the upgrade is such a replacement:
   set a new `JWT_PRIVATE_KEY` along with the ML-DSA-65 key.
 - A variable that holds a key the store retired changes nothing in the store,
-  and each boot warns about it: the store keeps its active key, which signs once
-  token signing moves onto the store. So a node that still has the old value
-  during a rolling restart boots, and warns.
+  and each boot warns about it: the store keeps its active key, which signs. So
+  a node that still has the old value during a rolling restart boots, and
+  warns.
 
 ### Adding a key: `auth-server:keys:create`
 
@@ -124,13 +157,12 @@ then, replace a signing key through its variable, as above.
 
 ## The PKCS#8 vs PKCS#1 pitfall (read this first)
 
-Every private key QAuth imports — EdDSA and RS256 — goes through jose's
-`importPKCS8` (`libs/core/crypto/src/lib/key-management.ts:47-49`), which
-requires **PKCS#8** PEM: first line `-----BEGIN PRIVATE KEY-----`.
+Every private key QAuth imports from a variable — EdDSA and RS256 — must be
+**PKCS#8** PEM: first line `-----BEGIN PRIVATE KEY-----`.
 
-**PKCS#1** (`-----BEGIN RSA PRIVATE KEY-----`) is what `importPKCS8` rejects
-outright — this is the single most common thing that wastes an afternoon
-setting QAuth up, if you hit it. Whether you _do_ hit it depends on your
+**PKCS#1** (`-----BEGIN RSA PRIVATE KEY-----`) is refused at boot — this is the
+single most common thing that wastes an afternoon setting QAuth up, if you hit
+it. Whether you _do_ hit it depends on your
 OpenSSL version:
 
 - **OpenSSL 3.0+** (check with `openssl version`): `openssl genrsa` now
@@ -150,66 +182,38 @@ openssl pkcs8 -topk8 -nocrypt -in old-rsa-key.pem -out jwt-rs256-private.pem
 ```
 
 Public keys, where you supply one, must be **SPKI PEM**
-(`-----BEGIN PUBLIC KEY-----`) — `importSPKI`
-(`libs/core/crypto/src/lib/key-management.ts:57-59`). `openssl pkey -pubout`
-(used below) always emits this format.
+(`-----BEGIN PUBLIC KEY-----`). `openssl pkey -pubout` (used below) always
+emits this format.
 
-## EdDSA (Ed25519) — required
+## EdDSA (Ed25519)
 
-Signs access tokens unconditionally, and ID tokens whenever an RS256 key is
-not configured.
+Signs access tokens unconditionally, and ID tokens whenever the realm has no
+RS256 key. A fresh realm gets one generated; set a variable only to bring the
+key a deployment already signs with, or to replace the stored key.
 
 ```bash
 openssl genpkey -algorithm Ed25519 -out jwt-ed25519-private.pem
 openssl pkey -in jwt-ed25519-private.pem -pubout -out jwt-ed25519-public.pem
 ```
 
-Set `JWT_PRIVATE_KEY` (or `JWT_PRIVATE_KEY_PATH`) to the private key, and
-`JWT_PUBLIC_KEY` (or `JWT_PUBLIC_KEY_PATH`) to the public key
-(`libs/server/config/src/lib/schemas/jwt.ts:65-83`).
+Set `JWT_PRIVATE_KEY` (or `JWT_PRIVATE_KEY_PATH`) to the private key. The key
+step derives the public half itself, with `node:crypto`; `JWT_PUBLIC_KEY` (or
+`JWT_PUBLIC_KEY_PATH`) is optional, and the boot stops when it is set and is
+not the private key's public half.
 
-### The EdDSA public key is not actually optional (#359)
-
-`.env.example` and the [OIDF certification runbook](https://github.com/qauth-labs/qauth/blob/main/docs/oidf-op-certification-runbook.md)
-both describe `JWT_PUBLIC_KEY` as optional — "if not provided, can be derived
-from private key." **Today, omitting it fails at boot.** Set both keys.
-
-What actually happens: when `JWT_PUBLIC_KEY` is unset, the JWT plugin tries to
-derive the public half by calling jose's `exportSPKI` directly on the imported
-**private** key
-(`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:88-95`, via
-`exportPublicKeyPem` → `joseExportSPKI`,
-`libs/server/jwt/src/lib/jose-utils.ts:77-79`). jose 6 imports a PKCS#8 private
-key as a **non-extractable** WebCrypto `CryptoKey`, and a non-extractable key's
-public half cannot be re-exported that way — `exportSPKI` throws, which the
-plugin catches and rethrows as:
-
-```
-Failed to derive public key from private key. Please provide JWT_PUBLIC_KEY in environment variables.
-```
-
-The server never starts. (The key step above derives the public key with
-`node:crypto` and has no such problem, but the JWT plugin still does until
-token signing moves onto the key store.) This is tracked as
-[issue #359](https://github.com/qauth-labs/qauth/issues/359); fixing it is out
-of scope for this documentation change. **Until it's fixed, always set both
-`JWT_PRIVATE_KEY` and `JWT_PUBLIC_KEY`** (or their `_PATH` equivalents) — do
-not rely on derivation for the EdDSA key.
-
-The codebase already has the correct fix sitting one file over:
-`derivePublicKeyPemFromPrivate`
-(`libs/server/jwt/src/lib/key-management.ts:104-106`) uses `node:crypto`'s
-`createPublicKey` instead of jose, which works on a non-extractable key because
-it operates on the PEM directly. It is, in fact, already used for the **RS256**
-key below — which is why RS256's derivation genuinely works. The EdDSA path
-just doesn't call it yet.
+Before tokens were signed through the key store, the JWT plugin also imported
+the key and could not derive its public half, so a boot without
+`JWT_PUBLIC_KEY` failed ([issue #359](https://github.com/qauth-labs/qauth/issues/359)).
+The plugin no longer holds a key, so that failure no longer happens.
 
 ## RS256 — optional, for OIDF certification
 
-Only needed for OpenID Foundation Basic/Config OP certification, which
-hard-fails an EdDSA-only OP on its `id_token` signature test. When configured,
-ID tokens switch to RS256 by default; access tokens are unaffected (always
-EdDSA).
+OpenID Foundation Basic/Config OP certification hard-fails an EdDSA-only OP on
+its `id_token` signature test, so a realm with an RS256 key signs its ID tokens
+with RS256; access tokens are unaffected (always EdDSA). A fresh realm gets one
+generated. A deployment that upgraded without `JWT_RS256_PRIVATE_KEY` has none
+and keeps signing ID tokens with EdDSA, until you import one with the variable
+or create one with `auth-server:keys:create`.
 
 **Must be ≥2048-bit, and the boot checks it.** The key boot step (#485) refuses
 a `JWT_RS256_PRIVATE_KEY` shorter than 2048 bits (RFC 7518 §3.3): the server
@@ -228,14 +232,9 @@ openssl rsa -in jwt-rs256-private.pem -noout -text | head -1
 ```
 
 Set `JWT_RS256_PRIVATE_KEY` (or `_PATH`); `JWT_RS256_PUBLIC_KEY` (or `_PATH`)
-is optional here and **derivation genuinely works** for this key — unlike
-EdDSA above, the RS256 public key is derived with `node:crypto`'s
-`createPublicKey` (`derivePublicKeyPemFromPrivate`,
-`libs/server/jwt/src/lib/key-management.ts:104-106`, wired in at
-`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:109-114`), which does
-not hit the non-extractable-key problem above. An optional `JWT_RS256_KID`
-gives the published RSA JWK a stable `kid`
-(`libs/server/config/src/lib/schemas/jwt.ts:113-118`).
+is optional, as for EdDSA: the key step derives the public half itself. An
+optional `JWT_RS256_KID` gives the published RSA JWK a stable `kid`; without
+it the key's `kid` is its RFC 7638 thumbprint.
 
 For the full certification flow — deploying, driving the conformance suite,
 and the residual-uncertainty checklist — see the
@@ -243,12 +242,14 @@ and the residual-uncertainty checklist — see the
 
 ## ML-DSA-65 seed — only with hybrid signing
 
-Only needed when `HYBRID_SIGNING_ENABLED=true` (default `false` — post-quantum
-hybrid signing is opt-in). Unlike EdDSA/RS256, this is not a PEM key: QAuth's
+Only used when `HYBRID_SIGNING_ENABLED=true` (default `false` — post-quantum
+hybrid signing is opt-in). A fresh realm with hybrid signing on gets the pair
+generated; set the variable to import a seed you already have, together with
+`JWT_PRIVATE_KEY`. Unlike EdDSA/RS256, this is not a PEM key: QAuth's
 canonical private form is the raw **32-byte seed**, base64url-encoded,
-unpadded (`libs/server/config/src/lib/schemas/crypto.ts:46-74` validates
-exactly this shape at startup — wrong length or alphabet fails fast with a
-clear message, without printing the seed).
+unpadded (`libs/server/config/src/lib/schemas/crypto.ts` validates exactly
+this shape at startup — wrong length or alphabet fails fast with a clear
+message, without printing the seed).
 
 Generate 32 CSPRNG bytes and encode them as unpadded base64url:
 
@@ -257,11 +258,10 @@ openssl rand 32 | base64 | tr '+/' '-_' | tr -d '=\n'
 ```
 
 Set the result as `JWT_MLDSA_PRIVATE_KEY` (or point
-`JWT_MLDSA_PRIVATE_KEY_PATH` at a file containing it). You also need
-`SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65` — `HYBRID_SIGNING_ENABLED=true`
-without both fails fast at boot
-(`libs/server/config/src/lib/schemas/crypto.ts:131-146`). An optional
-`JWT_MLDSA_KID` names the key in the published JWKS.
+`JWT_MLDSA_PRIVATE_KEY_PATH` at a file containing it). Hybrid signing also
+needs `SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65`, or the boot fails fast, and a
+realm whose active Ed25519 key has no ML-DSA-65 key beside it refuses to boot.
+An optional `JWT_MLDSA_KID` names the key in the published JWKS.
 
 **Treat the seed like a private key** — anyone with it can forge the
 post-quantum component of a hybrid token. Losing it (without a retired-key
@@ -281,12 +281,12 @@ Verified against `libs/server/config/src/lib/schemas/jwt.ts` and
 
 | Variable                          | Key    | Required?                                                      |
 | --------------------------------- | ------ | -------------------------------------------------------------- |
-| `JWT_PRIVATE_KEY` / `_PATH`       | EdDSA  | Yes (one of)                                                   |
-| `JWT_PUBLIC_KEY` / `_PATH`        | EdDSA  | Schema-optional; **set it anyway** (#359 above)                |
+| `JWT_PRIVATE_KEY` / `_PATH`       | EdDSA  | No — imported into the key store when set                      |
+| `JWT_PUBLIC_KEY` / `_PATH`        | EdDSA  | No — derived from the private key; checked when set            |
 | `JWT_RS256_PRIVATE_KEY` / `_PATH` | RS256  | No                                                             |
-| `JWT_RS256_PUBLIC_KEY` / `_PATH`  | RS256  | No — derivation works if omitted                               |
+| `JWT_RS256_PUBLIC_KEY` / `_PATH`  | RS256  | No — derived from the private key; checked when set            |
 | `JWT_RS256_KID`                   | RS256  | No                                                             |
-| `JWT_MLDSA_PRIVATE_KEY` / `_PATH` | ML-DSA | Required only if `HYBRID_SIGNING_ENABLED=true`                 |
+| `JWT_MLDSA_PRIVATE_KEY` / `_PATH` | ML-DSA | No — imported with `JWT_PRIVATE_KEY` as a hybrid pair when set |
 | `JWT_MLDSA_KID`                   | ML-DSA | No                                                             |
 | `HYBRID_SIGNING_ENABLED`          | —      | No — default `false`                                           |
 | `SIGNING_ALGORITHM_MODE`          | —      | No — default `ed25519`; must be `ed25519+ml-dsa-65` for hybrid |

@@ -238,16 +238,11 @@ describe('service roles and key material (#495)', () => {
     });
   });
 
-  it('refuses hybrid signing without the signer, naming the switch', async () => {
+  it('parses hybrid signing without the signer: the process verifies hybrid tokens (#491)', async () => {
     setApiEnv({ HYBRID_SIGNING_ENABLED: 'true', SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65' });
-    await expect(import('./env')).rejects.toMatchObject({
-      issues: [
-        expect.objectContaining({
-          path: ['HYBRID_SIGNING_ENABLED'],
-          message: expect.stringContaining('needs the signer role'),
-        }),
-      ],
-    });
+    const mod = await import('./env');
+    expect(mod.env.HYBRID_SIGNING_ENABLED).toBe(true);
+    expect(mod.env.SERVICE_ROLES).toEqual(['api']);
   });
 });
 

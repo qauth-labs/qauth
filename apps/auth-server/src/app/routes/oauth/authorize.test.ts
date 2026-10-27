@@ -1,5 +1,5 @@
 import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
-import { InvalidRequestError } from '@qauth-labs/shared-errors';
+import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -172,7 +172,6 @@ function makeFastify() {
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
-      getIssuer: () => 'https://auth.example.com',
     },
     sessionService: sessions.service,
     sessionUtils: {
@@ -1047,7 +1046,6 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
       jwtUtils: {
         extractFromHeader: vi.fn(),
         verifyAccessToken: vi.fn(),
-        getIssuer: () => 'https://auth.example.com',
       },
       sessionUtils: {
         getSession: vi.fn(),
@@ -1763,6 +1761,8 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       consent?: Record<string, unknown> | null;
       /** RFC 8707 resource indicators on the request. */
       resource?: string[];
+      /** Why verification fails, when it does. */
+      verifyError?: Error;
     } = {}
   ) {
     const { fastify, ctx } = makeFastify();
@@ -1779,12 +1779,16 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     );
     // No browser session; a valid Bearer token resolves the user.
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      clientId: DANGEROUS_CLIENT.clientId,
-      aud: DANGEROUS_CLIENT.clientId,
-      ...payload,
-    });
+    if (opts.verifyError === undefined) {
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+        sub: BEARER_USER,
+        clientId: DANGEROUS_CLIENT.clientId,
+        aud: DANGEROUS_CLIENT.clientId,
+        ...payload,
+      });
+    } else {
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(opts.verifyError);
+    }
     const { reply, state } = createReply();
     await ctx.handler!(
       {
@@ -1797,6 +1801,27 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     );
     return { fastify, state };
   }
+
+  it('answers a refused token with access_denied, and a key store failure with temporarily_unavailable (#491)', async () => {
+    for (const refused of [new JWTInvalidError('bad'), new JWTExpiredError('old')]) {
+      const { fastify, state } = await runBearer('email', {}, { verifyError: refused });
+      expect(state.redirected).toContain('error=access_denied');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    }
+    // RFC 6749 §4.1.2.1: the redirect URI is validated by now, so the client
+    // hears it there, never as a bad token, and no code is issued.
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      { verifyError: new Error('the key store is unreachable') }
+    );
+    const location = new URL(state.redirected as string);
+    expect(location.searchParams.get('error')).toBe('temporarily_unavailable');
+    expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
+    expect(location.searchParams.get('iss')).not.toBeNull();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.log.error).toHaveBeenCalled();
+  });
 
   it('refuses a dangerous scope on the Bearer path with access_denied (no interactive step-up)', async () => {
     const { fastify, state } = await runBearer('write:foo');
@@ -2037,9 +2062,10 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the denylist cannot be read', async () => {
+  it('fails closed when the denylist cannot be read: temporarily_unavailable, no code (#491)', async () => {
     const { fastify, ctx } = makeFastify();
-    (fastify.redis.exists as unknown as Mock).mockRejectedValue(new Error('redis down'));
+    const redisDown = new Error('redis down');
+    (fastify.redis.exists as unknown as Mock).mockRejectedValue(redisDown);
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
@@ -2061,7 +2087,8 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       },
       reply
     );
-    expect(state.redirected).toContain('error=access_denied');
+    expect(state.redirected).toContain('error=temporarily_unavailable');
+    expect(fastify.log.error).toHaveBeenCalledWith({ err: redisDown }, expect.any(String));
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
@@ -2324,8 +2351,8 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
 });
 
 describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)', () => {
-  // The issuer of the realm this suite's requests are resolved to (REALM), and
-  // the one makeFastify()'s jwtUtils.getIssuer() signs tokens with.
+  // The issuer of the realm this suite's requests are resolved to (REALM),
+  // the `iss` of the tokens the realm signs (#491).
   const RAW_ISSUER = 'https://auth.example.com';
 
   /**
@@ -2355,7 +2382,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     bearer?: 'valid' | 'invalid';
     /**
      * The issuer of the request's realm, to prove `iss` tracks the realm row
-     * verbatim (#490). The JWT plugin keeps `RAW_ISSUER`.
+     * verbatim (#490).
      */
     realmIssuer?: string;
   }
@@ -2381,7 +2408,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
         });
       } else {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
-          new Error('expired')
+          new JWTExpiredError('expired')
         );
       }
       headers['authorization'] = 'Bearer bearer.token';
@@ -2517,10 +2544,11 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   it("pins a Bearer token to the request realm's issuer (ADR-019 Decision 1, #490)", async () => {
     const { fastify, state } = await run({ bearer: 'valid', realmIssuer: 'https://b.example.com' });
     // The audience is assertManagementToken's to check (#509), so the
-    // verification pins only the issuer.
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('bearer.token', {
-      issuer: 'https://b.example.com',
-    });
+    // verification pins only the realm: its keys and its issuer (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: REALM.id, issuer: 'https://b.example.com' },
+      'bearer.token'
+    );
     expect(issOf(state.redirected)).toBe('https://b.example.com');
   });
 

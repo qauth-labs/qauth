@@ -136,6 +136,8 @@ const CALLS: Record<
   listByRealm: (repo) =>
     repo.listByRealm(REALM_ID, { purpose: 'token_signing', scopeId: null, status: 'active' }),
   listPublicByRealm: (repo) => repo.listPublicByRealm(REALM_ID),
+  anotherRealmPublishes: (repo) =>
+    repo.anotherRealmPublishes(REALM_ID, { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' }),
   getWrappedForSigner: (repo) => repo.getWrappedForSigner(REALM_ID, KID),
   updateStatus: (repo) =>
     repo.updateStatus(REALM_ID, KID, {
@@ -189,6 +191,17 @@ describe('createRealmKeysRepository — statements', () => {
     expect(queries).toHaveLength(1);
     expect(queries[0].text).toContain('pg_advisory_xact_lock(hashtextextended(');
     expect(queries[0].values).toEqual([`qauth:realm-keys:${REALM_ID}`]);
+  });
+
+  it('anotherRealmPublishes reads the public rows of the other realms only, by key identity (#491)', async () => {
+    const [query] = await run('anotherRealmPublishes');
+
+    expect(query.text.toLowerCase()).toContain('from "realm_public_keys"');
+    expect(query.text).toContain('<>');
+    expect(query.text).toContain('@>');
+    expect(query.values).toEqual(
+      expect.arrayContaining([REALM_ID, JSON.stringify({ kty: 'OKP', crv: 'Ed25519', x: 'AAAA' })])
+    );
   });
 
   it('create writes the key and its public row inside one transaction', async () => {

@@ -113,6 +113,22 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
       );
     },
 
+    async anotherRealmPublishes(
+      realmId: string,
+      identity: Readonly<Record<string, string>>,
+      tx: MemoryTx
+    ): Promise<boolean> {
+      calls.push({ method: 'anotherRealmPublishes', tx });
+      return rows.some(
+        ({ key, publicJwk }) =>
+          key.realmId !== realmId &&
+          publicJwk !== undefined &&
+          Object.entries(identity).every(
+            ([name, value]) => (publicJwk as Record<string, unknown>)[name] === value
+          )
+      );
+    },
+
     async create(input: NewStoredKey, tx: MemoryTx): Promise<unknown> {
       calls.push({ method: 'create', tx });
       options.beforeCreate?.(input, creates++);

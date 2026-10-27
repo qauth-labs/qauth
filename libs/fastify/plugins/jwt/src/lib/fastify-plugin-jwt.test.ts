@@ -1,53 +1,41 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, KeyObject } from 'node:crypto';
 
 import {
-  getSignatureBackend,
-  type MlDsaKey,
-  registerSignatureBackend,
-  resetSignatureBackends,
-} from '@qauth-labs/core-crypto';
-import {
-  generateEdDSAKeyPair,
-  importPrivateKey,
-  selectJwksKey,
-  signAccessToken,
-} from '@qauth-labs/server-jwt';
+  createTestSigner,
+  type TestSigner,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import {
   JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
+  TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
-import { exportPKCS8, exportSPKI, importJWK, jwtVerify, SignJWT } from 'jose';
-import { describe, expect, it } from 'vitest';
+import {
+  createLocalJWKSet,
+  decodeProtectedHeader,
+  importPKCS8,
+  type JSONWebKeySet,
+  jwtVerify,
+  SignJWT,
+} from 'jose';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { JwtPluginOptions, TokenRealm } from '../types';
 import { jwtPlugin } from './fastify-plugin-jwt';
 
 /** Operator-enabled algorithm set (SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65). */
 const PQC_ENABLED = ['EdDSA', 'ML-DSA-65'] as const;
 
-/**
- * Sign an already-expired token (avoids flaky setTimeout-based tests).
- * Uses past exp timestamp so verification fails immediately with JWTExpiredError.
- */
-async function signExpiredToken(
-  privateKeyPem: string,
-  payload: { sub: string; email: string; email_verified: boolean; clientId: string }
-): Promise<string> {
-  const key = await importPrivateKey(privateKeyPem);
-  const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({
-    sub: payload.sub,
-    email: payload.email,
-    email_verified: payload.email_verified,
-    client_id: payload.clientId,
-  })
-    .setProtectedHeader({ alg: 'EdDSA' })
-    .setIssuedAt(now - 3600)
-    .setExpirationTime(now - 60)
-    .setIssuer('https://auth.test.example.com')
-    .sign(key);
+const ISSUER_A = 'https://a.test.example.com';
+const ISSUER_B = 'https://b.test.example.com';
+
+/** An Ed25519 private key, PKCS#8 PEM, as `JWT_PRIVATE_KEY` holds one. */
+function ed25519Pem(): string {
+  return generateKeyPairSync('ed25519')
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
 }
 
 /**
@@ -72,70 +60,134 @@ async function registerTestErrorHandler(app: FastifyInstance) {
   });
 }
 
-async function buildTestApp() {
-  const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-  const privateKeyPem = await exportPKCS8(privateKey);
-  const publicKeyPem = await exportSPKI(publicKey);
+/** Two realms with keys of their own; realm A's EdDSA key is `realmAKey`. */
+interface TestRealms {
+  readonly signer: TestSigner;
+  readonly a: TokenRealm;
+  readonly b: TokenRealm;
+  /** The PEM of realm A's EdDSA `token_signing` key, imported as a variable would be. */
+  readonly realmAKey: string;
+  /** Its `kid`, which a token without a `kid` may be verified with; none for a hybrid realm. */
+  readonly realmAKeyKid?: string;
+}
 
+async function createRealms(
+  options: { hybridSigning?: boolean; rs256?: boolean; refreshIntervalMs?: number } = {}
+): Promise<TestRealms> {
+  const signer = createTestSigner({
+    hybridSigning: options.hybridSigning === true,
+    ...(options.refreshIntervalMs === undefined
+      ? {}
+      : { refreshIntervalMs: options.refreshIntervalMs }),
+  });
+  // A hybrid realm's EdDSA key is half a pair, which a variable cannot import
+  // alone; such a realm gets generated keys.
+  const realmAKey = ed25519Pem();
+  const a = {
+    id: await signer.addRealm({
+      issuer: ISSUER_A,
+      rs256: options.rs256 === true,
+      ...(options.hybridSigning === true ? {} : { ed25519PrivateKey: realmAKey }),
+    }),
+    issuer: ISSUER_A,
+  };
+  const b = { id: await signer.addRealm({ issuer: ISSUER_B }), issuer: ISSUER_B };
+  const realmAKeyKid =
+    options.hybridSigning === true
+      ? undefined
+      : (await signer.signer.getVerificationKeys('local', a.id, 'token_signing')).find(
+          (key) => key.algorithm === 'EdDSA'
+        )?.kid;
+  return { signer, a, b, realmAKey, ...(realmAKeyKid === undefined ? {} : { realmAKeyKid }) };
+}
+
+/**
+ * A server whose requests belong to realm A, or to realm B when they send
+ * `x-test-realm: b`.
+ */
+async function buildTestApp(
+  realms: TestRealms,
+  options: Partial<JwtPluginOptions> = {}
+): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-
   await app.register(jwtPlugin, {
-    privateKey: privateKeyPem,
-    publicKey: publicKeyPem,
-    issuer: 'https://auth.test.example.com',
+    signer: realms.signer.signer,
+    requestRealm: (request) => (request.headers['x-test-realm'] === 'b' ? realms.b : realms.a),
     accessTokenLifespan: 900,
     refreshTokenLifespan: 86400,
+    // Realm A's key came from a key variable, as before #491.
+    ...(realms.realmAKeyKid === undefined ? {} : { kidlessKeyIds: [realms.realmAKeyKid] }),
+    ...options,
   });
-
   await registerTestErrorHandler(app);
-
   app.get('/protected', { preHandler: app.requireJwt }, async (request) => ({
     sub: request.jwtPayload?.sub,
     email: request.jwtPayload?.email,
+    iss: request.jwtPayload?.iss,
+    cnf: request.jwtPayload?.cnf ?? null,
   }));
-
-  return { app, privateKeyPem, publicKeyPem };
+  return app;
 }
 
+/** The `kid` of the realm's active key of `algorithm`, as the signer lists it. */
+async function activeKid(
+  realms: TestRealms,
+  realm: TokenRealm,
+  algorithm: string
+): Promise<string> {
+  const keys = await realms.signer.signer.getVerificationKeys('local', realm.id, 'token_signing');
+  const key = keys.find((candidate) => candidate.algorithm === algorithm);
+  if (key === undefined) throw new Error(`no ${algorithm} key`);
+  return key.kid;
+}
+
+/** A token signed with `pem` the way a release before the key store signed one: no `kid`. */
+async function signWithPem(
+  pem: string,
+  claims: {
+    iss?: string;
+    typ?: string;
+    kid?: string;
+    jti?: string;
+    exp?: number;
+    aud?: string;
+  } = {}
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = new SignJWT({ sub: 'user-1', client_id: 'client-1', jti: claims.jti ?? 'jti-1' })
+    .setProtectedHeader({
+      alg: 'EdDSA',
+      ...(claims.typ === undefined ? {} : { typ: claims.typ }),
+      ...(claims.kid === undefined ? {} : { kid: claims.kid }),
+    })
+    .setIssuedAt(now - 60)
+    .setExpirationTime(claims.exp ?? now + 900);
+  if (claims.iss !== undefined) jwt.setIssuer(claims.iss);
+  if (claims.aud !== undefined) jwt.setAudience(claims.aud);
+  return jwt.sign(await importPKCS8(pem, 'EdDSA'));
+}
+
+function header(token: string): Record<string, unknown> {
+  return { ...decodeProtectedHeader(token) };
+}
+
+function payload(token: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf-8')) as Record<
+    string,
+    unknown
+  >;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('requireJwt middleware', () => {
-  it('allows valid token and sets jwtPayload', async () => {
-    const { app, privateKeyPem } = await buildTestApp();
+  it('allows a token of the request realm and sets jwtPayload', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
-      const token = await signAccessToken(
-        {
-          sub: 'user-1',
-          email: 'user@example.com',
-          email_verified: true,
-          clientId: 'client-1',
-        },
-        await importPrivateKey(privateKeyPem),
-        'https://auth.test.example.com',
-        900
-      );
-
-      const response = await app.inject({
-        method: 'GET',
-        url: '/protected',
-        headers: {
-          authorization: `Bearer ${token}`,
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      const json = response.json();
-      expect(json).toEqual({
-        sub: 'user-1',
-        email: 'user@example.com',
-      });
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('returns 401 for expired token', async () => {
-    const { app, privateKeyPem } = await buildTestApp();
-    try {
-      const token = await signExpiredToken(privateKeyPem, {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
         sub: 'user-1',
         email: 'user@example.com',
         email_verified: true,
@@ -145,14 +197,67 @@ describe('requireJwt middleware', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/protected',
-        headers: {
-          authorization: `Bearer ${token}`,
-        },
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        sub: 'user-1',
+        email: 'user@example.com',
+        iss: ISSUER_A,
+        cnf: null,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a token of another realm outright (ADR-019 Decision 1)', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const tokenOfB = await app.jwtUtils.signAccessToken(realms.b, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+
+      const atA = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${tokenOfB}` },
+      });
+      expect(atA.statusCode).toBe(401);
+      expect(atA.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN' });
+
+      const atB = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${tokenOfB}`, 'x-test-realm': 'b' },
+      });
+      expect(atB.statusCode).toBe(200);
+      expect(atB.json()).toMatchObject({ iss: ISSUER_B });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 401 for an expired token', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const token = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
+        exp: Math.floor(Date.now() / 1000) - 60,
+      });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${token}` },
       });
 
       expect(response.statusCode).toBe(401);
-      const json = response.json();
-      expect(json).toMatchObject({
+      expect(response.json()).toMatchObject({
         statusCode: 401,
         code: 'ACCESS_TOKEN_EXPIRED',
         error: expect.any(String),
@@ -162,33 +267,24 @@ describe('requireJwt middleware', () => {
     }
   });
 
-  it('returns 401 for invalid signature', async () => {
-    const { app } = await buildTestApp();
+  it('returns 401 for a signature by another key under the realm key id', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
-      const { privateKey: otherPrivateKey } = await generateEdDSAKeyPair();
-      const token = await signAccessToken(
-        {
-          sub: 'user-1',
-          email: 'user@example.com',
-          email_verified: true,
-          clientId: 'client-1',
-        },
-        otherPrivateKey,
-        'https://auth.test.example.com',
-        900
-      );
+      const token = await signWithPem(ed25519Pem(), {
+        iss: ISSUER_A,
+        typ: 'at+jwt',
+        kid: await activeKid(realms, realms.a, 'EdDSA'),
+      });
 
       const response = await app.inject({
         method: 'GET',
         url: '/protected',
-        headers: {
-          authorization: `Bearer ${token}`,
-        },
+        headers: { authorization: `Bearer ${token}` },
       });
 
       expect(response.statusCode).toBe(401);
-      const json = response.json();
-      expect(json).toMatchObject({
+      expect(response.json()).toMatchObject({
         statusCode: 401,
         code: 'INVALID_ACCESS_TOKEN',
         error: expect.any(String),
@@ -199,138 +295,561 @@ describe('requireJwt middleware', () => {
   });
 
   it('returns 401 for missing token', async () => {
-    const { app } = await buildTestApp();
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/protected',
-      });
+      const response = await app.inject({ method: 'GET', url: '/protected' });
 
       expect(response.statusCode).toBe(401);
-      const json = response.json();
-      expect(json).toMatchObject({
+      expect(response.json()).toMatchObject({
         statusCode: 401,
         // No credential is not a refused token (RFC 6750 §3.1).
         code: 'UNAUTHORIZED',
         error: 'Missing or malformed Authorization header',
       });
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('exposes getIssuer() returning the configured issuer', async () => {
-    const { app } = await buildTestApp();
-    try {
-      expect(app.jwtUtils.getIssuer()).toBe('https://auth.test.example.com');
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('exposes getJwks() returning a JWKS that verifies issued tokens', async () => {
-    const { app, privateKeyPem } = await buildTestApp();
-    try {
-      const jwks = await app.jwtUtils.getJwks();
-
-      expect(jwks.keys).toHaveLength(1);
-      const [jwk] = jwks.keys;
-      expect(jwk.alg).toBe('EdDSA');
-      expect(jwk.use).toBe('sig');
-      expect(jwk).not.toHaveProperty('d');
-
-      const token = await signAccessToken(
-        {
-          sub: 'user-1',
-          email: 'user@example.com',
-          email_verified: true,
-          clientId: 'client-1',
-        },
-        await importPrivateKey(privateKeyPem),
-        'https://auth.test.example.com',
-        900
-      );
-
-      const key = await importJWK(jwk, 'EdDSA');
-      const { payload } = await jwtVerify(token, key, { algorithms: ['EdDSA'] });
-      expect(payload.sub).toBe('user-1');
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('getJwks() is EdDSA-only (single OKP key) when no ML-DSA seed is configured (#246)', async () => {
-    const { app } = await buildTestApp();
-    try {
-      const jwks = await app.jwtUtils.getJwks();
-      expect(jwks.keys).toHaveLength(1);
-      expect(jwks.keys.every((k) => (k as { kty?: string }).kty !== 'AKP')).toBe(true);
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('getJwks() publishes an AKP key beside the OKP key when an ML-DSA seed is configured (#246)', async () => {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    const privateKeyPem = await exportPKCS8(privateKey);
-    const publicKeyPem = await exportSPKI(publicKey);
-    const mlDsa = getSignatureBackend('ML-DSA-65', PQC_ENABLED).generateKeyPair({
-      extractable: true,
-    });
-    const seed = getSignatureBackend('ML-DSA-65', PQC_ENABLED).exportKey(mlDsa.privateKey);
-
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      privateKey: privateKeyPem,
-      publicKey: publicKeyPem,
-      issuer: 'https://auth.test.example.com',
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 86400,
-      keyId: 'ed-1',
-      mlDsaSeed: seed,
-      mlDsaKeyId: 'ed-1-mldsa',
-      enabledSignatureAlgorithms: PQC_ENABLED,
-    });
-    try {
-      const jwks = await app.jwtUtils.getJwks();
-      expect(jwks.keys).toHaveLength(2);
-
-      const okp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'OKP') as
-        | Record<string, unknown>
-        | undefined;
-      const akp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'AKP') as
-        | Record<string, unknown>
-        | undefined;
-      expect(okp?.['alg']).toBe('EdDSA');
-      expect(akp?.['alg']).toBe('ML-DSA-65');
-      expect(akp?.['kid']).toBe('ed-1-mldsa');
-      // The AKP entry carries only the public key, never private material.
-      expect(akp).not.toHaveProperty('priv');
-      expect(akp).not.toHaveProperty('d');
     } finally {
       await app.close();
     }
   });
 
   it('returns 401 for malformed Authorization header', async () => {
-    const { app } = await buildTestApp();
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/protected',
-        headers: {
-          authorization: 'InvalidFormat',
-        },
+      for (const authorization of ['Basic abc', 'Bearer', 'Bearer not-a-jwt']) {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/protected',
+          headers: { authorization },
+        });
+        expect(response.statusCode).toBe(401);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('signing through the signer (#491)', () => {
+  it('signs access tokens with the realm issuer and the kid of its active EdDSA key', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const tokenA = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      const tokenB = await app.jwtUtils.signAccessToken(realms.b, {
+        sub: 'user-1',
+        clientId: 'client-1',
       });
 
-      expect(response.statusCode).toBe(401);
-      const json = response.json();
-      expect(json).toMatchObject({
-        statusCode: 401,
-        // No credential is not a refused token (RFC 6750 §3.1).
-        code: 'UNAUTHORIZED',
-        error: 'Missing or malformed Authorization header',
+      expect(header(tokenA)).toEqual({
+        alg: 'EdDSA',
+        kid: await activeKid(realms, realms.a, 'EdDSA'),
+        typ: 'at+jwt',
       });
+      expect(header(tokenB)['kid']).toBe(await activeKid(realms, realms.b, 'EdDSA'));
+      expect(header(tokenA)['kid']).not.toBe(header(tokenB)['kid']);
+      expect(payload(tokenA)).toMatchObject({
+        iss: ISSUER_A,
+        sub: 'user-1',
+        client_id: 'client-1',
+        aud: 'client-1',
+        token_use: 'access',
+      });
+      expect(payload(tokenB)['iss']).toBe(ISSUER_B);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('gives a token the configured lifespan, or the shorter override', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      const clamped = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+        expiresInOverride: 60,
+      });
+
+      const claims = payload(token);
+      expect((claims['exp'] as number) - (claims['iat'] as number)).toBe(900);
+      const clampedClaims = payload(clamped);
+      expect((clampedClaims['exp'] as number) - (clampedClaims['iat'] as number)).toBe(60);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves each realm's JWKS: a realm's tokens verify with its JWKS and not with another's", async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const jwksA = await app.jwtUtils.getJwks(realms.a);
+      const jwksB = await app.jwtUtils.getJwks(realms.b);
+      expect(jwksA.keys.map((key) => key.kid)).toEqual([
+        await activeKid(realms, realms.a, 'EdDSA'),
+      ]);
+      for (const key of [...jwksA.keys, ...jwksB.keys]) {
+        expect(key).not.toHaveProperty('d');
+        expect(key).toMatchObject({ alg: 'EdDSA', use: 'sig' });
+      }
+
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(
+        jwtVerify(token, createLocalJWKSet(jwksA as JSONWebKeySet), { issuer: ISSUER_A })
+      ).resolves.toBeDefined();
+      await expect(
+        jwtVerify(token, createLocalJWKSet(jwksB as JSONWebKeySet))
+      ).rejects.toMatchObject({ code: 'ERR_JWKS_NO_MATCHING_KEY' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('signs ID tokens with EdDSA, or with RS256 when the realm has an RS256 key, each with its kid', async () => {
+    const plain = await createRealms();
+    const withRs256 = await createRealms({ rs256: true });
+    const plainApp = await buildTestApp(plain);
+    const rsaApp = await buildTestApp(withRs256);
+    try {
+      const edIdToken = await plainApp.jwtUtils.signIdToken(plain.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+      });
+      expect(header(edIdToken)).toEqual({
+        alg: 'EdDSA',
+        kid: await activeKid(plain, plain.a, 'EdDSA'),
+        typ: 'JWT',
+      });
+      expect(await plainApp.jwtUtils.getIdTokenSigningAlgValuesSupported(plain.a)).toEqual([
+        'EdDSA',
+      ]);
+
+      const rsaIdToken = await rsaApp.jwtUtils.signIdToken(withRs256.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+        nonce: 'n-1',
+      });
+      expect(header(rsaIdToken)).toEqual({
+        alg: 'RS256',
+        kid: await activeKid(withRs256, withRs256.a, 'RS256'),
+        typ: 'JWT',
+      });
+      expect(payload(rsaIdToken)).toMatchObject({
+        iss: ISSUER_A,
+        aud: 'client-1',
+        nonce: 'n-1',
+        token_use: 'id',
+      });
+      expect(await rsaApp.jwtUtils.getIdTokenSigningAlgValuesSupported(withRs256.a)).toEqual([
+        'RS256',
+        'EdDSA',
+      ]);
+      // The other realm has no RS256 key: EdDSA ID tokens there.
+      expect(await rsaApp.jwtUtils.getIdTokenSigningAlgValuesSupported(withRs256.b)).toEqual([
+        'EdDSA',
+      ]);
+
+      const jwks = await rsaApp.jwtUtils.getJwks(withRs256.a);
+      await expect(
+        jwtVerify(rsaIdToken, createLocalJWKSet(jwks as JSONWebKeySet), {
+          issuer: ISSUER_A,
+          audience: 'client-1',
+        })
+      ).resolves.toBeDefined();
+    } finally {
+      await plainApp.close();
+      await rsaApp.close();
+    }
+  });
+
+  it('signs with no store read once the signer has the keys', async () => {
+    const realms = await createRealms({ rs256: true });
+    const app = await buildTestApp(realms);
+    try {
+      await app.jwtUtils.signAccessToken(realms.a, { sub: 'user-1', clientId: 'client-1' });
+      await app.jwtUtils.signIdToken(realms.a, { sub: 'user-1', audience: 'client-1' });
+      const reads = realms.signer.storeReads.length;
+
+      await app.jwtUtils.signAccessToken(realms.a, { sub: 'user-2', clientId: 'client-1' });
+      await app.jwtUtils.signIdToken(realms.a, { sub: 'user-2', audience: 'client-1' });
+      expect(realms.signer.storeReads.slice(reads)).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('verifying with the realm keys (#491)', () => {
+  it('verifies a token with no kid, signed before tokens named their key, with the imported key only', async () => {
+    const realms = await createRealms();
+    const importedKid = await activeKid(realms, realms.a, 'EdDSA');
+    expect(realms.realmAKeyKid).toBe(importedKid);
+    const app = await buildTestApp(realms, { kidlessKeyIds: [importedKid] });
+    try {
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A, aud: 'client-1' });
+      expect(header(legacy)).not.toHaveProperty('kid');
+
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, legacy)).resolves.toMatchObject({
+        sub: 'user-1',
+        iss: ISSUER_A,
+      });
+      // Not in another realm: its keys did not sign it.
+      await expect(
+        app.jwtUtils.verifyAccessToken({ ...realms.b, issuer: ISSUER_A }, legacy)
+      ).rejects.toThrow(JWTInvalidError);
+      // A key no variable imported is never tried for a token without a kid.
+      const other = await signWithPem(ed25519Pem(), { iss: ISSUER_A, aud: 'client-1' });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, other)).rejects.toThrow(
+        JWTInvalidError
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('verifies no token without a kid when no imported key is named, nor with a generated key', async () => {
+    const realms = await createRealms();
+    const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A, aud: 'client-1' });
+    // Realm B's key was generated by the store: it never signed a token without a kid.
+    const generatedKid = await activeKid(realms, realms.b, 'EdDSA');
+    for (const kidlessKeyIds of [[], [generatedKid]]) {
+      const app = await buildTestApp(realms, { kidlessKeyIds });
+      try {
+        await expect(app.jwtUtils.verifyAccessToken(realms.a, legacy)).rejects.toThrow(
+          'no key of this realm verifies it'
+        );
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  it("refuses a kid the realm does not publish, and one naming the realm's RS256 key", async () => {
+    const realms = await createRealms({ rs256: true });
+    const app = await buildTestApp(realms);
+    try {
+      const unknownKid = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
+        kid: 'no-such-key',
+      });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, unknownKid)).rejects.toThrow(
+        'no key of this realm verifies it'
+      );
+
+      const rsaKid = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
+        kid: await activeKid(realms, realms.a, 'RS256'),
+      });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, rsaKid)).rejects.toThrow(
+        JWTInvalidError
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a token whose key the realm no longer lists for verification', async () => {
+    // The signer reads the store on every call, so the status change shows at once.
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toBeDefined();
+
+      const kid = await activeKid(realms, realms.a, 'EdDSA');
+      realms.signer.setKeyStatus(realms.a.id, kid, 'compromised');
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).rejects.toThrow(
+        'no key of this realm verifies it'
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('reports an expired ID token of the realm as invalid, never as an expired access token (logout)', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const expired = (typ: 'at+jwt' | 'JWT') =>
+        realms.signer.signer.signJws('local', {
+          realmId: realms.a.id,
+          purpose: 'token_signing',
+          typ,
+          claims: {
+            sub: 'user-1',
+            client_id: 'client-1',
+            aud: 'client-1',
+            iat: now - 3600,
+            exp: now - 1800,
+          },
+        });
+      await expect(
+        app.jwtUtils.verifyAccessToken(realms.a, await expired('at+jwt'))
+      ).rejects.toBeInstanceOf(JWTExpiredError);
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, await expired('JWT'))).rejects.toThrow(
+        'not an access token'
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('pins the realm issuer, whatever the key', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const foreign = await signWithPem(realms.realmAKey, { iss: ISSUER_B, typ: 'at+jwt' });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, foreign)).rejects.toThrow(
+        JWTInvalidError
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('holds the audience to the one asked for', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(
+        app.jwtUtils.verifyAccessToken(realms.a, token, { audience: 'client-1' })
+      ).resolves.toMatchObject({ sub: 'user-1' });
+      await expect(
+        app.jwtUtils.verifyAccessToken(realms.a, token, { audience: 'client-2' })
+      ).rejects.toThrow(JWTInvalidError);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('the plugin holds no private key (#491)', () => {
+  it('takes no key option and imports only public verification keys', async () => {
+    const realms = await createRealms({ rs256: true });
+    // Warm the signer, which holds the realm's keys by design, so its own
+    // imports happen before the watch starts.
+    await realms.signer.signer.signJws('local', {
+      realmId: realms.a.id,
+      purpose: 'token_signing',
+      typ: 'at+jwt',
+      claims: { sub: 'warm-up' },
+    });
+    await realms.signer.signer.signJws('local', {
+      realmId: realms.a.id,
+      purpose: 'token_signing',
+      typ: 'JWT',
+      algorithm: 'RS256',
+      claims: { sub: 'warm-up' },
+    });
+    const importKey = vi.spyOn(crypto.subtle, 'importKey');
+
+    const app = await buildTestApp(realms);
+    try {
+      const token = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await app.jwtUtils.signIdToken(realms.a, { sub: 'user-1', audience: 'client-1' });
+      await app.jwtUtils.verifyAccessToken(realms.a, token);
+
+      // Every key the plugin imported is a public key that only verifies.
+      expect(importKey).toHaveBeenCalled();
+      for (const [format, keyData, , , usages] of importKey.mock.calls) {
+        expect(format).toBe('jwk');
+        expect(keyData).not.toHaveProperty('d');
+        expect(usages).toEqual(['verify']);
+      }
+
+      // Nothing reachable from the decorators is a private key.
+      const seen = new Set<unknown>();
+      const privateKeys: unknown[] = [];
+      const walk = (value: unknown): void => {
+        if (value === null || typeof value !== 'object' || seen.has(value)) return;
+        seen.add(value);
+        if (
+          (value instanceof CryptoKey && value.type === 'private') ||
+          (value instanceof KeyObject && value.type === 'private')
+        ) {
+          privateKeys.push(value);
+          return;
+        }
+        for (const member of Object.values(value)) walk(member);
+      };
+      walk(app.jwtUtils);
+      expect(privateKeys).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('a signer that only reads published keys (a process without the signer role, #495)', () => {
+  it("passes the signer's 503 on for every signature and still verifies the realm's tokens", async () => {
+    const realms = await createRealms();
+    const issuing = await buildTestApp(realms);
+    const token = await issuing.jwtUtils.signAccessToken(realms.a, {
+      sub: 'user-1',
+      clientId: 'client-1',
+    });
+    await issuing.close();
+
+    const refuse = (): Promise<never> =>
+      Promise.reject(
+        new TemporarilyUnavailableError(60, { reason: 'signer_service_not_reachable' })
+      );
+    const verifyOnly = await buildTestApp({
+      ...realms,
+      signer: {
+        ...realms.signer,
+        signer: {
+          signJws: refuse,
+          signHybrid: refuse,
+          getVerificationKeys: realms.signer.signer.getVerificationKeys,
+          getJwks: realms.signer.signer.getJwks,
+        } as unknown as TestSigner['signer'],
+      },
+    });
+    try {
+      await expect(
+        verifyOnly.jwtUtils.signAccessToken(realms.a, { sub: 'user-1', clientId: 'client-1' })
+      ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+      await expect(
+        verifyOnly.jwtUtils.signIdToken(realms.a, { sub: 'user-1', audience: 'client-1' })
+      ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+
+      await expect(verifyOnly.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toMatchObject({
+        sub: 'user-1',
+        iss: ISSUER_A,
+      });
+      await expect(verifyOnly.jwtUtils.verifyAccessToken(realms.b, token)).rejects.toBeInstanceOf(
+        JWTInvalidError
+      );
+      const response = await verifyOnly.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect((await verifyOnly.jwtUtils.getJwks(realms.a)).keys.length).toBeGreaterThan(0);
+    } finally {
+      await verifyOnly.close();
+    }
+  });
+});
+
+describe('hybrid issuance through the signer (#275, #491)', () => {
+  it('refuses to register hybrid signing that SIGNING_ALGORITHM_MODE does not enable', async () => {
+    const realms = await createRealms();
+    const app = Fastify({ logger: false });
+    await expect(
+      app.register(jwtPlugin, {
+        signer: realms.signer.signer,
+        requestRealm: () => realms.a,
+        accessTokenLifespan: 900,
+        refreshTokenLifespan: 86400,
+        hybridSigningEnabled: true,
+        enabledSignatureAlgorithms: ['EdDSA'],
+      })
+    ).rejects.toThrow(/hybridSigningEnabled requires .*ML-DSA-65/);
+    await app.close();
+  });
+
+  it('stamps kid and pqc_kid, and round-trips through verification in the realm only', async () => {
+    const realms = await createRealms({ hybridSigning: true });
+    const app = await buildTestApp(realms, {
+      hybridSigningEnabled: true,
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      expect(app.jwtUtils.isHybridSigningEnabled()).toBe(true);
+      const hybrid = await app.jwtUtils.signHybridAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+
+      expect(header(hybrid.token)).toEqual({
+        alg: 'EdDSA',
+        kid: await activeKid(realms, realms.a, 'EdDSA'),
+        typ: 'at+jwt',
+        pqc_alg: 'ML-DSA-65',
+        pqc_kid: await activeKid(realms, realms.a, 'ML-DSA-65'),
+      });
+      expect(payload(hybrid.token)['iss']).toBe(ISSUER_A);
+
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken(realms.a, hybrid, { requirePqc: true })
+      ).resolves.toMatchObject({ sub: 'user-1' });
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken({ ...realms.b, issuer: ISSUER_A }, hybrid, {
+          requirePqc: true,
+        })
+      ).rejects.toThrow();
+      // The bearer token is an ordinary Ed25519 JWS that verifies classically too.
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, hybrid.token)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a hybrid token of the realm that is not an access token (RFC 9068 typ)', async () => {
+    const realms = await createRealms({ hybridSigning: true });
+    const app = await buildTestApp(realms, {
+      hybridSigningEnabled: true,
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      // A hybrid ID token, signed by the realm's own hybrid pair.
+      const idToken = await realms.signer.signer.signHybrid('local', {
+        realmId: realms.a.id,
+        typ: 'JWT',
+        claims: { sub: 'user-1', aud: 'client-1', iat: now, exp: now + 900 },
+      });
+      expect(header(idToken.token)['typ']).toBe('JWT');
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken(realms.a, idToken, { requirePqc: true })
+      ).rejects.toThrow('not an access token');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses hybrid issuance when the switch is off, and PQC verification without ML-DSA-65', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      expect(app.jwtUtils.isHybridSigningEnabled()).toBe(false);
+      await expect(
+        app.jwtUtils.signHybridAccessToken(realms.a, { sub: 'user-1', clientId: 'client-1' })
+      ).rejects.toThrow('Hybrid signing is not enabled on this server.');
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken(
+          realms.a,
+          { token: 'a.b.c', pqcSignature: 'x', pqcAlg: 'ML-DSA-65' },
+          { requirePqc: true }
+        )
+      ).rejects.toThrow('PQC verification is not configured on this server');
     } finally {
       await app.close();
     }
@@ -338,7 +857,7 @@ describe('requireJwt middleware', () => {
 });
 
 /**
- * DPoP at `requireJwt` (RFC 9449 §7, #480). The plugin parses the scheme and
+ * DPoP at the routes `requireJwt` protects (RFC 9449 §7, #480). The plugin
  * applies the two rules that need no verifier: a DPoP-bound token is never a
  * Bearer token (§7.2), and the DPoP scheme needs a bound token. The proof
  * itself is the host app's `verifyDpopProof`, stubbed here.
@@ -349,24 +868,13 @@ describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
   async function buildDpopApp(
     verifyDpopProof?: (request: unknown, token: string, claims: { cnf?: unknown }) => Promise<void>
   ) {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    const privateKeyPem = await exportPKCS8(privateKey);
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      privateKey: privateKeyPem,
-      publicKey: await exportSPKI(publicKey),
-      issuer: 'https://auth.test.example.com',
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 86400,
-      ...(verifyDpopProof === undefined ? {} : { verifyDpopProof }),
-    });
-    await registerTestErrorHandler(app);
-    app.get('/protected', { preHandler: app.requireJwt }, async (request) => ({
-      sub: request.jwtPayload?.sub,
-      cnf: request.jwtPayload?.cnf ?? null,
-    }));
+    const realms = await createRealms();
+    const app = await buildTestApp(
+      realms,
+      verifyDpopProof === undefined ? {} : { verifyDpopProof }
+    );
     const sign = async (bound: boolean) =>
-      app.jwtUtils.signAccessToken({
+      app.jwtUtils.signAccessToken(realms.a, {
         sub: 'user-1',
         clientId: 'client-1',
         ...(bound ? { cnf: { jkt: JKT } } : {}),
@@ -425,7 +933,7 @@ describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
         headers: { authorization: `DPoP ${token}` },
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual({ sub: 'user-1', cnf: { jkt: JKT } });
+      expect(response.json()).toMatchObject({ sub: 'user-1', cnf: { jkt: JKT } });
       expect(calls).toEqual([{ token, cnf: { jkt: JKT } }]);
     } finally {
       await app.close();
@@ -477,394 +985,58 @@ describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
         headers: { authorization: `Bearer ${await sign(false)}` },
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual({ sub: 'user-1', cnf: null });
+      expect(response.json()).toMatchObject({ sub: 'user-1', cnf: null });
     } finally {
-      await app.close();
-    }
-  });
-});
-
-describe('jwtPlugin — PQC backend gating, rotation, and seed hygiene (#248 F7/F9/F10)', () => {
-  const mlDsaBackend = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
-
-  async function edPems() {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    return {
-      privateKeyPem: await exportPKCS8(privateKey),
-      publicKeyPem: await exportSPKI(publicKey),
-    };
-  }
-
-  function freshMlDsa() {
-    const pair = mlDsaBackend.generateKeyPair({ extractable: true });
-    return {
-      seed: mlDsaBackend.exportKey(pair.privateKey),
-      publicKey: mlDsaBackend.exportKey(pair.publicKey),
-    };
-  }
-
-  function baseOptions(pems: { privateKeyPem: string; publicKeyPem: string }) {
-    return {
-      privateKey: pems.privateKeyPem,
-      publicKey: pems.publicKeyPem,
-      issuer: 'https://auth.test.example.com',
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 86400,
-    };
-  }
-
-  it('F7: fails boot when an ML-DSA seed is set without the operator allowlist', async () => {
-    const pems = await edPems();
-    const app = Fastify({ logger: false });
-    // Omitting the allowlist is exactly the hardcoded-['ML-DSA-65'] bypass the
-    // finding is about — it must be impossible to configure, not defaulted.
-    await expect(
-      app.register(jwtPlugin, {
-        ...baseOptions(pems),
-        keyId: 'ed-1',
-        mlDsaSeed: freshMlDsa().seed,
-        mlDsaKeyId: 'mldsa-1',
-      })
-    ).rejects.toThrow(/enabledSignatureAlgorithms.*is required/s);
-    await app.close();
-  });
-
-  it('F7: fails boot when SIGNING_ALGORITHM_MODE has not enabled ML-DSA-65', async () => {
-    const pems = await edPems();
-    const app = Fastify({ logger: false });
-    await expect(
-      app.register(jwtPlugin, {
-        ...baseOptions(pems),
-        keyId: 'ed-1',
-        mlDsaSeed: freshMlDsa().seed,
-        mlDsaKeyId: 'mldsa-1',
-        // Classical-only deployment: the ML-DSA key must not be publishable.
-        enabledSignatureAlgorithms: ['EdDSA'],
-      })
-    ).rejects.toThrow(/'ML-DSA-65' is not enabled/);
-    await app.close();
-  });
-
-  it('F10: zeroizes the transient private key right after boot-time derivation', async () => {
-    const pems = await edPems();
-    const { seed } = freshMlDsa();
-    // Capture the exact MlDsaKey the plugin derives from, via the backend seam,
-    // so zeroization is observable rather than merely assumed.
-    let imported: MlDsaKey | undefined;
-    registerSignatureBackend({
-      ...mlDsaBackend,
-      importKey(encoded, kind, options) {
-        const key = mlDsaBackend.importKey(encoded, kind, options);
-        if (kind === 'private') imported = key;
-        return key;
-      },
-    });
-    const app = Fastify({ logger: false });
-    try {
-      await app.register(jwtPlugin, {
-        ...baseOptions(pems),
-        keyId: 'ed-1',
-        mlDsaSeed: seed,
-        mlDsaKeyId: 'mldsa-1',
-        enabledSignatureAlgorithms: PQC_ENABLED,
-      });
-
-      expect(imported).toBeDefined();
-      // The seed is overwritten and the key marked dead the moment boot-time
-      // derivation completes — it must not stay resident for the process life.
-      expect(() => imported?.seed()).toThrow(/destroyed/);
-      expect(() => imported?.material()).toThrow(/destroyed/);
-
-      // ...and the JWKS it produced is still correct.
-      const { keys } = await app.jwtUtils.getJwks();
-      expect(selectJwksKey(keys, { kid: 'mldsa-1', alg: 'ML-DSA-65' })).toBeDefined();
-    } finally {
-      resetSignatureBackends();
-      await app.close();
-    }
-  });
-
-  it('F10: the configured seed is not retained — JWKS exposes public material only', async () => {
-    const pems = await edPems();
-    const { seed } = freshMlDsa();
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      ...baseOptions(pems),
-      keyId: 'ed-1',
-      mlDsaSeed: seed,
-      mlDsaKeyId: 'mldsa-1',
-      enabledSignatureAlgorithms: PQC_ENABLED,
-    });
-    try {
-      const jwks = await app.jwtUtils.getJwks();
-      const serialized = JSON.stringify(jwks);
-      // The transient private key is zeroized right after derivation, so the
-      // seed exists nowhere in what the server can still serve.
-      expect(serialized).not.toContain(seed);
-      expect(serialized).not.toContain('priv');
-      expect(serialized).not.toContain('"d"');
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('F9: publishes retired Ed25519 and ML-DSA keys under their own kids', async () => {
-    const pems = await edPems();
-    const retiredEd = await generateEdDSAKeyPair(true);
-    const retiredMlDsa = freshMlDsa();
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      ...baseOptions(pems),
-      keyId: 'ed-2026',
-      mlDsaSeed: freshMlDsa().seed,
-      mlDsaKeyId: 'mldsa-2026',
-      enabledSignatureAlgorithms: PQC_ENABLED,
-      retiredKeys: [{ publicKey: await exportSPKI(retiredEd.publicKey), keyId: 'ed-2025' }],
-      retiredMlDsaPublicKeys: [{ publicKey: retiredMlDsa.publicKey, keyId: 'mldsa-2025' }],
-    });
-    try {
-      const { keys } = await app.jwtUtils.getJwks();
-      expect(keys).toHaveLength(4);
-
-      // Every published key resolves by its OWN (kid, alg) — the rotation
-      // property that lets tokens signed before the rotation keep verifying.
-      for (const [kid, alg] of [
-        ['ed-2026', 'EdDSA'],
-        ['ed-2025', 'EdDSA'],
-        ['mldsa-2026', 'ML-DSA-65'],
-        ['mldsa-2025', 'ML-DSA-65'],
-      ] as const) {
-        expect(selectJwksKey(keys, { kid, alg })).toBeDefined();
-      }
-      // ...and never under the wrong algorithm.
-      expect(selectJwksKey(keys, { kid: 'mldsa-2025', alg: 'EdDSA' })).toBeUndefined();
-      expect(selectJwksKey(keys, { kid: 'ed-2025', alg: 'ML-DSA-65' })).toBeUndefined();
-
-      // Retired ML-DSA keys are public material only.
-      expect(JSON.stringify(keys)).not.toContain('priv');
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('F9: refuses to SERVE a JWKS whose kids collide across OKP and AKP', async () => {
-    const pems = await edPems();
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      ...baseOptions(pems),
-      // Same kid for the Ed25519 and the ML-DSA key: a stock verifier selecting
-      // on kid alone could land on the wrong algorithm's key.
-      keyId: 'shared-kid',
-      mlDsaSeed: freshMlDsa().seed,
-      mlDsaKeyId: 'shared-kid',
-      enabledSignatureAlgorithms: PQC_ENABLED,
-    });
-    try {
-      await expect(app.jwtUtils.getJwks()).rejects.toThrow(/duplicate kid 'shared-kid'/);
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('F9: refuses to SERVE a JWKS whose retired kid collides with the active one', async () => {
-    const pems = await edPems();
-    const retiredEd = await generateEdDSAKeyPair(true);
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      ...baseOptions(pems),
-      keyId: 'ed-2026',
-      retiredKeys: [{ publicKey: await exportSPKI(retiredEd.publicKey), keyId: 'ed-2026' }],
-    });
-    try {
-      await expect(app.jwtUtils.getJwks()).rejects.toThrow(/duplicate kid 'ed-2026'/);
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('leaves the classical EdDSA-only JWKS untouched (no PQC config, no behaviour change)', async () => {
-    const pems = await edPems();
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, { ...baseOptions(pems), keyId: 'ed-1' });
-    try {
-      const { keys } = await app.jwtUtils.getJwks();
-      expect(keys).toHaveLength(1);
-      expect(selectJwksKey(keys, { kid: 'ed-1', alg: 'EdDSA' })).toBeDefined();
-    } finally {
-      await app.close();
-    }
-  });
-});
-
-describe('jwtPlugin — live hybrid issuance vs seed zeroization (#275 x #248 F10)', () => {
-  const PQC_ENABLED_LOCAL = ['EdDSA', 'ML-DSA-65'] as const;
-
-  async function edPemsLocal() {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    return {
-      privateKeyPem: await exportPKCS8(privateKey),
-      publicKeyPem: await exportSPKI(publicKey),
-    };
-  }
-
-  function baseOptionsLocal(pems: { privateKeyPem: string; publicKeyPem: string }) {
-    return {
-      privateKey: pems.privateKeyPem,
-      publicKey: pems.publicKeyPem,
-      issuer: 'https://auth.test.example.com',
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 86400,
-    };
-  }
-
-  function freshSeed() {
-    const backend = getSignatureBackend('ML-DSA-65', PQC_ENABLED_LOCAL);
-    return backend.exportKey(backend.generateKeyPair({ extractable: true }).privateKey);
-  }
-
-  // The regression guard for the #275/#276 merge: #276 zeroizes the ML-DSA
-  // private key right after deriving the public half (F10), while #275 needs
-  // that same key resident to sign. Collapsing the two arms boots cleanly and
-  // only fails on the FIRST token issuance — a total /token outage that no
-  // boot-time assertion catches. Issue *and* verify here, not just register.
-  it('retains the ML-DSA private key when hybrid issuance is ON, and round-trips a token', async () => {
-    const pems = await edPemsLocal();
-    const app = Fastify({ logger: false });
-    try {
-      await app.register(jwtPlugin, {
-        ...baseOptionsLocal(pems),
-        keyId: 'ed-1',
-        mlDsaSeed: freshSeed(),
-        mlDsaKeyId: 'mldsa-1',
-        hybridSigningEnabled: true,
-        enabledSignatureAlgorithms: PQC_ENABLED_LOCAL,
-      });
-
-      expect(app.jwtUtils.isHybridSigningEnabled()).toBe(true);
-
-      const hybrid = await app.jwtUtils.signHybridAccessToken({
-        sub: 'user-1',
-        clientId: 'client-1',
-      });
-      expect(hybrid.pqcSignature.length).toBeGreaterThan(0);
-
-      const claims = await app.jwtUtils.verifyHybridAccessToken(hybrid, {
-        requirePqc: true,
-        issuer: 'https://auth.test.example.com',
-        audience: 'client-1',
-      });
-      expect(claims.sub).toBe('user-1');
-    } finally {
-      await app.close();
-    }
-  });
-
-  // The other arm: with hybrid OFF the F10 property must still hold exactly as
-  // #276 asserts it — no signing material survives boot.
-  it('still zeroizes the seed when hybrid issuance is OFF (F10 unchanged)', async () => {
-    const pems = await edPemsLocal();
-    const mlDsaBackendLocal = getSignatureBackend('ML-DSA-65', PQC_ENABLED_LOCAL);
-    let imported: MlDsaKey | undefined;
-    registerSignatureBackend({
-      ...mlDsaBackendLocal,
-      importKey(encoded, kind, options) {
-        const key = mlDsaBackendLocal.importKey(encoded, kind, options);
-        if (kind === 'private') imported = key;
-        return key;
-      },
-    });
-    const app = Fastify({ logger: false });
-    try {
-      await app.register(jwtPlugin, {
-        ...baseOptionsLocal(pems),
-        keyId: 'ed-1',
-        mlDsaSeed: freshSeed(),
-        mlDsaKeyId: 'mldsa-1',
-        enabledSignatureAlgorithms: PQC_ENABLED_LOCAL,
-      });
-
-      expect(imported).toBeDefined();
-      expect(() => imported?.seed()).toThrow(/destroyed/);
-      expect(app.jwtUtils.isHybridSigningEnabled()).toBe(false);
-    } finally {
-      resetSignatureBackends();
       await app.close();
     }
   });
 });
 
 describe('RFC 9068 typ rollout switch (#283)', () => {
-  const ISSUER = 'https://auth.test.example.com';
-
-  async function appWith(requireAccessTokenTyp: boolean | undefined) {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    const privateKeyPem = await exportPKCS8(privateKey);
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      privateKey: privateKeyPem,
-      publicKey: await exportSPKI(publicKey),
-      issuer: ISSUER,
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 86400,
-      ...(requireAccessTokenTyp !== undefined ? { requireAccessTokenTyp } : {}),
-    });
-    return { app, privateKeyPem };
-  }
-
-  /** A token minted by a build that predates #283: valid, but no `typ`. */
-  async function signLegacyToken(privateKeyPem: string): Promise<string> {
-    return new SignJWT({ sub: 'user-legacy', client_id: 'client-1', token_use: 'access' })
-      .setProtectedHeader({ alg: 'EdDSA' })
-      .setIssuedAt()
-      .setExpirationTime('900s')
-      .setIssuer(ISSUER)
-      .setAudience('client-1')
-      .sign(await importPrivateKey(privateKeyPem));
-  }
-
-  /** Decode a compact JWS protected header without verifying (test-only). */
-  function decodeHeader(token: string): Record<string, unknown> {
-    return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf-8')) as Record<
-      string,
-      unknown
-    >;
-  }
-
   it('signs access tokens with typ: at+jwt and ID tokens with typ: JWT', async () => {
-    const { app } = await appWith(undefined);
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
-      // Both are signed with the SAME privateKey and verify against the SAME
-      // JWKS entry — the reason #283 exists. Assert them together so the pair
-      // can never drift into being indistinguishable.
-      const accessToken = await app.jwtUtils.signAccessToken({
+      // Both are signed with the SAME key and verify against the SAME JWKS
+      // entry — the reason #283 exists. Assert them together so the pair can
+      // never drift into being indistinguishable.
+      const accessToken = await app.jwtUtils.signAccessToken(realms.a, {
         sub: 'user-1',
         clientId: 'client-1',
       });
-      const idToken = await app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' });
+      const idToken = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+      });
 
-      expect(decodeHeader(accessToken)['typ']).toBe('at+jwt');
-      expect(decodeHeader(idToken)['typ']).toBe('JWT');
+      expect(header(accessToken)['typ']).toBe('at+jwt');
+      expect(header(idToken)['typ']).toBe('JWT');
+      expect(header(accessToken)['kid']).toBe(header(idToken)['kid']);
     } finally {
       await app.close();
     }
   });
 
   it('rejects an ID token presented as an access token, audience held constant', async () => {
-    const { app } = await appWith(undefined);
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
       // `aud` is `client-1` on BOTH tokens, so the audience check is satisfied
       // either way and cannot be what rejects — only `typ` can.
-      const idToken = await app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' });
-      const accessToken = await app.jwtUtils.signAccessToken({
+      const idToken = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+      });
+      const accessToken = await app.jwtUtils.signAccessToken(realms.a, {
         sub: 'user-1',
         clientId: 'client-1',
       });
 
       await expect(
-        app.jwtUtils.verifyAccessToken(accessToken, { issuer: ISSUER, audience: 'client-1' })
+        app.jwtUtils.verifyAccessToken(realms.a, accessToken, { audience: 'client-1' })
       ).resolves.toMatchObject({ sub: 'user-1' });
       await expect(
-        app.jwtUtils.verifyAccessToken(idToken, { issuer: ISSUER, audience: 'client-1' })
+        app.jwtUtils.verifyAccessToken(realms.a, idToken, { audience: 'client-1' })
       ).rejects.toThrow(/typ is not at\+jwt/);
     } finally {
       await app.close();
@@ -872,178 +1044,69 @@ describe('RFC 9068 typ rollout switch (#283)', () => {
   });
 
   it('accepts a legacy typ-less token when the switch is off (default)', async () => {
-    const { app, privateKeyPem } = await appWith(undefined);
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
     try {
-      const legacy = await signLegacyToken(privateKeyPem);
-      await expect(
-        app.jwtUtils.verifyAccessToken(legacy, { issuer: ISSUER })
-      ).resolves.toMatchObject({ sub: 'user-legacy' });
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, legacy)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
     } finally {
       await app.close();
     }
   });
 
   it('rejects a legacy typ-less token when the operator flips the switch on', async () => {
-    const { app, privateKeyPem } = await appWith(true);
+    const realms = await createRealms();
+    const app = await buildTestApp(realms, { requireAccessTokenTyp: true });
     try {
-      const legacy = await signLegacyToken(privateKeyPem);
-      await expect(app.jwtUtils.verifyAccessToken(legacy, { issuer: ISSUER })).rejects.toThrow(
-        JWTInvalidError
-      );
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('applies the switch at the plugin seam, not per call site', async () => {
-    const { app, privateKeyPem } = await appWith(true);
-    try {
-      // A route cannot weaken the policy: `JwtUtils.verifyAccessToken` exposes
-      // only `{ audience, issuer }`, and the plugin sets `requireTyp` AFTER
-      // spreading whatever the caller passed. That is a compile-time guarantee
-      // (attempting `requireTyp: false` here is a type error), so what is left
-      // to assert at runtime is that the deployment-wide setting is the one in
-      // force on every call.
-      const legacy = await signLegacyToken(privateKeyPem);
-      await expect(app.jwtUtils.verifyAccessToken(legacy, { issuer: ISSUER })).rejects.toThrow(
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, legacy)).rejects.toThrow(
         JWTInvalidError
       );
 
-      // ...and that strict mode does not over-reject: a properly typed token
-      // still passes under the same setting.
-      const good = await app.jwtUtils.signAccessToken({ sub: 'user-1', clientId: 'client-1' });
-      await expect(app.jwtUtils.verifyAccessToken(good, { issuer: ISSUER })).resolves.toMatchObject(
-        {
-          sub: 'user-1',
-        }
-      );
+      // ...and strict mode does not over-reject: a properly typed token still
+      // passes under the same setting.
+      const good = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, good)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
     } finally {
       await app.close();
     }
   });
 });
 
-describe('jwtPlugin without a private key (a process without the signer role, #495)', () => {
-  const ISSUER = 'https://auth.test.example.com';
-
-  async function keyPems() {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    return {
-      privateKeyPem: await exportPKCS8(privateKey),
-      publicKeyPem: await exportSPKI(publicKey),
-    };
-  }
-
-  async function verifyOnlyApp(publicKeyPem: string) {
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      publicKey: publicKeyPem,
-      issuer: ISSUER,
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 604800,
-    });
-    await app.ready();
-    return app;
-  }
-
-  it('verifies a token the signer issued with the matching key', async () => {
-    const { privateKeyPem, publicKeyPem } = await keyPems();
-    const app = await verifyOnlyApp(publicKeyPem);
-    const token = await signAccessToken(
-      { sub: 'user-1', clientId: 'client-1' },
-      await importPrivateKey(privateKeyPem),
-      ISSUER,
-      900
-    );
-    await expect(app.jwtUtils.verifyAccessToken(token, { issuer: ISSUER })).resolves.toMatchObject({
-      sub: 'user-1',
-    });
-    await app.close();
-  });
-
-  it('publishes the public key in the JWKS', async () => {
-    const { publicKeyPem } = await keyPems();
-    const app = await verifyOnlyApp(publicKeyPem);
-    const jwks = await app.jwtUtils.getJwks();
-    expect(jwks.keys).toHaveLength(1);
-    expect(jwks.keys[0]).not.toHaveProperty('d');
-    await app.close();
-  });
-
-  it('refuses every signature with a 503', async () => {
-    const { publicKeyPem } = await keyPems();
-    const app = await verifyOnlyApp(publicKeyPem);
-    for (const sign of [
-      () => app.jwtUtils.signAccessToken({ sub: 'user-1', clientId: 'client-1' }),
-      () => app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' }),
-    ]) {
-      await expect(sign()).rejects.toMatchObject({
-        statusCode: 503,
-        code: 'TEMPORARILY_UNAVAILABLE',
+describe('RFC 9068 typ rollout switch at requireJwt (#283)', () => {
+  it('applies the switch at the plugin seam, so requireJwt refuses a typ-less token too', async () => {
+    const realms = await createRealms();
+    const strict = await buildTestApp(realms, { requireAccessTokenTyp: true });
+    const lenient = await buildTestApp(realms);
+    try {
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
+      const typed = await strict.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
       });
+      const call = (app: FastifyInstance, token: string) =>
+        app.inject({
+          method: 'GET',
+          url: '/protected',
+          headers: { authorization: `Bearer ${token}` },
+        });
+
+      expect((await call(lenient, legacy)).statusCode).toBe(200);
+      const refused = await call(strict, legacy);
+      expect(refused.statusCode).toBe(401);
+      expect(refused.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN' });
+      expect((await call(strict, typed)).statusCode).toBe(200);
+    } finally {
+      await strict.close();
+      await lenient.close();
     }
-    await app.close();
-  });
-
-  it('publishes an RS256 public key given without its private key, and advertises RS256', async () => {
-    const { publicKeyPem } = await keyPems();
-    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      publicKey: publicKeyPem,
-      rs256PublicKey: rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
-      rs256KeyId: 'rs-1',
-      issuer: ISSUER,
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 604800,
-    });
-    await app.ready();
-    const jwks = await app.jwtUtils.getJwks();
-    expect(jwks.keys.map((key) => key.kty)).toEqual(['OKP', 'RSA']);
-    expect(jwks.keys[1]).toMatchObject({ kid: 'rs-1', alg: 'RS256' });
-    expect(jwks.keys[1]).not.toHaveProperty('d');
-    expect(app.jwtUtils.getIdTokenSigningAlgValuesSupported()).toEqual(['RS256', 'EdDSA']);
-    await expect(
-      app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' })
-    ).rejects.toMatchObject({ statusCode: 503 });
-    await app.close();
-  });
-
-  it('refuses to start with neither key', async () => {
-    const app = Fastify({ logger: false });
-    await expect(
-      (async () => {
-        await app.register(jwtPlugin, {
-          issuer: ISSUER,
-          accessTokenLifespan: 900,
-          refreshTokenLifespan: 604800,
-        });
-        await app.ready();
-      })()
-    ).rejects.toThrow(/JWT_PUBLIC_KEY/);
-    await app.close();
-  });
-
-  it('refuses hybrid signing without the Ed25519 private key', async () => {
-    const backend = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
-    const seed = backend.exportKey(backend.generateKeyPair({ extractable: true }).privateKey);
-    const { publicKeyPem } = await keyPems();
-    const app = Fastify({ logger: false });
-    await expect(
-      (async () => {
-        await app.register(jwtPlugin, {
-          publicKey: publicKeyPem,
-          issuer: ISSUER,
-          accessTokenLifespan: 900,
-          refreshTokenLifespan: 604800,
-          mlDsaSeed: seed,
-          hybridSigningEnabled: true,
-          enabledSignatureAlgorithms: [...PQC_ENABLED],
-        });
-        await app.ready();
-      })()
-    ).rejects.toThrow(/no Ed25519 key/);
-    await app.close();
   });
 });
 
@@ -1053,49 +1116,25 @@ describe('jwtPlugin without a private key (a process without the signer role, #4
  * rule as a hook. Neither may skip a check `requireJwt` makes.
  */
 describe('verifyRequestAccessToken policy (#509)', () => {
-  const ISSUER = 'https://auth.test.example.com';
   const OTHER_ISSUER = 'https://other.test.example.com';
 
   async function appWith(options: { revoked?: string } = {}) {
-    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
-    const privateKeyPem = await exportPKCS8(privateKey);
-    const app = Fastify({ logger: false });
-    await app.register(jwtPlugin, {
-      privateKey: privateKeyPem,
-      publicKey: await exportSPKI(publicKey),
-      issuer: ISSUER,
-      accessTokenLifespan: 900,
-      refreshTokenLifespan: 86400,
+    const realms = await createRealms();
+    const app = await buildTestApp(realms, {
       isTokenRevoked: (jti) => jti !== undefined && jti === options.revoked,
     });
-    return { app, signingKey: await importPrivateKey(privateKeyPem) };
+    return { app, realms };
   }
 
-  /** A request carrying `token` as a Bearer credential. */
+  /** A request of realm A carrying `token` as a Bearer credential. */
   function requestWith(token: string): FastifyRequest {
     return { headers: { authorization: `Bearer ${token}` } } as FastifyRequest;
   }
 
-  /** A token signed by the server's own key, `typ` and `iss` as given. */
-  async function signToken(
-    signingKey: Awaited<ReturnType<typeof importPrivateKey>>,
-    claims: { typ?: string; iss?: string; jti?: string }
-  ): Promise<string> {
-    const jwt = new SignJWT({ sub: 'user-1', client_id: 'client-1', jti: claims.jti ?? 'jti-1' })
-      .setProtectedHeader({
-        alg: 'EdDSA',
-        ...(claims.typ === undefined ? {} : { typ: claims.typ }),
-      })
-      .setIssuedAt()
-      .setExpirationTime('900s');
-    if (claims.iss !== undefined) jwt.setIssuer(claims.iss);
-    return jwt.sign(signingKey);
-  }
-
   it('requires typ: at+jwt when the policy asks, though the rollout switch is off', async () => {
-    const { app, signingKey } = await appWith();
+    const { app, realms } = await appWith();
     try {
-      const typless = await signToken(signingKey, { iss: ISSUER });
+      const typless = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
       await expect(app.verifyRequestAccessToken(requestWith(typless))).resolves.toMatchObject({
         sub: 'user-1',
       });
@@ -1103,7 +1142,7 @@ describe('verifyRequestAccessToken policy (#509)', () => {
         app.verifyRequestAccessToken(requestWith(typless), { requireTyp: true })
       ).rejects.toThrow(JWTInvalidError);
 
-      const typed = await signToken(signingKey, { iss: ISSUER, typ: 'at+jwt' });
+      const typed = await signWithPem(realms.realmAKey, { iss: ISSUER_A, typ: 'at+jwt' });
       await expect(
         app.verifyRequestAccessToken(requestWith(typed), { requireTyp: true })
       ).resolves.toMatchObject({ sub: 'user-1' });
@@ -1112,10 +1151,10 @@ describe('verifyRequestAccessToken policy (#509)', () => {
     }
   });
 
-  it('pins the plugin issuer when the policy names no issuer rule', async () => {
-    const { app, signingKey } = await appWith();
+  it('pins the realm issuer when the policy names no issuer rule', async () => {
+    const { app, realms } = await appWith();
     try {
-      const foreign = await signToken(signingKey, { iss: OTHER_ISSUER, typ: 'at+jwt' });
+      const foreign = await signWithPem(realms.realmAKey, { iss: OTHER_ISSUER, typ: 'at+jwt' });
       await expect(app.verifyRequestAccessToken(requestWith(foreign))).rejects.toThrow(
         JWTInvalidError
       );
@@ -1125,20 +1164,20 @@ describe('verifyRequestAccessToken policy (#509)', () => {
   });
 
   it('lets the issuer rule decide, with the verified iss and the request', async () => {
-    const { app, signingKey } = await appWith();
+    const { app, realms } = await appWith();
     try {
       const seen: [string, FastifyRequest][] = [];
       const acceptOther = (issuer: string, request: FastifyRequest) => {
         seen.push([issuer, request]);
         return issuer === OTHER_ISSUER;
       };
-      const request = requestWith(await signToken(signingKey, { iss: OTHER_ISSUER }));
+      const request = requestWith(await signWithPem(realms.realmAKey, { iss: OTHER_ISSUER }));
       await expect(
         app.verifyRequestAccessToken(request, { acceptIssuer: acceptOther })
       ).resolves.toMatchObject({ iss: OTHER_ISSUER });
       expect(seen).toEqual([[OTHER_ISSUER, request]]);
 
-      const own = await signToken(signingKey, { iss: ISSUER });
+      const own = await signWithPem(realms.realmAKey, { iss: ISSUER_A });
       await expect(
         app.verifyRequestAccessToken(requestWith(own), { acceptIssuer: acceptOther })
       ).rejects.toThrow('Access token issuer is not accepted here');
@@ -1147,21 +1186,41 @@ describe('verifyRequestAccessToken policy (#509)', () => {
     }
   });
 
-  it('refuses a token with no iss, or a bad signature, before the issuer rule runs', async () => {
-    const { app, signingKey } = await appWith();
-    const { privateKey: otherKey } = await generateEdDSAKeyPair(true);
+  it("verifies with the request realm's keys whatever the issuer rule", async () => {
+    const { app, realms } = await appWith();
     try {
       let calls = 0;
       const acceptAny = async () => {
         calls += 1;
         return true;
       };
-      const noIssuer = await signToken(signingKey, {});
+      const tokenOfB = await app.jwtUtils.signAccessToken(realms.b, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await expect(
+        app.verifyRequestAccessToken(requestWith(tokenOfB), { acceptIssuer: acceptAny })
+      ).rejects.toThrow(JWTInvalidError);
+      expect(calls).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a token with no iss, or a bad signature, before the issuer rule runs', async () => {
+    const { app, realms } = await appWith();
+    try {
+      let calls = 0;
+      const acceptAny = async () => {
+        calls += 1;
+        return true;
+      };
+      const noIssuer = await signWithPem(realms.realmAKey, {});
       await expect(
         app.verifyRequestAccessToken(requestWith(noIssuer), { acceptIssuer: acceptAny })
       ).rejects.toThrow(JWTInvalidError);
 
-      const forged = await signToken(otherKey, { iss: ISSUER });
+      const forged = await signWithPem(ed25519Pem(), { iss: ISSUER_A });
       await expect(
         app.verifyRequestAccessToken(requestWith(forged), { acceptIssuer: acceptAny })
       ).rejects.toThrow(JWTInvalidError);
@@ -1172,11 +1231,11 @@ describe('verifyRequestAccessToken policy (#509)', () => {
   });
 
   it('still refuses a revoked token and a missing credential under a policy', async () => {
-    const { app, signingKey } = await appWith({ revoked: 'jti-revoked' });
+    const { app, realms } = await appWith({ revoked: 'jti-revoked' });
     const policy = { acceptIssuer: () => true, requireTyp: true };
     try {
-      const revoked = await signToken(signingKey, {
-        iss: ISSUER,
+      const revoked = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
         typ: 'at+jwt',
         jti: 'jti-revoked',
       });
@@ -1193,9 +1252,11 @@ describe('verifyRequestAccessToken policy (#509)', () => {
   });
 
   it('leaves request.jwtPayload to the caller', async () => {
-    const { app, signingKey } = await appWith();
+    const { app, realms } = await appWith();
     try {
-      const request = requestWith(await signToken(signingKey, { iss: ISSUER, typ: 'at+jwt' }));
+      const request = requestWith(
+        await signWithPem(realms.realmAKey, { iss: ISSUER_A, typ: 'at+jwt' })
+      );
       await app.verifyRequestAccessToken(request);
       expect(request.jwtPayload).toBeUndefined();
     } finally {

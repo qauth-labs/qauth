@@ -1,24 +1,32 @@
 import { generateKeyPairSync } from 'node:crypto';
 
 import {
+  createTestSigner,
+  type TestSigner,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
+import {
   InvalidClientError,
   InvalidGrantError,
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
+  JWTInvalidError,
   NotFoundError,
   UnauthorizedClientError,
   UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import {
+  createLocalJWKSet,
   type CryptoKey,
   decodeJwt,
   decodeProtectedHeader,
   exportJWK,
   generateKeyPair,
   importPKCS8,
+  type JSONWebKeySet,
   type JWK,
+  jwtVerify,
   SignJWT,
 } from 'jose';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
@@ -55,8 +63,6 @@ function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
   return { privateKeyPem: privateKey, publicKeyPem: publicKey };
 }
 
-/** This server's own signing key — used by the ADR-011 ID-JAG MINT path. */
-const SERVER_KEYS = generateEd25519Pem();
 /** The enterprise IdP's signing key — used to mint ID-JAG fixtures to CONSUME. */
 const IDP_KEYS = generateEd25519Pem();
 
@@ -77,7 +83,6 @@ function resetMockEnv(): void {
     EMAIL_BASE_URL: 'http://localhost:3000',
     TOKEN_RATE_LIMIT: 60,
     TOKEN_RATE_WINDOW: 60,
-    JWT_PRIVATE_KEY: SERVER_KEYS.privateKeyPem,
     // ADR-011 defaults: OFF, and an EMPTY allowlist.
     ID_JAG_ENABLED: false,
     ID_JAG_TRUSTED_ISSUERS: [] as string[],
@@ -112,6 +117,12 @@ const revokeGrantAccessTokensMock = vi.mocked(revokeGrantAccessTokens);
 
 /** The realm every request of this file reaches the route in (#487). */
 const REALM = testRealm({ id: 'realm-1', name: 'default' });
+
+/**
+ * The realm argument of every token the route signs: the request's, whose keys
+ * sign it and whose issuer is its `iss` (#491).
+ */
+const IN_REQUEST_REALM = expect.objectContaining({ id: REALM.id });
 
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
@@ -272,7 +283,6 @@ function createFastifyStub() {
       hashRefreshToken: vi.fn().mockImplementation((t: string) => `hash:${t}`),
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
       getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
-      getIssuer: vi.fn().mockReturnValue('https://auth.example.com'),
     },
     pkceUtils: {
       verifyCodeChallenge: vi.fn(),
@@ -349,6 +359,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     // Verify JWT signed with client_id as sub, scope string, and aud falling back to client_id
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         sub: client.clientId,
         clientId: client.clientId,
@@ -410,6 +421,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       );
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
     });
@@ -450,6 +462,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       });
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: [ACCOUNT_AUDIENCE, 'https://api.example.com'] })
       );
     });
@@ -513,6 +526,11 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       'realm-tenant',
       'tenant-client'
     );
+    // Signed in that realm too: its keys, its issuer (#491).
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'realm-tenant' }),
+      expect.objectContaining({ sub: 'tenant-client' })
+    );
     expect(emitUserEventMock).toHaveBeenCalledWith(
       expect.anything(),
       TOKEN_ISSUED,
@@ -558,6 +576,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     // aud must be the requested resource, narrowing from the allowlist.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: 'https://api.example.com/v1' })
     );
   });
@@ -666,6 +685,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
       // The light-mode default (the client's own id), not the targets.
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: client.clientId })
       );
     });
@@ -715,6 +735,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     );
     // Verify audience resolved from client.audience (single-item array collapses to string)
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         aud: 'https://api.example.com',
       })
@@ -884,6 +905,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     await handler(request, reply);
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: client.clientId })
     );
   });
@@ -923,6 +945,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     await handler(request, reply);
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         aud: ['https://a.example.com', 'https://b.example.com'],
       })
@@ -1213,6 +1236,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
       expect(result).toMatchObject({ scope: 'agent:readonly', token_type: 'Bearer' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ scope: 'agent:readonly' })
       );
     });
@@ -1478,6 +1502,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       client.id
     );
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         sub: user.id,
         clientId: client.clientId,
@@ -1489,7 +1514,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // carries no email claim although the user has a verified address, and
     // the attribute is not even looked up.
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in accessClaims).toBe(false);
     expect('email_verified' in accessClaims).toBe(false);
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
@@ -1664,6 +1689,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // the authorization request is echoed; name derives from first/last name
     // under the `profile` scope.
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         sub: user.id,
         audience: client.clientId,
@@ -1702,7 +1728,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       const result = await handler(baseRequest(), createReply());
 
       expect(result).toHaveProperty('id_token', 'signed.id.token');
-      const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -1710,7 +1736,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       expect('name' in idClaims).toBe(false);
       // The access token never carries `name`, under any scope.
       const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-        .calls[0][0] as Record<string, unknown>;
+        .calls[0][1] as Record<string, unknown>;
       expect('name' in accessClaims).toBe(false);
     }
   );
@@ -1734,6 +1760,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     // The route passes epoch ms; signIdToken (jwt plugin) floors to seconds.
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ authTime: authTimeMs })
     );
   });
@@ -1753,7 +1780,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -1778,6 +1805,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // Rendered into the deployment's vocabulary at ISSUANCE, from the internal
     // level stored on the code (ADR-010).
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ acr: 'http://eidas.europa.eu/LoA/high' })
     );
   });
@@ -1799,7 +1827,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -1826,7 +1854,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -1854,9 +1882,12 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(expect.objectContaining({ sid }));
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ sid })
+    );
     // Not on the access token, nor on the refresh row the exchange stores.
-    const [accessClaims] = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0];
+    const [, accessClaims] = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0];
     expect(JSON.stringify(accessClaims)).not.toContain(sid);
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledOnce();
     const [refreshRow] = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
@@ -1882,10 +1913,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
+    expect(idClaims).toMatchObject({ sub: expect.any(String) });
     expect(idClaims['sid']).toBeUndefined();
   });
 
@@ -1905,7 +1937,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     await handler(baseRequest(), createReply());
 
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -1915,7 +1947,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // carried the address anyway, in the same response as the ID token that
     // withheld it.
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in accessClaims).toBe(false);
     expect('email_verified' in accessClaims).toBe(false);
   });
@@ -1935,9 +1967,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await handler(baseRequest(), createReply());
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ email: 'user@example.com', email_verified: true })
     );
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ email: 'user@example.com', email_verified: true })
     );
   });
@@ -1961,10 +1995,10 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     // Omitted means the KEYS are absent — never null (proof standard: `in`).
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in accessClaims).toBe(false);
     expect('email_verified' in accessClaims).toBe(false);
-    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -2003,7 +2037,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await handler(baseRequest(), createReply());
 
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in accessClaims).toBe(false);
     expect('email_verified' in accessClaims).toBe(false);
   });
@@ -2049,9 +2083,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
       // ONE shared resolution: access token and ID token agree by construction.
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ email: expected, email_verified: true })
       );
       expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ email: expected, email_verified: true })
       );
     }
@@ -2074,6 +2110,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const result = await handler(baseRequest(), reply);
 
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ nonce: undefined })
     );
     expect(result).toHaveProperty('id_token', 'signed.id.token');
@@ -2100,7 +2137,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const reply = createReply();
     await handler(baseRequest(), reply);
 
-    const call = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+    const call = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -2985,7 +3022,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const reply = createReply();
     await handler(baseRequest(), reply);
 
-    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0];
+    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1];
     expect(signArg.aud).toBe('https://api.example.com/v1');
     const rtArg = (fastify.repositories.refreshTokens.create as unknown as Mock).mock.calls[0][0];
     expect(rtArg.resource).toEqual(['https://api.example.com/v1']);
@@ -3047,6 +3084,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
       await ctx.handler(baseRequest(), createReply());
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
     });
@@ -3061,6 +3099,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
       await ctx.handler(baseRequest(), createReply());
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: 'https://api.example.com' })
       );
     });
@@ -3073,6 +3112,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
       await ctx.handler(baseRequest(), createReply());
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: client.clientId })
       );
     });
@@ -3364,6 +3404,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       expect.anything()
     );
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         sub: user.id,
         scope: 'read:foo write:foo',
@@ -3373,7 +3414,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     // ANT-2026-2O0T72HY: no `email` scope in the refreshed grant, so no email
     // claim, although the user has a verified address.
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in accessClaims).toBe(false);
     expect('email_verified' in accessClaims).toBe(false);
     expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
@@ -3424,6 +3465,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
 
     // #229: the emitted email is the ATTRIBUTE value, not the users row's.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         sub: user.id,
         email: 'rt-attr@example.com',
@@ -3454,7 +3496,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     await handler(refreshRequest({ scope: 'read:foo' }), createReply());
 
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect(accessClaims['scope']).toBe('read:foo');
     expect('email' in accessClaims).toBe(false);
     expect('email_verified' in accessClaims).toBe(false);
@@ -3918,6 +3960,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     await handler(refreshRequest(), reply);
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: 'https://api.example.com/v1' })
     );
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
@@ -3977,6 +4020,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
 
     await ctx.handler(refreshRequest(), createReply());
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: 'https://api.example.com' })
     );
   });
@@ -3996,6 +4040,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
 
     await ctx.handler(refreshRequest(), createReply());
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: 'urn:qauth:aud:account:v1-rc.0' })
     );
   });
@@ -4017,6 +4062,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const result = await handler(refreshRequest({ scope: 'read:foo' }), reply);
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ scope: 'read:foo' })
     );
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
@@ -4370,14 +4416,17 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
-    // Issuer is now enforced INSIDE verifyAccessToken (RFC 9700). Model that:
-    // when the route pins `issuer` and it does not match the token's `iss`, the
-    // mock rejects exactly as jose would, instead of the route doing a manual
-    // post-verification issuer comparison.
+    // The issuer is enforced INSIDE verifyAccessToken (RFC 9700): the plugin
+    // pins the issuer of the realm it verifies in (#491). Model that: when the
+    // token's `iss` is not the realm's issuer, the mock rejects exactly as
+    // jose would, instead of the route doing a manual post-verification
+    // issuer comparison.
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation(
-      (_token: string, options?: { issuer?: string }) => {
-        if (options?.issuer !== undefined && subjectPayload.iss !== options.issuer) {
-          return Promise.reject(new Error('unexpected "iss" claim value'));
+      (realm: { id: string; issuer: string }, _token: string) => {
+        if (subjectPayload.iss !== realm.issuer) {
+          return Promise.reject(
+            new JWTInvalidError('Invalid JWT token: unexpected "iss" claim value')
+          );
         }
         return Promise.resolve(subjectPayload);
       }
@@ -4433,8 +4482,9 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
   it('rejects an actor_token whose jti is on the revocation denylist', async () => {
     const { fastify, ctx, subjectPayload } = setupExchangeStub();
     const actorPayload = { ...subjectPayload, jti: 'revoked-actor-jti' };
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation((token: string) =>
-      Promise.resolve(token === 'actor.jwt.token' ? actorPayload : subjectPayload)
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation(
+      (_realm: unknown, token: string) =>
+        Promise.resolve(token === 'actor.jwt.token' ? actorPayload : subjectPayload)
     );
     await fastify.redis.set('revoked-access-token:revoked-actor-jti', '1');
 
@@ -4474,8 +4524,14 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     });
     const result = await invoke(fastify, ctx, exchangeRequest());
 
+    // The subject token verifies in the request realm, with its issuer pinned (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: REALM.id, issuer: ISSUER },
+      'subject.jwt.token'
+    );
     // sub is the end-user; act identifies the acting agent (RFC 8693 §4.1).
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         sub: user.id,
         clientId: client.clientId,
@@ -4486,7 +4542,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     );
     // ANT-2026-2O0T72HY: the delegated scope has no `email`, so the agent gets
     // no email claim although the user has a verified address.
-    const claims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0] as Record<
+    const claims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -4514,6 +4570,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     // user@example.com while the subject users row carries
     // subject@example.com — a users-row revert emits the wrong value.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         email: 'user@example.com',
         email_verified: true,
@@ -4528,7 +4585,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     });
     await invoke(narrowed.fastify, narrowed.ctx, exchangeRequest({ scope: 'read:docs' }));
     const claims = (narrowed.fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in claims).toBe(false);
     expect('email_verified' in claims).toBe(false);
   });
@@ -4545,7 +4602,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     await invoke(fastify, ctx, exchangeRequest());
 
-    const claims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0] as Record<
+    const claims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1] as Record<
       string,
       unknown
     >;
@@ -4559,6 +4616,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     await invoke(fastify, ctx, exchangeRequest());
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         act: { sub: 'agent-client', act: { sub: 'prior-agent' } },
       })
@@ -4634,6 +4692,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     await invoke(fastify, ctx, exchangeRequest({ scope: 'read:docs' }));
 
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ scope: 'read:docs' })
     );
   });
@@ -4652,6 +4711,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     });
     await invoke(fastify, ctx, exchangeRequest({ resource: ['https://api.example.com/v1'] }));
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: 'https://api.example.com/v1' })
     );
   });
@@ -4676,6 +4736,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       client.audience = [ACCOUNT_AUDIENCE] as never;
       await invoke(fastify, ctx, exchangeRequest({ audience: [ACCOUNT_AUDIENCE] }));
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
     });
@@ -4706,6 +4767,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       const result = (await invoke(fastify, ctx, exchangeRequest())) as Record<string, unknown>;
       expect(result['scope']).toBe('read:docs');
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ scope: 'read:docs' })
       );
       expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
@@ -4783,9 +4845,18 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
   it('rejects an unverifiable subject_token (invalid_request)', async () => {
     const { fastify, ctx } = setupExchangeStub();
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
-      new Error('bad signature')
+      new JWTInvalidError('Invalid JWT token: signature verification failed')
     );
     await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('fails closed, not as invalid_request, when the subject token could not be checked (#491)', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    // Verification reads the realm's keys from the key store; it is down.
+    const outage = new Error('connection refused');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(outage);
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toBe(outage);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
@@ -4855,7 +4926,19 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       exchangeRequest({ actor_token: 'actor.jwt', actor_token_type: ACCESS_TOKEN_TYPE })
     );
 
+    // Both tokens verify in the request realm, its issuer pinned (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenNthCalledWith(
+      1,
+      { id: REALM.id, issuer: ISSUER },
+      'subject.jwt.token'
+    );
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenNthCalledWith(
+      2,
+      { id: REALM.id, issuer: ISSUER },
+      'actor.jwt'
+    );
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ act: { sub: 'agent-client' } })
     );
     expect(emitUserEventMock).toHaveBeenCalledWith(
@@ -4911,6 +4994,12 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
   it('rejects a subject_token from a foreign issuer (invalid_request)', async () => {
     const { fastify, ctx } = setupExchangeStub({ subjectIss: 'https://evil.example.com' });
     await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidRequestError);
+    // Refused because the route verifies in the request realm, whose issuer
+    // the plugin pins (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: REALM.id, issuer: ISSUER },
+      'subject.jwt.token'
+    );
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
@@ -4920,7 +5009,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     const { fastify, ctx } = setupExchangeStub({ subjectExp: exp });
     const result = await invoke(fastify, ctx, exchangeRequest());
 
-    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0];
+    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1];
     expect(signArg.expiresInOverride).toBeGreaterThan(110);
     expect(signArg.expiresInOverride).toBeLessThanOrEqual(120);
     expect((result as { expires_in: number }).expires_in).toBe(signArg.expiresInOverride);
@@ -4931,7 +5020,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     const exp = Math.floor(Date.now() / 1000) + 10000;
     const { fastify, ctx } = setupExchangeStub({ subjectExp: exp });
     await invoke(fastify, ctx, exchangeRequest());
-    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0];
+    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1];
     expect(signArg.expiresInOverride).toBe(900);
   });
 
@@ -4967,6 +5056,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       const result = await invoke(fastify, ctx, exchangeRequest());
       expect(result).toMatchObject({ scope: 'read:docs agent:readonly' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
         expect.objectContaining({ scope: 'read:docs agent:readonly' })
       );
     });
@@ -5022,6 +5112,24 @@ const IDP_ISSUER = 'https://idp.example.com';
 const MCP_SERVER = 'https://mcp.example.com/';
 const TARGET_AS = 'https://auth.chat.example';
 const EMA_CLIENT_ID = 'mcp-client-1';
+
+/**
+ * The realm the ID-JAG MINT requests reach the route in. An ID-JAG is signed
+ * through the signer with the realm's EdDSA token key (#491), and the real
+ * signer takes only a UUID realm id.
+ */
+const MINT_REALM = testRealm({
+  id: '7d1e2c4a-9b3f-4e6d-8a2c-5f0b1e3d7c94',
+  name: 'default',
+  issuer: AS_ISSUER,
+});
+
+/** The real in-memory signer (#491), holding {@link MINT_REALM}'s keys. */
+async function createMintRealmSigner(): Promise<TestSigner> {
+  const signer = createTestSigner();
+  await signer.addRealm({ id: MINT_REALM.id, issuer: AS_ISSUER });
+  return signer;
+}
 
 /**
  * Serve the trusted IdP's OIDC discovery document and JWK Set through the
@@ -5190,6 +5298,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     // THE central MUST: `aud` is the MCP server the assertion names — a single
     // value, not the client's default audience and not an array.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ sub: 'user-uuid-enterprise', aud: MCP_SERVER })
     );
     // EMA §5.2 is a plain access-token response: no refresh token, no
@@ -5220,6 +5329,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     )) as Record<string, unknown>;
     expect(result['scope']).toBe('chat.read');
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ scope: 'chat.read', aud: MCP_SERVER })
     );
     expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
@@ -5275,7 +5385,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       bearerRequest(await signIdJag(idpKey, { scope: 'chat.read' }))
     );
     const claims = (without.fastify.jwtUtils.signAccessToken as unknown as Mock).mock
-      .calls[0][0] as Record<string, unknown>;
+      .calls[0][1] as Record<string, unknown>;
     expect('email' in claims).toBe(false);
     expect('email_verified' in claims).toBe(false);
 
@@ -5290,6 +5400,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       bearerRequest(await signIdJag(idpKey, { scope: 'chat.read email' }))
     );
     expect(withEmail.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({
         email: 'enterprise@example.com',
         email_verified: true,
@@ -5547,6 +5658,7 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
       bearerRequest(await signIdJag(idpKey, { resource: DEVELOPER_AUDIENCE }))
     );
     expect(listed.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
       expect.objectContaining({ aud: DEVELOPER_AUDIENCE })
     );
   });
@@ -5730,6 +5842,11 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
 describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
   const AGENT_CLIENT_ID = 'agent-client';
 
+  let mintSigner: TestSigner;
+  beforeAll(async () => {
+    mintSigner = await createMintRealmSigner();
+  });
+
   /**
    * An agent client provisioned to mint for {@link TARGET_AS} and
    * {@link MCP_SERVER} through its ID-JAG targets (#434). Its `audience` is
@@ -5753,6 +5870,8 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     } = {}
   ) {
     const { fastify, ctx } = createFastifyStub();
+    // The ID-JAG is signed through the signer, in the request realm (#491).
+    fastify.signer = mintSigner.signer;
 
     const client = {
       id: 'client-uuid-agent-1',
@@ -5790,6 +5909,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
 
   function mintRequest(overrides: Record<string, unknown> = {}) {
     return {
+      realm: MINT_REALM,
       body: {
         grant_type: TOKEN_EXCHANGE_GRANT,
         client_id: AGENT_CLIENT_ID,
@@ -5833,8 +5953,35 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(result['scope']).toBe('chat.read chat.history');
     expect(result).not.toHaveProperty('refresh_token');
 
+    // The subject token verified in the request realm, its issuer pinned (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: MINT_REALM.id, issuer: AS_ISSUER },
+      'subject.jwt.token'
+    );
+
+    // Signed with the realm's active EdDSA token key, which the header names,
+    // so the target AS verifies it from the realm's JWKS (#491).
     const assertion = result['access_token'] as string;
-    expect(decodeProtectedHeader(assertion)).toEqual({ alg: 'EdDSA', typ: ID_JAG_TYP });
+    const tokenKeys = await mintSigner.signer.getVerificationKeys(
+      'local',
+      MINT_REALM.id,
+      'token_signing'
+    );
+    const eddsaKey = tokenKeys.find((key) => key.algorithm === 'EdDSA' && key.status === 'active');
+    expect(eddsaKey).toBeDefined();
+    expect(decodeProtectedHeader(assertion)).toEqual({
+      alg: 'EdDSA',
+      typ: ID_JAG_TYP,
+      kid: eddsaKey?.kid,
+    });
+    const realmJwks = await mintSigner.signer.getJwks('local', MINT_REALM.id);
+    await expect(
+      jwtVerify(assertion, createLocalJWKSet(realmJwks as JSONWebKeySet), {
+        issuer: AS_ISSUER,
+        audience: TARGET_AS,
+        typ: ID_JAG_TYP,
+      })
+    ).resolves.toBeDefined();
 
     const claims = decodeJwt(assertion) as Record<string, unknown>;
     expect(Object.keys(claims).sort()).toEqual(
@@ -6215,6 +6362,11 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
 describe('POST /oauth/token — response serialization (union schema, ADR-011)', () => {
   const AGENT_CLIENT_ID = 'agent-client';
 
+  let mintSigner: TestSigner;
+  beforeAll(async () => {
+    mintSigner = await createMintRealmSigner();
+  });
+
   /**
    * Boot the REAL route on a REAL Fastify instance with the Zod type provider,
    * so the `response: { 200: ... }` schema is actually applied.
@@ -6225,14 +6377,17 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
    * reject an ID-JAG's mandatory `N_A` at serialization time — a failure that
    * only appears once a response is actually written.
    */
-  async function buildApp(overrides: (fastify: FastifyInstance) => void) {
+  async function buildApp(
+    overrides: (fastify: FastifyInstance) => void,
+    realm: ReturnType<typeof testRealm> = REALM
+  ) {
     const { serializerCompiler, validatorCompiler } = await import('fastify-type-provider-zod');
     const Fastify = (await import('fastify')).default;
 
     const app = Fastify({ logger: false });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
-    supplyRequestRealm(app, REALM);
+    supplyRequestRealm(app, realm);
     await app.register(async (instance) => {
       const { fastify: stub } = createFastifyStub();
       for (const [key, value] of Object.entries(stub)) {
@@ -6246,8 +6401,10 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
     return app;
   }
 
+  /** An app whose requests reach the route in {@link MINT_REALM}, with its signer (#491). */
   function mintingApp() {
     return buildApp((instance) => {
+      instance.decorate('signer', mintSigner.signer);
       const client = {
         id: 'client-uuid-agent-1',
         clientId: AGENT_CLIENT_ID,
@@ -6283,7 +6440,7 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
       (
         instance.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
       ).mockResolvedValue([]);
-    });
+    }, MINT_REALM);
   }
 
   it('serializes an ID-JAG response with token_type "N_A" intact', async () => {

@@ -3,8 +3,6 @@ import { readFileSync } from 'node:fs';
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { z } from 'zod';
 
-import { serviceRolesEnvSchema } from './service-roles';
-
 /**
  * Crypto / signing environment configuration (ADR-005, #243 + #245).
  *
@@ -12,15 +10,15 @@ import { serviceRolesEnvSchema } from './service-roles';
  * both the classical Ed25519 path and the ML-DSA-65 backend are compiled in,
  * and this decides which are ENABLED at runtime.
  *
- * `HYBRID_SIGNING_ENABLED` (#245) turns on hybrid (Ed25519 + ML-DSA-65)
- * signing CAPABILITY. It is a CAPABILITY flag: with it on, jwt-service can
- * produce hybrid tokens, but the live auth-server token routes and verify path
- * are unchanged until the JWKS (#246), token-size (#247), and security-review
- * (#248) work lands. Enabling it REQUIRES `SIGNING_ALGORITHM_MODE` =
- * `ed25519+ml-dsa-65` AND a configured ML-DSA private key — enforced at
- * startup (fail-fast). All three coupled fields live in this ONE schema so the
- * cross-check is actually enforceable (separately-parsed schemas cannot see
- * each other's fields).
+ * `HYBRID_SIGNING_ENABLED` (#245, #275) turns on hybrid (Ed25519 + ML-DSA-65)
+ * access-token issuance. Enabling it REQUIRES `SIGNING_ALGORITHM_MODE` =
+ * `ed25519+ml-dsa-65` — enforced here at startup (fail-fast). The ML-DSA-65
+ * key is the realm's, in its key store (ADR-019 Decision 9, #491): a fresh
+ * deployment generates the pair, `JWT_MLDSA_PRIVATE_KEY` imports one, and the
+ * key boot step refuses to start a realm whose active token keys are half a
+ * pair. The coupled fields live in this ONE schema so the cross-check is
+ * actually enforceable (separately-parsed schemas cannot see each other's
+ * fields).
  *
  * `PQC_TOKEN_DELIVERY` (#247) selects how the ML-DSA-65 component reaches a
  * verifier when hybrid is on. A hybrid token's detached ML-DSA-65 signature is
@@ -105,12 +103,6 @@ export const cryptoEnvSchema = z
       .enum(['true', 'false', '1', '0'])
       .default('false')
       .transform((v) => v === 'true' || v === '1'),
-
-    /**
-     * The roles of this process (#495), read here only to decide whether
-     * hybrid signing can run in it. `serviceRolesEnvSchema` owns the key.
-     */
-    SERVICE_ROLES: serviceRolesEnvSchema.shape.SERVICE_ROLES,
   })
   .superRefine((data, ctx) => {
     // #248 F8: a CONFIGURED seed must be well-formed whether or not hybrid is
@@ -137,19 +129,10 @@ export const cryptoEnvSchema = z
     }
 
     if (!data.HYBRID_SIGNING_ENABLED) return;
-    // #495: the ML-DSA-65 seed is a private key, which only the signer holds,
-    // and a process without it has no public-only form of the key to verify
-    // hybrid tokens with. Hybrid signing therefore keeps every role in the
-    // processes that hold the signer, for now.
-    if (!data.SERVICE_ROLES.includes('signer')) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['HYBRID_SIGNING_ENABLED'],
-        message:
-          'HYBRID_SIGNING_ENABLED=true needs the signer role in this process: it signs and verifies hybrid tokens with the ML-DSA-65 key, which only the signer holds. Add signer to SERVICE_ROLES, or run hybrid signing as a single process (SERVICE_ROLES=all).',
-      });
-      return;
-    }
+    // The switch describes what the deployment's signer issues, so every
+    // process of a hybrid deployment sets it, whatever its roles (#495): a
+    // process without the signer verifies hybrid tokens with the realm's
+    // published ML-DSA-65 keys (#491), and answers 503 when asked to sign.
     if (data.SIGNING_ALGORITHM_MODE !== 'ed25519+ml-dsa-65') {
       ctx.addIssue({
         code: 'custom',
@@ -157,14 +140,9 @@ export const cryptoEnvSchema = z
         message: "HYBRID_SIGNING_ENABLED=true requires SIGNING_ALGORITHM_MODE='ed25519+ml-dsa-65'.",
       });
     }
-    if (configuredSeed === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['JWT_MLDSA_PRIVATE_KEY'],
-        message:
-          'HYBRID_SIGNING_ENABLED=true requires an ML-DSA key: set JWT_MLDSA_PRIVATE_KEY or JWT_MLDSA_PRIVATE_KEY_PATH.',
-      });
-    }
+    // No ML-DSA-65 variable is required (#491): the realm's key store holds
+    // the hybrid pair, a fresh deployment generates it, and the key boot step
+    // refuses to start a realm whose active token keys are half a pair.
     // #247 AC#3: self-contained hybrid tokens carry a ~4.4 KB detached ML-DSA
     // signature that overflows cookie/URL budgets — never let a deployment pick
     // it silently. Reference/introspection delivery is the safe default.

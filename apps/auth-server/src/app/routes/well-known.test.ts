@@ -34,8 +34,6 @@ const ISSUER = 'https://auth.example.com';
  */
 async function buildApp(overrides?: {
   jwks?: { keys: Array<Record<string, unknown>> };
-  /** The JWT plugin's issuer, `JWT_ISSUER`. */
-  issuer?: string;
   /** The issuer of the request's realm. */
   realmIssuer?: string;
   idTokenSigningAlgValuesSupported?: string[];
@@ -55,11 +53,12 @@ async function buildApp(overrides?: {
     ],
   };
 
+  // Both answer for the realm they are given (#491).
   app.decorate('jwtUtils', {
-    getIssuer: () => overrides?.issuer ?? ISSUER,
-    getJwks: async () => jwks,
-    getIdTokenSigningAlgValuesSupported: () =>
-      overrides?.idTokenSigningAlgValuesSupported ?? ['EdDSA'],
+    getJwks: vi.fn(async () => jwks),
+    getIdTokenSigningAlgValuesSupported: vi.fn(
+      async () => overrides?.idTokenSigningAlgValuesSupported ?? ['EdDSA']
+    ),
   } as unknown as never);
   supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: overrides?.realmIssuer ?? ISSUER }));
 
@@ -162,10 +161,11 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     }
   });
 
-  it("publishes the realm row's issuer, whatever trailing slash the JWT plugin's issuer has", async () => {
+  it("publishes the realm row's issuer: the JWT plugin holds none of its own (#491)", async () => {
     // The row never ends with a slash (a CHECK refuses one; the boot step
-    // drops the one JWT_ISSUER may carry), and the plugin's issuer is not read.
-    const app = await buildApp({ issuer: `${ISSUER}/` });
+    // drops the one JWT_ISSUER may carry). The JWT plugin, which kept
+    // JWT_ISSUER as written before #491, no longer has an issuer to read.
+    const app = await buildApp();
     try {
       const res = await app.inject({
         method: 'GET',
@@ -180,7 +180,7 @@ describe('GET /.well-known/oauth-authorization-server', () => {
   });
 
   it("builds every URL on the request realm's issuer, not on JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
-    const app = await buildApp({ issuer: ISSUER, realmIssuer: 'https://b.example.com' });
+    const app = await buildApp({ realmIssuer: 'https://b.example.com' });
     try {
       const res = await app.inject({
         method: 'GET',
@@ -240,6 +240,10 @@ describe('GET /.well-known/openid-configuration', () => {
       // Discovery reflects exactly what the plugin can produce keys for; when an
       // RS256 key is present RS256 is advertised (and listed first, the default).
       expect(body['id_token_signing_alg_values_supported']).toEqual(['RS256', 'EdDSA']);
+      // The keys asked about are the request realm's (#491).
+      expect(app.jwtUtils.getIdTokenSigningAlgValuesSupported).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'realm-1', issuer: ISSUER })
+      );
     } finally {
       await app.close();
     }
@@ -266,6 +270,10 @@ describe('GET /.well-known/jwks.json', () => {
       expect(jwk['use']).toBe('sig');
       expect(jwk['kid']).toBe('test-kid');
       expect(jwk).not.toHaveProperty('d');
+      // The JWKS served is the request realm's (#491).
+      expect(app.jwtUtils.getJwks).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'realm-1', issuer: ISSUER })
+      );
     } finally {
       await app.close();
     }
@@ -316,9 +324,8 @@ describe('GET /.well-known/jwks.json', () => {
     const eventKey = { kid: 'event', publicJwk: { kty: 'OKP', crv: 'Ed25519', kid: 'event' } };
     const getVerificationKeys = vi.fn(async () => [eventKey]);
     app.decorate('jwtUtils', {
-      getIssuer: () => ISSUER,
       getJwks: async () => jwks,
-      getIdTokenSigningAlgValuesSupported: () => ['EdDSA'],
+      getIdTokenSigningAlgValuesSupported: async () => ['EdDSA'],
     } as unknown as never);
     app.decorate('ssf', {} as never);
     app.decorate('signer', { getVerificationKeys } as unknown as never);

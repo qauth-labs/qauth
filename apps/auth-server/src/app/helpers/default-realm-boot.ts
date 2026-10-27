@@ -70,7 +70,7 @@ export interface DefaultRealmIssuer {
 
 /** Logged when `JWT_ISSUER` ends with a slash. */
 export const JWT_ISSUER_TRAILING_SLASH_WARNING =
-  'JWT_ISSUER ends with a slash: the default realm stores its issuer without it, as discovery publishes it, but tokens carry JWT_ISSUER as written; remove the slash';
+  'JWT_ISSUER ends with a slash: the default realm stores its issuer without it, and its discovery documents and tokens name it that way; remove the slash';
 
 /** Logged when `JWT_ISSUER` has a path. */
 export const JWT_ISSUER_PATH_WARNING =

@@ -128,11 +128,17 @@ describe('key import at first boot, through the real auth-server', () => {
         (key) => key.algorithm === 'EdDSA' && key.purpose === 'token_signing'
       )?.kid;
       const rsaKid = stored.find((key) => key.algorithm === 'RS256')?.kid;
-      expect(keys.map(publicMembers)).toEqual([
-        publicMembers(createPublicKey(jwt.publicKey).export({ format: 'jwk' })),
-        publicMembers(createPublicKey(rsa).export({ format: 'jwk' })),
-      ]);
-      expect(keys.map((key) => key['kid'])).toEqual([edKid, rsaKid]);
+      // The realm's JWKS since #491: the store's keys in the signer's fixed
+      // order (purpose, publication, kid), which does not follow the
+      // algorithm. A verifier picks a key by kid, so the order means nothing.
+      expect(keys).toHaveLength(2);
+      const byKid = new Map(keys.map((key) => [key['kid'], publicMembers(key)]));
+      expect(byKid.get(edKid)).toEqual(
+        publicMembers(createPublicKey(jwt.publicKey).export({ format: 'jwk' }))
+      );
+      expect(byKid.get(rsaKid)).toEqual(
+        publicMembers(createPublicKey(rsa).export({ format: 'jwk' }))
+      );
       expect(edKid).toMatch(/^[A-Za-z0-9_-]{43}$/);
     } finally {
       await server.close();
@@ -156,8 +162,10 @@ describe('key import at first boot, through the real auth-server', () => {
 
     const server = await boot();
     try {
+      const realm = await server.app.repositories.realms.findByName('master');
+      // The token names no `kid`: the realm's EdDSA keys are tried (#491).
       await expect(
-        server.app.jwtUtils.verifyAccessToken(token, { issuer: ISSUER })
+        server.app.jwtUtils.verifyAccessToken({ id: realm?.id ?? '', issuer: ISSUER }, token)
       ).resolves.toMatchObject({ clientId: 'client-1' });
 
       const jwks = (
@@ -169,7 +177,6 @@ describe('key import at first boot, through the real auth-server', () => {
         jwtVerify(token, createLocalJWKSet(jwks), { issuer: ISSUER })
       ).resolves.toBeDefined();
 
-      const realm = await server.app.repositories.realms.findByName('master');
       const stored = await server.app.signer.getVerificationKeys(
         'local',
         realm?.id ?? '',

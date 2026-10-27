@@ -117,7 +117,6 @@ async function buildServer(): Promise<FastifyInstance> {
   fastify.decorate('jwtUtils', {
     extractFromHeader: vi.fn().mockReturnValue(null),
     verifyAccessToken: vi.fn(),
-    getIssuer: () => 'https://auth.example.com',
   } as never);
   fastify.decorate('sessionUtils', {
     getSession: vi.fn().mockResolvedValue(null),

@@ -76,7 +76,6 @@ function createFastifyStub() {
     },
     jwtUtils: {
       verifyAccessToken: vi.fn(),
-      getIssuer: () => 'https://auth.example.com',
       // Classical deployment by default (#275): no PQC material is looked up
       // and no `pqc_signature` appears in the response.
       isHybridSigningEnabled: () => false,
@@ -256,9 +255,10 @@ describe('POST /oauth/introspect route', () => {
       { send: (body: unknown) => body }
     );
 
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('valid-token', {
-      issuer: 'https://b.example.com',
-    });
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: 'realm-b', issuer: 'https://b.example.com' },
+      'valid-token'
+    );
   });
 
   it('reports a DPoP-bound token as DPoP with its cnf.jkt (RFC 9449 §6.2, #480)', async () => {

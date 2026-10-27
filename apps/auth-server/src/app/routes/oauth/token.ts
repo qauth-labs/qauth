@@ -9,6 +9,8 @@ import {
   InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
+  JWTExpiredError,
+  JWTInvalidError,
   NotFoundError,
   TemporarilyUnavailableError,
   UnauthorizedClientError,
@@ -53,7 +55,7 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
+import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import {
   refreshFamilyEnd,
   refreshFamilyEnded,
@@ -1063,7 +1065,7 @@ async function handleAuthorizationCode(
     // Signed here, after the compare-and-set and before the event: a lost
     // race mints nothing, and a signing failure rolls the redemption back, so
     // the code is not spent and `token.issued` records only tokens that exist.
-    const accessToken = await issueAccessToken(fastify, {
+    const accessToken = await issueAccessToken(fastify, requestRealm(request), {
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
@@ -1083,10 +1085,11 @@ async function handleAuthorizationCode(
     // response also carries an ID token asserting the end-user's authentication
     // to this client. `aud` is the client_id (NOT the resource audience used for
     // the access token), and the authorization request's `nonce` is echoed when
-    // present (OIDC Core §3.1.3.6). Signed with the same EdDSA key as the access
-    // token so a single JWKS verifies both.
+    // present (OIDC Core §3.1.3.6). Signed through the signer with the realm's
+    // keys (RS256 when the realm has an RS256 key, #309), so the realm's JWKS
+    // verifies both.
     const idToken = authCode.scopes.includes('openid')
-      ? await fastify.jwtUtils.signIdToken({
+      ? await fastify.jwtUtils.signIdToken(requestRealm(request), {
           sub: user.id,
           audience: client.clientId,
           // BREAKING (#259, data minimization): email claims are released only
@@ -1223,7 +1226,7 @@ async function handleClientCredentials(
   // no admin scope, and no admin audience.
   const issuedScopes = await issuableScopes(ctx, { userId: null, scopes: grantedScopes, aud });
   const scopeString = issuedScopes.join(' ');
-  const accessToken = await issueAccessToken(fastify, {
+  const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: client.clientId,
     clientId: client.clientId,
     scope: scopeString,
@@ -1556,7 +1559,7 @@ async function handleRefreshToken(
     // race mints nothing, and a signing failure rolls the rotation back, so
     // the presented token stays live and `token.issued` records only a token
     // that exists.
-    const signed = await issueAccessToken(fastify, {
+    const signed = await issueAccessToken(fastify, requestRealm(request), {
       sub: user.id,
       ...emailClaims,
       clientId: client.clientId,
@@ -1662,6 +1665,11 @@ function arrayToAud(values: string[]): string | string[] {
  * grant the agent can use. The delegation branch does not apply it yet; ADR-014
  * adds it there behind `AUTHORITY_TREE_ENABLED`.
  */
+/** Whether a verification error refused the token, rather than failing to check it. */
+function isTokenRefusal(error: unknown): boolean {
+  return error instanceof JWTInvalidError || error instanceof JWTExpiredError;
+}
+
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
 ): Promise<TokenEndpointResponse> {
@@ -1725,20 +1733,20 @@ async function handleTokenExchange(
     throw new InvalidRequestError('unsupported actor_token_type');
   }
 
-  // GATE 3 — verify the subject token (EdDSA signature + exp + issuer). The
-  // issuer is pinned in `verifyAccessToken` (RFC 9700 mix-up defence), so a
-  // token minted by a different AS — even one sharing our signing key — fails
-  // verification here. Only QAuth's signing key + issuer verifies, so success
-  // establishes provenance; an unverifiable / expired / foreign-issuer token is
-  // "unacceptable" → invalid_request. The issuer is the one the request realm's
-  // tokens carry (#489, #490), so a token naming another realm's issuer fails too.
-  const expectedIssuer = realmTokenIssuer(fastify, requestRealm(request));
+  // GATE 3 — verify the subject token (EdDSA signature + exp + issuer). It
+  // verifies only with the request realm's keys and its issuer is pinned in
+  // `verifyAccessToken` (RFC 9700 mix-up defence), so a token minted by a
+  // different AS or by another realm (#490, #491) fails verification here.
+  // Success establishes provenance; an unverifiable / expired / foreign-issuer
+  // token is "unacceptable" → invalid_request. Verification reads the realm's
+  // keys from the key store, so any other failure (the store unreachable) is
+  // the server's, not the token's: it propagates and fails the exchange closed.
+  const verifyingRealm = tokenRealm(requestRealm(request));
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
-    subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token, {
-      issuer: expectedIssuer,
-    });
-  } catch {
+    subjectPayload = await fastify.jwtUtils.verifyAccessToken(verifyingRealm, body.subject_token);
+  } catch (error) {
+    if (!isTokenRefusal(error)) throw error;
     await emitRequestFailed(ctx, 'invalid_request', 'subject_token_invalid');
     throw new InvalidRequestError('subject_token is not a valid access token');
   }
@@ -1773,10 +1781,9 @@ async function handleTokenExchange(
   let actorPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>> | undefined;
   if (body.actor_token !== undefined) {
     try {
-      actorPayload = await fastify.jwtUtils.verifyAccessToken(body.actor_token, {
-        issuer: expectedIssuer,
-      });
-    } catch {
+      actorPayload = await fastify.jwtUtils.verifyAccessToken(verifyingRealm, body.actor_token);
+    } catch (error) {
+      if (!isTokenRefusal(error)) throw error;
       await emitRequestFailed(ctx, 'invalid_request', 'actor_token_invalid');
       throw new InvalidRequestError('actor_token is not a valid access token');
     }
@@ -2001,7 +2008,7 @@ async function handleTokenExchange(
   // agent learns the address only when the user's grant included it.
   const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
-  const accessToken = await issueAccessToken(fastify, {
+  const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
@@ -2236,7 +2243,7 @@ async function mintIdJagForExchange(args: {
   const issuedScopes = issuance.scopes;
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
-  const minted = await mintIdJag(requestRealm(request), {
+  const minted = await mintIdJag(fastify, requestRealm(request), {
     subject: user.id,
     audience: targetAuthorizationServer,
     resource: targetResource,
@@ -2492,7 +2499,7 @@ async function handleJwtBearer(
   // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other
   // grant: the assertion's scope, narrowed and capped by GATE 5, decides.
   const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
-  const accessToken = await issueAccessToken(fastify, {
+  const accessToken = await issueAccessToken(fastify, requestRealm(request), {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,

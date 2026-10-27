@@ -34,8 +34,8 @@ export interface KeyVariableConfig {
 /**
  * The key settings for the boot step: each key whose variable is set.
  *
- * - The ML-DSA-65 seed only with hybrid signing on: the JWT plugin reads it
- *   only then, and the store keeps it only as the second key of a hybrid pair.
+ * - The ML-DSA-65 seed only with hybrid signing on: the store keeps it only as
+ *   the second key of a hybrid pair.
  * - `SESSION_COOKIE_SECRET` only when the operator set it, and never the
  *   development default the configuration falls back to: a fresh deployment
  *   generates its cookie key instead.
@@ -105,24 +105,34 @@ export function keyVariableSettings(
 }
 
 /**
- * The `kid` the key store gives a key from a PEM private key when no `kid` is
- * configured: the RFC 7638 SHA-256 thumbprint of its public key, derived with
- * `node:crypto`. The JWT plugin publishes the same `kid`, so the served JWKS
- * names each key as the store does.
+ * The `kid`s a token without a `kid` may be verified with (#491): the Ed25519
+ * key of `JWT_PRIVATE_KEY`, or of `JWT_PUBLIC_KEY` on a process that holds no
+ * private key. That key signed every access token before tokens named their
+ * key, and the key boot step stores it under its RFC 7638 thumbprint, the
+ * `kid` computed here. The key store does not record where a key came from,
+ * so the variable is what names it; a key the store generated is never
+ * listed.
  *
- * The PEM may also be the public key itself: a process without the signer
- * role (#495) has only that, and publishes the key under the same `kid`.
+ * Transitional: removed one release after #491, once the tokens issued
+ * before the upgrade have expired. Keep the variable set until then.
  *
- * @returns the thumbprint, or `undefined` when the PEM does not parse; the
- *   JWT plugin and the key boot step each refuse such a key with their own
- *   message
+ * @returns the thumbprints, none when neither variable holds an Ed25519 key
  */
-export async function thumbprintKid(keyPem: string): Promise<string | undefined> {
-  let jwk: JWK;
-  try {
-    jwk = createPublicKey(keyPem).export({ format: 'jwk' }) as JWK;
-  } catch {
-    return undefined;
+export async function kidlessTokenKeyIds(
+  config: Pick<KeyVariableConfig, 'JWT_PRIVATE_KEY' | 'JWT_PUBLIC_KEY'>
+): Promise<string[]> {
+  const kids = new Set<string>();
+  for (const pem of [config.JWT_PRIVATE_KEY, config.JWT_PUBLIC_KEY]) {
+    if (pem === undefined || pem.trim().length === 0) continue;
+    let jwk: JWK;
+    try {
+      jwk = createPublicKey(pem).export({ format: 'jwk' }) as JWK;
+    } catch {
+      // The key boot step refuses a key that does not parse, with its own message.
+      continue;
+    }
+    if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519') continue;
+    kids.add(await calculateJwkThumbprint(jwk, 'sha256'));
   }
-  return calculateJwkThumbprint(jwk, 'sha256');
+  return [...kids];
 }

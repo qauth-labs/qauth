@@ -8,7 +8,7 @@ import { logAuthEvent } from '../../helpers/auth-events';
 import { endBrowserSessions } from '../../helpers/browser-session';
 import { assertManagementToken } from '../../helpers/management-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
-import { realmTokenIssuer } from '../../helpers/realm-url';
+import { tokenRealm } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   clearSessionCookie,
@@ -88,11 +88,9 @@ export default async function (fastify: FastifyInstance) {
         const realm = requestRealm(request);
         let claims: JWTPayload;
         try {
-          claims = await fastify.jwtUtils.verifyAccessToken(token, {
-            // RFC 9700 mix-up defence: only accept a token this realm issued
-            // (#489).
-            issuer: realmTokenIssuer(fastify, realm),
-          });
+          // RFC 9700 mix-up defence: only accept a token this realm issued,
+          // under its keys and its issuer (#491).
+          claims = await fastify.jwtUtils.verifyAccessToken(tokenRealm(realm), token);
         } catch (error) {
           if (error instanceof JWTExpiredError) {
             // Token expired - its signature verified, so decode it to read the claims

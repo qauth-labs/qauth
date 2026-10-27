@@ -1,5 +1,9 @@
 import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
-import { JWTInvalidError, UnauthorizedClientError } from '@qauth-labs/shared-errors';
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  UnauthorizedClientError,
+} from '@qauth-labs/shared-errors';
 import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -36,7 +40,7 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
+import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   evaluateStepUp,
@@ -348,10 +352,12 @@ export default async function (fastify: FastifyInstance) {
     } else {
       // bearer path
       try {
-        const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
-          // RFC 9700 mix-up defence: only accept a token this realm issued.
-          issuer: realmTokenIssuer(fastify, realm),
-        });
+        // RFC 9700 mix-up defence: only accept a token this realm issued,
+        // under its keys and its issuer (#491).
+        const payload = await fastify.jwtUtils.verifyAccessToken(
+          tokenRealm(realm),
+          bearer as string
+        );
         // Only the first-party login token: the system client's `client_id`,
         // its audience (or, for a token minted before #509, its `client_id`
         // as audience) and no delegation, exactly as the management API pins
@@ -375,7 +381,28 @@ export default async function (fastify: FastifyInstance) {
           throw inactiveSubjectError();
         }
         userId = payload.sub;
-      } catch {
+      } catch (error) {
+        // Only a refused token is the client's `access_denied`. Anything else
+        // (the key store or the denylist unreachable) is the server's, never
+        // a bad token (#491): the client and its redirect URI are validated by
+        // now, so it hears `temporarily_unavailable` there (RFC 6749
+        // §4.1.2.1), with `state` and `iss` as every authorization error
+        // carries them, and no code is issued.
+        if (!(error instanceof JWTInvalidError || error instanceof JWTExpiredError)) {
+          fastify.log.error({ err: error }, 'authorize: the Bearer token could not be checked');
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:authorization.failed:v1-rc.0',
+            { error: 'temporarily_unavailable' },
+            clientEvent
+          );
+          return sendAuthorizationError(reply, client, redirectUri, {
+            error: 'temporarily_unavailable',
+            error_description: 'The authorization server cannot check the token right now',
+            state: state ?? undefined,
+            iss,
+          });
+        }
         await emitUserEvent(
           request,
           'urn:qauth:event:authorization.failed:v1-rc.0',

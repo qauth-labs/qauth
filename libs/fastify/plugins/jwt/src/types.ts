@@ -2,73 +2,54 @@ import type { HybridSignedToken, SignatureAlgorithm } from '@qauth-labs/core-cry
 import type {
   AccessTokenCredential,
   ActClaim,
-  AkpJwk,
   ConfirmationClaim,
   JWTPayload,
-  PublicJwk,
-  Rs256Jwk,
 } from '@qauth-labs/server-jwt';
+import type { RealmJwks, Signer } from '@qauth-labs/server-keys';
 import type { FastifyPluginOptions, FastifyRequest } from 'fastify';
+
+/**
+ * The signer operations the JWT plugin uses (ADR-019 Decision 9, #491): it
+ * signs every token through `signJws` and `signHybrid`, and verifies with the
+ * public keys `getVerificationKeys` lists. It holds no key of its own.
+ */
+export type TokenSigner = Pick<
+  Signer,
+  'signJws' | 'signHybrid' | 'getVerificationKeys' | 'getJwks'
+>;
+
+/**
+ * The realm a token is signed for or verified in (ADR-019 Decision 1). The
+ * signer sets `iss` from the realm row and `kid` from the realm's active key,
+ * so signing needs only the `id`; verification also pins the `issuer`.
+ */
+export interface TokenRealm {
+  /** The realm id: its keys sign the token and verify it. */
+  readonly id: string;
+  /** The realm's issuer, the `iss` its tokens carry (the realm row's, without a trailing slash). */
+  readonly issuer: string;
+}
 
 /**
  * JWT plugin configuration options
  */
 export interface JwtPluginOptions extends FastifyPluginOptions {
   /**
-   * JWT private key in PEM format. Absent on a process that does not hold the
-   * signer role (ADR-019 Decision 9, #495): the plugin then only verifies, with
-   * {@link publicKey}, and every signing call fails with a 503
-   * `TemporarilyUnavailableError`.
+   * The signer (`fastify.signer` of `@qauth-labs/fastify-plugin-signer`).
+   * Every token is signed through it with the realm's active key, and verified
+   * with the realm's published keys it lists. The plugin is given no key.
    */
-  privateKey?: string;
+  signer: TokenSigner;
   /**
-   * JWT public key in PEM format: derived from the private key when absent,
-   * and required without one.
+   * The realm a request belongs to, for `requireJwt` and
+   * `verifyRequestAccessToken`: a token verifies only with that realm's keys
+   * and only when its `iss` is that realm's issuer.
    */
-  publicKey?: string;
-  /** JWT issuer URL */
-  issuer: string;
+  requestRealm: (request: FastifyRequest) => TokenRealm;
   /** Access token expiration in seconds */
   accessTokenLifespan: number;
   /** Refresh token expiration in seconds */
   refreshTokenLifespan: number;
-  /**
-   * Optional stable key identifier published in the JWKS `kid` member.
-   * Required once key rotation is enabled; absent for a single-active-key setup.
-   */
-  keyId?: string;
-  /**
-   * Optional RS256 (RSASSA-PKCS1-v1_5 + SHA-256) private key in PKCS#8 PEM (#309).
-   *
-   * OPTIONAL and env-provisioned (`JWT_RS256_PRIVATE_KEY`/`_PATH`). When present:
-   * - `getJwks()` additionally publishes the derived RSA PUBLIC key as an `RSA`
-   *   JWK (with a `kid` distinct from the EdDSA key);
-   * - `signIdToken()` signs ID tokens with RS256 by DEFAULT (access tokens stay
-   *   EdDSA);
-   * - discovery advertises `id_token_signing_alg_values_supported: ['RS256','EdDSA']`.
-   *
-   * Absent → behaviour is exactly as before: EdDSA-only ID tokens, single JWKS
-   * key, discovery lists `['EdDSA']`. This unblocks OIDC Basic/Config OP
-   * certification (#286), which hard-fails an EdDSA-only OP. It is deliberately
-   * NOT generated at boot: a boot-generated RSA key would break JWKS stability
-   * across restarts and across instances.
-   */
-  rs256PrivateKey?: string;
-  /**
-   * Optional RS256 public key in SPKI PEM (#309). When omitted, the public key
-   * is derived from {@link rs256PrivateKey} (public material only). Provide it
-   * only when the private key is not available to this process. Without
-   * {@link privateKey} and {@link rs256PrivateKey}, on a process without the
-   * signer role (#495), it is published alone and ID tokens are advertised as
-   * RS256, as the signer signs them; this process signs none.
-   */
-  rs256PublicKey?: string;
-  /**
-   * Stable `kid` for the RS256 key published in the RSA JWK (#309). Optional,
-   * but recommended so the RSA entry carries a `kid` DISTINCT from the EdDSA
-   * key; enforced distinct at boot via `assertDistinctJwksKeyIds`.
-   */
-  rs256KeyId?: string;
   /**
    * Require the RFC 9068 `typ: at+jwt` protected header on every access token
    * this server verifies (#283). Default `false`.
@@ -86,52 +67,41 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    */
   requireAccessTokenTyp?: boolean;
   /**
-   * Optional ML-DSA-65 private key as a base64url 32-byte seed (#246). When
-   * present, `getJwks()` additionally publishes the derived ML-DSA PUBLIC key
-   * as an `AKP` JWK alongside the Ed25519 `OKP` entry, so PQC-capable verifiers
-   * can retrieve it. Supplied by the auth-server only when hybrid signing is
-   * enabled (`HYBRID_SIGNING_ENABLED`); no ML-DSA-signed token is issued by
-   * this plugin. Absent → JWKS is EdDSA-only, exactly as before.
-   */
-  mlDsaSeed?: string;
-  /** Stable `kid` for the ML-DSA key published in the AKP JWK (#246). */
-  mlDsaKeyId?: string;
-  /**
-   * Turn on LIVE hybrid (Ed25519 + ML-DSA-65) token issuance (#275). Sourced
-   * from `HYBRID_SIGNING_ENABLED`, default off.
+   * The `kid`s of the keys a token WITHOUT a `kid` may be verified with: the
+   * Ed25519 key a deployment imported from its key variable, which signed
+   * every access token before tokens named their key (#491). The key store
+   * does not record where a key came from, so the auth-server derives these
+   * from the variable (`JWT_PRIVATE_KEY`, or `JWT_PUBLIC_KEY` on a process
+   * without the signer role). A key the store generated never signed a token
+   * without a `kid`, so it is never tried for one. Empty or absent: a token
+   * without a `kid` verifies with no key.
    *
-   * When true the plugin retains the ML-DSA PRIVATE key and exposes
-   * {@link JwtUtils.signHybridAccessToken}; when false only the derived public
-   * key is kept (JWKS publication, #246) and no hybrid token can be minted.
-   * Enabling it without `mlDsaSeed` throws at registration — a half-configured
-   * hybrid deployment must fail fast, never silently degrade to classical-only.
+   * Transitional: this path is removed one release after #491, once the
+   * tokens issued before the upgrade have expired.
+   */
+  kidlessKeyIds?: readonly string[];
+  /**
+   * Turn on LIVE hybrid (Ed25519 + ML-DSA-65) access-token issuance (#275).
+   * Sourced from `HYBRID_SIGNING_ENABLED`, default off. The signer signs the
+   * hybrid token with the realm's hybrid pair; a realm without one refuses to
+   * sign (`SignerKeyNotFoundError`), and the key boot step refuses to start a
+   * deployment whose realm holds half a pair.
+   *
+   * Turning it on without `enabledSignatureAlgorithms` that enable ML-DSA-65
+   * throws at registration: a half-configured hybrid deployment must fail fast,
+   * never silently degrade to classical-only.
    */
   hybridSigningEnabled?: boolean;
   /**
    * Operator-enabled signature algorithms (`SIGNING_ALGORITHM_MODE`, threaded
    * from `cryptoEnv.enabledSignatureAlgorithms`).
    *
-   * REQUIRED whenever {@link mlDsaSeed} is set (#248 F7/F11): boot-time ML-DSA
-   * key derivation resolves its backend through `getSignatureBackend`, so the
-   * operator allowlist — not a hardcoded literal — decides whether ML-DSA-65 is
-   * usable at all, and a registered native backend (#244) is selectable.
+   * The ML-DSA-65 backend that verifies a hybrid token's second signature is
+   * resolved through this list (#248 F7/F11), so the operator allowlist, not a
+   * hardcoded literal, decides whether ML-DSA-65 is usable. Absent: no hybrid
+   * token verifies here.
    */
   enabledSignatureAlgorithms?: readonly SignatureAlgorithm[];
-  /**
-   * Retired Ed25519 verification keys to keep publishing in the JWKS (#248 F9).
-   *
-   * After a signing-key rotation, tokens signed by the previous key stay valid
-   * until they expire; publishing the retired PUBLIC key under its OWN `kid`
-   * lets verifiers resolve them. Each `keyId` MUST be distinct from every other
-   * published `kid` (enforced at boot) — see `assertDistinctJwksKeyIds`.
-   */
-  retiredKeys?: readonly { publicKey: string; keyId: string }[];
-  /**
-   * Retired ML-DSA-65 verification keys, as base64url raw PUBLIC keys, published
-   * as `AKP` JWKs under their own `kid` (#248 F9). PUBLIC material only — a
-   * retired key is never configured as a seed.
-   */
-  retiredMlDsaPublicKeys?: readonly { publicKey: string; keyId: string }[];
   /**
    * Optional revocation denylist check (RFC 7009). When provided, the
    * `requireJwt` preHandler calls it AFTER a successful signature/issuer
@@ -165,9 +135,12 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
 export interface AccessTokenCheckPolicy {
   /**
    * Decide whether the verified token's `iss` is one the route accepts. It
-   * replaces the comparison with the plugin's `issuer`, and runs after the
-   * signature check, so it never sees an unverified claim. A token with no
-   * `iss` is refused before it is called. Absent: `iss` must equal `issuer`.
+   * replaces the comparison with the issuer of the request's realm, and runs
+   * after the signature check with that realm's keys, so it never sees an
+   * unverified claim, and it can only narrow which of the realm's tokens
+   * pass: a token another realm's keys signed is refused before it runs. A
+   * token with no `iss` is refused before it is called. Absent: `iss` must
+   * equal the realm's issuer.
    */
   acceptIssuer?: (issuer: string, request: FastifyRequest) => boolean | Promise<boolean>;
   /**
@@ -179,15 +152,12 @@ export interface AccessTokenCheckPolicy {
 }
 
 /**
- * JWKS envelope as served by `/.well-known/jwks.json` (RFC 7517 §5).
+ * JWKS envelope as served by `/.well-known/jwks.json` (RFC 7517 §5): the
+ * realm's published `token_signing` keys, as the signer lists them. Ed25519
+ * `OKP` keys, `RSA` keys for RS256 ID tokens (#309) and, with hybrid signing,
+ * ML-DSA-65 `AKP` keys (#246), each under its own `kid`.
  */
-export interface Jwks {
-  /**
-   * Ed25519 `OKP` keys; when an RS256 key is configured, the `RSA` key (#309);
-   * and, when hybrid signing is configured, ML-DSA `AKP` keys (#246).
-   */
-  keys: (PublicJwk | Rs256Jwk | AkpJwk)[];
-}
+export type Jwks = RealmJwks;
 
 /**
  * JWT payload structure and the RFC 8693 `act` (actor) claim shape.
@@ -213,25 +183,31 @@ export interface JwtUtils {
    * agent into the delegated token (`sub` stays the end-user). `act` is
    * omitted for every non-delegated token. Pass `expiresInOverride` to clamp
    * the delegated token's lifetime to the subject token's remaining lifetime.
+   *
+   * The signer signs it with the realm's active EdDSA key: `iss` is the
+   * realm's issuer and the protected header names the key's `kid`.
    */
-  signAccessToken(payload: {
-    sub: string;
-    email?: string;
-    email_verified?: boolean;
-    clientId: string;
-    scope?: string;
-    aud?: string | string[];
-    act?: ActClaim;
-    /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
-    cnf?: ConfirmationClaim;
-    /**
-     * Override the access-token lifespan (seconds). Intended to SHORTEN a token
-     * below the configured default — the token-exchange grant clamps the
-     * delegated token so it never outlives the subject token. Omitted for
-     * normal grants (uses the configured lifespan).
-     */
-    expiresInOverride?: number;
-  }): Promise<string>;
+  signAccessToken(
+    realm: Pick<TokenRealm, 'id'>,
+    payload: {
+      sub: string;
+      email?: string;
+      email_verified?: boolean;
+      clientId: string;
+      scope?: string;
+      aud?: string | string[];
+      act?: ActClaim;
+      /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
+      cnf?: ConfirmationClaim;
+      /**
+       * Override the access-token lifespan (seconds). Intended to SHORTEN a token
+       * below the configured default — the token-exchange grant clamps the
+       * delegated token so it never outlives the subject token. Omitted for
+       * normal grants (uses the configured lifespan).
+       */
+      expiresInOverride?: number;
+    }
+  ): Promise<string>;
   /**
    * Whether LIVE hybrid issuance is enabled on this server (#275). Routes
    * branch on this to decide between a classical and a hybrid access token.
@@ -246,77 +222,91 @@ export interface JwtUtils {
    * indistinguishable from the classical one — the PQC material is delivered
    * out-of-band via introspection (`reference` delivery, #247).
    *
+   * The signer signs it with the realm's hybrid pair: the protected header
+   * names the EdDSA key's `kid` and the ML-DSA-65 key's `pqc_kid`.
+   *
    * @throws Error if hybrid signing is not enabled on this server.
    */
-  signHybridAccessToken(payload: {
-    sub: string;
-    email?: string;
-    email_verified?: boolean;
-    clientId: string;
-    scope?: string;
-    aud?: string | string[];
-    act?: ActClaim;
-    /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
-    cnf?: ConfirmationClaim;
-    /** Narrow the lifespan below the configured default (never widens). */
-    expiresInOverride?: number;
-  }): Promise<HybridSignedToken>;
+  signHybridAccessToken(
+    realm: Pick<TokenRealm, 'id'>,
+    payload: {
+      sub: string;
+      email?: string;
+      email_verified?: boolean;
+      clientId: string;
+      scope?: string;
+      aud?: string | string[];
+      act?: ActClaim;
+      /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
+      cnf?: ConfirmationClaim;
+      /** Narrow the lifespan below the configured default (never widens). */
+      expiresInOverride?: number;
+    }
+  ): Promise<HybridSignedToken>;
   /**
    * Verify a hybrid access token: the Ed25519 component always, plus the
    * ML-DSA-65 component whenever the ISSUER-SIGNED `pqc_alg` header asserts it
-   * (binding regardless of `requirePqc`, #248 F1). The ML-DSA key is resolved
-   * from the signed `pqc_kid` (#248 F5).
+   * (binding regardless of `requirePqc`, #248 F1). Both keys are the realm's:
+   * the Ed25519 key by the token's `kid`, the ML-DSA key by the signed
+   * `pqc_kid` (#248 F5). `iss` must be the realm's issuer.
    *
-   * @throws JWTInvalidError if PQC verification is not configured here.
+   * @throws JWTInvalidError if PQC verification is not configured here, or no
+   *   key of the realm has the token's `kid`.
    * @throws CryptoVerificationError on any verification failure, including a
    *   stripped detached signature on a token whose header asserts `pqc_alg`.
    */
   verifyHybridAccessToken(
+    realm: TokenRealm,
     hybrid: HybridSignedToken,
-    options: { audience?: string | string[]; issuer?: string; requirePqc: boolean }
+    options: { audience?: string | string[]; requirePqc: boolean }
   ): Promise<JWTPayload>;
   /**
    * Sign an OIDC ID token (OpenID Connect Core 1.0 §2).
    *
    * Issued by the token endpoint when the granted scope includes `openid`.
-   * Uses the same EdDSA signing key and lifespan as access tokens; `aud` is
-   * the client identifier, `nonce` is echoed when the client supplied one in
-   * the authorization request. Identity claims (`email`, `email_verified`,
+   * Signed with the realm's active RS256 `token_signing` key when it has one
+   * (#309, what OIDC Basic/Config certification requires), otherwise with its
+   * EdDSA key, and with the lifespan of access tokens; `aud` is the client
+   * identifier, `nonce` is echoed when the client supplied one in the
+   * authorization request. Identity claims (`email`, `email_verified`,
    * `name`) are included when the caller passes them; the token route passes
    * each only under the scope that releases it (`email`, `profile`).
    */
-  signIdToken(payload: {
-    sub: string;
-    audience: string;
-    email?: string;
-    email_verified?: boolean;
-    name?: string;
-    nonce?: string;
-    /**
-     * OIDC Core §2 `auth_time` — the end-user authentication time in epoch
-     * MILLISECONDS (session establishment). `signIdToken` maps it to the
-     * `auth_time` claim in epoch SECONDS (floored). Omitted when unknown.
-     */
-    authTime?: number;
-    /**
-     * OIDC Core §2 `acr` — the authentication event's assurance level, already
-     * mapped to the deployment's vocabulary (#237). Omitted (claim absent)
-     * whenever no assurance above `low` was established, which is every password
-     * login.
-     *
-     * This payload type is structurally duplicated from `SignIdTokenPayload` in
-     * `@qauth-labs/server-jwt` (the decorator surface may not import it), so a
-     * new field must be added in BOTH places or the app cannot pass it.
-     */
-    acr?: string;
-    /**
-     * OIDC `sid` — the browser session behind the authorization code (#549),
-     * as back-channel logout names it. Passed only by the code exchange, and
-     * only when a browser session backs the code; omitted (claim absent)
-     * otherwise.
-     */
-    sid?: string;
-  }): Promise<string>;
+  signIdToken(
+    realm: Pick<TokenRealm, 'id'>,
+    payload: {
+      sub: string;
+      audience: string;
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+      nonce?: string;
+      /**
+       * OIDC Core §2 `auth_time` — the end-user authentication time in epoch
+       * MILLISECONDS (session establishment). `signIdToken` maps it to the
+       * `auth_time` claim in epoch SECONDS (floored). Omitted when unknown.
+       */
+      authTime?: number;
+      /**
+       * OIDC Core §2 `acr` — the authentication event's assurance level, already
+       * mapped to the deployment's vocabulary (#237). Omitted (claim absent)
+       * whenever no assurance above `low` was established, which is every password
+       * login.
+       *
+       * This payload type is structurally duplicated from `SignIdTokenPayload` in
+       * `@qauth-labs/server-jwt` (the decorator surface may not import it), so a
+       * new field must be added in BOTH places or the app cannot pass it.
+       */
+      acr?: string;
+      /**
+       * OIDC `sid` — the browser session behind the authorization code (#549),
+       * as back-channel logout names it. Passed only by the code exchange, and
+       * only when a browser session backs the code; omitted (claim absent)
+       * otherwise.
+       */
+      sid?: string;
+    }
+  ): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)
    */
@@ -326,18 +316,22 @@ export interface JwtUtils {
    */
   hashRefreshToken(token: string): string;
   /**
-   * Verify an access token and return payload.
-   * When `audience` is provided, the token's `aud` claim MUST match
-   * (string or array intersection per RFC 7519 §4.1.3). When `issuer` is
-   * provided, the token's `iss` claim MUST equal it (RFC 9700 mix-up
-   * defence); omit it only when the caller deliberately accepts any issuer.
+   * Verify an access token of `realm` and return payload.
+   *
+   * The token verifies only with one of the realm's verification keys: the
+   * one its `kid` names, or, for a token with no `kid` (issued before tokens
+   * named their key, #491), each EdDSA key of the realm. Its `iss` MUST be the
+   * realm's issuer (RFC 9700 mix-up defence). When `audience` is provided,
+   * the token's `aud` claim MUST match (string or array intersection per
+   * RFC 7519 §4.1.3).
    * @throws JWTExpiredError if token has expired
-   * @throws JWTInvalidError if token is invalid, audience mismatches, or the
-   *   issuer mismatches
+   * @throws JWTInvalidError if token is invalid, no key of the realm verifies
+   *   it, the audience mismatches, or the issuer mismatches
    */
   verifyAccessToken(
+    realm: TokenRealm,
     token: string,
-    options?: { audience?: string | string[]; issuer?: string }
+    options?: { audience?: string | string[] }
   ): Promise<JWTPayload>;
   /**
    * Extract JWT token from Authorization header
@@ -369,20 +363,15 @@ export interface JwtUtils {
    */
   getRefreshTokenLifespan(): number;
   /**
-   * Get the configured issuer URL (the `iss` claim value used when signing).
-   * Used by discovery endpoints (RFC 8414 / OIDC Discovery 1.0).
-   */
-  getIssuer(): string;
-  /**
    * The `id_token_signing_alg_values_supported` values discovery must advertise
-   * (OIDC Discovery 1.0), reflecting the keys actually configured on this
-   * server: `['RS256','EdDSA']` when an RS256 key is present (#309, RS256 is the
+   * for `realm` (OIDC Discovery 1.0), reflecting its active `token_signing`
+   * keys: `['RS256','EdDSA']` when it has an RS256 key (#309, RS256 is the
    * default ID-token signature then), otherwise `['EdDSA']`.
    */
-  getIdTokenSigningAlgValuesSupported(): string[];
+  getIdTokenSigningAlgValuesSupported(realm: Pick<TokenRealm, 'id'>): Promise<string[]>;
   /**
-   * Export the server's active public key(s) as a JWKS document, ready to
-   * serve at `/.well-known/jwks.json` (RFC 7517).
+   * The realm's JWKS, ready to serve at `/.well-known/jwks.json` (RFC 7517):
+   * its published `token_signing` keys, as the signer lists them.
    */
-  getJwks(): Promise<Jwks>;
+  getJwks(realm: Pick<TokenRealm, 'id'>): Promise<Jwks>;
 }

@@ -1,4 +1,4 @@
-import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -6,7 +6,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
-import { realmTokenIssuer } from '../../helpers/realm-url';
+import { tokenRealm } from '../../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { revokeJti } from '../../helpers/token-revocation';
@@ -165,13 +165,15 @@ async function tryRevokeAccessToken(
 ): Promise<boolean> {
   let payload;
   try {
-    // RFC 9700 mix-up defence: only a token this realm issued (#489, #490).
-    payload = await fastify.jwtUtils.verifyAccessToken(token, {
-      issuer: realmTokenIssuer(fastify, realm),
-    });
-  } catch {
-    // Invalid/expired/foreign-issuer token — nothing to revoke.
-    return false;
+    // RFC 9700 mix-up defence: only a token this realm issued, under its
+    // keys and its issuer (#490, #491).
+    payload = await fastify.jwtUtils.verifyAccessToken(tokenRealm(realm), token);
+  } catch (error) {
+    // Invalid/expired/foreign-issuer token — nothing to revoke. Any other
+    // failure (the key store unreachable) is the server's: it propagates, so
+    // a token is never reported revoked when it was not checked (#491).
+    if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) return false;
+    throw error;
   }
   // Ownership: only the client the token was issued for may revoke it.
   if (payload.clientId !== clientId) return false;

@@ -94,11 +94,11 @@ describe('jwtEnvSchema under the role switch', () => {
     .privateKey.export({ type: 'pkcs8', format: 'pem' })
     .toString();
 
-  it('requires the private key where the signer runs, by default too', () => {
+  it('requires no private key where the signer runs either: the key store holds the keys (#491)', () => {
     for (const roles of [undefined, 'all', 'api,signer']) {
       const result = jwtEnvSchema.safeParse({ ...issuer, SERVICE_ROLES: roles });
-      expect(result.success, roles).toBe(false);
-      expect(result.error?.issues[0]?.path).toEqual(['JWT_PRIVATE_KEY']);
+      expect(result.success, roles).toBe(true);
+      expect(result.data?.JWT_PRIVATE_KEY, roles).toBeUndefined();
     }
   });
 
@@ -120,20 +120,15 @@ describe('jwtEnvSchema under the role switch', () => {
 describe('cryptoEnvSchema under the role switch', () => {
   const hybrid = { HYBRID_SIGNING_ENABLED: 'true', SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65' };
 
-  it('refuses hybrid signing on a process without the signer, naming the switch', () => {
+  it('allows hybrid signing on a process without the signer, which verifies hybrid tokens (#491)', () => {
     const result = cryptoEnvSchema.safeParse({ ...hybrid, SERVICE_ROLES: 'api,web' });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues).toEqual([
-      expect.objectContaining({
-        path: ['HYBRID_SIGNING_ENABLED'],
-        message: expect.stringContaining('needs the signer role'),
-      }),
-    ]);
+    expect(result.success).toBe(true);
+    expect(result.data?.HYBRID_SIGNING_ENABLED).toBe(true);
   });
 
-  it('still asks for the ML-DSA key where the signer runs', () => {
+  it('allows it where the signer runs, with no ML-DSA key variable: the key store holds the pair (#491)', () => {
     const result = cryptoEnvSchema.safeParse({ ...hybrid, SERVICE_ROLES: 'api,signer' });
-    expect(result.error?.issues.map((issue) => issue.path)).toEqual([['JWT_MLDSA_PRIVATE_KEY']]);
+    expect(result.success).toBe(true);
   });
 });
 

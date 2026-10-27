@@ -597,6 +597,37 @@ describe('RFC 9068 typ enforcement (#283)', () => {
     expect(protectedHeader['typ']).not.toBe('at+jwt');
   });
 
+  it('checks typ before reporting an expiry, so an expired ID token is never an expired access token', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const now = Math.floor(Date.now() / 1000);
+    const expired = (typ: string | undefined) => {
+      const jwt = new SignJWT({ sub: 'user-1', client_id: 'client-1', jti: 'jti-1' })
+        .setProtectedHeader({ alg: 'EdDSA', ...(typ === undefined ? {} : { typ }) })
+        .setIssuer(ISSUER)
+        .setIssuedAt(now - 3600)
+        .setExpirationTime(now - 1800);
+      return jwt.sign(privateKey);
+    };
+
+    // A caller that accepts an expired access token (logout) learns it is one.
+    await expect(verifyAccessToken(await expired('at+jwt'), publicKey)).rejects.toThrow(
+      JWTExpiredError
+    );
+    // An expired ID token or ID-JAG signed by the same key is not an access token.
+    for (const typ of ['JWT', 'oauth-id-jag+jwt']) {
+      const token = await expired(typ);
+      await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+      await expect(verifyAccessToken(token, publicKey)).rejects.not.toThrow(JWTExpiredError);
+    }
+    // A typ-less legacy token follows the rollout switch, as an unexpired one does.
+    await expect(verifyAccessToken(await expired(undefined), publicKey)).rejects.toThrow(
+      JWTExpiredError
+    );
+    await expect(
+      verifyAccessToken(await expired(undefined), publicKey, { requireTyp: true })
+    ).rejects.toThrow('missing typ header');
+  });
+
   it('rejects an ID token presented as an access token on typ grounds ALONE', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();
 

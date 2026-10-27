@@ -1,7 +1,12 @@
 # JWT Plugin
 
 Fastify plugin wrapping `@qauth-labs/server-jwt` for JWT signing, verification, and route protection.
-It also serves the JWKS, and can sign hybrid ML-DSA-65 + Ed25519 tokens and accept DPoP-bound tokens.
+It also serves each realm's JWKS, and can sign hybrid ML-DSA-65 + Ed25519 tokens and accept DPoP-bound tokens.
+
+The plugin holds no key (ADR-019 Decision 9). Every token is signed through the signer for its
+realm, which sets `iss` from the realm row and `kid` from the realm's active key, and every token
+is verified with the public keys the signer lists for the realm. A realm's tokens therefore verify
+only in that realm.
 
 ## Usage
 
@@ -9,27 +14,27 @@ It also serves the JWKS, and can sign hybrid ML-DSA-65 + Ed25519 tokens and acce
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 
 await fastify.register(jwtPlugin, {
-  privateKey: env.JWT_PRIVATE_KEY,
-  publicKey: env.JWT_PUBLIC_KEY, // set it: registration fails without it (see Keys below)
-  issuer: env.JWT_ISSUER,
+  signer: fastify.signer, // @qauth-labs/fastify-plugin-signer
+  requestRealm: (request) => ({ id: request.realm.id, issuer: request.realm.issuer }),
   accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
   refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
 });
 
-// Sign an access token. `sub` and `clientId` are required; `email` /
-// `email_verified` are optional. Pass them only when the grant includes the
-// `email` scope, and never for client_credentials grants.
+// Sign an access token for a realm. `sub` and `clientId` are required;
+// `email` / `email_verified` are optional. Pass them only when the grant
+// includes the `email` scope, and never for client_credentials grants.
 //
 // Since ADR-002 (#230) the `users` row carries no email — resolve it from
 // `user_attributes` in the trust order (wallet > oidc_* > self_reported) and
 // omit both claims entirely when there is no verified address.
-const token = await fastify.jwtUtils.signAccessToken({
+const token = await fastify.jwtUtils.signAccessToken(realm, {
   sub: user.id,
   clientId: client.clientId,
   ...(emailScopeGranted && verifiedEmail ? { email: verifiedEmail, email_verified: true } : {}),
 });
 
-// Protect a route with requireJwt preHandler
+// Protect a route with requireJwt preHandler: the token must be one of the
+// request realm's.
 fastify.get('/userinfo', {
   preHandler: [fastify.requireJwt],
   handler: async (request) => {
@@ -43,39 +48,39 @@ fastify.get('/userinfo', {
 
 The auth-server's source for each option is named in parentheses.
 
-| Option                       | Type                            | Required         | Description                                                                                       |
-| ---------------------------- | ------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------- |
-| `privateKey`                 | `string`                        | no               | Ed25519 private key, PKCS#8 PEM (`JWT_PRIVATE_KEY`); without it the plugin only verifies          |
-| `publicKey`                  | `string`                        | no, but set it   | Ed25519 public key, SPKI PEM (`JWT_PUBLIC_KEY`); registration fails without it                    |
-| `issuer`                     | `string`                        | yes              | JWT `iss` claim (`JWT_ISSUER`)                                                                    |
-| `accessTokenLifespan`        | `number`                        | yes              | Access and ID token TTL in seconds (`ACCESS_TOKEN_LIFESPAN`)                                      |
-| `refreshTokenLifespan`       | `number`                        | yes              | Refresh token TTL in seconds (`REFRESH_TOKEN_LIFESPAN`)                                           |
-| `keyId`                      | `string`                        | no               | `kid` of the Ed25519 key in the JWKS and in hybrid token headers (its RFC 7638 thumbprint)        |
-| `rs256PrivateKey`            | `string`                        | no               | RS256 private key, PKCS#8 PEM; ID tokens are then signed with RS256 (`JWT_RS256_PRIVATE_KEY`)     |
-| `rs256PublicKey`             | `string`                        | no               | RS256 public key, SPKI PEM; derived from `rs256PrivateKey` when omitted (`JWT_RS256_PUBLIC_KEY`)  |
-| `rs256KeyId`                 | `string`                        | no               | `kid` of the RS256 key in the JWKS and ID token header (`JWT_RS256_KID`, else its thumbprint)     |
-| `requireAccessTokenTyp`      | `boolean`                       | no               | Also refuse access tokens without `typ: at+jwt` (default `false`; not set by the auth-server)     |
-| `mlDsaSeed`                  | `string`                        | no               | ML-DSA-65 seed, base64url, 32 bytes; publishes an `AKP` JWK (`JWT_MLDSA_PRIVATE_KEY`)             |
-| `mlDsaKeyId`                 | `string`                        | no               | `kid` of the ML-DSA-65 key, stamped as `pqc_kid` (`JWT_MLDSA_KID`)                                |
-| `hybridSigningEnabled`       | `boolean`                       | no               | Issue hybrid access tokens; needs `mlDsaSeed` (`HYBRID_SIGNING_ENABLED`, default `false`)         |
-| `enabledSignatureAlgorithms` | `readonly SignatureAlgorithm[]` | with `mlDsaSeed` | Enabled signature algorithms (`SIGNING_ALGORITHM_MODE`)                                           |
-| `retiredKeys`                | `{ publicKey, keyId }[]`        | no               | Retired Ed25519 public keys, SPKI PEM, kept in the JWKS under their own `kid`                     |
-| `retiredMlDsaPublicKeys`     | `{ publicKey, keyId }[]`        | no               | Retired ML-DSA-65 public keys, base64url, kept in the JWKS; read only with `mlDsaSeed`            |
-| `isTokenRevoked`             | function                        | no               | `(jti) => boolean`, sync or async; `requireJwt` refuses a revoked token (the revocation denylist) |
-| `verifyDpopProof`            | function                        | no               | `(request, token, claims) => Promise<void>`; turns on the `DPoP` scheme (set when `DPOP_ENABLED`) |
+| Option                       | Type                            | Required | Description                                                                                       |
+| ---------------------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `signer`                     | `TokenSigner`                   | yes      | Signs every token and lists each realm's verification keys and JWKS (`fastify.signer`)            |
+| `requestRealm`               | `(request) => TokenRealm`       | yes      | The realm (`id`, `issuer`) a request belongs to, for `requireJwt` (`request.realm`)               |
+| `accessTokenLifespan`        | `number`                        | yes      | Access and ID token TTL in seconds (`ACCESS_TOKEN_LIFESPAN`)                                      |
+| `refreshTokenLifespan`       | `number`                        | yes      | Refresh token TTL in seconds (`REFRESH_TOKEN_LIFESPAN`)                                           |
+| `requireAccessTokenTyp`      | `boolean`                       | no       | Also refuse access tokens without `typ: at+jwt` (default `false`; not set by the auth-server)     |
+| `kidlessKeyIds`              | `readonly string[]`             | no       | `kid`s a token without a `kid` may verify with (the key variable's thumbprint); transitional      |
+| `hybridSigningEnabled`       | `boolean`                       | no       | Issue hybrid access tokens with the realm's pair (`HYBRID_SIGNING_ENABLED`, default `false`)      |
+| `enabledSignatureAlgorithms` | `readonly SignatureAlgorithm[]` | no       | Enabled signature algorithms (`SIGNING_ALGORITHM_MODE`); ML-DSA-65 in it for hybrid signing       |
+| `isTokenRevoked`             | function                        | no       | `(jti) => boolean`, sync or async; `requireJwt` refuses a revoked token (the revocation denylist) |
+| `verifyDpopProof`            | function                        | no       | `(request, token, claims) => Promise<void>`; turns on the `DPoP` scheme (set when `DPOP_ENABLED`) |
 
 ## Keys and signing modes
 
-- Access tokens are always signed with the Ed25519 key.
-- With `rs256PrivateKey`, ID tokens are signed with RS256 and carry `rs256KeyId` as `kid`. Without it, they use the Ed25519 key.
-- With `hybridSigningEnabled`, `signHybridAccessToken` adds a detached ML-DSA-65 signature. Registration fails without `mlDsaSeed`.
-- `mlDsaSeed` needs `enabledSignatureAlgorithms` with `ML-DSA-65` in it, or registration fails.
-- With `mlDsaSeed` and hybrid signing off, only the ML-DSA-65 public key is kept, for the JWKS.
-- `getJwks()` lists the Ed25519 key, the RS256 key, the retired Ed25519 keys, then the ML-DSA-65 keys. It throws when two keys share a `kid`.
-- Without `privateKey` the plugin only verifies: the JWKS still lists the public keys (`rs256PublicKey` too), and every signature answers 503 `temporarily_unavailable`. Hybrid signing then fails registration. The auth-server leaves the private keys out on a process without the `signer` role (#495).
-- Registration fails without `publicKey`: the plugin cannot export the public half of an imported Ed25519 private key. See [the EdDSA public key](https://docs.qauth.dev/operate/keys/#the-eddsa-public-key-is-not-actually-optional-359).
+- The realm's keys live in its encrypted key store; the plugin is given none. The auth-server's
+  key boot step imports the `JWT_*` variables into the default realm's store, and a fresh realm
+  gets generated keys. See [Keys](https://docs.qauth.dev/operate/keys/).
+- Access tokens are always signed with the realm's active Ed25519 key, and carry its `kid`.
+- A realm with an active RS256 key signs its ID tokens with RS256, under that key's `kid`. Without
+  one, they use the Ed25519 key.
+- With `hybridSigningEnabled`, `signHybridAccessToken` adds a detached ML-DSA-65 signature with
+  the realm's hybrid pair, naming the ML-DSA-65 key in `pqc_kid`. Registration fails unless
+  `enabledSignatureAlgorithms` has `ML-DSA-65` in it.
+- Verification picks the realm's key by the token's `kid` among its `active` and still-published
+  `retired` keys. A token with no `kid`, from before tokens named their key, is tried only against
+  the realm's Ed25519 keys that `kidlessKeyIds` names: the auth-server names the key its key
+  variable holds, never a key the store generated. This path is removed in the next release.
+- `getJwks(realm)` is the realm's JWKS as the signer serves it.
+- On a process without the `signer` role (#495), the auth-server's `signer` refuses every signature with 503 `temporarily_unavailable`, and reads each realm's verification keys and JWKS from its published public keys, without a KEK. The plugin passes the 503 on, and still verifies the realm's tokens.
 
-The auth-server passes the ML-DSA-65 seed only when `HYBRID_SIGNING_ENABLED` is on. At boot it also imports the `JWT_*` keys into the default realm's encrypted key store. Tokens are still signed with the variables until token signing moves onto the store (#491). See [Keys](https://docs.qauth.dev/operate/keys/) and the [PQC verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).
+See [Keys](https://docs.qauth.dev/operate/keys/) and the
+[PQC verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).
 
 ## DPoP
 
@@ -85,12 +90,12 @@ With `verifyDpopProof` set, `requireJwt` also accepts `Authorization: DPoP <toke
 
 ### `fastify.jwtUtils`
 
-- `signAccessToken(payload)` - Sign an EdDSA access token; `expiresInOverride` can shorten its lifetime
-- `signIdToken(payload)` - Sign an ID token with RS256 when configured, otherwise EdDSA
+- `signAccessToken(realm, payload)` - Sign an EdDSA access token; `expiresInOverride` can shorten its lifetime
+- `signIdToken(realm, payload)` - Sign an ID token with RS256 when the realm has an RS256 key, otherwise EdDSA
 - `isHybridSigningEnabled()` - Whether hybrid issuance is on
-- `signHybridAccessToken(payload)` - Sign a hybrid access token; throws when hybrid signing is off
-- `verifyHybridAccessToken(hybrid, options)` - Verify both signatures; throws `JWTInvalidError` without `mlDsaSeed`
-- `verifyAccessToken(token, options?)` - Verify and decode an access token; `options` takes `issuer` and `audience`
+- `signHybridAccessToken(realm, payload)` - Sign a hybrid access token; throws when hybrid signing is off
+- `verifyHybridAccessToken(realm, hybrid, options)` - Verify both signatures; throws `JWTInvalidError` without ML-DSA-65 enabled
+- `verifyAccessToken(realm, token, options?)` - Verify and decode an access token of the realm, under its issuer; `options` takes `audience`
 - `generateRefreshToken()` - Generate a refresh token pair `{ token, tokenHash }`
 - `hashRefreshToken(token)` - Hash a refresh token
 - `extractFromHeader(authHeader)` - Extract Bearer token from `Authorization` header
@@ -98,19 +103,18 @@ With `verifyDpopProof` set, `requireJwt` also accepts `Authorization: DPoP <toke
 - `decodeTokenUnsafe(token)` - Decode without verification (expired tokens, debugging)
 - `getAccessTokenLifespan()` - Get configured access token TTL
 - `getRefreshTokenLifespan()` - Get configured refresh token TTL
-- `getIssuer()` - Get the configured issuer
-- `getIdTokenSigningAlgValuesSupported()` - `['RS256', 'EdDSA']` with an RS256 key, otherwise `['EdDSA']`
-- `getJwks()` - Build the JWKS document for `/.well-known/jwks.json`
+- `getIdTokenSigningAlgValuesSupported(realm)` - `['RS256', 'EdDSA']` when the realm has an RS256 key, otherwise `['EdDSA']`
+- `getJwks(realm)` - The realm's JWKS document for `/.well-known/jwks.json`
 
 ### `fastify.requireJwt`
 
-PreHandler that extracts and verifies the access token from the `Authorization` header. It requires the configured `issuer`, then runs `isTokenRevoked` when set. A `DPoP` credential goes to `verifyDpopProof`; a Bearer token with `cnf` is refused. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `MissingAccessTokenError` (401) when the request carries no credential (no `Authorization` header, no token in it, or a scheme the plugin does not take), and `JWTInvalidError` (401) for a token that does not verify, is revoked, or fails its binding. It lets `JWTExpiredError` (401) and errors from `verifyDpopProof` propagate. `verifyRequestAccessToken` throws the same.
+PreHandler that extracts and verifies the access token from the `Authorization` header, with the keys of the request's realm. It requires that realm's issuer, then runs `isTokenRevoked` when set. A `DPoP` credential goes to `verifyDpopProof`; a Bearer token with `cnf` is refused. On success, sets `request.jwtPayload` with the verified `JWTPayload`. Throws `MissingAccessTokenError` (401) when the request carries no credential (no `Authorization` header, no token in it, or a scheme the plugin does not take), and `JWTInvalidError` (401) for a token that does not verify, is revoked, or fails its binding. It lets `JWTExpiredError` (401) and errors from `verifyDpopProof` propagate. `verifyRequestAccessToken` throws the same.
 
 ### `fastify.verifyRequestAccessToken(request, policy?)`
 
 The checks `requireJwt` makes, returning the verified `JWTPayload` instead of setting `request.jwtPayload`. A route that needs a stricter check passes an `AccessTokenCheckPolicy`:
 
-- `acceptIssuer(issuer, request)` replaces the comparison with the configured `issuer`. It runs after the signature check, and a token with no `iss` is refused before it is called.
+- `acceptIssuer(issuer, request)` replaces the comparison with the issuer of the request's realm. It runs after the signature check with that realm's keys, and a token with no `iss` is refused before it is called. Since the keys are always the request realm's, it can narrow which tokens pass, never admit another realm's.
 - `requireTyp: true` requires the RFC 9068 `typ: at+jwt` header whatever `requireAccessTokenTyp` says. It can only tighten that setting.
 
 The signature, expiry, revocation and DPoP checks always run. The auth server's API family guards (`requireFamilyToken`) are built on it.

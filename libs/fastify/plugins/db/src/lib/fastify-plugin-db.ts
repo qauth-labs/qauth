@@ -16,6 +16,7 @@ import {
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
   createOid4vpRequestStatesRepository,
+  createRealmPublicKeysRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
   createSessionsRepository,
@@ -32,6 +33,7 @@ import {
   OAuthClientsRepository,
   type OAuthConsentsRepository,
   type Oid4vpRequestStatesRepository,
+  type RealmPublicKeysRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
   type SessionsRepository,
@@ -113,6 +115,12 @@ declare module 'fastify' {
        * request (`resolveAdminAuthority`), never from a token.
        */
       adminGrants: AdminGrantsRepository;
+      /**
+       * The published keys of each realm (`realm_public_keys`, #491): public
+       * material every service role reads. A process without the signer
+       * verifies a realm's tokens and serves its JWKS with them (#495).
+       */
+      realmPublicKeys: RealmPublicKeysRepository;
     };
   }
 }
@@ -145,6 +153,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   ssfStreams: true,
   adminRoles: true,
   adminGrants: true,
+  realmPublicKeys: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -235,6 +244,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
         createAdminRolesRepository(database.db, { catalog: options.adminRoleCatalog }),
       adminGrants: () =>
         createAdminGrantsRepository(database.db, { catalog: options.adminRoleCatalog }),
+      realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

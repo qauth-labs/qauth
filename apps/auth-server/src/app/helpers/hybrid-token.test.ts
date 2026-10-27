@@ -1,5 +1,3 @@
-import { generateKeyPairSync } from 'node:crypto';
-
 import {
   CryptoVerificationError,
   extractJwsSigningInput,
@@ -7,7 +5,11 @@ import {
   type HybridSignedToken,
   PQC_ALG_ML_DSA_65,
 } from '@qauth-labs/core-crypto';
-import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
+import { jwtPlugin, type TokenRealm } from '@qauth-labs/fastify-plugin-jwt';
+import {
+  createTestSigner,
+  type TestSigner,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,24 +18,16 @@ import { getPqcSignature, issueAccessToken } from './hybrid-token';
 
 /**
  * End-to-end coverage for live hybrid issuance + PQC-aware verification
- * (ADR-005 / #275). Everything below runs the REAL crypto stack — a real
- * Ed25519 key, a real ML-DSA-65 seed, the real `jwtPlugin` — against an
- * in-memory Redis double, so the assertions are about actual signatures rather
- * than mocks.
+ * (ADR-005 / #275). Everything below runs the REAL crypto stack — the real
+ * in-process signer over a realm's real Ed25519 and ML-DSA-65 keys (#491), the
+ * real `jwtPlugin` — against an in-memory Redis double, so the assertions are
+ * about actual signatures rather than mocks.
  */
 
 const ISSUER = 'https://auth.test.example.com';
-const MLDSA_KID = 'mldsa-test-1';
+/** Operator-enabled algorithm set (SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65). */
+const PQC_ENABLED = ['EdDSA', 'ML-DSA-65'] as const;
 const noble = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
-
-/** A fresh Ed25519 key pair in the PKCS#8 / SPKI PEM form the plugin expects. */
-function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519', {
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
-  return { privateKeyPem: privateKey, publicKeyPem: publicKey };
-}
 
 /** Minimal in-memory stand-in for the `fastify.redis` decorator (no TTL clock). */
 function createRedisDouble() {
@@ -49,53 +43,63 @@ function createRedisDouble() {
   };
 }
 
+/**
+ * A server whose one realm holds the keys of `opts`: a hybrid EdDSA +
+ * ML-DSA-65 pair when `hybrid`, otherwise an EdDSA key alone.
+ */
 async function buildApp(opts: { hybrid: boolean }): Promise<{
   app: FastifyInstance;
   redis: ReturnType<typeof createRedisDouble>;
+  realm: TokenRealm;
+  signer: TestSigner;
 }> {
-  const { privateKeyPem, publicKeyPem } = generateEd25519Pem();
-  // A real ML-DSA-65 seed in the same base64url export form the config layer
-  // resolves from JWT_MLDSA_PRIVATE_KEY.
-  const mlDsaPair = noble.generateKeyPair({ extractable: true });
-  const mlDsaSeed = noble.exportKey(mlDsaPair.privateKey);
+  const signer = createTestSigner({ hybridSigning: opts.hybrid });
+  const realm = { id: await signer.addRealm({ issuer: ISSUER }), issuer: ISSUER };
 
   const app = Fastify();
   const redis = createRedisDouble();
   app.decorate('redis', redis as never);
 
   await app.register(jwtPlugin, {
-    privateKey: privateKeyPem,
-    publicKey: publicKeyPem,
-    issuer: ISSUER,
+    signer: signer.signer,
+    requestRealm: () => realm,
     accessTokenLifespan: 900,
     refreshTokenLifespan: 3600,
-    ...(opts.hybrid
-      ? {
-          mlDsaSeed,
-          mlDsaKeyId: MLDSA_KID,
-          hybridSigningEnabled: true,
-          enabledSignatureAlgorithms: ['EdDSA', 'ML-DSA-65'] as const,
-        }
-      : {}),
+    ...(opts.hybrid ? { hybridSigningEnabled: true, enabledSignatureAlgorithms: PQC_ENABLED } : {}),
   });
   await app.ready();
-  return { app, redis };
+  return { app, redis, realm, signer };
+}
+
+/** The `kid` of the realm's active `token_signing` key of `algorithm`, as the signer lists it. */
+async function activeKid(
+  signer: TestSigner,
+  realm: TokenRealm,
+  algorithm: string
+): Promise<string> {
+  const keys = await signer.signer.getVerificationKeys('local', realm.id, 'token_signing');
+  const key = keys.find(
+    (candidate) => candidate.algorithm === algorithm && candidate.status === 'active'
+  );
+  if (key === undefined) throw new Error(`no active ${algorithm} key`);
+  return key.kid;
 }
 
 const PAYLOAD = { sub: 'user-1', clientId: 'client-1', scope: 'read' };
 
 describe('#275 — live hybrid issuance', () => {
   it('classical deployment: issues a plain token and stores no PQC material', async () => {
-    const { app, redis } = await buildApp({ hybrid: false });
-    const token = await issueAccessToken(app, PAYLOAD);
+    const { app, redis, realm } = await buildApp({ hybrid: false });
+    const token = await issueAccessToken(app, realm, PAYLOAD);
 
     expect(app.jwtUtils.isHybridSigningEnabled()).toBe(false);
     expect(token.split('.')).toHaveLength(3);
     expect(redis.setex).not.toHaveBeenCalled();
 
     // The classical verify path is untouched.
-    const claims = await app.jwtUtils.verifyAccessToken(token, { issuer: ISSUER });
+    const claims = await app.jwtUtils.verifyAccessToken(realm, token);
     expect(claims.sub).toBe('user-1');
+    expect(claims.iss).toBe(ISSUER);
     await app.close();
   });
 
@@ -104,72 +108,77 @@ describe('#275 — live hybrid issuance', () => {
     // signed `pqc_alg` binding, a hybrid token with no retrievable signature is
     // not degraded — it is unverifiable at every PQC-aware verifier. Returning
     // it would be exactly the silent downgrade this module prevents.
-    const { app } = await buildApp({ hybrid: true });
+    const { app, realm } = await buildApp({ hybrid: true });
     // A token carrying no jti has nothing to key the store entry on.
     app.jwtUtils.decodeTokenUnsafe = () =>
       ({ jti: undefined, exp: undefined }) as ReturnType<
         FastifyInstance['jwtUtils']['decodeTokenUnsafe']
       >;
 
-    await expect(issueAccessToken(app, PAYLOAD)).rejects.toThrow(/no jti/);
+    await expect(issueAccessToken(app, realm, PAYLOAD)).rejects.toThrow(/no jti/);
     await app.close();
   });
 
   it('refuses to issue a hybrid token that is already expired', async () => {
-    const { app } = await buildApp({ hybrid: true });
+    const { app, realm } = await buildApp({ hybrid: true });
     app.jwtUtils.decodeTokenUnsafe = () =>
       ({
         jti: 'jti-expired',
         exp: Math.floor(Date.now() / 1000) - 60,
       }) as ReturnType<FastifyInstance['jwtUtils']['decodeTokenUnsafe']>;
 
-    await expect(issueAccessToken(app, PAYLOAD)).rejects.toThrow(/already expired/);
+    await expect(issueAccessToken(app, realm, PAYLOAD)).rejects.toThrow(/already expired/);
     await app.close();
   });
 
   it('hybrid deployment: the BEARER stays a small classical JWS (reference delivery, #247)', async () => {
-    const { app } = await buildApp({ hybrid: true });
-    const token = await issueAccessToken(app, PAYLOAD);
+    const { app, realm } = await buildApp({ hybrid: true });
+    const token = await issueAccessToken(app, realm, PAYLOAD);
 
     expect(app.jwtUtils.isHybridSigningEnabled()).toBe(true);
     expect(token.split('.')).toHaveLength(3);
     // The ~4.4 KB PQC signature is NOT inlined; the bearer stays budget-safe.
     expect(token.length).toBeLessThan(1500);
     // And it still verifies with zero PQC awareness (AC#2 compatibility).
-    const claims = await app.jwtUtils.verifyAccessToken(token, { issuer: ISSUER });
+    const claims = await app.jwtUtils.verifyAccessToken(realm, token);
     expect(claims.sub).toBe('user-1');
     await app.close();
   });
 
   it('hybrid deployment: stamps the SIGNED pqc_alg / pqc_kid protected header', async () => {
-    const { app } = await buildApp({ hybrid: true });
-    const token = await issueAccessToken(app, PAYLOAD);
+    const { app, realm, signer } = await buildApp({ hybrid: true });
+    const token = await issueAccessToken(app, realm, PAYLOAD);
 
     const header = JSON.parse(
       Buffer.from(token.split('.')[0], 'base64url').toString('utf-8')
     ) as Record<string, unknown>;
     expect(header['alg']).toBe('EdDSA');
+    // Both keys are the realm's own hybrid pair (#491).
+    expect(header['kid']).toBe(await activeKid(signer, realm, 'EdDSA'));
     expect(header['pqc_alg']).toBe(PQC_ALG_ML_DSA_65);
-    expect(header['pqc_kid']).toBe(MLDSA_KID);
+    expect(header['pqc_kid']).toBe(await activeKid(signer, realm, 'ML-DSA-65'));
     // Non-critical, so stock verifiers keep working.
     expect(header['crit']).toBeUndefined();
     await app.close();
   });
 
   it('the stored PQC signature verifies over the token JWS signing-input', async () => {
-    const { app } = await buildApp({ hybrid: true });
-    const token = await issueAccessToken(app, PAYLOAD);
+    const { app, realm, signer } = await buildApp({ hybrid: true });
+    const token = await issueAccessToken(app, realm, PAYLOAD);
     const jti = app.jwtUtils.decodeTokenUnsafe(token).jti;
 
     const stored = await getPqcSignature(app, jti, token);
     expect(stored?.pqcAlg).toBe(PQC_ALG_ML_DSA_65);
 
-    // Verify with the ML-DSA public key the server publishes in JWKS — i.e.
-    // exactly the material an external verifier can actually obtain.
-    const jwks = await app.jwtUtils.getJwks();
+    // Verify with the ML-DSA public key the server publishes in the realm's
+    // JWKS — i.e. exactly the material an external verifier can actually
+    // obtain.
+    const jwks = await app.jwtUtils.getJwks(realm);
     const akp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'AKP');
     expect(akp).toBeDefined();
-    expect((akp as unknown as { kid?: string }).kid).toBe(MLDSA_KID);
+    expect((akp as unknown as { kid?: string }).kid).toBe(
+      await activeKid(signer, realm, 'ML-DSA-65')
+    );
 
     const mlDsaPublic = noble.importKey((akp as unknown as { pub: string }).pub, 'public');
     expect(() =>
@@ -183,8 +192,8 @@ describe('#275 — live hybrid issuance', () => {
   });
 
   it('the stored entry TTL tracks the token lifetime, keyed by jti', async () => {
-    const { app, redis } = await buildApp({ hybrid: true });
-    const token = await issueAccessToken(app, PAYLOAD);
+    const { app, redis, realm } = await buildApp({ hybrid: true });
+    const token = await issueAccessToken(app, realm, PAYLOAD);
     const jti = app.jwtUtils.decodeTokenUnsafe(token).jti;
 
     expect(redis.setex).toHaveBeenCalledTimes(1);
@@ -195,34 +204,35 @@ describe('#275 — live hybrid issuance', () => {
     await app.close();
   });
 
-  it('registering with hybridSigningEnabled but no seed fails fast', async () => {
-    const { privateKeyPem, publicKeyPem } = generateEd25519Pem();
+  it('registering with hybridSigningEnabled but no ML-DSA-65 enabled fails fast', async () => {
+    const signer = createTestSigner();
+    const realm = { id: await signer.addRealm({ issuer: ISSUER }), issuer: ISSUER };
     const app = Fastify();
     await expect(
       app
         .register(jwtPlugin, {
-          privateKey: privateKeyPem,
-          publicKey: publicKeyPem,
-          issuer: ISSUER,
+          signer: signer.signer,
+          requestRealm: () => realm,
           accessTokenLifespan: 900,
           refreshTokenLifespan: 3600,
           hybridSigningEnabled: true,
         })
         .ready()
-    ).rejects.toThrow(/hybridSigningEnabled requires mlDsaSeed/);
+    ).rejects.toThrow(/hybridSigningEnabled requires .*ML-DSA-65/);
   });
 });
 
 describe('#275 — end-to-end: issue a hybrid token, validate it via introspection', () => {
   let app: FastifyInstance;
+  let realm: TokenRealm;
 
   beforeEach(async () => {
-    ({ app } = await buildApp({ hybrid: true }));
+    ({ app, realm } = await buildApp({ hybrid: true }));
   });
 
   it('a resource server reassembles and fully verifies the hybrid token from introspection', async () => {
     // 1. Authorization server issues the token (what the token endpoint does).
-    const token = await issueAccessToken(app, PAYLOAD);
+    const token = await issueAccessToken(app, realm, PAYLOAD);
     const jti = app.jwtUtils.decodeTokenUnsafe(token).jti;
 
     // 2. Resource server receives ONLY the bearer, then introspects to fetch
@@ -238,35 +248,36 @@ describe('#275 — end-to-end: issue a hybrid token, validate it via introspecti
       pqcSignature: pqc?.pqcSignature ?? '',
       pqcAlg: PQC_ALG_ML_DSA_65,
     };
-    const claims = await app.jwtUtils.verifyHybridAccessToken(reassembled, {
-      issuer: ISSUER,
+    const claims = await app.jwtUtils.verifyHybridAccessToken(realm, reassembled, {
       requirePqc: true,
     });
     expect(claims.sub).toBe('user-1');
     expect(claims.scope).toBe('read');
+    expect(claims.iss).toBe(ISSUER);
   });
 
   it('F1 e2e: a bearer whose PQC signature was withheld is REJECTED even with requirePqc=false', async () => {
-    const token = await issueAccessToken(app, PAYLOAD);
+    const token = await issueAccessToken(app, realm, PAYLOAD);
 
     // An attacker (or a lazy RS) skips introspection and presents the bearer
     // alone. The Ed25519-signed `pqc_alg` header makes that a downgrade, and it
     // must fail regardless of the caller's policy flag.
     await expect(
       app.jwtUtils.verifyHybridAccessToken(
+        realm,
         { token, pqcSignature: '', pqcAlg: PQC_ALG_ML_DSA_65 },
-        { issuer: ISSUER, requirePqc: false }
+        { requirePqc: false }
       )
     ).rejects.toThrow(CryptoVerificationError);
 
     // Meanwhile the CLASSICAL path still accepts it — that is the deliberate
     // AC#2 compatibility guarantee, and precisely why the PQC-aware path must
     // not be permissive.
-    await expect(app.jwtUtils.verifyAccessToken(token, { issuer: ISSUER })).resolves.toBeDefined();
+    await expect(app.jwtUtils.verifyAccessToken(realm, token)).resolves.toBeDefined();
   });
 
   it('F5 e2e: a signature from a foreign ML-DSA key does not verify', async () => {
-    const token = await issueAccessToken(app, PAYLOAD);
+    const token = await issueAccessToken(app, realm, PAYLOAD);
     const attacker = noble.generateKeyPair({ extractable: true });
     const forged = Buffer.from(
       noble.sign(attacker.privateKey, extractJwsSigningInput(token))
@@ -274,27 +285,29 @@ describe('#275 — end-to-end: issue a hybrid token, validate it via introspecti
 
     await expect(
       app.jwtUtils.verifyHybridAccessToken(
+        realm,
         { token, pqcSignature: forged, pqcAlg: PQC_ALG_ML_DSA_65 },
-        { issuer: ISSUER, requirePqc: true }
+        { requirePqc: true }
       )
     ).rejects.toThrow(CryptoVerificationError);
   });
 
   it('a PQC signature bound to a DIFFERENT token is rejected (no replay across tokens)', async () => {
-    const tokenA = await issueAccessToken(app, PAYLOAD);
-    const tokenB = await issueAccessToken(app, { ...PAYLOAD, sub: 'user-2' });
+    const tokenA = await issueAccessToken(app, realm, PAYLOAD);
+    const tokenB = await issueAccessToken(app, realm, { ...PAYLOAD, sub: 'user-2' });
     const pqcB = await getPqcSignature(app, app.jwtUtils.decodeTokenUnsafe(tokenB).jti, tokenB);
 
     await expect(
       app.jwtUtils.verifyHybridAccessToken(
+        realm,
         { token: tokenA, pqcSignature: pqcB?.pqcSignature ?? '', pqcAlg: PQC_ALG_ML_DSA_65 },
-        { issuer: ISSUER, requirePqc: true }
+        { requirePqc: true }
       )
     ).rejects.toThrow(CryptoVerificationError);
   });
 
   it('getPqcSignature returns undefined for an unknown jti', async () => {
-    const token = await issueAccessToken(app, PAYLOAD);
+    const token = await issueAccessToken(app, realm, PAYLOAD);
     await expect(getPqcSignature(app, 'no-such-jti', token)).resolves.toBeUndefined();
   });
 
@@ -304,7 +317,7 @@ describe('#275 — end-to-end: issue a hybrid token, validate it via introspecti
     // is what keeps a HYBRID_SIGNING_ENABLED rollback graceful while still
     // costing a classical token zero store round-trips.
     const classical = await buildApp({ hybrid: false });
-    const classicalToken = await issueAccessToken(classical.app, PAYLOAD);
+    const classicalToken = await issueAccessToken(classical.app, classical.realm, PAYLOAD);
     const jti = classical.app.jwtUtils.decodeTokenUnsafe(classicalToken).jti;
 
     await expect(getPqcSignature(classical.app, jti, classicalToken)).resolves.toBeUndefined();

@@ -1,5 +1,9 @@
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
-import { decodeJwt as joseDecodeJwt, exportSPKI as joseExportSPKI } from 'jose';
+import {
+  decodeJwt as joseDecodeJwt,
+  decodeProtectedHeader as joseDecodeProtectedHeader,
+  exportSPKI as joseExportSPKI,
+} from 'jose';
 
 import type { ActClaim } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
@@ -72,6 +76,25 @@ export function decodeJwtUnsafe(token: string) {
       exp: decoded.exp,
       iss: decoded.iss,
     };
+  } catch {
+    throw new JWTInvalidError('Invalid JWT token format');
+  }
+}
+
+/**
+ * Read the protected header of a compact JWS without verifying it.
+ *
+ * Only to choose the key that verifies the token (its `alg` and `kid`, RFC
+ * 7515 §4.1.4): every member is attacker-controlled until the signature is
+ * checked with that key, so nothing else may be decided on it.
+ *
+ * @param token - compact JWS
+ * @returns the header's members
+ * @throws JWTInvalidError if the token is not a compact JWS
+ */
+export function decodeProtectedHeaderUnsafe(token: string): Record<string, unknown> {
+  try {
+    return { ...joseDecodeProtectedHeader(token) };
   } catch {
     throw new JWTInvalidError('Invalid JWT token format');
   }

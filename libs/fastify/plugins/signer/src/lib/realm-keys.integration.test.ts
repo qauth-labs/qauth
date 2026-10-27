@@ -267,7 +267,12 @@ describe('realm key boot integration (real Postgres)', () => {
     for (const entry of variableWarnings) {
       const purpose = entry.variable === 'SESSION_COOKIE_SECRET' ? 'cookie_hmac' : 'token_signing';
       expect(entry.msg).toBe(keyVariableWarning(entry.variable ?? '', purpose));
-      expect(entry.msg).toContain('keep it set');
+      // The cookie is still signed with its variable (#493); the tokens are
+      // signed through the store, which reads a token variable only to
+      // replace the stored key (#491).
+      expect(entry.msg).toContain(
+        purpose === 'cookie_hmac' ? 'keep it set' : 'replaces the stored key'
+      );
     }
     await second.app.close();
   });

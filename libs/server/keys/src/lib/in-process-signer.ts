@@ -9,7 +9,7 @@ import {
   type SignatureAlgorithm,
 } from '@qauth-labs/core-crypto';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
-import { type JWK, type JWTPayload, SignJWT } from 'jose';
+import { type JWTPayload, SignJWT } from 'jose';
 
 import type { KeyIdentity } from './aad';
 import { BoundedCache } from './bounded-cache';
@@ -26,7 +26,16 @@ import { KeyDecryptionError } from './errors';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
-import { isRealmId } from './realm-id';
+import {
+  DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS,
+  describePurpose,
+  isPublishedAt,
+  publicJwkOf,
+  realmJwksOf,
+  resolveRealmId,
+  sortForPublication,
+  verificationKeysOf,
+} from './published-keys';
 import type {
   CookieSecret,
   CookieSecrets,
@@ -63,7 +72,6 @@ import {
   isTypAllowed,
   type JwsSigningPurpose,
   type JwsTyp,
-  REALM_JWKS_PURPOSES,
 } from './signer-typ';
 import {
   formatWebhookSignature,
@@ -124,7 +132,7 @@ import {
 export const DEFAULT_SIGNER_KEY_CACHE_SIZE = 256;
 
 /** The default time a key lookup is trusted before the store is asked again, in ms. */
-export const DEFAULT_SIGNER_REFRESH_INTERVAL_MS = 60_000;
+export const DEFAULT_SIGNER_REFRESH_INTERVAL_MS = DEFAULT_PUBLISHED_KEY_REFRESH_INTERVAL_MS;
 
 /**
  * The least time between two reads that a `decrypt` miss forces, per realm
@@ -197,12 +205,6 @@ const JWS_IMPORT_PARAMS: Readonly<
   RS256: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
   ES256: { name: 'ECDSA', namedCurve: 'P-256' },
 });
-
-/**
- * The private members of every JWK key type (RFC 7518 §6, RFC 8037 §2,
- * RFC 9964), as the `realm_public_keys` CHECK lists them.
- */
-const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k', 'priv'] as const;
 
 /** The claims the signer sets on a client assertion. */
 const CLIENT_ASSERTION_RESERVED_CLAIMS = ['iss', 'sub', 'aud'] as const;
@@ -832,36 +834,13 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
       authorize(caller, 'getVerificationKeys');
       const realmId = resolveRealmId(realmIdInput);
-      const at = now();
-      const keys: VerificationKey[] = [];
-      for (const record of sortForPublication(await listPublicKeys(realmId))) {
-        if (record.purpose !== purpose || !isPublishedAt(record, at)) continue;
-        if (record.status !== 'active' && record.status !== 'retired') continue;
-        keys.push(
-          Object.freeze({
-            kid: record.kid,
-            algorithm: record.algorithm,
-            status: record.status,
-            publicJwk: publicJwkOf(record),
-          })
-        );
-      }
-      return Object.freeze(keys);
+      return verificationKeysOf(await listPublicKeys(realmId), purpose, now());
     },
 
     async getJwks(caller: SignerCaller, realmIdInput: string): Promise<RealmJwks> {
       authorize(caller, 'getJwks');
       const realmId = resolveRealmId(realmIdInput);
-      const at = now();
-      const keys = sortForPublication(await listPublicKeys(realmId))
-        .filter(
-          (record) =>
-            (REALM_JWKS_PURPOSES as readonly string[]).includes(record.purpose) &&
-            record.status !== 'compromised' &&
-            isPublishedAt(record, at)
-        )
-        .map(publicJwkOf);
-      return Object.freeze({ keys: Object.freeze(keys) });
+      return realmJwksOf(await listPublicKeys(realmId), now());
     },
 
     async getUpstreamJwks(
@@ -914,14 +893,6 @@ function readRequest<F extends string>(
   return request as Partial<Record<F, unknown>>;
 }
 
-/** The realm id in lowercase, the form the store keeps and the key's associated data binds. */
-function resolveRealmId(realmId: unknown): string {
-  if (!isRealmId(realmId)) {
-    throw new SignerRequestRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
-  }
-  return realmId.toLowerCase();
-}
-
 /** A subscription or provider id: the scope id of its keys, as the key factory stores it. */
 function resolveScope(scopeId: unknown, name: string): string {
   if (!isScopeId(scopeId)) {
@@ -955,13 +926,6 @@ function resolveTyp(purpose: JwsSigningPurpose, typ: unknown): JwsTyp {
     );
   }
   return typ;
-}
-
-/** A purpose in a message: named when it is one, never echoed when it is not. */
-function describePurpose(purpose: unknown): string {
-  return typeof purpose === 'string' && Object.hasOwn(KEY_PURPOSES, purpose)
-    ? `Key purpose '${purpose}'`
-    : 'An unknown key purpose';
 }
 
 /**
@@ -1047,44 +1011,4 @@ function sameKeys(a: readonly SignerKeyRecord[], b: readonly SignerKeyRecord[]):
 /** Newest retirement first; a key without a retirement time, then the newest key, last. */
 function byMostRecentlyRetired(a: SignerKeyRecord, b: SignerKeyRecord): number {
   return (b.retireAt ?? -1) - (a.retireAt ?? -1) || b.createdAt - a.createdAt;
-}
-
-/** Whether a published key is inside its publication window at `at`. */
-function isPublishedAt(record: PublicKeyRecord, at: number): boolean {
-  return record.publishAt <= at && (record.unpublishAt === null || at < record.unpublishAt);
-}
-
-/** A fixed order, so every node serves the same JWKS: purpose, then publication, then `kid`. */
-function sortForPublication(records: readonly PublicKeyRecord[]): PublicKeyRecord[] {
-  const rank = (purpose: string) => {
-    const index = (REALM_JWKS_PURPOSES as readonly string[]).indexOf(purpose);
-    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
-  };
-  return [...records].sort(
-    (a, b) =>
-      rank(a.purpose) - rank(b.purpose) ||
-      a.publishAt - b.publishAt ||
-      (a.kid < b.kid ? -1 : a.kid > b.kid ? 1 : 0)
-  );
-}
-
-/**
- * A frozen copy of a published key's JWK, carrying the row's `kid`. A JWK with
- * a private member is refused rather than served; the `realm_public_keys`
- * CHECK makes one impossible to store.
- */
-function publicJwkOf(record: PublicKeyRecord): JWK {
-  const jwk = structuredClone(record.publicJwk) as JWK;
-  if (PRIVATE_JWK_MEMBERS.some((member) => Object.hasOwn(jwk, member))) {
-    throw new Error(`The published key '${record.kid}' carries a private member`);
-  }
-  return deepFreeze({ ...jwk, kid: record.kid });
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value === 'object' && value !== null) {
-    for (const member of Object.values(value)) deepFreeze(member);
-    Object.freeze(value);
-  }
-  return value;
 }

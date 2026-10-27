@@ -394,7 +394,7 @@
         "tags": [
           "Discovery"
         ],
-        "description": "JSON Web Key Set (RFC 7517) containing the active EdDSA public signing key(s). Used by clients and resource servers to verify JWT signatures.",
+        "description": "JSON Web Key Set (RFC 7517) of the realm the request host names: its published token signing keys (EdDSA, RS256 and, with hybrid signing, ML-DSA-65), each under its own `kid`. Used by clients and resource servers to verify JWT signatures.",
         "x-qauth-stability": "stable",
         "responses": {
           "200": {

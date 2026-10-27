@@ -390,8 +390,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@qauth-labs/server-keys/custody` entry point, and a lint rule lets only the
   signer's wiring, the new `@qauth-labs/fastify-plugin-signer`, import it.
   The auth-server registers the plugin for the key import at first boot
-  ([#485]); tokens are still signed with the environment keys until token
-  signing moves onto the signer.
+  ([#485]), and every token is signed through it ([#491]).
 
 - **Schema**: migration 0029 adds the event store ([#457], ADR-019 Decision 8,
   ADR-018 §3). One append-only table, `events`, is both the transactional
@@ -576,12 +575,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the RFC 7638 thumbprint, so the Ed25519 key has a `kid` for the first time.
   The step then creates every standard key the realm still lacks
   (`event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
-  on a fresh deployment), and gives a fresh realm an RS256 signing key too;
-  while `JWT_PRIVATE_KEY` stays required, every deployment imports its
-  signing key instead. It is one transaction, so two nodes that boot together import once. A
-  warning at every boot names each key variable that is still set and says to
-  keep it: tokens and the session cookie keep using the variables until they
-  move onto the signer. Until rotation through the store ships, a signing
+  on a fresh deployment), and gives a fresh realm an RS256 signing key too.
+  It is one transaction, so two nodes that boot together import once. A
+  warning at every boot names each key variable that is still set ([#491]
+  changes what it says for the token keys, above); the session cookie keeps
+  using its variable until it moves onto the signer. Until rotation through the store ships, a signing
   variable that holds a new key replaces the stored key of its algorithm, as
   changing the variable replaced the key before: the stored key is retired and
   leaves the JWKS at once, and the boot warns with both `kid`s.
@@ -869,9 +867,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the signer service ships, such a process answers a request that needs a
   signature with `503` `temporarily_unavailable`, and its event deliveries wait
   without spending attempts (the delivery role now holds a delivery whose
-  signer is unavailable). It verifies tokens with `JWT_PUBLIC_KEY`, which it
-  needs where tokens are verified, publishes `JWT_RS256_PUBLIC_KEY` when set,
-  and refuses `HYBRID_SIGNING_ENABLED=true`. `@fastify/autoload` is no longer a
+  signer is unavailable). It verifies a realm's tokens, and serves its JWKS,
+  from the realm's published public keys (`realm_public_keys`), which it reads
+  without a KEK through the new `realmPublicKeys` repository, which every
+  role builds ([#491]): no public key variable is needed, and the
+  verification keys and JWKS are the signer's own. `HYBRID_SIGNING_ENABLED`
+  describes what the deployment's signer issues, so every process of a
+  hybrid deployment sets it: one without the signer verifies hybrid tokens
+  with the realm's published ML-DSA-65 keys and answers `503` when asked to
+  sign one. `@fastify/autoload` is no longer a
   dependency. The docs site's new **Service roles** page
   (`operate/service-roles`) describes the split that works today. The egress
   client (`fastify.egress`) is registered where a route makes an outbound call
@@ -941,6 +945,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (relying parties and resource servers): tokens are signed and
+  verified per realm, through the signer** ([#491], ADR-019 Decisions 1 and 9).
+  The JWT plugin holds no key any more. Every access token, ID token, hybrid
+  token and ID-JAG is signed by the signer with the keys of the realm it is
+  issued in: its `iss` is the realm's issuer, as discovery publishes it, and its
+  protected header names the signing key in `kid` (a hybrid token names its
+  ML-DSA-65 key in `pqc_kid` too). Each realm's `/.well-known/jwks.json` lists
+  its own keys, and the server verifies a token only with the keys of the
+  request's realm and only under that realm's issuer, so a token one realm
+  issued is refused by another outright: `requireJwt`, the API family guards,
+  the SSF stream routes, introspection, revocation, logout, userinfo, the
+  token-exchange subject and actor tokens and the Bearer path of
+  `/oauth/authorize`. A token issued before the upgrade carries no `kid`: it
+  still verifies, but only against the Ed25519 key that `JWT_PRIVATE_KEY` (or
+  `JWT_PUBLIC_KEY` on a process without the signer role) holds, never against
+  a key the store generated; keep the variable set until those tokens expire.
+  This path goes away in the next release. The key boot step refuses to import
+  a key variable that holds a key another realm already stores, naming it. A
+  token's `typ` is checked before its expiry is reported, so logout's
+  expired-token path accepts an expired access token only, never an expired ID
+  token or ID-JAG; a hybrid token must be an access token (`typ: at+jwt`) too;
+  and the Bearer path of `/oauth/authorize` answers `access_denied` only for a
+  refused token, a key store or denylist failure failing the request closed
+  instead. A deployment whose
+  `JWT_ISSUER` ends with a slash: its access and ID tokens now name the issuer
+  without it, as discovery already did, so a relying party that compares `iss`
+  with the slashed form must drop the slash. During a rolling upgrade the nodes
+  of the previous release refuse the new tokens and the new nodes refuse the
+  access tokens the old ones issued, until they expire
+  (`ACCESS_TOKEN_LIFESPAN`): upgrade such a deployment all at once.
+- ID tokens are signed with RS256 when the realm's key store holds an RS256
+  key, and discovery's `id_token_signing_alg_values_supported` lists what each
+  realm holds: `["RS256","EdDSA"]` or `["EdDSA"]`. A fresh deployment generates
+  an RS256 key ([#485]); one upgraded without `JWT_RS256_PRIVATE_KEY` keeps
+  EdDSA ID tokens until it imports or creates one.
+- **The key variables are optional** ([#491]). `JWT_PRIVATE_KEY` (or its
+  `_PATH`) is no longer required, and `HYBRID_SIGNING_ENABLED=true` no longer
+  requires `JWT_MLDSA_PRIVATE_KEY`: once the realm's key store holds the keys,
+  the server boots with no key variable, and a fresh deployment generates them
+  (the hybrid pair too, with hybrid signing on). The key boot step still
+  imports a variable the store lacks, and a signing variable that holds a new
+  key still replaces the stored key until rotation through the store ships. A
+  deployment with hybrid signing on whose realm holds an Ed25519 signing key
+  without its ML-DSA-65 key refuses to start. The boot warning for a token key
+  variable now says the boot step reads it only to replace the stored key.
+  Without `JWT_PUBLIC_KEY`, the boot no longer fails ([#359]): the key step
+  derives the public key, and nothing else imports the private one.
+- `@qauth-labs/fastify-plugin-jwt` takes `signer` and `requestRealm` instead of
+  `privateKey`, `publicKey`, `issuer`, `keyId`, the `rs256*` and `mlDsa*`
+  options and the retired keys; `signAccessToken`, `signIdToken`,
+  `signHybridAccessToken`, `verifyAccessToken`, `verifyHybridAccessToken`,
+  `getJwks` and `getIdTokenSigningAlgValuesSupported` take the realm, and
+  `getIssuer` is gone. The wallet verifier's crypto capability gate reads the
+  default realm's stored token keys, not the key variables.
 - **BREAKING (clients that hold `qauth:admin:*` scopes or the admin audience)**:
   the token endpoint issues an admin scope only when the client lists the admin
   API's audience and the account holds a live admin grant whose role has a
@@ -1265,22 +1323,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The issuer pins of introspection, revocation, logout, the token-exchange
   subject token, the Bearer path of `/oauth/authorize` and the API family
-  guards (`requireFamilyToken`) name the realm's token issuer: `JWT_ISSUER` as
-  written for the realm whose issuer it is, the realm's own issuer for any other
-  realm.
-
-  No route creates a second realm yet. Until tokens are signed per realm
-  ([#491]), every token carries `JWT_ISSUER`, so a second realm:
-  - names its own issuer in discovery, `iss`, mail links and wallet URLs, and a
-    DPoP proof sent to it must name its own endpoint URL;
-  - refuses its own tokens: introspection reports them inactive,
-    `/oauth/revoke` answers `200` without denylisting them, `/auth/logout`
-    answers `401` so the user's sessions stay, and the token-exchange subject
-    token, the Bearer path of `/oauth/authorize` and the family guards refuse
-    them;
-  - has its tokens accepted by the default realm, whose issuer they name:
-    introspection there reports them active and revocation there denylists
-    them, when their `client_id` also names a client of the default realm.
+  guards (`requireFamilyToken`) name the request realm's issuer, which since
+  [#491] is the `iss` of every token the realm issues (below).
 
 - **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
   The lookups by an id that a request, a token or a code carries now take the
@@ -1299,7 +1343,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - another realm's access token is `active: false` at introspection and 401
     at userinfo, and revocation and `/auth/logout` ignore or refuse it: these
     routes and token exchange check the token's `iss` against the request
-    realm's token issuer;
+    realm's token issuer, and since [#491] verify it only with the request
+    realm's keys;
   - a consent, client or API key id of another realm answers 404 at the
     management API, and a verification token mailed for another realm's
     account is an invalid token;
@@ -1311,12 +1356,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /auth/register` (`rate-limit:resend:*`, `last-email-sent:*`) carry the
   realm id, so an address has an allowance in each realm; they start from zero
   after the upgrade, and during a rolling upgrade old and new nodes count
-  apart for one window. A deployment with one realm behaves as before. Until
-  tokens are signed per realm ([#491]), every token carries `JWT_ISSUER`: a
-  second realm's host refuses every access token at these routes, its own
-  included, and the default realm tells another realm's token apart only by
-  its user, so a `client_credentials` token of a same-named client in another
-  realm still introspects there.
+  apart for one window. A deployment with one realm behaves as before. Tokens
+  are signed per realm ([#491], above), so each realm's host accepts its own
+  realm's tokens only: a `client_credentials` token of a same-named client in
+  another realm is `active: false` at the default realm's introspection, and
+  its revocation there denylists nothing.
 
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
@@ -1605,6 +1649,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nx` command by up to about 50 seconds before Nx falls back to the local
   cache.
 
+[#359]: https://github.com/qauth-labs/qauth/issues/359
 [#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
 [#434]: https://github.com/qauth-labs/qauth/issues/434

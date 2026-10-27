@@ -867,6 +867,18 @@ export type RealmKeyStatusChange =
   | { status: 'retired'; retireAt: number; unpublishAt: number | null };
 
 /**
+ * The published keys of each realm (`realm_public_keys`): public material that
+ * every service role reads (#491, #495), unlike `realm_keys`.
+ */
+export interface RealmPublicKeysRepository {
+  /**
+   * Every published key of a realm, whatever its status or publication
+   * window, ordered by purpose, `publish_at` and `kid`.
+   */
+  listByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]>;
+}
+
+/**
  * Realm keys repository (ADR-019 Decision 9, issue #461).
  *
  * The signer's view of `realm_keys` and `realm_public_keys`. Only the signer's
@@ -901,6 +913,17 @@ export interface RealmKeysRepository {
    * material only: the table's CHECKs refuse a private JWK member.
    */
   listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]>;
+  /**
+   * Whether a realm other than `realmId` publishes a key whose public JWK has
+   * every member of `identity` (its key type and public value, such as
+   * `{ kty, crv, x }`), whatever its status or window: two realms never share a
+   * key (#491).
+   */
+  anotherRealmPublishes(
+    realmId: string,
+    identity: Readonly<Record<string, string>>,
+    tx?: DbClient
+  ): Promise<boolean>;
   /**
    * The ONE method that returns wrapped key material: the full row, for the
    * signer to unwrap. Takes the realm id as well as the `kid`, so a `kid` from

@@ -34,7 +34,6 @@ function splitSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRole
     INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
     INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
     INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
-    JWT_PUBLIC_KEY: '-----BEGIN PUBLIC KEY-----',
   };
 }
 
@@ -95,9 +94,9 @@ describe('what each role loads (the boot-time list)', () => {
     );
   });
 
-  it('gives signer and admin only the realms the resolver reads', () => {
-    expect(repositoriesFor(['signer'])).toEqual(['realms']);
-    expect(repositoriesFor(['admin'])).toEqual(['realms']);
+  it('gives signer and admin only the realms the resolver reads and their published keys', () => {
+    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys']);
+    expect(repositoriesFor(['admin'])).toEqual(['realms', 'realmPublicKeys']);
     expect([...pluginsFor(['signer'])]).toEqual([]);
     expect([...pluginsFor(['admin'])]).toEqual([]);
   });
@@ -109,6 +108,7 @@ describe('what each role loads (the boot-time list)', () => {
       'eventDeliveries',
       'eventRetention',
       'ssfStreams',
+      'realmPublicKeys',
     ]);
     expect([...pluginsFor(['delivery'])]).toEqual(['ssf', 'eventDelivery']);
   });
@@ -281,7 +281,7 @@ describe('checkServiceRoles', () => {
   });
 
   it('requires SIGNER_URL and the internal TLS files without the signer', () => {
-    const check = checkServiceRoles({ SERVICE_ROLES: ['delivery'], JWT_PUBLIC_KEY: undefined }, {});
+    const check = checkServiceRoles({ SERVICE_ROLES: ['delivery'] }, {});
     expect(check.problems.map((problem) => problem.variable)).toEqual([
       'SIGNER_URL',
       'INTERNAL_TLS_CERT_PATH',
@@ -290,16 +290,10 @@ describe('checkServiceRoles', () => {
     ]);
   });
 
-  it('requires the public key only where tokens are verified', () => {
-    const { JWT_PUBLIC_KEY: _publicKey, ...withoutPublicKey } = splitSettings(['api']);
-    expect(
-      checkServiceRoles({ ...withoutPublicKey, SERVICE_ROLES: ['api'] }, {}).problems.map(
-        (problem) => problem.variable
-      )
-    ).toEqual(['JWT_PUBLIC_KEY']);
-    expect(
-      checkServiceRoles({ ...withoutPublicKey, SERVICE_ROLES: ['delivery'] }, {}).problems
-    ).toEqual([]);
+  it('needs no public key variable where tokens are verified: the published keys verify them (#491)', () => {
+    for (const roles of [['api'], ['web'], ['delivery']] as const) {
+      expect(checkServiceRoles(splitSettings(roles), {}).problems, roles.join()).toEqual([]);
+    }
   });
 
   it('warns that a process without the signer cannot sign yet', () => {

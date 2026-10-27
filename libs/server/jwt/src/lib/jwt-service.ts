@@ -11,6 +11,7 @@ import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { JWTPayload, SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
 import { accessTokenClaimsSchema } from './access-token-claims';
+import { decodeProtectedHeaderUnsafe } from './jose-utils';
 
 /**
  * RFC 9068 §2.1 `typ` for a JWT OAuth 2.0 access token.
@@ -337,7 +338,7 @@ export async function signIdToken(
  * @throws JWTInvalidError when the `typ` is wrong, non-string, or (under
  *   `requireTyp`) missing.
  */
-function assertAccessTokenTyp(signedTyp: unknown, requireTyp: boolean): void {
+export function assertAccessTokenTyp(signedTyp: unknown, requireTyp: boolean): void {
   if (signedTyp === undefined) {
     if (requireTyp) {
       throw new JWTInvalidError('Invalid JWT token: missing typ header (expected at+jwt)');
@@ -377,6 +378,15 @@ export async function verifyAccessToken(
     // never depends on `@qauth-labs/shared-errors`.
     if (error instanceof CryptoVerificationError) {
       if (error.reason === 'expired') {
+        // The backend checks the claims only after the signature, so an
+        // expired token was signed by this key. Its `typ` is checked here too,
+        // before the expiry is reported: a caller that accepts an expired
+        // access token (logout) must not accept an expired ID token or ID-JAG
+        // signed by the same key. The header is authenticated by now.
+        assertAccessTokenTyp(
+          decodeProtectedHeaderUnsafe(token)['typ'],
+          options.requireTyp === true
+        );
         throw new JWTExpiredError('JWT token has expired');
       }
       // A backend-supplied diagnostic is surfaced verbatim, preserving the

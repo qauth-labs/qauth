@@ -273,7 +273,6 @@ function createTokenStub(persistedClient: {
       hashRefreshToken: vi.fn((t: string) => `hash:${t}`),
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
       getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
-      getIssuer: vi.fn().mockReturnValue(ISSUER),
     },
     pkceUtils: { verifyCodeChallenge: vi.fn() },
     redis: {
@@ -338,8 +337,15 @@ describe('the token-exchange grant is reachable through a shipped provisioning p
     const result = (await exchange(fastify, ctx)) as any;
 
     expect(result.access_token).toBe('delegated.jwt.token');
-    // RFC 8693 §4.1: sub is the end user, act identifies the acting agent.
+    // The subject token is verified in the request realm, its issuer pinned (#491).
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
+      { id: REALM.id, issuer: ISSUER },
+      'subject.jwt.token'
+    );
+    // RFC 8693 §4.1: sub is the end user, act identifies the acting agent;
+    // the delegated token is signed in the same realm.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: REALM.id }),
       expect.objectContaining({
         sub: user.id,
         act: expect.objectContaining({ sub: AGENT_CLIENT_ID }),

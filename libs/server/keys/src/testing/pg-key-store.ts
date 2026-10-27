@@ -107,6 +107,18 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
       ]);
     },
 
+    async anotherRealmPublishes(
+      realmId: string,
+      identity: Readonly<Record<string, string>>,
+      tx: PoolClient
+    ): Promise<boolean> {
+      const { rows } = await tx.query(
+        'SELECT 1 FROM realm_public_keys WHERE realm_id <> $1 AND public_jwk @> $2::jsonb LIMIT 1',
+        [realmId, JSON.stringify(identity)]
+      );
+      return rows.length > 0;
+    },
+
     async listPublicKeys(realmId: string, tx: PoolClient): Promise<readonly StoredPublicKey[]> {
       const { rows } = await tx.query<{
         kid: string;

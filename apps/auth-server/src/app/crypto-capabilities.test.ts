@@ -26,17 +26,17 @@ import { deriveCryptoCapabilities, type ProvisionedSigningKeys } from './crypto-
 /** A PEM-shaped placeholder. Nothing here parses it; only presence is read. */
 const PEM = (label: string) => `-----BEGIN ${label}-----\nplaceholder\n-----END ${label}-----`;
 
-/** The default posture: EdDSA only, no RS256 key, no verifier identity. */
+/** The default posture: an EdDSA token key only, no RS256 key, no verifier identity. */
 const NOTHING_OPTIONAL: ProvisionedSigningKeys = {
-  rs256PrivateKey: undefined,
+  tokenSigningAlgorithms: ['EdDSA'],
   verifierEs256PrivateKey: undefined,
   verifierCertificateChainPems: [],
 };
 
-/** A deployment with the optional RS256 ID-token key configured (#309). */
+/** A realm whose key store holds an RS256 ID-token key (#309, #485). */
 const WITH_RS256: ProvisionedSigningKeys = {
   ...NOTHING_OPTIONAL,
-  rs256PrivateKey: PEM('PRIVATE KEY'),
+  tokenSigningAlgorithms: ['EdDSA', 'RS256'],
 };
 
 /**
@@ -64,21 +64,27 @@ const WITH_VERIFIER_IDENTITY: ProvisionedSigningKeys = {
 const WRPAC_PROVISIONED = { available: ['non-self-signed-chain'] } as const;
 
 describe('deriveCryptoCapabilities (#298 F1, #377)', () => {
-  it('always claims EdDSA — the env schema refuses to parse without that key', () => {
+  it("claims EdDSA when the realm's key store holds an EdDSA token key", () => {
     expect(deriveCryptoCapabilities(NOTHING_OPTIONAL).signingAlgs).toContain('EdDSA');
   });
 
-  it('claims RS256 only when an RS256 key is provisioned', () => {
+  it('claims RS256 only when the key store holds an RS256 token key (#491)', () => {
     expect(deriveCryptoCapabilities(WITH_RS256).signingAlgs).toContain('RS256');
     expect(deriveCryptoCapabilities(NOTHING_OPTIONAL).signingAlgs).not.toContain('RS256');
   });
 
-  it('treats a blank RS256 key as unprovisioned', () => {
-    // `resolveKey` can hand back an empty string from an empty env var or an
-    // empty key file. Fail closed: an empty key signs nothing.
+  it('claims no token algorithm the key store does not hold', () => {
+    // Read from the store, never assumed: a realm without an EdDSA key claims none.
     expect(
-      deriveCryptoCapabilities({ ...NOTHING_OPTIONAL, rs256PrivateKey: '   ' }).signingAlgs
-    ).not.toContain('RS256');
+      deriveCryptoCapabilities({ ...NOTHING_OPTIONAL, tokenSigningAlgorithms: [] }).signingAlgs
+    ).toEqual([]);
+    // ML-DSA-65 is a token algorithm too, but no JOSE request is signed with it.
+    expect(
+      deriveCryptoCapabilities({
+        ...NOTHING_OPTIONAL,
+        tokenSigningAlgorithms: ['EdDSA', 'ML-DSA-65'],
+      }).signingAlgs
+    ).toEqual(['EdDSA']);
   });
 
   // The #377 acceptance criterion, stated as a test on the pure function.
