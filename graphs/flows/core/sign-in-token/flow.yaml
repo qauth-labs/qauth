@@ -4,11 +4,13 @@
 # and SES-03 change this flow later, and change this graph first. It has no screens. The states run in the order the
 # server runs them: the realm resolver and the rate limiter (onRequest hooks), the body schema, then the handler.
 #
-# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees. A 4xx
-#   is the error handler's body (apps/auth-server/src/app/plugins/error-handler.ts), since /auth is not under an API
-#   family prefix.
-# - The four 401 exits answer byte for byte the same, by design (ANT-2026-SPEMY9GU): only the event, the log line and
-#   the metric they record tell them apart, and the metric not even then. They are four states because they are four
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees. Every
+#   refusal and failure is the error handler's RFC 9457 problem document, sent as application/problem+json
+#   (apps/auth-server/src/app/plugins/error-handler.ts, #513), since /auth/login is not an OAuth protocol endpoint;
+#   <error> is the document's code, but for a 500, whose code is internal_error. A client branches on the code; the
+#   detail wording may change. No 401 carries a WWW-Authenticate challenge: the route takes no bearer token.
+# - The four 401 exits answer the same, by design (ANT-2026-SPEMY9GU), each document's own trace_id aside: only the
+#   event, the log line and the metric they record tell them apart, and the metric not even then. They are four states because they are four
 #   causes, and a replay that sees one of them answer differently names the state that changed.
 # - The checks run in the same order as on POST /ui/login (graphs/flows/core/sign-in): the lockout, the password, the
 #   verified-account gate, then the enabled flag, and the two routes share one failed-login counter.
@@ -37,8 +39,8 @@ scope:
     - 'a store failure while the password is checked or the user is read answers 500 the same way as one after it:
       user.sign_in_failed is recorded with the reason internal_error first, and the answer waits out the floor; a
       failure to record a refusal (user.sign_in_failed) turns that refusal into a 500'
-    - "Fastify's own answers before the schema check, such as a body of a media type no parser takes (415) or an
-      empty body sent as application/json (400)"
+    - "Fastify's own answers before the schema check, as problem documents, such as a body of a media type no parser
+      takes (415, unsupported_media_type) or an empty body sent as application/json (400, bad_request)"
     - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer) give one answer
       and are drawn as one exit; an endpoint host of the realm is served, since this is an api route'
     - 'with RATE_LIMIT_ENABLED=false the login limit is not applied'
@@ -163,7 +165,7 @@ states:
     description: >-
       LOGIN_RATE_LIMIT requests per LOGIN_RATE_WINDOW seconds, for each client address and realm, whatever the request
       ends in. This is the limiter, not the lockout: it counts requests, before the body is read.
-    source: apps/auth-server/src/app/routes/auth/login.ts:44
+    source: apps/auth-server/src/app/routes/auth/login.ts:45
     always:
       - guard: rateLimited
         target: too_many_requests.login_limit
@@ -171,20 +173,20 @@ states:
         source: apps/auth-server/src/app/plugins/rate-limit.ts:25
       - target: validatingBody
         say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/auth/login.ts:44
+        source: apps/auth-server/src/app/routes/auth/login.ts:45
 
   validatingBody:
     title: Check the body against the login schema
     description: loginSchema in apps/auth-server/src/app/schemas/auth.ts.
-    source: apps/auth-server/src/app/routes/auth/login.ts:37
+    source: apps/auth-server/src/app/routes/auth/login.ts:38
     always:
       - guard: inputInvalid
         target: validation_error.body
         say: 'the body does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:496
+        source: apps/auth-server/src/app/plugins/error-handler.ts:263
       - target: checkingLockout
         say: 'the body matches the schema'
-        source: apps/auth-server/src/app/schemas/auth.ts:99
+        source: apps/auth-server/src/app/schemas/auth.ts:108
 
   checkingLockout:
     title: Refuse a locked-out address, else count the attempt
@@ -193,12 +195,12 @@ states:
       client address (an IPv6 one by its /64). A locked-out identifier refuses the attempt before anything is counted.
       Otherwise the attempt is counted on both before the password is looked at, and the attempt that reaches
       FAILED_LOGIN_MAX_ATTEMPTS arms the lockout on its way in.
-    source: apps/auth-server/src/app/routes/auth/login.ts:72
+    source: apps/auth-server/src/app/routes/auth/login.ts:73
     always:
       - guard: lockedOut
         target: too_many_requests.locked_out
         say: 'an identifier is locked out'
-        source: apps/auth-server/src/app/routes/auth/login.ts:73
+        source: apps/auth-server/src/app/routes/auth/login.ts:74
       - target: checkingPassword
         effect: [countAttempt]
         say: 'the attempt is counted on the address being signed in to and on the client address'
@@ -209,7 +211,7 @@ states:
     description: >-
       The password credential of the normalized address in this realm, then Argon2id against its hash. With no
       credential the password is verified against a decoy hash, so every outcome costs one verification.
-    source: apps/auth-server/src/app/routes/auth/login.ts:89
+    source: apps/auth-server/src/app/routes/auth/login.ts:90
     invoke: { action: UserCredential.findByRealmProviderSub }
     on:
       DONE:
@@ -227,41 +229,41 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/routes/auth/login.ts:251
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
 
   checkingVerified:
     title: Apply the verified-account gate
     description: >-
       F-08: under REQUIRE_VERIFIED_ACCOUNT, a password account is used only once its address is confirmed. It is read
       from the credential, before the users row, so an unconfirmed disabled account is refused here. It used to answer
-      403 EMAIL_NOT_VERIFIED, which let anyone tell a free address from a registered one (ANT-2026-SPEMY9GU).
-    source: apps/auth-server/src/app/routes/auth/login.ts:109
+      403 with the code EMAIL_NOT_VERIFIED, which let anyone tell a free address from a registered one (ANT-2026-SPEMY9GU).
+    source: apps/auth-server/src/app/routes/auth/login.ts:110
     always:
       - guard: unverifiedUnderTheGate
         target: invalid_credentials.email_not_verified
         say: 'the address is not confirmed, and the gate is on'
-        source: apps/auth-server/src/app/routes/auth/login.ts:132
+        source: apps/auth-server/src/app/routes/auth/login.ts:133
       - target: findingUser
         say: 'the address is confirmed, or the gate is off'
-        source: apps/auth-server/src/app/routes/auth/login.ts:115
+        source: apps/auth-server/src/app/routes/auth/login.ts:116
 
   findingUser:
     title: Read the user, for its enabled flag
-    source: apps/auth-server/src/app/routes/auth/login.ts:117
+    source: apps/auth-server/src/app/routes/auth/login.ts:118
     invoke: { action: User.findById }
     on:
       DONE:
         - guard: userDisabled
           target: invalid_credentials.account_disabled
           say: 'the user is disabled'
-          source: apps/auth-server/src/app/routes/auth/login.ts:132
+          source: apps/auth-server/src/app/routes/auth/login.ts:133
         - target: issuingAccessToken
           say: 'the user is enabled'
-          source: apps/auth-server/src/app/routes/auth/login.ts:166
+          source: apps/auth-server/src/app/routes/auth/login.ts:167
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/routes/auth/login.ts:251
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
 
   issuingAccessToken:
     title: Sign an access token for the system client
@@ -271,54 +273,54 @@ states:
       neither email nor email_verified (ANT-2026-2O0T72HY). It is signed with the JWT_PRIVATE_KEY key and its iss is
       JWT_ISSUER, in every realm, until #491 moves tokens onto the realm's keys. It lives ACCESS_TOKEN_LIFESPAN
       seconds, whatever the client's environment.
-    source: apps/auth-server/src/app/routes/auth/login.ts:173
+    source: apps/auth-server/src/app/routes/auth/login.ts:174
     invoke: { external: tokenSigner }
     on:
       DONE:
         target: storingRefreshToken
         say: 'the access token is signed, and a refresh token of 32 random bytes generated'
-        source: apps/auth-server/src/app/routes/auth/login.ts:180
+        source: apps/auth-server/src/app/routes/auth/login.ts:181
       FAIL.server:
         target: server_error.store
         say: 'the database fails, or the hybrid signature cannot be stored'
-        source: apps/auth-server/src/app/routes/auth/login.ts:251
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
 
   storingRefreshToken:
     title: Store the refresh token, hashed, as a new family
     description: >-
       A new family with a random id, started now. Its expiry is REFRESH_TOKEN_LIFESPAN from now, capped at the end of
       the family when the realm sets sso_max_lifespan; no browser session caps it.
-    source: apps/auth-server/src/app/routes/auth/login.ts:198
+    source: apps/auth-server/src/app/routes/auth/login.ts:199
     invoke: { action: RefreshToken.create }
     on:
       DONE:
         target: recordingSignIn
         effect: [storeRefreshToken]
         say: 'the refresh token is stored'
-        source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:61
+        source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:66
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/routes/auth/login.ts:251
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
 
   recordingSignIn:
     title: Record the sign-in
     description: The event urn:qauth:event:user.signed_in:v1-rc.0, with the method password and the system client.
-    source: apps/auth-server/src/app/routes/auth/login.ts:210
+    source: apps/auth-server/src/app/routes/auth/login.ts:211
     invoke: { external: eventStore }
     on:
       DONE:
         target: updatingLastLogin
         say: 'the event is recorded'
-        source: apps/auth-server/src/app/routes/auth/login.ts:223
+        source: apps/auth-server/src/app/routes/auth/login.ts:224
       FAIL.server:
         target: server_error.store
         say: 'the event store fails'
-        source: apps/auth-server/src/app/routes/auth/login.ts:251
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
 
   updatingLastLogin:
     title: Record the time of the sign-in on the user
-    source: apps/auth-server/src/app/routes/auth/login.ts:223
+    source: apps/auth-server/src/app/routes/auth/login.ts:224
     invoke: { action: User.updateLastLogin }
     on:
       DONE:
@@ -328,7 +330,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/routes/auth/login.ts:251
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
 
   clearingFailures:
     title: Settle the counted attempt
@@ -336,7 +338,7 @@ states:
       The address the password proved gets its counter and its lockout cleared. The client address gets back only
       this attempt's own count, and the lockout if this attempt armed it, so signing in to an account of one's own
       does not wipe a password spray from the same address. Best effort: a cache failure here is ignored.
-    source: apps/auth-server/src/app/routes/auth/login.ts:231
+    source: apps/auth-server/src/app/routes/auth/login.ts:232
     always:
       - target: tokens_issued
         say: 'the attempt is settled'
@@ -347,7 +349,7 @@ states:
   tokens_issued:
     type: final
     title: Answer with the tokens
-    source: apps/auth-server/src/app/routes/auth/login.ts:245
+    source: apps/auth-server/src/app/routes/auth/login.ts:246
     response:
       status: 200
       headers:
@@ -367,15 +369,19 @@ states:
       the metric login_attempts (result failure, reason locked_out) and the log line user.login.failure. The answer
       waits out the 500 ms floor that every refused credential waits. Distinct from the login limit, which the rate
       limiter answers.
-    source: apps/auth-server/src/app/routes/auth/login.ts:83
+    source: apps/auth-server/src/app/routes/auth/login.ts:84
     response:
       status: 429
       headers:
         Retry-After: the seconds left on the lockout
       body:
-        error: Too many failed login attempts. Please try again later.
-        code: TOO_MANY_REQUESTS
-        statusCode: 429
+        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
+        title: Too many requests
+        status: 429
+        detail: Too many failed login attempts. Please try again later.
+        instance: /auth/login
+        code: too_many_requests
+        trace_id: the request id
 
   invalid_credentials.unknown_identifier:
     type: final
@@ -383,13 +389,17 @@ states:
     description: >-
       user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
       and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/auth/login.ts:162
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
     response: &invalidCredentials
       status: 401
       body:
-        error: Invalid email or password
-        code: INVALID_CREDENTIALS
-        statusCode: 401
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-credentials
+        title: Invalid credentials
+        status: 401
+        detail: Invalid email or password
+        instance: /auth/login
+        code: invalid_credentials
+        trace_id: the request id
 
   invalid_credentials.wrong_password:
     type: final
@@ -397,7 +407,7 @@ states:
     description: >-
       user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
       and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/auth/login.ts:162
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
     response: *invalidCredentials
 
   invalid_credentials.email_not_verified:
@@ -407,7 +417,7 @@ states:
       user.sign_in_failed is recorded with the reason email_not_verified and the user as its subject, and the log line
       says email_not_verified; the metric's label stays invalid_credentials, since /metrics is not authenticated. The
       attempt stays counted, and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/auth/login.ts:162
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
     response: *invalidCredentials
 
   invalid_credentials.account_disabled:
@@ -416,22 +426,26 @@ states:
     description: >-
       The password was right. user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The
       attempt stays counted, and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/auth/login.ts:162
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
     response: *invalidCredentials
 
   validation_error.body:
     type: final
     title: Refuse a body that does not match the login schema
     description: Nothing is counted against the lockout.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:496
+    source: apps/auth-server/src/app/plugins/error-handler.ts:337
     response:
       status: 400
       body:
-        error: Validation error
-        code: VALIDATION_ERROR
-        statusCode: 400
-        details:
-          - path: '/<the field>, such as /email'
+        type: https://docs.qauth.dev/reference/problem-types/#validation-error
+        title: Validation error
+        status: 400
+        detail: The request is not valid.
+        instance: /auth/login
+        code: validation_error
+        trace_id: the request id
+        errors:
+          - pointer: '/<the field>, such as /email'
             message: "the schema's message, such as: Invalid email format"
 
   misdirected_request.host:
@@ -441,9 +455,13 @@ states:
     response:
       status: 421
       body:
-        error: This server does not answer for the requested host
-        code: MISDIRECTED_REQUEST
-        statusCode: 421
+        type: https://docs.qauth.dev/reference/problem-types/#misdirected-request
+        title: Misdirected request
+        status: 421
+        detail: This server does not answer for the requested host
+        instance: /auth/login
+        code: misdirected_request
+        trace_id: the request id
 
   too_many_requests.login_limit:
     type: final
@@ -457,8 +475,13 @@ states:
         x-ratelimit-reset: the seconds until the window resets
         retry-after: the same seconds
       body:
-        error: 'Rate limit exceeded, retry in {the rest of the window, such as 15 minutes}'
-        statusCode: 429
+        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
+        title: Too many requests
+        status: 429
+        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 15 minutes}'
+        instance: /auth/login
+        code: too_many_requests
+        trace_id: the request id
 
   server_error.store:
     type: final
@@ -466,12 +489,17 @@ states:
     description: >-
       user.sign_in_failed is recorded with the reason internal_error and the answer waits out the floor first. The
       steps before the failing one stay done: a refresh token stored before a later failure stays, though the caller
-      never receives it. With NODE_ENV=production the body is the one below; otherwise it carries the error's message
-      and stack.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:533
+      never receives it. The body says nothing of the failure, in any NODE_ENV; its trace_id finds the log line.
+    source: apps/auth-server/src/app/plugins/error-handler.ts:600
     response:
       status: 500
-      body: { error: Internal server error, statusCode: 500 }
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#internal-error
+        title: Internal error
+        status: 500
+        instance: /auth/login
+        code: internal_error
+        trace_id: the request id
 
 assertions:
   - id: no-tokens-for-a-refused-account
@@ -481,7 +509,7 @@ assertions:
     say: >-
       Tokens are issued only for an existing, enabled account and its right password, and under the gate only for a
       confirmed address
-    source: apps/auth-server/src/app/routes/auth/login.ts:132
+    source: apps/auth-server/src/app/routes/auth/login.ts:133
   - id: attempt-counted-before-the-password
     never: "state == 'checkingPassword' and not attemptCounted"
     say: 'Every password checked has been counted first, so guesses sent at once cannot outrun the lockout'
@@ -489,8 +517,8 @@ assertions:
   - id: locked-out-checks-no-password
     never: "state == 'too_many_requests.locked_out' and attemptCounted"
     say: 'A locked-out attempt is refused before it is counted and before any password is checked, the right one too'
-    source: apps/auth-server/src/app/routes/auth/login.ts:73
+    source: apps/auth-server/src/app/routes/auth/login.ts:74
   - id: tokens-issued-means-stored
     never: "state == 'tokens_issued' and not refreshTokenStored"
     say: 'A refresh token reaches the caller only once its hash is stored'
-    source: apps/auth-server/src/app/routes/auth/login.ts:198
+    source: apps/auth-server/src/app/routes/auth/login.ts:199

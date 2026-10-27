@@ -42,6 +42,7 @@ import { type LoginForm, loginFormSchema } from '../../schemas/auth';
  * input falls back to `/`.
  */
 
+/** The sign-in page's HTML: the form, an optional refusal and the wallet link. */
 function loginPage(opts: {
   returnTo: string;
   /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
@@ -209,6 +210,12 @@ function signInRefusal(): string {
     : 'Invalid email or password.';
 }
 
+/**
+ * Register the session-cookie sign-in routes under `/ui`: `GET /login`, which
+ * renders the page with a CSRF value mirrored in a signed cookie, and
+ * `POST /login`, which checks the form and, on success, creates a browser
+ * session and redirects to `return_to`.
+ */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/login',

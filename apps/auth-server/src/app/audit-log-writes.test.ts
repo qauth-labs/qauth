@@ -31,6 +31,7 @@ const WRITES: readonly RegExp[] = [
 
 const SKIPPED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.nx', '.astro']);
 
+/** Every JavaScript or TypeScript source file under `dir`, build output skipped. */
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (SKIPPED_DIRS.has(entry.name)) return [];
@@ -40,6 +41,10 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+/**
+ * The files under `dir`, relative to the repository root, that write to
+ * `audit_logs`, leaving out the allowed ones, and the test files unless `tests`.
+ */
 function writesIn(dir: string, { tests }: { tests: boolean }): string[] {
   return sourceFiles(join(REPO_ROOT, dir))
     .map((file) => relative(REPO_ROOT, file))

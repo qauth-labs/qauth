@@ -65,7 +65,7 @@ actions:
 
   RefreshToken.create:
     # internal: invoked by core.sign-in-token, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:59
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:64
     body:
       type: object
       required: [userId, oauthClientId, tokenHash, familyCreatedAt, expiresAt]
@@ -78,6 +78,8 @@ actions:
         familySessionExpiresAt: { type: [integer, 'null'] } # core.sign-in-token passes null: no browser session
         expiresAt: { type: integer }
         scopes: { type: array, items: { type: string } } # core.sign-in-token passes none
+        # set by the code exchange on the first token of the family a code starts; core.sign-in-token passes none
+        authorizationCodeId: { type: [string, 'null'], format: uuid }
     result: { returns: RefreshToken }
     sideEffects:
       - >-
