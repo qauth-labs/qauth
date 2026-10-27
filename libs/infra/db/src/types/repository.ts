@@ -114,7 +114,8 @@ export interface UpsertUserAttributeInput {
  */
 export interface UserCredentialsRepository {
   create(data: NewUserCredential, tx?: DbClient): Promise<UserCredential>;
-  findById(id: string, tx?: DbClient): Promise<UserCredential | undefined>;
+  /** A credential of the realm by id; another realm's is answered as unknown (#489). */
+  findById(realmId: string, id: string, tx?: DbClient): Promise<UserCredential | undefined>;
   findByRealmProviderSub(
     realmId: string,
     providerType: string,
@@ -232,9 +233,34 @@ export interface BaseRepository<TSelect, TInsert, TUpdate> {
 }
 
 /**
- * OAuth clients repository interface extending BaseRepository with additional methods
+ * {@link BaseRepository} for a table whose rows each belong to one realm
+ * (ADR-019 Decision 1, #489).
+ *
+ * Every method that takes an id takes the realm first, as a required argument:
+ * an id read from a request, a token, a code or a cookie names a row only in
+ * the realm the request was resolved to. A row of another realm is answered as
+ * no row (`undefined`, `false` or `NotFoundError`), from the same single query
+ * an unknown id gets, so neither the answer nor its timing tells the caller
+ * that the id exists elsewhere.
  */
-export interface OAuthClientsRepository extends BaseRepository<
+export interface RealmScopedRepository<TSelect, TInsert, TUpdate> {
+  /** Create a new entity; its realm is in `data` */
+  create(data: TInsert, tx?: DbClient): Promise<TSelect>;
+  /** Find an entity of the realm by ID @returns Entity if found, undefined otherwise */
+  findById(realmId: string, id: string, tx?: DbClient): Promise<TSelect | undefined>;
+  /** Find an entity of the realm by ID @throws NotFoundError if the realm has no such entity */
+  findByIdOrThrow(realmId: string, id: string, tx?: DbClient): Promise<TSelect>;
+  /** Update an entity of the realm by ID @throws NotFoundError if the realm has no such entity */
+  update(realmId: string, id: string, data: TUpdate, tx?: DbClient): Promise<TSelect>;
+  /** Delete an entity of the realm by ID @returns True if deleted, false if not found */
+  delete(realmId: string, id: string, tx?: DbClient): Promise<boolean>;
+}
+
+/**
+ * OAuth clients repository interface: realm-scoped CRUD plus lookups by the
+ * public `client_id` and by owning developer
+ */
+export interface OAuthClientsRepository extends RealmScopedRepository<
   OAuthClient,
   NewOAuthClient,
   UpdateOAuthClient
@@ -254,14 +280,14 @@ export interface OAuthClientsRepository extends BaseRepository<
    * open dynamic registration (RFC 7591) have a null `developer_id` and are
    * therefore never returned here.
    */
-  listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
+  listByDeveloper(realmId: string, developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
 
   /**
    * Count the OAuth clients owned by a developer: the rows
    * {@link listByDeveloper} would return, without loading them. Used to
    * enforce the per-developer client ceiling before a create.
    */
-  countByDeveloper(developerId: string, tx?: DbClient): Promise<number>;
+  countByDeveloper(realmId: string, developerId: string, tx?: DbClient): Promise<number>;
 
   /**
    * Idempotently materialise a Client ID Metadata Document (CIMD) client.
@@ -286,9 +312,15 @@ export interface EmailVerificationTokensRepository {
    */
   create(data: NewEmailVerificationToken, tx?: DbClient): Promise<EmailVerificationToken>;
   /**
-   * Find a token by its token hash
+   * Find an unused, unexpired token by its token hash, among the tokens of the
+   * realm's credentials (#489): the table has no realm column, its credential
+   * has one. A token of another realm is answered as an unknown one.
    */
-  findByTokenHash(tokenHash: string, tx?: DbClient): Promise<EmailVerificationToken | undefined>;
+  findByTokenHash(
+    realmId: string,
+    tokenHash: string,
+    tx?: DbClient
+  ): Promise<EmailVerificationToken | undefined>;
   /**
    * Mark a token as used
    */
@@ -323,16 +355,29 @@ export interface RefreshTokensRepository {
   /**
    * Find a token by its token hash
    * Only returns tokens that are not revoked and not expired
+   *
+   * Only a token issued to a client of `realmId` is found (#489). The table
+   * has no realm column: the client pins the realm, so a token of another
+   * realm's client is answered as an unknown one.
    */
-  findByTokenHash(tokenHash: string, tx?: DbClient): Promise<RefreshToken | undefined>;
+  findByTokenHash(
+    realmId: string,
+    tokenHash: string,
+    tx?: DbClient
+  ): Promise<RefreshToken | undefined>;
   /**
    * Find a token by its token hash regardless of `revoked`/`expiresAt`.
    *
    * Used by the refresh-token rotation flow to detect replay of an
    * already-revoked token (OAuth 2.1 §4.3.1 / RFC 9700 §2.2.2). Callers
    * MUST apply their own liveness and freshness checks.
+   *
+   * Realm-scoped through the token's client, as {@link findByTokenHash} is: a
+   * token of another realm never reaches the replay logic, so presenting it
+   * cannot revoke that realm's family.
    */
   findByTokenHashIncludingRevoked(
+    realmId: string,
     tokenHash: string,
     tx?: DbClient
   ): Promise<RefreshToken | undefined>;
@@ -429,8 +474,9 @@ export type NewOAuthConsent = InferInsertModel<typeof oauthConsents>;
 export interface OAuthConsentsRepository {
   /** Create a consent row (insert). Caller is responsible for uniqueness. */
   create(data: NewOAuthConsent, tx?: DbClient): Promise<OAuthConsent>;
-  /** Fetch the active (non-revoked) consent for a (user, client) pair. */
+  /** Fetch the active (non-revoked) consent for a (user, client) pair of the realm. */
   findActive(
+    realmId: string,
     userId: string,
     oauthClientId: string,
     tx?: DbClient
@@ -445,18 +491,20 @@ export interface OAuthConsentsRepository {
    * end, or has already committed and no row is returned.
    */
   findActiveForShare(
+    realmId: string,
     userId: string,
     oauthClientId: string,
     tx: DbClient
   ): Promise<OAuthConsent | undefined>;
-  /** List all active consents for a user, joined to client metadata (revocation UI). */
-  listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
+  /** List all active consents a user of the realm holds. */
+  listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
   /**
    * List all active consents for a user *with* their client metadata joined
    * in a single query. Used by the revocation UI to render client name and
    * client_id without a per-row findById fan-out.
    */
   listActiveForUserWithClient(
+    realmId: string,
     userId: string,
     tx?: DbClient
   ): Promise<
@@ -477,15 +525,18 @@ export interface OAuthConsentsRepository {
    * for.
    */
   upsertGrant(
+    realmId: string,
     userId: string,
     oauthClientId: string,
-    realmId: string,
     scopes: string[],
     resources?: readonly string[],
     tx?: DbClient
   ): Promise<OAuthConsent>;
-  /** Revoke a consent row by id (owner must be checked by caller). */
-  revoke(id: string, tx?: DbClient): Promise<OAuthConsent>;
+  /**
+   * Revoke an active consent row of the realm by id (owner must be checked by
+   * caller). @throws NotFoundError when the realm has no such active row.
+   */
+  revoke(realmId: string, id: string, tx?: DbClient): Promise<OAuthConsent>;
 }
 
 /**
@@ -499,17 +550,26 @@ export interface AuthorizationCodesRepository {
   /**
    * Find an authorization code by its code value
    * Only returns codes that are not used and not expired
+   *
+   * Only a code issued to a client of `realmId` is found (#489): the client
+   * pins the realm, so a code of another realm is answered as an unknown one
+   * (`invalid_grant`).
    */
-  findByCode(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
+  findByCode(realmId: string, code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
   /**
    * Find an authorization code by its code value regardless of `used` and
    * `expiresAt`.
    *
    * The token endpoint uses this to recognise a second redemption of a spent
    * code (OAuth 2.1 §4.1.3). Callers MUST apply their own single-use and
-   * expiry checks.
+   * expiry checks. Realm-scoped as {@link findByCode} is (#489): a code of
+   * another realm, spent or not, is not found.
    */
-  findByCodeIncludingUsed(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
+  findByCodeIncludingUsed(
+    realmId: string,
+    code: string,
+    tx?: DbClient
+  ): Promise<AuthorizationCode | undefined>;
   /**
    * Mark a code as used
    * Sets used=true and usedAt=now
@@ -555,21 +615,22 @@ export interface ApiKeysRepository {
    * hash verification so a revoked vs unknown prefix are indistinguishable by
    * timing. Returns undefined when no row matches.
    */
-  findByPrefix(prefix: string, tx?: DbClient): Promise<ApiKey | undefined>;
+  findByPrefix(realmId: string, prefix: string, tx?: DbClient): Promise<ApiKey | undefined>;
   /**
    * List the API keys scoped to a client, newest first. Includes revoked keys
    * (callers mask them); the route projects to non-secret fields only.
    */
-  listByClient(clientId: string, tx?: DbClient): Promise<ApiKey[]>;
+  listByClient(realmId: string, clientId: string, tx?: DbClient): Promise<ApiKey[]>;
   /**
-   * Find a single API key by id, or undefined.
+   * Find a single API key of the realm by id, or undefined.
    */
-  findById(id: string, tx?: DbClient): Promise<ApiKey | undefined>;
+  findById(realmId: string, id: string, tx?: DbClient): Promise<ApiKey | undefined>;
   /**
-   * Revoke a key by id (idempotent soft-delete): sets `revokedAt` if not
-   * already set. Returns the updated row, or undefined when no row matches.
+   * Revoke a key of the realm by id (idempotent soft-delete): sets `revokedAt`
+   * if not already set. Returns the updated row, or undefined when no row
+   * matches.
    */
-  revoke(id: string, tx?: DbClient): Promise<ApiKey | undefined>;
+  revoke(realmId: string, id: string, tx?: DbClient): Promise<ApiKey | undefined>;
   /**
    * Best-effort touch of `lastUsedAt` after a successful authentication. Never
    * throws on a missing row.
@@ -645,9 +706,11 @@ export interface Oid4vpRequestStatesRepository {
    * @returns the redeemed row, or `undefined` when the state is unknown,
    * expired, or already consumed. Those three are DELIBERATELY indistinguishable
    * to the caller so the endpoint's rejection cannot be used to enumerate
-   * request states.
+   * request states. A state of another realm than `realmId`, the request's, is
+   * unknown too (#489): it is neither matched nor consumed.
    */
   redeem(
+    realmId: string,
     stateHash: string,
     responseCode: NewOid4vpResponseCode,
     tx?: DbClient
@@ -689,6 +752,7 @@ export interface Oid4vpRequestStatesRepository {
    * consumed, whichever correlator consumed it.
    */
   redeemByEncryptionKid(
+    realmId: string,
     kid: string,
     responseCode: NewOid4vpResponseCode,
     tx?: DbClient
@@ -721,7 +785,11 @@ export interface Oid4vpRequestStatesRepository {
    * (HAIP 1.0 §5.1) and guarantees the initiating flow can then never
    * complete. There is deliberately no `findByResponseCode`.
    */
-  redeemResponseCode(codeHash: string, tx?: DbClient): Promise<{ stateHash: string } | undefined>;
+  redeemResponseCode(
+    realmId: string,
+    codeHash: string,
+    tx?: DbClient
+  ): Promise<{ stateHash: string } | undefined>;
   /**
    * Delete expired rows. Cleanup only — expiry is already enforced by
    * {@link Oid4vpRequestStatesRepository.redeem}'s guard, so this never affects
@@ -890,6 +958,16 @@ export type Session = InferSelectModel<typeof sessions>;
 export type SessionClient = InferSelectModel<typeof sessionClients>;
 
 /**
+ * What {@link SessionsRepository.revoke} returns: the ended row and the
+ * `session_clients` rows it deleted with it (issue #549), the clients the
+ * session served, which back-channel logout notifies.
+ */
+export interface RevokedSession {
+  session: Session;
+  clients: SessionClient[];
+}
+
+/**
  * Input of {@link SessionsRepository.create}. The id is not accepted: the
  * database makes it (`uuidv7()`), and it becomes the session's `sid`. Nor are
  * the revocation columns: a session starts live.
@@ -952,21 +1030,83 @@ export interface SessionsRepository {
    * `revoked_reason` on a row not yet revoked. An expired row may still be
    * revoked, with `expired` or any other reason.
    *
-   * @returns the ended row, or `undefined` when the realm holds no such session
-   * or it was already revoked. A second call changes nothing and keeps the
-   * first reason.
+   * In the same transaction it deletes the session's `session_clients` rows
+   * (issue #549), an ended session holding no client, and returns them: the
+   * one complete list of the clients it served, which back-channel logout
+   * reads. A list read before the call could miss a code being minted
+   * meanwhile, whose row {@link recordClient} commits before this `UPDATE`
+   * proceeds; the `DELETE` that follows sees it. It also spends the
+   * session's unredeemed authorization codes, so none is redeemed into an ID
+   * token whose `sid` names the ended session.
+   *
+   * Runs READ COMMITTED; a `tx` passed in must be READ COMMITTED too, or the
+   * `DELETE` reads the snapshot from before the `UPDATE` waited. A `tx` at
+   * another level is refused with an error before anything is written.
+   *
+   * @returns the ended row and the clients it served, or `undefined` when the
+   * realm holds no such session or it was already revoked. A second call
+   * changes nothing and keeps the first reason.
    */
   revoke(
     realmId: string,
     id: string,
     reason: SessionRevokedReason,
     tx?: DbClient
-  ): Promise<Session | undefined>;
+  ): Promise<RevokedSession | undefined>;
   /**
    * A user's live sessions in a realm, newest first: not revoked and before
    * `expires_at`. Served by the partial index `idx_sessions_realm_user_active`.
    */
   listActiveForUser(realmId: string, userId: string, tx?: DbClient): Promise<Session[]>;
+  /**
+   * Record that a live session served a client (issue #549): the
+   * `session_clients` row back-channel logout reads, written in the
+   * transaction that mints the authorization code. A session that served the
+   * client before keeps its one row and its first time.
+   *
+   * The session row is locked `FOR SHARE` until `tx` ends, so a concurrent
+   * {@link revoke} either waits and then deletes (and returns) the row
+   * written here, or committed first and this call finds no live session.
+   * Hence `tx` is required, a transaction (not the root client), and READ
+   * COMMITTED: outside a transaction the lock would end with the statement.
+   *
+   * @returns `true` when the realm holds the session live (not revoked, before
+   * `expires_at`), the client is one of the same realm, and the row is stored;
+   * `false`, writing nothing, otherwise. The caller then issues no code, so
+   * every code minted from a session is among the clients its revocation
+   * returns.
+   */
+  recordClient(
+    realmId: string,
+    sessionId: string,
+    oauthClientId: string,
+    tx: DbTransaction
+  ): Promise<boolean>;
+  /**
+   * The clients one live session of the realm served, oldest first. Empty for
+   * a session of another realm, and for one revoked or past `expires_at`. The
+   * idle limit is the session service's call and is not judged here.
+   */
+  listClientsForSession(
+    realmId: string,
+    sessionId: string,
+    tx?: DbClient
+  ): Promise<SessionClient[]>;
+  /**
+   * The registry rows of every live session of one user in the realm (not
+   * revoked, before `expires_at`), oldest first.
+   */
+  listClientsForUser(realmId: string, userId: string, tx?: DbClient): Promise<SessionClient[]>;
+  /**
+   * The registry rows of one client (its `oauth_clients.id`) across the
+   * realm's live sessions, oldest first. A session past `expires_at` keeps its
+   * rows until it is revoked or its row deleted, but is not listed.
+   */
+  listSessionsForClient(
+    realmId: string,
+    oauthClientId: string,
+    tx?: DbClient
+  ): Promise<SessionClient[]>;
 }
 
 /** A stored `admin_audit_log` row (ADR-019 Decision 7, issue #448). */

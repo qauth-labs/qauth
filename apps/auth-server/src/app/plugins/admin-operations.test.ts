@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -53,7 +55,14 @@ const PATCH_OPERATION = defineOperation<{ minScore: number }>({
     };
   },
   loadState: async () => ({ minScore: 2 }),
+  stateVersion: (state) => `v${state.minScore}`,
 });
+
+/** An authorization stage that lets every classified request through. */
+const ALLOW = () => undefined;
+
+/** The `If-Match` of a request written against the fixture state. */
+const IF_MATCH = { 'if-match': '"v2"' };
 
 const REGISTRY = createOperationRegistry([READ_OPERATION, PATCH_OPERATION] as AdminOperation[], {
   reserved: [],
@@ -74,7 +83,7 @@ async function listener(
   options: { logger?: boolean } = {}
 ): Promise<FastifyInstance> {
   app = Fastify({ logger: options.logger ?? false });
-  await app.register(adminOperationsPlugin, { registry: REGISTRY });
+  await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
   await app.register(async (scope) => routes(scope));
   return app;
 }
@@ -197,18 +206,18 @@ describe('the boot check (#508)', () => {
   it('refuses to load on an instance that already has a route, in any scope', async () => {
     app = Fastify({ logger: false });
     app.get('/admin/v1-rc.0/early', async () => ({}));
-    await expect(app.register(adminOperationsPlugin, { registry: REGISTRY })).rejects.toThrow(
-      /must be registered before any route of the admin listener/
-    );
+    await expect(
+      app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW })
+    ).rejects.toThrow(/must be registered before any route of the admin listener/);
     await app.close();
 
     app = Fastify({ logger: false });
     await app.register(async (scope) => {
       scope.get('/admin/v1-rc.0/early', async () => ({}));
     });
-    await expect(app.register(adminOperationsPlugin, { registry: REGISTRY })).rejects.toThrow(
-      /must be registered before any route of the admin listener/
-    );
+    await expect(
+      app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW })
+    ).rejects.toThrow(/must be registered before any route of the admin listener/);
   });
 
   it('names the problem without Fastify', () => {
@@ -264,6 +273,8 @@ describe('the classification per request (#508)', () => {
         effects: [],
         permissions: ['realms.read'],
         failedClosed: null,
+        stateVersion: null,
+        bodyDigest: null,
       },
     ]);
   });
@@ -282,11 +293,13 @@ describe('the classification per request (#508)', () => {
     await instance.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { lifespan: 600 },
     });
     await instance.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { password: 1 },
     });
     expect(seen.map(({ class: c, permissions }) => [c, permissions])).toEqual([
@@ -301,7 +314,7 @@ describe('the classification per request (#508)', () => {
     app = Fastify({
       logger: { level: 'warn', stream: { write: (line: string) => void lines.push(line) } },
     });
-    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
     app.patch(
       '/admin/v1-rc.0/widgets/policies',
       { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
@@ -313,6 +326,7 @@ describe('the classification per request (#508)', () => {
     await app.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { broken: 'secret-value' },
     });
     expect(seen).toEqual([
@@ -322,6 +336,8 @@ describe('the classification per request (#508)', () => {
         effects: ['credential-path'],
         permissions: ['realms.policies.write', 'realms.policies.security'],
         failedClosed: 'threw',
+        stateVersion: 'v2',
+        bodyDigest: null,
       },
     ]);
     const warning = lines.map((line) => JSON.parse(line)).find((line) => line.level === 40);
@@ -342,10 +358,12 @@ describe('the classification per request (#508)', () => {
       effects: [],
       permissions: ['realms.read'],
       failedClosed: null,
+      stateVersion: null,
+      bodyDigest: null,
     });
 
     app = Fastify({ logger: false });
-    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
     app.addHook('onResponse', async (request) => {
       afterHandler = request.adminOperation;
     });
@@ -398,6 +416,7 @@ describe('the classification per request (#508)', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { password: 1 },
     });
 
@@ -407,6 +426,8 @@ describe('the classification per request (#508)', () => {
       effects: ['credential-path'],
       permissions: ['realms.policies.security'],
       failedClosed: null,
+      stateVersion: 'v2',
+      bodyDigest: null,
     };
     expect(response.json()).toEqual({ class: 'security' });
     expect(afterHandler).toEqual(expected);
@@ -429,6 +450,7 @@ describe('the classification per request (#508)', () => {
     const next = await app.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { lifespan: 1 },
     });
     expect(next.json()).toEqual({ class: 'write' });
@@ -445,7 +467,7 @@ describe('the classification per request (#508)', () => {
         configurable: false,
       });
     });
-    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
     app.get(
       '/admin/v1-rc.0/widgets/:id',
       { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
@@ -459,7 +481,7 @@ describe('the classification per request (#508)', () => {
   it('runs nothing for a route a later onRoute hook changed after the boot check', async () => {
     const handler = vi.fn(async () => ({}));
     app = Fastify({ logger: false });
-    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
     // Runs after the stage's own onRoute hook, so the boot check saw the
     // route as declared.
     app.addHook('onRoute', (route) => {
@@ -491,7 +513,7 @@ describe('the classification per request (#508)', () => {
     const seen: unknown[] = [];
     const attempts: Record<string, string> = {};
     app = Fastify({ logger: false });
-    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
     app.patch(
       '/admin/v1-rc.0/widgets/policies',
       { config: { operation: 'widgets.policies.update' }, schema: schemaOf(PATCH_OPERATION) },
@@ -523,6 +545,7 @@ describe('the classification per request (#508)', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies?dryRun=true',
+      headers: IF_MATCH,
       payload: { lifespan: 600 },
     });
     expect(response.statusCode).toBe(200);
@@ -538,7 +561,7 @@ describe('the classification per request (#508)', () => {
   it('runs nothing when a later stage changes the classified body', async () => {
     const handler = vi.fn(async () => ({}));
     app = Fastify({ logger: false });
-    await app.register(adminOperationsPlugin, { registry: REGISTRY });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
     app.addHook('preHandler', async (request) => {
       (request.body as Record<string, unknown>).password = 1;
     });
@@ -550,6 +573,7 @@ describe('the classification per request (#508)', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { lifespan: 600 },
     });
     expect(response.statusCode).toBe(500);
@@ -567,6 +591,7 @@ describe('the classification per request (#508)', () => {
     app = Fastify({ logger: false });
     await app.register(adminOperationsPlugin, {
       registry: createOperationRegistry([failing] as AdminOperation[], { reserved: [] }),
+      authorize: ALLOW,
     });
     app.patch(
       '/admin/v1-rc.0/widgets/policies',
@@ -576,6 +601,7 @@ describe('the classification per request (#508)', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
       payload: { lifespan: 1 },
     });
     expect(response.statusCode).toBe(500);
@@ -592,5 +618,132 @@ describe('the classification per request (#508)', () => {
     expect(() =>
       requestClassification({ adminOperation: null } as unknown as FastifyRequest)
     ).toThrow(/no admin operation classification/);
+  });
+});
+
+describe('the state version, If-Match and the authorization stage (#508)', () => {
+  /** A listener with the PATCH route, whose handler records its classification. */
+  async function patchListener(
+    seen: OperationClassification[],
+    authorize: (request: FastifyRequest, classification: OperationClassification) => unknown = ALLOW
+  ) {
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize });
+    await app.register(async (scope) => {
+      scope.addContentTypeParser(
+        'application/octet-stream',
+        { parseAs: 'buffer' },
+        (_request, body, done) => done(null, body)
+      );
+      scope.patch(
+        '/admin/v1-rc.0/widgets/policies',
+        { config: { operation: PATCH_OPERATION.id }, schema: schemaOf(PATCH_OPERATION) },
+        async (request) => {
+          seen.push(requestClassification(request));
+          return { ok: true };
+        }
+      );
+    });
+    return app;
+  }
+
+  const patch = (instance: FastifyInstance, headers: Record<string, string> = IF_MATCH) =>
+    instance.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      headers,
+      payload: { lifespan: 1 },
+    });
+
+  it('refuses to load without an authorization stage', async () => {
+    app = Fastify({ logger: false });
+    await expect(
+      app.register(adminOperationsPlugin, { registry: REGISTRY } as unknown as Parameters<
+        typeof adminOperationsPlugin
+      >[1])
+    ).rejects.toThrow(/needs authorize\(request, classification\)/);
+  });
+
+  it('puts the version of the state it classified against on the classification', async () => {
+    const seen: OperationClassification[] = [];
+    const instance = await patchListener(seen);
+    expect((await patch(instance)).statusCode).toBe(200);
+    expect((await patch(instance, { 'if-match': '"v1", "v2"' })).statusCode).toBe(200);
+    expect((await patch(instance, { 'if-match': '*' })).statusCode).toBe(200);
+    expect(seen.map((classification) => classification.stateVersion)).toEqual(['v2', 'v2', 'v2']);
+  });
+
+  it('answers 428 before reading the state when the request has no If-Match', async () => {
+    const seen: OperationClassification[] = [];
+    const loadState = vi.fn(async () => ({ minScore: 2 }));
+    const authorize = vi.fn();
+    const operation = defineOperation({ ...PATCH_OPERATION, loadState });
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, {
+      registry: createOperationRegistry([operation] as AdminOperation[], { reserved: [] }),
+      authorize,
+    });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      { config: { operation: operation.id }, schema: schemaOf(operation as AdminOperation) },
+      async (request) => {
+        seen.push(requestClassification(request));
+        return { ok: true };
+      }
+    );
+    expect((await patch(app, {})).statusCode).toBe(428);
+    expect(loadState).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+    // An operation that reads no state needs none: the GET tests above send none.
+  });
+
+  it('answers 412 before the handler when If-Match names another version', async () => {
+    const seen: OperationClassification[] = [];
+    const authorize = vi.fn();
+    const instance = await patchListener(seen, authorize);
+    for (const ifMatch of ['"v1"', 'W/"v2"', 'v2']) {
+      expect((await patch(instance, { 'if-match': ifMatch })).statusCode, ifMatch).toBe(412);
+    }
+    expect(seen).toEqual([]);
+    expect(authorize).not.toHaveBeenCalled();
+  });
+
+  it('authorizes every classified request before the handler, and a refusal runs nothing', async () => {
+    const seen: OperationClassification[] = [];
+    const authorize = vi.fn((_request: FastifyRequest, classification: OperationClassification) => {
+      if (classification.class === 'security') {
+        throw Object.assign(new Error('forbidden'), { statusCode: 403 });
+      }
+    });
+    const instance = await patchListener(seen, authorize);
+    expect((await patch(instance)).statusCode).toBe(200);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(authorize.mock.calls[0][1]).toBe(seen[0]);
+
+    const response = await instance.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      headers: IF_MATCH,
+      payload: { password: 'x' },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('carries the digest of a binary body, which cannot be frozen', async () => {
+    const seen: OperationClassification[] = [];
+    const instance = await patchListener(seen);
+    const bytes = Buffer.from('a realm file');
+    const response = await instance.inject({
+      method: 'PATCH',
+      url: '/admin/v1-rc.0/widgets/policies',
+      headers: { 'content-type': 'application/octet-stream', ...IF_MATCH },
+      payload: bytes,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(seen[0].bodyDigest).toBe(createHash('sha256').update(bytes).digest('base64url'));
+    expect((await patch(instance)).statusCode).toBe(200);
+    expect(seen[1].bodyDigest).toBeNull();
   });
 });

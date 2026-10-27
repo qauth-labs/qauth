@@ -183,13 +183,13 @@ The absence of a "view again" button is a UI convenience, not the guarantee. "Ne
 is enforced two levels below it, and neither is client-side:
 
 - **At the type level**, the portal's own client for `/api/clients` distinguishes the two shapes.
-  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:71`) — what every list
+  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:63`) — what every list
   and get call returns — has no `clientSecret` field at all; the comment above it says why:
   "deliberately absent here — it only exists on {@link ClientWithSecret}"
-  (`apps/developer-portal/src/server/auth-server-client.ts:62`). `ClientWithSecret`
-  (`apps/developer-portal/src/server/auth-server-client.ts:141`) is a distinct type, returned
+  (`apps/developer-portal/src/server/auth-server-client.ts:54`). `ClientWithSecret`
+  (`apps/developer-portal/src/server/auth-server-client.ts:133`) is a distinct type, returned
   **only** by the create and regenerate calls
-  (`apps/developer-portal/src/server/auth-server-client.ts:137`). There is no portal API call
+  (`apps/developer-portal/src/server/auth-server-client.ts:129`). There is no portal API call
   that can ask for a client and get a secret back outside those two responses — the type the
   other calls return cannot carry one.
 - **On the auth-server**, where the actual guarantee is enforced: `POST /api/clients` generates
@@ -277,7 +277,7 @@ none: a Bearer token has to be put on the request by code that already holds it.
 > it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:153`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`
-> (`apps/auth-server/src/app/app.ts:283-284`). The shipped topology is cross-origin to begin with —
+> (`apps/auth-server/src/app/app.ts:290-290`). The shipped topology is cross-origin to begin with —
 > [Docker](/operate/docker/#developer-portal) runs `auth-server` and `developer-portal` as separate
 > Compose services on different ports. A fourth blocker was waiting behind those: the page never
 > read the CSRF token out of the list response, so its `DELETE` would have been refused even had

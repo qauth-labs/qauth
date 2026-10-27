@@ -23,7 +23,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
  * that path (the fix-one-site-at-a-time trap #316 was itself about).
  */
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -42,16 +42,10 @@ vi.mock('../../../config/env', () => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
 }));
 
-vi.mock('../../helpers/ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
-    '../../helpers/ssrf-safe-fetch'
-  );
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
 vi.mock('../../helpers/user-events', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../helpers/user-events')>();

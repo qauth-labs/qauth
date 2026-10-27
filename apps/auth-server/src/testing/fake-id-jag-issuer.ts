@@ -4,14 +4,14 @@ import { generateSigningKeyPair } from '@qauth-labs/core-crypto';
 import { type CryptoKey, exportJWK, type JWK } from 'jose';
 import { type Mock, vi } from 'vitest';
 
-import type { SsrfSafeFetchResult } from '../app/helpers/ssrf-safe-fetch';
+import type { EgressGetResult } from '../app/helpers/egress-get';
 
 /**
  * TEST SUPPORT — a fake enterprise IdP for the ID-JAG key resolver (#433), and
  * an in-memory Redis whose `EX` expiry runs on a clock the test moves.
  *
  * The issuer answers what the resolver fetches through the SSRF-guarded
- * fetcher: wire it with `ssrfSafeGet.mockImplementation(idp.fetch)`. It counts
+ * fetcher: wire it with `egressGet.mockImplementation((_fastify, url) => idp.fetch(url))`. It counts
  * every fetch of each document, rotates its signing key, goes down and hangs
  * on demand, so a test can state "N requests cost one refresh" or "an outage costs
  * one attempt per window" in fetches the issuer actually saw.
@@ -32,8 +32,8 @@ export interface FakeIdJagIssuer {
   /** Discovery and JWKS fetches together. */
   totalFetches(): number;
   resetFetches(): void;
-  /** Answer one fetch as `ssrfSafeGet` would: a 200, or a transport error while down. */
-  fetch(url: string): Promise<SsrfSafeFetchResult>;
+  /** Answer one fetch as `egressGet` would: a 200, or a transport error while down. */
+  fetch(url: string): Promise<EgressGetResult>;
   /** Publish a new key under a new `kid` and withdraw the old one. */
   rotate(): Promise<void>;
   /** Fail fetches of the named documents (both by default) until {@link comeBack}. */
@@ -70,7 +70,7 @@ export async function createFakeIdJagIssuer(
   }
   await newKey();
 
-  function respond(document: FakeIdJagIssuerOutage, body: unknown): SsrfSafeFetchResult {
+  function respond(document: FakeIdJagIssuerOutage, body: unknown): EgressGetResult {
     if (down.has(document)) {
       throw new Error(`connect ECONNREFUSED (fake issuer ${document} is down)`);
     }

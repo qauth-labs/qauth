@@ -18,6 +18,7 @@ vi.mock('./oauth-client', () => ({
 
 import { assertManagementToken, createRequireManagementJwt } from './management-token';
 import { getOrCreateSystemClient } from './oauth-client';
+import { inactiveSubjectError } from './token-subject';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 /** The realm of the request (`request.realm`), and the user's. */
@@ -29,6 +30,29 @@ const fastify = { repositories: { users } } as unknown as FastifyInstance;
 /** The claims `/auth/login` puts on the developer-portal token. */
 function portalClaims(overrides: Record<string, unknown> = {}) {
   return { sub: USER_ID, clientId: 'system', aud: 'system', ...overrides };
+}
+
+/**
+ * Make {@link USER_ID} a user of the other realm: the realm-scoped lookup
+ * (#489) finds it there only, and no user at the request realm.
+ */
+function userOfOtherRealmOnly(enabled = true) {
+  users.findById.mockImplementation(async (realmId: string, id: string) =>
+    realmId === OTHER_REALM_ID && id === USER_ID
+      ? { id: USER_ID, enabled, realmId: OTHER_REALM_ID }
+      : undefined
+  );
+}
+
+/** The refusal as the client sees it, to compare two refusals by. */
+async function refusal(promise: Promise<unknown>) {
+  const error = await promise.then(
+    () => undefined,
+    (e: unknown) => e
+  );
+  expect(error).toBeInstanceOf(JWTInvalidError);
+  const { name, message, statusCode, code } = error as JWTInvalidError;
+  return { name, message, statusCode, code };
 }
 
 beforeEach(() => {
@@ -81,7 +105,8 @@ describe('assertManagementToken', () => {
     await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toThrow(
       JWTInvalidError
     );
-    expect(users.findById).toHaveBeenCalledWith(USER_ID);
+    // Looked up in the request's realm (#489).
+    expect(users.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
   });
 
   it('rejects a token whose user no longer exists', async () => {
@@ -108,6 +133,8 @@ describe('assertManagementToken', () => {
     await expect(
       assertManagementToken(fastify, REALM, portalClaims(), { requireActiveUser: false })
     ).resolves.toBeUndefined();
+    // No user lookup at all: the caller looks the subject up in its realm (#489).
+    expect(users.findById).not.toHaveBeenCalled();
   });
 
   it('leaves a subject that names no user to a caller that only ends access', async () => {
@@ -116,6 +143,7 @@ describe('assertManagementToken', () => {
     await expect(
       assertManagementToken(fastify, REALM, portalClaims(), { requireActiveUser: false })
     ).resolves.toBeUndefined();
+    expect(users.findById).not.toHaveBeenCalled();
   });
 
   describe('the realm of the request (#487)', () => {
@@ -125,20 +153,31 @@ describe('assertManagementToken', () => {
       expect(getOrCreateSystemClient).toHaveBeenCalledWith(REALM.id, fastify);
     });
 
-    it('rejects a token whose user belongs to another realm', async () => {
-      users.findById.mockResolvedValue({ id: USER_ID, enabled: true, realmId: OTHER_REALM_ID });
+    // #489: the subject is looked up in the request's realm only. Another
+    // realm's user is no user here, refused as an unknown subject is, so the
+    // answer does not tell that the subject exists in another realm.
+    it('rejects a token whose user belongs to another realm, as a token of an unknown user (#489)', async () => {
+      userOfOtherRealmOnly();
+      const otherRealmUser = await refusal(assertManagementToken(fastify, REALM, portalClaims()));
+      expect(users.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
 
-      await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toBeInstanceOf(
-        JWTInvalidError
-      );
+      users.findById.mockReset();
+      users.findById.mockResolvedValue(undefined);
+      const unknownUser = await refusal(assertManagementToken(fastify, REALM, portalClaims()));
+
+      expect(otherRealmUser).toEqual(unknownUser);
+      expect(otherRealmUser.message).toBe(inactiveSubjectError().message);
     });
 
-    it('rejects it for a caller that only ends access, too', async () => {
-      users.findById.mockResolvedValue({ id: USER_ID, enabled: false, realmId: OTHER_REALM_ID });
+    it("leaves another realm's user to a caller that only ends access, which looks it up in its realm (#489)", async () => {
+      // Logout refuses a subject that names no user of its realm itself
+      // (logout.test.ts); this check reads no user for it.
+      userOfOtherRealmOnly(false);
 
       await expect(
         assertManagementToken(fastify, REALM, portalClaims(), { requireActiveUser: false })
-      ).rejects.toBeInstanceOf(JWTInvalidError);
+      ).resolves.toBeUndefined();
+      expect(users.findById).not.toHaveBeenCalled();
     });
   });
 
@@ -254,8 +293,8 @@ describe('createRequireManagementJwt', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('refuses a token of another realm’s user at the request realm', async () => {
-    users.findById.mockResolvedValue({ id: USER_ID, enabled: true, realmId: OTHER_REALM_ID });
+  it('refuses a token of another realm’s user at the request realm, as an unknown user (#489)', async () => {
+    userOfOtherRealmOnly();
     const requireJwt = vi.fn(async (request: FastifyRequest) => {
       request.jwtPayload = portalClaims() as never;
     });
@@ -264,8 +303,11 @@ describe('createRequireManagementJwt', () => {
       repositories: { users },
     } as unknown as FastifyInstance);
 
-    await expect(
-      guard({ headers: {}, realm: REALM } as unknown as FastifyRequest, {} as FastifyReply)
-    ).rejects.toThrow(JWTInvalidError);
+    expect(
+      await refusal(
+        guard({ headers: {}, realm: REALM } as unknown as FastifyRequest, {} as FastifyReply)
+      )
+    ).toEqual(await refusal(Promise.reject(inactiveSubjectError())));
+    expect(users.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
   });
 });

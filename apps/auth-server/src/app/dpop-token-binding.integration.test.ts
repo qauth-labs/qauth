@@ -167,7 +167,7 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
       enabled: true,
       requirePkce: true,
     });
-    await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm, SCOPES);
+    await app.repositories.oauthConsents.upsertGrant(realm, userId, client.id, SCOPES);
   }
 
   /** A confidential resource server allowed to introspect the public client's tokens. */
@@ -488,7 +488,7 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
         // proof is the subject token's own binding.
         enabled: true,
       });
-      await app.repositories.oauthConsents.upsertGrant(userId, agent.id, realm, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(realm, userId, agent.id, SCOPES);
       await app.repositories.oauthClients.create({
         realmId: realm,
         clientId: MACHINE_CLIENT_ID,

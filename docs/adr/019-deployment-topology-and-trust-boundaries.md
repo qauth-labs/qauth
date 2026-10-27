@@ -98,6 +98,18 @@
 >   registration allowlist cannot hold a scope in it, and discovery never lists one. Dynamic
 >   registration drops such a scope like any other scope outside the allowlist, and registers the
 >   client with the rest; it does not refuse the request.
+>
+> **Amended 2026-10-27** with the maintainer's decision of that day on the key custody adapters
+> (#481, #578). Decision 8 sends every outbound call that configuration causes through the egress
+> client, but a KEK custody adapter's key service serves the whole deployment, while the egress
+> allowlist opens destinations per realm and a KEK has no realm.
+>
+> - Decision 8: the calls a KEK custody adapter (`libs/keys/*`, loaded by `KEK_PROVIDER`) makes to
+>   its key service are outside the egress client. Their destination is deployment-wide operator
+>   configuration, never caused by a request, a realm admin, a client, an end user or a fetched
+>   document. The adapter carries its own transport limits: TLS only, with an operator-set CA file
+>   where the service needs one, no redirect followed, and capped time and size of each response.
+>   An adapter package stays free of server dependencies.
 
 ## Context
 
@@ -733,10 +745,14 @@ How revocation reaches resource servers:
 SSRF-safe egress client. That covers webhooks, SSF push, back-channel logout, upstream discovery,
 JWKS, token and userinfo calls, federation statements, CIMD and client `jwks_uri` fetches,
 bot-challenge verification, breach-list lookups and logo fetches. Plugins use the same client
-(Decision 12). One call is outside it: the operator's OpenTelemetry export (OTLP). Its destination
-comes only from deployment configuration, never from a realm admin, a client or an end user. The
-collector it reaches usually sits on a private network, which the client refuses. It follows no
-redirect, and caps the time and the size of each response (amendment of 2026-10-24). The client:
+(Decision 12). Two calls are outside it. The first is the operator's OpenTelemetry export (OTLP).
+Its destination comes only from deployment configuration, never from a realm admin, a client or an
+end user. The collector it reaches usually sits on a private network, which the client refuses. It
+follows no redirect, and caps the time and the size of each response (amendment of 2026-10-24). The
+second is a KEK custody adapter's calls to its key service (`libs/keys/*`, loaded by
+`KEK_PROVIDER`). That destination is deployment-wide operator configuration and has no realm for
+the allowlist to name; the adapter uses TLS only, follows no redirect and caps the time and the size
+of each response (amendment of 2026-10-27). The client:
 
 - serves every HTTP method, not only `GET`;
 - uses `https` only, with no credentials in the URL;

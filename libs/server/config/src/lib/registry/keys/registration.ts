@@ -111,16 +111,6 @@ export const REGISTRATION_KEYS = defineKeys([
     docs: 'The deadline, in milliseconds, for one whole metadata document fetch.',
   },
   {
-    name: 'CIMD_ALLOW_PRIVATE_ADDRESSES',
-    tier: 'advanced',
-    role: 'deployment',
-    owner: 'client-registration',
-    default: 'false',
-    since: '0.1.0',
-    developmentOnly: true,
-    docs: 'Let metadata document and client `jwks_uri` fetches reach loopback, private and link-local addresses, for a test server on localhost; refused when `NODE_ENV=production`.',
-  },
-  {
     name: 'ID_JAG_ENABLED',
     tier: 'stable',
     role: 'deployment',
@@ -182,16 +172,6 @@ export const REGISTRATION_KEYS = defineKeys([
     default: '65536',
     since: '0.1.0',
     docs: 'The largest discovery document or JWKS, in bytes, the server accepts.',
-  },
-  {
-    name: 'ID_JAG_ALLOW_PRIVATE_ADDRESSES',
-    tier: 'advanced',
-    role: 'deployment',
-    owner: 'id-jag',
-    default: 'false',
-    since: '0.1.0',
-    developmentOnly: true,
-    docs: 'Let issuer discovery and JWKS fetches reach loopback, private and link-local addresses, for a test server on localhost; refused when `NODE_ENV=production`.',
   },
   {
     name: 'ID_JAG_CLOCK_SKEW_LEEWAY',

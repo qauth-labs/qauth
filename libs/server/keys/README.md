@@ -22,7 +22,8 @@ ADR-019 provisions the KEK to the signer role alone, so a rule in `.oxlintrc.jso
 `nx lint` for an import of `@qauth-labs/server-keys/custody`, or of a deep path into the package,
 from any other project. Every other component signs, encrypts and reads keys through `Signer`. The
 KEK adapter packages are on that rule's list too, since they implement `KekProvider` and run in the
-signer's process: [`@qauth-labs/keys-aws-kms`](../../keys/aws-kms/README.md) (#577) is the first.
+signer's process: [`@qauth-labs/keys-aws-kms`](../../keys/aws-kms/README.md) (#577) and
+[`@qauth-labs/keys-vault`](../../keys/vault/README.md) (#578).
 
 ## Overview
 
@@ -37,8 +38,10 @@ keys; the material stays as it is.
 - **`encodeKeyAad`**: the associated data both GCM operations authenticate. It binds `realmId`,
   `purpose`, `scopeId`, `kid`, `algorithm` and the format version, so a row copied to another
   realm, purpose or key fails to open. The format is fixed, and a test vector pins it.
-- **`KekProvider`**: `wrap(dek, aad)`, `unwrap(wrapped, aad, kekRef)` and `health()`. Providers
-  wrap data keys only. Signing stays in the signer, because KMS support for EdDSA and ML-DSA varies.
+- **`KekProvider`**: `wrap(dek, aad)`, `unwrap(wrapped, aad, kekRef)` and `health()`, and an
+  optional `close()` that releases a backend session, which the signer calls when the server
+  closes. Providers wrap data keys only. Signing stays in the signer, because KMS support for EdDSA
+  and ML-DSA varies.
 - **`loadKekProvider`**: creates the provider `KEK_PROVIDER` selects.
 - **`runKekProviderContract`**: the tests every provider passes.
 - **`KEY_PURPOSES`**: the fixed list of key purposes and their rules. See
@@ -113,7 +116,8 @@ An adapter is an optional package named `@qauth-labs/keys-<name>`, selected with
 `createKekProvider(context): KekProvider`, reads its own settings from `context.env`, and reports
 configuration warnings through `context.warn`. It lives under `libs/keys/<name>`, is tagged
 `type:kek-adapter` (no project may depend on it) and is added to the key custody guard's
-`excludeFiles` in `.oxlintrc.json`. [`@qauth-labs/keys-aws-kms`](../../keys/aws-kms/README.md) is one.
+`excludeFiles` in `.oxlintrc.json`. [`@qauth-labs/keys-aws-kms`](../../keys/aws-kms/README.md) and
+[`@qauth-labs/keys-vault`](../../keys/vault/README.md) are two.
 
 - Bind the associated data. A byte-oriented backend can authenticate `encodeKeyAad(aad)`.
 - Return a fresh buffer from every `unwrap`. The caller zeroes it, so never hand out a cached data

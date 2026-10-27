@@ -1,3 +1,4 @@
+import { PreconditionFailedError, PreconditionRequiredError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, RouteOptions } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -5,10 +6,12 @@ import {
   type AdminOperation,
   classifyRequest,
   deepFreeze,
+  ifMatchAllows,
   OPERATION_REGISTRY,
   type OperationClassification,
   type OperationRegistry,
   operationSchemaExtensions,
+  operationStateVersion,
 } from '../helpers/admin-operations';
 
 declare module 'fastify' {
@@ -24,11 +27,12 @@ declare module 'fastify' {
   interface FastifyRequest {
     /**
      * What this request needs, as the admin pipeline classified it (#508):
-     * frozen, and neither writable nor configurable once set. `null` on an
+     * frozen, and neither writable nor configurable once set. Absent on an
      * instance without {@link adminOperationsPlugin}, and before its stage.
-     * Read it with {@link requestClassification}.
+     * Read it with {@link requestClassification}, which throws rather than
+     * give a request without one any default.
      */
-    adminOperation?: OperationClassification | null;
+    readonly adminOperation?: OperationClassification;
   }
 }
 
@@ -36,6 +40,14 @@ declare module 'fastify' {
 export interface AdminOperationsPluginOptions extends FastifyPluginOptions {
   /** The registry routes name their operations in. Defaults to the server's own. */
   registry?: OperationRegistry;
+  /**
+   * The authorization stage: refuses, by throwing, a caller that does not
+   * hold every permission of `classification` (and its scopes). Required: the
+   * stage refuses to load without it, and calls it on every request right
+   * after classifying, before any later stage or the handler, so no route of
+   * the admin listener runs on a classification nothing checked.
+   */
+  authorize: (request: FastifyRequest, classification: OperationClassification) => unknown;
 }
 
 export const ADMIN_OPERATIONS_PLUGIN_NAME = '@qauth-labs/admin-operations';
@@ -102,7 +114,7 @@ export function adminRouteProblem(
  */
 export function requestClassification(request: FastifyRequest): OperationClassification {
   const classification = request.adminOperation;
-  if (classification === null || classification === undefined) {
+  if (classification === undefined || (classification as unknown) === null) {
     throw new Error('The request has no admin operation classification');
   }
   return classification;
@@ -123,29 +135,40 @@ export function requestClassification(request: FastifyRequest): OperationClassif
  * - ON EVERY REQUEST, a `preHandler` hook, after validation and before the
  *   handler, checks the route again as it was finally built (once per route;
  *   a later `onRoute` hook may have changed it), reads the operation's
- *   current state (`loadState`) and classifies the request
- *   (`classifyRequest`, which fails closed). It sets the result as
+ *   current state (`loadState`) and its version (`stateVersion`), answers
+ *   428 when such a request has no `If-Match` and 412 when it names another
+ *   version, and classifies
+ *   the request (`classifyRequest`, which fails closed). The classification
+ *   carries the state version, which the handler's write must be conditional
+ *   on, and the digest of a binary body, which cannot be frozen. It sets the
+ *   result as
  *   `request.adminOperation`, a frozen value on a property that is neither
  *   writable nor configurable, so the handler and every later stage (the
  *   approval gate, the audit row) read one classification and none can lower
  *   it. It then freezes the path parameters, query and body it classified and
  *   makes those properties permanent too, so what runs is what was
- *   classified: a later stage that changes them fails the request. A request
- *   whose route fails the check, whose state cannot be read, or whose
- *   property an earlier stage already took fails and runs nothing. A
- *   classification that failed closed is logged at `warn`, with the operation
- *   and the reason only.
+ *   classified: a later stage that changes them fails the request. Then it
+ *   calls `authorize(request, classification)`; a rejection fails the
+ *   request. A request whose route fails the check, whose state or state
+ *   version cannot be read, or whose property an earlier stage already took
+ *   fails and runs nothing. A classification that failed closed is logged at
+ *   `warn`, with the operation and the reason only.
  *
  * Scope-level hooks run in registration order, so the listener registers
  * the earlier stages (the token guard, the realm lookup, the caller's
  * authority) as hooks before this plugin's and the approval gate after them.
- * The permission check reads `requestClassification(request).permissions`.
  * A request that matches no route is not classified, so a custom not-found
  * handler on the listener must not act.
  */
 export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
   async (fastify: FastifyInstance, options: AdminOperationsPluginOptions) => {
     const registry = options.registry ?? OPERATION_REGISTRY;
+    const authorize: unknown = options.authorize;
+    if (typeof authorize !== 'function') {
+      throw new Error(
+        'The admin operations stage needs authorize(request, classification): no route of the admin listener runs on a classification nothing checked'
+      );
+    }
 
     if (fastify.printRoutes() !== NO_ROUTES) {
       throw new Error(
@@ -153,7 +176,7 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
       );
     }
 
-    fastify.decorateRequest('adminOperation', null);
+    fastify.decorateRequest('adminOperation', undefined);
 
     fastify.addHook('onRoute', (route) => {
       const problem = adminRouteProblem(route, registry);
@@ -188,8 +211,22 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
         throw new Error(problem ?? `${request.method} ${route.url ?? ''} has no admin operation`);
       }
 
-      const currentState =
-        operation.loadState === undefined ? undefined : await operation.loadState(request);
+      let currentState: unknown;
+      let stateVersion: string | null = null;
+      if (operation.loadState !== undefined) {
+        // What the request needs depends on the state it meets: it names the
+        // version it was written against, or it does not run.
+        if (request.headers['if-match'] === undefined) {
+          throw new PreconditionRequiredError({ operation: operation.id });
+        }
+        currentState = await operation.loadState(request);
+        stateVersion = operationStateVersion(operation, currentState);
+        // The request was written against another version: what it would
+        // change, and so its classification, may differ from this state's.
+        if (!ifMatchAllows(request.headers['if-match'], stateVersion)) {
+          throw new PreconditionFailedError({ operation: operation.id });
+        }
+      }
       const classification = classifyRequest(
         registry,
         operation,
@@ -199,7 +236,8 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
           query: request.query,
           body: request.body,
         },
-        currentState
+        currentState,
+        stateVersion
       );
       if (classification.failedClosed !== null) {
         request.log.warn(
@@ -224,6 +262,8 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
           configurable: false,
         });
       }
+
+      await (authorize as AdminOperationsPluginOptions['authorize'])(request, classification);
     });
   },
   { name: ADMIN_OPERATIONS_PLUGIN_NAME }

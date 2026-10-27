@@ -9,10 +9,24 @@ export const PURGE_EXPIRED_JOB_NAME = 'purge-expired';
 export const PURGE_EXPIRED_INTERVAL_MS = 60 * 60_000;
 
 /** The repositories whose expired rows the job deletes. */
+export const PURGE_EXPIRED_REPOSITORIES = [
+  'authorizationCodes',
+  'refreshTokens',
+  'emailVerificationTokens',
+  'oid4vpRequestStates',
+] as const;
+
+/** The repositories whose expired rows the job deletes. */
 export type PurgeExpiredRepositories = Pick<
   FastifyInstance['repositories'],
-  'authorizationCodes' | 'refreshTokens' | 'emailVerificationTokens' | 'oid4vpRequestStates'
+  (typeof PURGE_EXPIRED_REPOSITORIES)[number]
 >;
+
+/**
+ * The role whose nodes run the job: `api`, where codes and refresh tokens are
+ * redeemed.
+ */
+export const PURGE_EXPIRED_ROLE = 'api';
 
 /**
  * Delete the rows whose lifetime has ended from the four tables nothing else
@@ -42,7 +56,7 @@ export function createPurgeExpiredJob(repositories: PurgeExpiredRepositories): J
 
   return defineJob({
     name: PURGE_EXPIRED_JOB_NAME,
-    role: 'api',
+    role: PURGE_EXPIRED_ROLE,
     intervalMs: PURGE_EXPIRED_INTERVAL_MS,
     async run({ signal, log }) {
       const deleted: Record<string, number> = {};

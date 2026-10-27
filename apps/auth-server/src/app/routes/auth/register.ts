@@ -17,7 +17,8 @@ import { MIN_RESPONSE_TIME_MS, REDIS_KEYS, SUCCESS_MESSAGES } from '../../consta
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
-import { requestRealm } from '../../helpers/request-realm';
+import { realmMailLink } from '../../helpers/realm-url';
+import { type RealmRow, requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
 import { type RegisterRequest, registerResponseSchema, registerSchema } from '../../schemas/auth';
@@ -50,10 +51,17 @@ class AddressAlreadyRegistered extends Error {
  * registration would answer 429 for a registered address and 200 for a free
  * one.
  *
+ * Counted per realm (#489): the same address in another realm is another
+ * account, with its own allowance.
+ *
  * @returns whether a mail may go to the address now
  */
-async function claimAddressMailSlot(fastify: FastifyInstance, address: string): Promise<boolean> {
-  const countKey = REDIS_KEYS.RESEND_RATE_LIMIT(address);
+async function claimAddressMailSlot(
+  fastify: FastifyInstance,
+  realmId: string,
+  address: string
+): Promise<boolean> {
+  const countKey = REDIS_KEYS.RESEND_RATE_LIMIT(realmId, address);
   const count = await fastify.redis.incr(countKey);
   if (count === 1) {
     await fastify.redis.expire(countKey, env.RESEND_VERIFICATION_EMAIL_WINDOW);
@@ -62,7 +70,7 @@ async function claimAddressMailSlot(fastify: FastifyInstance, address: string): 
     return false;
   }
   const claimed = await fastify.redis.set(
-    REDIS_KEYS.LAST_EMAIL_SENT(address),
+    REDIS_KEYS.LAST_EMAIL_SENT(realmId, address),
     Date.now().toString(),
     'EX',
     env.RESEND_VERIFICATION_MIN_INTERVAL,
@@ -92,10 +100,10 @@ async function claimAddressMailSlot(fastify: FastifyInstance, address: string): 
  */
 async function mailExistingAccount(
   fastify: FastifyInstance,
-  params: { realmId: string; address: string; token: string; tokenHash: string; expiresAt: number }
+  params: { realm: RealmRow; address: string; token: string; tokenHash: string; expiresAt: number }
 ): Promise<void> {
   const credential = await fastify.repositories.userCredentials.findByRealmProviderSub(
-    params.realmId,
+    params.realm.id,
     PASSWORD_PROVIDER_TYPE,
     params.address
   );
@@ -110,7 +118,7 @@ async function mailExistingAccount(
     );
     return;
   }
-  const user = await fastify.repositories.users.findById(credential.userId);
+  const user = await fastify.repositories.users.findById(params.realm.id, credential.userId);
   if (!user?.enabled) {
     return;
   }
@@ -129,7 +137,11 @@ async function mailExistingAccount(
     expiresAt: params.expiresAt,
     used: false,
   });
-  await fastify.emailService.sendVerificationEmail(credential.externalSub, params.token);
+  await fastify.emailService.sendVerificationEmail(
+    credential.externalSub,
+    params.token,
+    realmMailLink(params.realm)
+  );
 }
 
 /**
@@ -235,7 +247,7 @@ export default async function (fastify: FastifyInstance) {
       // Calculate expiration time
       const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;
 
-      const mayMailExistingAccount = await claimAddressMailSlot(fastify, normalizedEmail);
+      const mayMailExistingAccount = await claimAddressMailSlot(fastify, realm.id, normalizedEmail);
 
       // One transaction for the whole identity write set (#228, ADR-002): a
       // users row without its credential row would be unloginable AND block
@@ -323,7 +335,12 @@ export default async function (fastify: FastifyInstance) {
         // A new account always gets its verification mail: an address can be
         // registered only once, so this cannot be repeated to flood an inbox.
         background.run(
-          () => fastify.emailService.sendVerificationEmail(normalizedEmail, token),
+          () =>
+            fastify.emailService.sendVerificationEmail(
+              normalizedEmail,
+              token,
+              realmMailLink(realm)
+            ),
           'Failed to send verification email during registration'
         );
         // Structured log of the successful registration (#124). Email is
@@ -337,7 +354,7 @@ export default async function (fastify: FastifyInstance) {
           background.run(
             () =>
               mailExistingAccount(fastify, {
-                realmId: realm.id,
+                realm,
                 address: identity.externalSub,
                 token,
                 tokenHash,

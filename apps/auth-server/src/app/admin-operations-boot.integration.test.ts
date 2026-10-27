@@ -68,6 +68,7 @@ const PATCH_OPERATION = defineOperation<{ minScore: number }>({
   permissions: ['realms.policies.write', 'realms.policies.security'],
   description: "Change a realm's policies.",
   loadState: async () => ({ minScore: 2 }),
+  stateVersion: () => '1',
   classify: (request, current) => {
     const body = request.body as { minScore?: number };
     return body.minScore !== undefined && body.minScore < current.minScore
@@ -80,10 +81,12 @@ const PATCH_OPERATION = defineOperation<{ minScore: number }>({
   },
 });
 
-const FIXTURE_REGISTRY = createOperationRegistry([
-  GET_OPERATION,
-  PATCH_OPERATION,
-] as AdminOperation[]);
+// The fixture's classify knows only `minScore`, not the reserved table's
+// policy cases (`vectors`), so the fixture is checked without the table.
+const FIXTURE_REGISTRY = createOperationRegistry(
+  [GET_OPERATION, PATCH_OPERATION] as AdminOperation[],
+  { reserved: [] }
+);
 
 const realmParams = z.object({ realmId: z.uuid() });
 const REALM_ID = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
@@ -111,7 +114,12 @@ async function startAdminListener(
     app.getDefaultJsonParser('error', 'error')
   );
   await app.register(swagger, openapiOptions);
-  await app.register(adminOperationsPlugin, { registry });
+  await app.register(adminOperationsPlugin, {
+    registry,
+    // The listener's authorization stage (#511) checks the caller's
+    // permissions; this suite exercises the classification only.
+    authorize: () => undefined,
+  });
   await app.register(async (scope) => routes(scope));
   return app.listen({ host: '127.0.0.1', port: 0 });
 }

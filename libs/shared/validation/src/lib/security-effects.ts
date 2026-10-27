@@ -53,7 +53,8 @@ export const SECURITY_EFFECT_DESCRIPTIONS: Readonly<Record<SecurityEffect, strin
     'key-custody': 'Rotates a key, rotates the KEK or retires a key.',
     'realm-lifecycle': 'Deletes a realm or transfers its ownership.',
     'authority-tree-power': 'Revokes by agent or disables a transmitter.',
-    'posture-loosening': 'Loosens the environment posture.',
+    'posture-loosening':
+      'Loosens the environment posture, lengthens a token or session lifetime or the key rotation interval, or shortens or switches off audit-event retention.',
     'bulk-revocation': 'Revokes sessions or refresh-token families in bulk.',
   }
 );

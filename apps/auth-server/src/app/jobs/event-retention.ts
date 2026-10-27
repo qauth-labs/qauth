@@ -10,6 +10,12 @@ export const EVENT_RETENTION_JOB_NAME = 'event-retention';
 /** One hour. */
 export const EVENT_RETENTION_INTERVAL_MS = 60 * 60_000;
 
+/**
+ * The role whose nodes run the job: `delivery`, whose nodes have the delivery
+ * routes (see {@link createEventRetentionJob}).
+ */
+export const EVENT_RETENTION_ROLE = 'delivery';
+
 /** The rows one batch deletes at most: one short transaction each. */
 export const EVENT_RETENTION_BATCH_SIZE = 1000;
 
@@ -134,7 +140,7 @@ export function createEventRetentionJob(options: EventRetentionJobOptions): JobD
 
   return defineJob({
     name: EVENT_RETENTION_JOB_NAME,
-    role: 'delivery',
+    role: EVENT_RETENTION_ROLE,
     intervalMs: EVENT_RETENTION_INTERVAL_MS,
     async run({ signal, now, log }) {
       const served = await listServed(options.routes, options.unservedKinds ?? [], log);

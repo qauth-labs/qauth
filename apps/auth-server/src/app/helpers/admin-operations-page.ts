@@ -90,6 +90,22 @@ function reservedSection(registry: OperationRegistry): string {
   return sections.join('\n\n');
 }
 
+/** The security cases of the request-dependent entries: one list per entry. */
+function vectorSection(registry: OperationRegistry): string {
+  return registry.reserved
+    .filter((entry) => entry.requestDependent === true)
+    .map((entry) =>
+      [
+        `#### ${code(entry.id)}`,
+        '',
+        ...(entry.vectors ?? []).map(
+          (vector) => `- ${tableCell(vector.name)}: at least ${codeList(vector.effects)}.`
+        ),
+      ].join('\n')
+    )
+    .join('\n\n');
+}
+
 /** Effects with no reserved operation, named so the page never hides a gap. */
 function unreservedEffects(registry: OperationRegistry): SecurityEffect[] {
   return SECURITY_EFFECTS.filter(
@@ -142,11 +158,25 @@ operation of the OpenAPI document as \`x-qauth-effects\`
   declares the strictest case (class \`security\`, every effect it may have and every permission it
   may need) and a \`classify\` function. \`classify\` is pure: it reads copies of the request's
   method, path parameters, query and body, and the operation's current state, and returns the
-  class, the effects and the permissions that request needs, within the declaration.
+  class, the effects and the permissions that request needs, within the declaration. A merge
+  patch's changed fields come from \`mergePatchLeafPaths(body)\`, which walks the body's own keys
+  (an array is one field, a \`null\` member is a change), so a field \`classify\` has no rule for
+  fails closed.
+- By effect, a policy change that lengthens an access-token, refresh-token or session lifetime or
+  the key rotation interval, or shortens or switches off audit-event retention, is
+  \`posture-loosening\`, a security change. Shortening a lifetime or lengthening retention is a
+  write.
+- An operation that reads state to classify names the version of the state it read
+  (\`stateVersion\`). The classification carries it, a request without \`If-Match\` is answered
+  428 and one whose \`If-Match\` names another version 412, both before the handler, and the handler's write is conditional on that
+  version (or loads, classifies and writes in one transaction under \`SELECT … FOR UPDATE\`), so
+  it never writes state other than the state it classified.
 - The admin pipeline classifies every request after validation and before the handler. The
   handler receives the classification and cannot lower it, and every later stage reads the same
   one. The path parameters, query and body it classified are frozen: a stage that changes them
-  fails the request.
+  fails the request. A binary body cannot be frozen, so the classification carries its SHA-256
+  digest (\`bodyDigest\`), which approval and apply bind to. The listener's authorization stage
+  (\`authorize\`) is required and runs on every request right after the classification.
 - Fail closed: when \`classify\` throws, meets a field it has no rule for, or returns an unknown
   member, effect, class or permission, or more than the operation declares, the request needs the
   operation as declared: \`security\`, with every declared effect and permission.
@@ -181,6 +211,17 @@ every request. Each entry is listed under each of its effects. The table lives i
 
 ${reservedSection(registry)}
 ${gaps.length === 0 ? '' : `\nNo operation is reserved yet for ${codeList(gaps)}.\n`}
+### Security cases
+
+An operation marked "per request" must meet its entry's security cases: at boot, the registry
+runs its \`classify\` on each case and refuses the operation when a case gets less than the
+effects listed (it is then a \`security\` request), or fails closed because \`classify\` does
+not understand it. So a \`classify\` that answers \`write\` for every request cannot take the
+reservation. The change that registers the operation writes the cases in the representation it
+ships, and may add cases but never drop one or lower its effects.
+
+${vectorSection(registry)}
+
 ## Stability
 
 The effect tags and the operation ids will be part of the admin API's contract. Like every

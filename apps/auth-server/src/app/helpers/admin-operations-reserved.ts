@@ -16,10 +16,25 @@ import type { SecurityEffect } from '@qauth-labs/shared-validation';
  * pick per request. Every other reserved operation needs its declaration on
  * every request.
  *
+ * A request-dependent entry lists security cases (`vectors`): a request and
+ * the state it meets, with the effects the request needs at least. The
+ * registry runs the operation's `classify` on each at boot and refuses it
+ * when it gives a case less, or fails closed on it, so the entry cannot be
+ * taken by a `classify` that answers `write`. A merge-patch operation derives
+ * the fields a request changes with `mergePatchLeafPaths(body)`, which walks
+ * the body's own keys (an array is one field, a `null` member is a change),
+ * and classifies them with `classifyByField`, which fails an unknown field
+ * closed. By effect (ADR-019 Decision 7), lengthening an access-token,
+ * refresh-token or session lifetime or the key rotation interval, and
+ * shortening or switching off audit-event retention, are `posture-loosening`;
+ * shortening a lifetime or lengthening retention is a write.
+ *
  * An entry names what the operation does and where the requirement comes
  * from. The ids follow the API conventions (`<resource>.<verb>`). The issue
  * that adds an operation may rename its entry before 1.0.0, in the same pull
- * request and visibly; it may not weaken it. The docs page
+ * request and visibly; it may not weaken it. It writes its entry's vectors in
+ * the representation it ships (their field names are this table's guess), in
+ * the same way, and may add cases but not drop one or lower its effects. The docs page
  * `reference/security-operations.md` lists the table, grouped by effect.
  *
  * Not reserved, on purpose: sending a set-up or reset link to the contact
@@ -36,14 +51,51 @@ export interface ReservedOperation {
   readonly effects: readonly SecurityEffect[];
   /**
    * `true` when the request decides what the operation needs, so it may
-   * `classify` (a policy patch that only changes a token lifespan is a
+   * `classify` (a policy patch that only shortens a token lifetime is a
    * write). Absent: every request needs the declaration.
    */
   readonly requestDependent?: true;
+  /**
+   * With `requestDependent`, the security cases its `classify` must meet;
+   * one or more. Absent otherwise.
+   */
+  readonly vectors?: readonly ReservedVector[];
   /** Where the requirement comes from: a record's section or an issue. */
   readonly source: string;
   /** What the operation does, in one sentence. */
   readonly description: string;
+}
+
+/**
+ * A security case of a request-dependent entry: a request, the state it
+ * meets, and the effects it needs at least. Its classification must be
+ * `security` with every one of `effects`.
+ */
+export interface ReservedVector {
+  /** What the request does, in a few words. */
+  readonly name: string;
+  /** The request as `classify` sees it. */
+  readonly request: {
+    readonly method: string;
+    readonly params: unknown;
+    readonly query: unknown;
+    readonly body: unknown;
+  };
+  /** The state `loadState` returns, in the admin API's representation of the resource. */
+  readonly state: unknown;
+  /** The effects the request needs at least: some of its entry's. */
+  readonly effects: readonly SecurityEffect[];
+}
+
+/** `value`, frozen with everything it holds. */
+function frozen<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Reflect.ownKeys(value)) {
+      frozen((value as Record<PropertyKey, unknown>)[key]);
+    }
+  }
+  return value;
 }
 
 const reserve = (
@@ -54,14 +106,84 @@ const reserve = (
 ): ReservedOperation =>
   Object.freeze({ id, effects: Object.freeze([...effects]), source, description });
 
-/** An entry whose request decides what the operation needs: it may `classify`. */
+/** An entry whose request decides what the operation needs: it may `classify`, and must meet `vectors`. */
 const reserveRequestDependent = (
   id: string,
   effects: readonly SecurityEffect[],
   source: string,
-  description: string
+  description: string,
+  vectors: readonly ReservedVector[]
 ): ReservedOperation =>
-  Object.freeze({ ...reserve(id, effects, source, description), requestDependent: true as const });
+  Object.freeze({
+    ...reserve(id, effects, source, description),
+    requestDependent: true as const,
+    vectors: frozen([...vectors]),
+  });
+
+/** A merge patch of the resource at `params`, as `classify` sees it. */
+const patch = (params: Record<string, string>, body: Record<string, unknown>) => ({
+  method: 'PATCH',
+  params,
+  query: {},
+  body,
+});
+
+const REALM = { realmId: '00000000-0000-4000-8000-000000000001' };
+const CLIENT = { ...REALM, clientId: '00000000-0000-4000-8000-000000000002' };
+
+/** A realm's policies, as the policy cases meet them. */
+const REALM_POLICIES = {
+  accessTokenLifespan: 900,
+  refreshTokenLifespan: 604800,
+  ssoMaxLifespan: 86400,
+  ssoIdleTimeout: 1800,
+  keyRotationIntervalDays: 90,
+  adminEventRetentionDays: 365,
+  userEventRetentionDays: 90,
+  maxEnvironmentLaxity: 'production',
+  passwordPolicy: { minLength: 12 },
+  bruteForce: { enabled: true, maxFailures: 5 },
+};
+
+/** A client, as the client cases meet it. */
+const CLIENT_STATE = {
+  redirectUris: ['https://app.example/callback'],
+  tokenEndpointAuthMethod: 'private_key_jwt',
+  jwks: {
+    keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU' }],
+  },
+  jwksUri: null,
+  requirePkce: true,
+  dpopBoundAccessTokens: true,
+  firstParty: false,
+  environment: 'production',
+};
+
+const policyCase = (
+  name: string,
+  body: Record<string, unknown>,
+  effects: readonly SecurityEffect[]
+): ReservedVector => ({ name, request: patch(REALM, body), state: REALM_POLICIES, effects });
+
+const clientCase = (
+  name: string,
+  body: Record<string, unknown>,
+  effects: readonly SecurityEffect[]
+): ReservedVector => ({ name, request: patch(CLIENT, body), state: CLIENT_STATE, effects });
+
+/** A realm file applied over `REALM_IMPORT_STATE`. */
+const REALM_IMPORT_STATE = {
+  displayName: 'Example',
+  passwordPolicy: { minLength: 12 },
+  clients: [{ clientId: 'app', redirectUris: ['https://app.example/callback'] }],
+};
+
+const importCase = (name: string, file: Record<string, unknown>): ReservedVector => ({
+  name,
+  request: { method: 'POST', params: REALM, query: {}, body: { ...REALM_IMPORT_STATE, ...file } },
+  state: REALM_IMPORT_STATE,
+  effects: ['import'],
+});
 
 const ADR_019 = 'ADR-019 Decision 7';
 const ADR_020 = 'ADR-020 §3';
@@ -81,6 +203,24 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     ['credential-path'],
     `${ADR_019}, ${ADR_020}`,
     "Change an account's identifier or contact address."
+  ),
+  reserve(
+    'users.password.set',
+    ['credential-path'],
+    `${ADR_019}, ${ADR_020}`,
+    "Set an account's password."
+  ),
+  reserve(
+    'users.passkeys.create',
+    ['credential-path'],
+    `${ADR_019}, ${ADR_020}`,
+    'Add a passkey to an account.'
+  ),
+  reserve(
+    'users.credentials.create',
+    ['credential-path'],
+    `${ADR_019}, ${ADR_020}`,
+    'Add any other credential to an account, such as a TOTP secret or an upstream identity.'
   ),
   reserve(
     'users.passkeys.delete',
@@ -188,7 +328,39 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'realms.policies.update',
     ['credential-path', 'token-content', 'posture-loosening', 'administration'],
     `${ADR_019}, #514, #517`,
-    'Change realm policies: the mail transport and sender, the sign-in, password and brute-force policy, the registration policy, the environment ceiling and the two-admin set.'
+    'Change realm policies: the mail transport and sender, the sign-in, password and brute-force policy, the registration policy, the environment ceiling, token and session lifetimes, the key rotation interval, audit-event retention and the two-admin set; lengthening a lifetime or the rotation interval, or shortening or switching off retention, is posture-loosening.',
+    [
+      policyCase('lowers the password minimum length', { passwordPolicy: { minLength: 8 } }, [
+        'credential-path',
+      ]),
+      policyCase('switches brute-force protection off', { bruteForce: { enabled: false } }, [
+        'credential-path',
+      ]),
+      policyCase('raises the environment ceiling', { maxEnvironmentLaxity: 'development' }, [
+        'posture-loosening',
+      ]),
+      policyCase('lengthens the access-token lifetime', { accessTokenLifespan: 3600 }, [
+        'posture-loosening',
+      ]),
+      policyCase('lengthens the refresh-token lifetime', { refreshTokenLifespan: 2592000 }, [
+        'posture-loosening',
+      ]),
+      policyCase('lengthens the session lifetime', { ssoMaxLifespan: 604800 }, [
+        'posture-loosening',
+      ]),
+      policyCase('removes the session lifetime cap', { ssoMaxLifespan: null }, [
+        'posture-loosening',
+      ]),
+      policyCase('lengthens the key rotation interval', { keyRotationIntervalDays: 365 }, [
+        'posture-loosening',
+      ]),
+      policyCase('shortens audit-event retention', { adminEventRetentionDays: 90 }, [
+        'posture-loosening',
+      ]),
+      policyCase('switches audit-event retention off', { adminEventRetentionDays: null }, [
+        'posture-loosening',
+      ]),
+    ]
   ),
 
   // token-content: what a token asserts or who receives it.
@@ -202,7 +374,45 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'clients.update',
     ['token-content', 'posture-loosening'],
     `${ADR_019}, #518, #632`,
-    'Change a client: its redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, environment or agent-type fields.'
+    'Change a client: its redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, environment or agent-type fields.',
+    [
+      clientCase(
+        'adds a redirect URI',
+        { redirectUris: ['https://app.example/callback', 'https://other.example/callback'] },
+        ['token-content']
+      ),
+      clientCase(
+        'sets the token endpoint authentication method to none',
+        {
+          tokenEndpointAuthMethod: 'none',
+        },
+        ['token-content']
+      ),
+      clientCase('replaces the JWKS', { jwks: { keys: [] } }, ['token-content']),
+      clientCase(
+        'moves the keys to a JWKS URI',
+        { jwks: null, jwksUri: 'https://keys.example/jwks.json' },
+        ['token-content']
+      ),
+      clientCase('switches PKCE off', { requirePkce: false }, ['posture-loosening']),
+      clientCase('switches DPoP binding off', { dpopBoundAccessTokens: false }, [
+        'posture-loosening',
+      ]),
+      clientCase('makes the client first-party', { firstParty: true }, ['token-content']),
+      clientCase('loosens the environment', { environment: 'development' }, ['posture-loosening']),
+    ]
+  ),
+  reserve(
+    'clients.secret.rotate',
+    ['token-content'],
+    `${ADR_019}, #518`,
+    "Rotate a client's secret, returned once to the admin who rotates it."
+  ),
+  reserve(
+    'clients.registrationToken.rotate',
+    ['token-content'],
+    `${ADR_019}, #518`,
+    "Rotate a client's registration access token (RFC 7592), returned once to the admin who rotates it."
   ),
   reserve('clients.delete', ['token-content'], `${ADR_019}, #518, #632`, 'Delete a client.'),
   reserve(
@@ -243,6 +453,29 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     ['token-content'],
     ADR_019,
     'Remove a resource server and its audience.'
+  ),
+  reserve('roles.create', ['token-content'], `${ADR_019}, #683`, 'Define a realm role.'),
+  reserve(
+    'roles.update',
+    ['token-content'],
+    `${ADR_019}, #683`,
+    'Change a realm role, its name or composites.'
+  ),
+  reserve('roles.delete', ['token-content'], `${ADR_019}, #683`, 'Delete a realm role.'),
+  reserve('groups.create', ['token-content'], `${ADR_019}, #683`, 'Define a group.'),
+  reserve('groups.update', ['token-content'], `${ADR_019}, #683`, 'Change a group.'),
+  reserve('groups.delete', ['token-content'], `${ADR_019}, #683`, 'Delete a group.'),
+  reserve(
+    'groups.roles.assign',
+    ['token-content'],
+    `${ADR_019}, #683`,
+    "Map a realm role to a group, so the group's members hold it."
+  ),
+  reserve(
+    'groups.roles.remove',
+    ['token-content'],
+    `${ADR_019}, #683`,
+    'Remove a realm role from a group.'
   ),
   reserve(
     'users.roles.assign',
@@ -351,7 +584,18 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'realms.imports.apply',
     ['import'],
     'ADR-019 Decisions 7 and 11, #531, #555',
-    'Apply a realm-file import or a sandbox promotion.'
+    'Apply a realm-file import or a sandbox promotion.',
+    [
+      importCase('lowers the password policy', { passwordPolicy: { minLength: 6 } }),
+      importCase('adds a redirect URI to a client', {
+        clients: [
+          {
+            clientId: 'app',
+            redirectUris: ['https://app.example/callback', 'https://other.example/callback'],
+          },
+        ],
+      }),
+    ]
   ),
 
   // federation-operator.

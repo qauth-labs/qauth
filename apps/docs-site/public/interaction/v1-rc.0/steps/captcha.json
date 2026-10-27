@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/captcha.json",
+  "title": "urn:qauth:ia:captcha:v1-rc.0",
+  "description": "A bot challenge, when a soft threshold requires one; the pending step resumes after it (ADR-017 Decisions 4 and 7). By default the built-in proof of work, whose script the ceremony app serves from the realm origin. An operator may name a hosted provider for the sign-up and sign-in pages only (ADR-019 Decision 5). A required challenge needs JavaScript and is never skipped.",
+  "x-qauth-transports": [
+    "interaction",
+    "fipa"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:captcha:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:captcha:v1-rc.0",
+      "params": {
+        "provider": "pow",
+        "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+        "difficulty": 18
+      },
+      "answer": {
+        "captcha_token": "AAAAAAAABl9x"
+      },
+      "personal": {},
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "description": "The challenge to solve: the built-in proof of work, or a hosted provider.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "const": "pow",
+              "description": "The built-in proof of work."
+            },
+            "challenge": {
+              "type": "string",
+              "minLength": 22,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]{22,128}$",
+              "description": "The puzzle the engine issued."
+            },
+            "difficulty": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32,
+              "description": "How many leading zero bits the answer must produce."
+            }
+          },
+          "required": [
+            "provider",
+            "challenge",
+            "difficulty"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "const": "hosted",
+              "description": "A hosted provider the operator named."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+              "description": "The name the operator gave the hosted provider."
+            },
+            "site_key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "description": "The provider’s public site key."
+            }
+          },
+          "required": [
+            "provider",
+            "name",
+            "site_key"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "examples": [
+        {
+          "provider": "pow",
+          "challenge": "Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI",
+          "difficulty": 18
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "captcha_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[!-~]+$",
+          "description": "The solution, or the provider’s token: printable ASCII, so 4096 characters are 4096 bytes."
+        }
+      },
+      "required": [
+        "captcha_token"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "captcha_token": "AAAAAAAABl9x"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "captcha_failed"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

@@ -1,22 +1,32 @@
+import { createHash } from 'node:crypto';
+
 import { SECURITY_EFFECTS, type SecurityEffect } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
 import {
   ADMIN_OPERATIONS,
   type AdminOperationDefinition,
+  bodyDigestOf,
   type Classification,
   classifyByField,
   type ClassifyInput,
   classifyRequest,
   createOperationRegistry,
   defineOperation,
+  ifMatchAllows,
   mergeClassifications,
+  mergePatchLeafPaths,
   OPERATION_REGISTRY,
   OperationDefinitionError,
   operationSchemaExtensions,
+  operationStateVersion,
   UnknownFieldError,
 } from './admin-operations';
-import { RESERVED_OPERATIONS, type ReservedOperation } from './admin-operations-reserved';
+import {
+  RESERVED_OPERATIONS,
+  type ReservedOperation,
+  type ReservedVector,
+} from './admin-operations-reserved';
 import {
   createPermissionRegistry,
   definePermission,
@@ -50,6 +60,14 @@ const SECURITY: Classification = {
   class: 'security',
   effects: ['credential-path'],
   permissions: ['realms.policies.security'],
+};
+
+/** A security case of a request-dependent test entry. */
+const KEYS_CASE: ReservedVector = {
+  name: 'replaces the keys',
+  request: { method: 'PATCH', params: {}, query: {}, body: { keys: [] } },
+  state: {},
+  effects: ['key-custody'],
 };
 
 /** A policy-patch-like operation: write or security by field. */
@@ -202,9 +220,39 @@ describe('defineOperation: the static rule (#508)', () => {
   });
 
   it('refuses loadState without classify', () => {
-    expect(() => defineOperation(readOperation({ loadState: async () => ({}) }))).toThrow(
-      /loadState is read only by classify/
-    );
+    expect(() =>
+      defineOperation(readOperation({ loadState: async () => ({}), stateVersion: () => 'v1' }))
+    ).toThrow(/loadState is read only by classify/);
+  });
+
+  // M1: the classification holds for the state it was made against only.
+  it('requires stateVersion with loadState, and only with it', () => {
+    const classified = {
+      class: 'security' as const,
+      effects: ['credential-path' as const],
+      permissions: ['realms.policies.write', 'realms.policies.security'],
+      classify: () => WRITE,
+    };
+    expect(() =>
+      defineOperation(readOperation({ ...classified, loadState: async () => ({}) }))
+    ).toThrow(/names the version of the state it read \(stateVersion\)/);
+    expect(() =>
+      defineOperation(readOperation({ ...classified, stateVersion: () => 'v1' }))
+    ).toThrow(/stateVersion is read only with loadState/);
+    expect(() =>
+      defineOperation(
+        readOperation({
+          ...classified,
+          loadState: async () => ({}),
+          stateVersion: 'v1' as unknown as () => string,
+        })
+      )
+    ).toThrow(/stateVersion is a function/);
+    expect(
+      defineOperation(
+        readOperation({ ...classified, loadState: async () => ({}), stateVersion: () => 'v1' })
+      ).stateVersion
+    ).toBeTypeOf('function');
   });
 
   // What is checked is what is stored: a getter could answer the checks one
@@ -367,9 +415,61 @@ describe('createOperationRegistry (#508)', () => {
       expect(() => registry([lowering], reserved)).toThrow(
         /reserved as a security operation on every request \(a test\); it may not classify/
       );
+      const meeting = rotate({
+        permissions: ['realms.policies.write', 'realms.policies.security'],
+        classify: (request) =>
+          (request.body as { keys?: unknown }).keys === undefined
+            ? WRITE
+            : {
+                class: 'security',
+                effects: ['key-custody'],
+                permissions: ['realms.policies.security'],
+              },
+      });
       expect(
-        registry([lowering], [{ ...reserved[0], requestDependent: true }]).get('widgets.rotate')
+        registry([meeting], [{ ...reserved[0], requestDependent: true, vectors: [KEYS_CASE] }]).get(
+          'widgets.rotate'
+        )
       ).toBeDefined();
+    });
+
+    // M2: a request-dependent reservation keeps its security cases.
+    it('refuses a classify that gives a reserved case less than it needs', () => {
+      const table = [{ ...reserved[0], requestDependent: true as const, vectors: [KEYS_CASE] }];
+      const answering = (classification: Classification) =>
+        rotate({
+          permissions: ['realms.policies.write', 'realms.policies.security'],
+          classify: () => classification,
+        });
+      expect(() => registry([answering(WRITE)], table)).toThrow(
+        /classify gives the reserved case "replaces the keys" write with no effect, but it needs at least security with key-custody \(a test\)/
+      );
+      expect(() =>
+        registry(
+          [
+            answering({
+              class: 'security',
+              effects: ['token-content'],
+              permissions: ['realms.policies.security'],
+            }),
+          ],
+          table
+        )
+      ).toThrow(/gives the reserved case "replaces the keys" security with token-content/);
+      // A case classify fails closed on tests nothing: it is in another shape.
+      expect(() =>
+        registry(
+          [
+            rotate({
+              permissions: ['realms.policies.write', 'realms.policies.security'],
+              classify: () => {
+                throw new UnknownFieldError('/keys');
+              },
+            }),
+          ],
+          table
+        )
+      ).toThrow(/classify fails closed \(unknown-field\) on the reserved case "replaces the keys"/);
     });
 
     // Ids that differ only in case are one id everywhere else in the registry.
@@ -429,6 +529,38 @@ describe('createOperationRegistry (#508)', () => {
         [{ ...entry, source: '' }],
         [{ ...entry, requestDepedent: true } as ReservedOperation],
         [{ ...entry, requestDependent: false } as unknown as ReservedOperation],
+        // A request-dependent entry lists cases; no other entry does.
+        [{ ...entry, requestDependent: true } as ReservedOperation],
+        [{ ...entry, requestDependent: true, vectors: [] } as ReservedOperation],
+        [{ ...entry, vectors: [KEYS_CASE] }],
+        [
+          {
+            ...entry,
+            requestDependent: true,
+            vectors: [{ ...KEYS_CASE, effects: ['import'] }],
+          } as ReservedOperation,
+        ],
+        [
+          {
+            ...entry,
+            requestDependent: true,
+            vectors: [{ ...KEYS_CASE, effects: [] }],
+          } as ReservedOperation,
+        ],
+        [
+          {
+            ...entry,
+            requestDependent: true,
+            vectors: [KEYS_CASE, KEYS_CASE],
+          } as ReservedOperation,
+        ],
+        [
+          {
+            ...entry,
+            requestDependent: true,
+            vectors: [{ ...KEYS_CASE, extra: 1 } as ReservedVector],
+          } as ReservedOperation,
+        ],
       ]) {
         expect(() => registry([], table)).toThrow(OperationDefinitionError);
       }
@@ -447,6 +579,7 @@ describe('the server registry and reserved table (#508)', () => {
     expect(
       RESERVED_OPERATIONS.filter((entry) => entry.requestDependent).map((entry) => entry.id)
     ).toEqual(['realms.policies.update', 'clients.update', 'realms.imports.apply']);
+    // M2: answering `write` for every request no longer takes the entry.
     const policies = defineOperation({
       id: 'realms.policies.update',
       class: 'security',
@@ -455,7 +588,9 @@ describe('the server registry and reserved table (#508)', () => {
       description: "Change a realm's policies.",
       classify: () => WRITE,
     });
-    expect(createOperationRegistry([policies]).get('realms.policies.update')).toBeDefined();
+    expect(() => createOperationRegistry([policies])).toThrow(
+      /classify gives the reserved case "lowers the password minimum length" write with no effect/
+    );
     expect(() =>
       createOperationRegistry([
         defineOperation({
@@ -510,6 +645,8 @@ describe('classifyRequest (#508)', () => {
       effects: [],
       permissions: ['realms.read'],
       failedClosed: null,
+      stateVersion: null,
+      bodyDigest: null,
     });
     expect(Object.isFrozen(classification)).toBe(true);
   });
@@ -527,6 +664,8 @@ describe('classifyRequest (#508)', () => {
       effects: ['credential-path', 'posture-loosening'],
       permissions: ['realms.policies.write', 'realms.policies.security'],
       failedClosed: null,
+      stateVersion: null,
+      bodyDigest: null,
     });
     expect(Object.isFrozen(classification.effects)).toBe(true);
     expect(Object.isFrozen(classification.permissions)).toBe(true);
@@ -555,6 +694,8 @@ describe('classifyRequest (#508)', () => {
       operationId: 'widgets.policies.update',
       ...DECLARATION,
       failedClosed: 'threw',
+      stateVersion: null,
+      bodyDigest: null,
     });
     const throwsValue = patchOperation(() => {
       throw 'not an error';
@@ -607,6 +748,8 @@ describe('classifyRequest (#508)', () => {
       operationId: 'widgets.policies.update',
       ...DECLARATION,
       failedClosed: reason,
+      stateVersion: null,
+      bodyDigest: null,
     });
   });
 
@@ -846,5 +989,357 @@ describe('operationSchemaExtensions (#508)', () => {
       'x-qauth-effects': ['credential-path', 'posture-loosening'],
       'x-qauth-two-admin': 'recommended',
     });
+  });
+});
+
+/** A security classification with `effects`, needing the security permission. */
+const securityWith = (...effects: SecurityEffect[]): Classification => ({
+  class: 'security',
+  effects,
+  permissions: ['realms.policies.security'],
+});
+
+/** The member of a merge-patch body at a top-level or two-level JSON Pointer. */
+function at(value: unknown, path: string): unknown {
+  return path
+    .split('/')
+    .slice(1)
+    .reduce<unknown>(
+      (node, key) =>
+        typeof node === 'object' && node !== null
+          ? (node as Record<string, unknown>)[key]
+          : undefined,
+      value
+    );
+}
+
+/** A number that grows, or a cap removed, loosens. */
+const lengthening =
+  (path: string) =>
+  (request: ClassifyInput, state: unknown): Classification => {
+    const next = at(request.body, path);
+    const current = at(state, path);
+    return next === null || (typeof next === 'number' && next > (current as number))
+      ? securityWith('posture-loosening')
+      : WRITE;
+  };
+
+/** A retention that shrinks, or is switched off, loosens. */
+const shortening =
+  (path: string) =>
+  (request: ClassifyInput, state: unknown): Classification => {
+    const next = at(request.body, path);
+    const current = at(state, path);
+    return next === null || (typeof next === 'number' && next < (current as number))
+      ? securityWith('posture-loosening')
+      : WRITE;
+  };
+
+/** A field that is a security change unless it keeps or tightens `safe`. */
+const unless =
+  (path: string, safe: (value: unknown, current: unknown) => boolean, effect: SecurityEffect) =>
+  (request: ClassifyInput, state: unknown): Classification =>
+    safe(at(request.body, path), at(state, path)) ? WRITE : securityWith(effect);
+
+const REQUEST_DEPENDENT_PERMISSIONS = ['realms.policies.write', 'realms.policies.security'];
+
+/** A correct classify for each request-dependent reserved entry, as its issue would write it. */
+const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
+  'realms.policies.update': classifyByField<unknown>({
+    changedFields: (request) => mergePatchLeafPaths(request.body),
+    fields: {
+      '/passwordPolicy/minLength': unless(
+        '/passwordPolicy/minLength',
+        (next, current) => typeof next === 'number' && next >= (current as number),
+        'credential-path'
+      ),
+      '/bruteForce/enabled': unless(
+        '/bruteForce/enabled',
+        (next) => next === true,
+        'credential-path'
+      ),
+      '/maxEnvironmentLaxity': unless(
+        '/maxEnvironmentLaxity',
+        (next) => next === 'production',
+        'posture-loosening'
+      ),
+      '/accessTokenLifespan': lengthening('/accessTokenLifespan'),
+      '/refreshTokenLifespan': lengthening('/refreshTokenLifespan'),
+      '/ssoMaxLifespan': lengthening('/ssoMaxLifespan'),
+      '/ssoIdleTimeout': lengthening('/ssoIdleTimeout'),
+      '/keyRotationIntervalDays': lengthening('/keyRotationIntervalDays'),
+      '/adminEventRetentionDays': shortening('/adminEventRetentionDays'),
+      '/userEventRetentionDays': shortening('/userEventRetentionDays'),
+    },
+    unchanged: WRITE,
+  }),
+  'clients.update': classifyByField<unknown>({
+    changedFields: (request) => mergePatchLeafPaths(request.body),
+    fields: {
+      '/redirectUris': unless(
+        '/redirectUris',
+        (next, current) =>
+          Array.isArray(next) && next.every((uri) => (current as unknown[]).includes(uri)),
+        'token-content'
+      ),
+      '/tokenEndpointAuthMethod': securityWith('token-content'),
+      '/jwks': securityWith('token-content'),
+      '/jwks/keys': securityWith('token-content'),
+      '/jwksUri': securityWith('token-content'),
+      '/requirePkce': unless('/requirePkce', (next) => next === true, 'posture-loosening'),
+      '/dpopBoundAccessTokens': unless(
+        '/dpopBoundAccessTokens',
+        (next) => next === true,
+        'posture-loosening'
+      ),
+      '/firstParty': unless('/firstParty', (next) => next === false, 'token-content'),
+      '/environment': unless('/environment', (next) => next === 'production', 'posture-loosening'),
+    },
+    unchanged: WRITE,
+  }),
+  // An import is a security operation as soon as its file differs from the
+  // realm in anything but the display name.
+  'realms.imports.apply': (request, state) => {
+    const content = (value: unknown) =>
+      JSON.stringify({ ...(value as Record<string, unknown>), displayName: undefined });
+    return content(request.body) === content(state) ? WRITE : securityWith('import');
+  },
+};
+
+/** The request-dependent entry `id` registered with `classify`. */
+function requestDependentOperation(id: string, classify: AdminOperationDefinition['classify']) {
+  const entry = RESERVED_OPERATIONS.find((candidate) => candidate.id === id) as ReservedOperation;
+  return defineOperation({
+    id,
+    class: 'security',
+    effects: entry.effects,
+    permissions: REQUEST_DEPENDENT_PERMISSIONS,
+    description: entry.description,
+    classify,
+  });
+}
+
+describe('the reserved security cases (#508)', () => {
+  const requestDependent = RESERVED_OPERATIONS.filter((entry) => entry.requestDependent);
+
+  it('gives every request-dependent entry cases, and a correct classify meets them', () => {
+    expect(Object.keys(CORRECT_CLASSIFY).sort()).toEqual(
+      requestDependent.map((entry) => entry.id).sort()
+    );
+    for (const entry of requestDependent) {
+      expect(entry.vectors?.length ?? 0, entry.id).toBeGreaterThan(0);
+      const operation = requestDependentOperation(entry.id, CORRECT_CLASSIFY[entry.id]);
+      expect(createOperationRegistry([operation]).get(entry.id), entry.id).toBeDefined();
+    }
+  });
+
+  it('refuses a classify that answers write for every request, on every entry', () => {
+    for (const entry of requestDependent) {
+      expect(
+        () => createOperationRegistry([requestDependentOperation(entry.id, () => WRITE)]),
+        entry.id
+      ).toThrow(/classify gives the reserved case ".+" write with no effect/);
+    }
+  });
+
+  it('covers the client cases the security review named', () => {
+    const names = RESERVED_OPERATIONS.find((entry) => entry.id === 'clients.update')?.vectors?.map(
+      (vector) => vector.name
+    );
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'adds a redirect URI',
+        'sets the token endpoint authentication method to none',
+        'replaces the JWKS',
+        'moves the keys to a JWKS URI',
+        'switches PKCE off',
+        'switches DPoP binding off',
+        'makes the client first-party',
+      ])
+    );
+  });
+
+  // ADR-019 Decision 7, by effect: lengthening a lifetime or the rotation
+  // interval, or shortening or switching off retention, loosens the posture;
+  // the opposite direction is a write.
+  it('counts lifetimes, the rotation interval and retention by direction', () => {
+    const policies = requestDependentOperation(
+      'realms.policies.update',
+      CORRECT_CLASSIFY['realms.policies.update']
+    );
+    const entry = RESERVED_OPERATIONS.find(
+      (candidate) => candidate.id === 'realms.policies.update'
+    );
+    const state = entry?.vectors?.[0].state;
+    const classOf = (body: Record<string, unknown>) =>
+      classifyRequest(
+        { permissions: PERMISSION_REGISTRY },
+        policies,
+        { method: 'PATCH', params: {}, query: {}, body },
+        state
+      ).class;
+    expect(classOf({ accessTokenLifespan: 3600 })).toBe('security');
+    expect(classOf({ accessTokenLifespan: 300 })).toBe('write');
+    expect(classOf({ keyRotationIntervalDays: 30 })).toBe('write');
+    expect(classOf({ adminEventRetentionDays: 730 })).toBe('write');
+    expect(classOf({ adminEventRetentionDays: null })).toBe('security');
+    expect(entry?.description).toMatch(/lengthening a lifetime or the rotation interval/);
+  });
+
+  // M3: the operations the security review found missing.
+  it('reserves roles, groups, admin-set credentials and client secret rotation', () => {
+    const effectsOf = (id: string) => RESERVED_OPERATIONS.find((entry) => entry.id === id)?.effects;
+    for (const id of [
+      'roles.create',
+      'roles.update',
+      'roles.delete',
+      'groups.create',
+      'groups.update',
+      'groups.delete',
+      'groups.roles.assign',
+      'groups.roles.remove',
+      'clients.secret.rotate',
+      'clients.registrationToken.rotate',
+    ]) {
+      expect(effectsOf(id), id).toEqual(['token-content']);
+    }
+    for (const id of ['users.password.set', 'users.passkeys.create', 'users.credentials.create']) {
+      expect(effectsOf(id), id).toEqual(['credential-path']);
+    }
+  });
+});
+
+describe('mergePatchLeafPaths (#508)', () => {
+  it('walks the body, with arrays, null and empty objects as changed fields', () => {
+    expect(
+      mergePatchLeafPaths({
+        passwordPolicy: { minLength: 8, forbidden: ['password'] },
+        ssoMaxLifespan: null,
+        bruteForce: {},
+        'a/b~c': 1,
+      })
+    ).toEqual([
+      '/a~1b~0c',
+      '/bruteForce',
+      '/passwordPolicy/forbidden',
+      '/passwordPolicy/minLength',
+      '/ssoMaxLifespan',
+    ]);
+  });
+
+  it('gives the whole resource for a body that is not an object, and nothing for none', () => {
+    expect(mergePatchLeafPaths(null)).toEqual(['']);
+    expect(mergePatchLeafPaths([1])).toEqual(['']);
+    expect(mergePatchLeafPaths('x')).toEqual(['']);
+    expect(mergePatchLeafPaths(undefined)).toEqual([]);
+    expect(mergePatchLeafPaths({})).toEqual([]);
+  });
+
+  it('reports a field the classifier has no rule for, which then fails closed', () => {
+    const operation = patchOperation(
+      classifyByField({
+        changedFields: (request) => mergePatchLeafPaths(request.body),
+        fields: { '/lifespan': WRITE },
+        unchanged: WRITE,
+      })
+    );
+    const classify = (body: unknown) =>
+      classifyRequest(
+        { permissions: PERMISSION_REGISTRY },
+        operation as never,
+        { method: 'PATCH', params: {}, query: {}, body },
+        undefined
+      );
+    expect(classify({ lifespan: 1 }).failedClosed).toBeNull();
+    expect(classify({ lifespan: 1, password: { minLength: 1 } }).failedClosed).toBe(
+      'unknown-field'
+    );
+  });
+});
+
+describe('the state version and If-Match (#508)', () => {
+  const versioned = (stateVersion: (state: unknown) => unknown) =>
+    defineOperation({
+      id: 'widgets.policies.update',
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.write', 'realms.policies.security'],
+      description: 'Change widget policies.',
+      classify: () => WRITE,
+      loadState: async () => ({ version: 7 }),
+      stateVersion: stateVersion as (state: unknown) => string,
+    });
+
+  it('reads an entity-tag opaque value, and refuses anything else', () => {
+    expect(operationStateVersion(versioned(() => 'r7') as never, {})).toBe('r7');
+    for (const bad of ['', 'has space', 'has"quote', 'x'.repeat(257), 7, undefined]) {
+      expect(() => operationStateVersion(versioned(() => bad) as never, {})).toThrow(
+        /not an entity-tag's opaque value/
+      );
+    }
+    expect(() => operationStateVersion(readOperation() as never, {})).toThrow(
+      /names no stateVersion/
+    );
+  });
+
+  it('puts the version on the classification, including one that failed closed', () => {
+    const operation = versioned(() => 'r7');
+    const input = { method: 'PATCH', params: {}, query: {}, body: {} };
+    const permissions = { permissions: PERMISSION_REGISTRY };
+    expect(classifyRequest(permissions, operation as never, input, {}, 'r7').stateVersion).toBe(
+      'r7'
+    );
+    const throwing = defineOperation({
+      ...operation,
+      classify: () => {
+        throw new Error('broken');
+      },
+    });
+    const failed = classifyRequest(permissions, throwing as never, input, {}, 'r7');
+    expect([failed.failedClosed, failed.stateVersion]).toEqual(['threw', 'r7']);
+    expect(classifyRequest(permissions, readOperation() as never, input).stateVersion).toBeNull();
+  });
+
+  it.each([
+    [undefined, true],
+    ['*', true],
+    ['"r7"', true],
+    ['"r6", "r7"', true],
+    ['"r6",, "r7"', true],
+    ['W/"r7"', false],
+    ['"r6"', false],
+    ['r7', false],
+    ['"r7" "r6"', false],
+    ['', false],
+  ])('If-Match %j allows version r7: %s', (field, allowed) => {
+    expect(ifMatchAllows(field, 'r7')).toBe(allowed);
+  });
+});
+
+describe('bodyDigestOf (#508)', () => {
+  const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('base64url');
+
+  it('digests a binary body, whatever view holds it', () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    expect(bodyDigestOf(Buffer.from(bytes))).toBe(digest(bytes));
+    expect(bodyDigestOf(bytes.buffer)).toBe(digest(bytes));
+    // A view of part of a larger buffer digests its own bytes only.
+    expect(bodyDigestOf(new DataView(bytes.buffer, 1, 3))).toBe(digest(bytes.subarray(1, 4)));
+  });
+
+  it('gives null for any other body', () => {
+    expect(bodyDigestOf({ a: 1 })).toBeNull();
+    expect(bodyDigestOf('text')).toBeNull();
+    expect(bodyDigestOf(undefined)).toBeNull();
+  });
+
+  it('puts the digest of a binary body on the classification', () => {
+    const body = Buffer.from('realm file');
+    const classification = classifyRequest(
+      { permissions: PERMISSION_REGISTRY },
+      readOperation() as never,
+      { method: 'POST', params: {}, query: {}, body }
+    );
+    expect(classification.bodyDigest).toBe(digest(body));
   });
 });

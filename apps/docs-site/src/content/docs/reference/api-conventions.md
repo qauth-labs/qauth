@@ -13,10 +13,11 @@ contract ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)), s
 before the families' first route. A test enforces them over the generated OpenAPI document
 ([Enforcement](#enforcement)).
 
-The Interaction API (`/interaction/v1-rc.0`) reuses these rules. The OAuth protocol endpoints do
-not: they keep the shapes their specifications define ([Errors](#errors)). The error format of
-[Errors](#errors) is not limited to the families: every route that is not an OAuth protocol
-endpoint answers it.
+The Interaction API (`/interaction/v1-rc.0`) reuses these rules, with the differences its own
+page lists: its problem documents carry no prose, and its steps keep the names of the step grammar
+([Interaction API](/reference/interaction-api/)). The OAuth protocol endpoints do not: they keep
+the shapes their specifications define ([Errors](#errors)). The error format of [Errors](#errors)
+is not limited to the families: every route that is not an OAuth protocol endpoint answers it.
 
 ## The three families
 
@@ -49,7 +50,8 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
 - its protected header carries `typ: at+jwt` (RFC 9068 §2.1), whatever
   `requireAccessTokenTyp` is set to;
 - its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
-  accepts only the deployment's issuer, `JWT_ISSUER`;
+  accepts only the token issuer of the request's realm (ADR-019 Decision 1): `JWT_ISSUER` as
+  written for the realm whose issuer it is, and the realm's own issuer for any other realm;
 - it carries `sub`, `exp` and `jti`, with `sub` and `jti` non-empty strings;
 - its `aud` holds exactly one value, the family's audience. A token with several audiences is
   refused even when one of them is the family's;
@@ -61,11 +63,12 @@ Every family route is guarded by `requireFamilyToken(family, options)` in
   suspended; any other token must name a user of that realm who is enabled;
 - it carries every scope the route lists.
 
-A family audience and the deployment's issuer read the same in every realm, and an access token
-names no realm, so the subject decides which realm a token belongs to. A user's token is therefore
-refused in every realm but the user's. A `client_id` names a client per realm, so a token of a
-`client_id` that names an enabled client in two realms passes in both, until each realm has its
-own issuer.
+A family audience reads the same in every realm. Every token still carries `JWT_ISSUER` until
+tokens are signed per realm (#491), so under the default issuer rule only the realm whose issuer
+that is admits a token, and any other realm refuses every token until then. The subject is checked
+in the request's realm as well, whatever issuer rule a family uses: a user's token is refused in
+every realm but the user's, and a `client_credentials` token in every realm whose client of that
+`client_id` is missing, disabled or suspended.
 
 A request that presents no token is refused with 401 `unauthorized` and a challenge that names no
 error, `WWW-Authenticate: Bearer realm="OAuth"`. A token that fails, its subject included, is
@@ -300,19 +303,51 @@ otherwise. A route of the admin listener names its operation in its route config
 takes these members from the registry (`operationSchemaExtensions`), and the listener refuses to
 boot a route that names no registered operation or whose members differ.
 
-A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
+A request-dependent operation classifies each request (`classify`). By effect, a policy change
+that lengthens an access-token, refresh-token or session lifetime or the key rotation interval, or
+shortens or switches off audit-event retention, is `posture-loosening` and needs the security
+class; shortening a lifetime or lengthening retention is a write. A merge patch's changed fields
+come from `mergePatchLeafPaths(body)`, so a field `classify` has no rule for fails closed.
+
+An operation that reads the current state to classify (`loadState`) names the version of what it
+read (`stateVersion`), which the route sends quoted as its `ETag`. The listener puts the version on
+the classification and, before the handler, answers `428` when the request has no `If-Match` and
+`412` when it names another version. The handler's write must be conditional on `classification.stateVersion` (an update that
+matches the stored version, `412` when none does), or load, classify and write in one transaction
+under `SELECT … FOR UPDATE`: otherwise a change made between the classification and the write runs
+under a classification of other state.
+
+A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation. On
+the admin API the operation is defined once in the registry, and the route names it in its config
+and spreads the registry's members into its schema:
 
 ```ts
+// helpers/admin-operations.ts, listed in ADMIN_OPERATIONS
+export const REALM_POLICIES_UPDATE = defineOperation({
+  id: 'realms.policies.update',
+  class: 'security',
+  effects: ['credential-path', 'token-content', 'posture-loosening', 'administration'],
+  permissions: ['realms.policies.write', 'realms.policies.security'],
+  description: "Change a realm's policies.",
+  loadState: loadRealmPolicies,
+  stateVersion: (policies) => policies.version,
+  classify: classifyByField({
+    changedFields: (request) => mergePatchLeafPaths(request.body),
+    fields: POLICY_FIELDS,
+    unchanged: WRITE,
+  }),
+});
+
+// the route, on the admin listener
 fastify.patch(
   '/admin/v1-rc.0/realms/:realmId/policies',
   {
+    config: { operation: REALM_POLICIES_UPDATE.id },
     schema: {
-      operationId: 'realms.policies.update',
+      // operationId, x-qauth-class, x-qauth-permission, x-qauth-effects and
+      // x-qauth-two-admin, from the registry
+      ...operationSchemaExtensions(REALM_POLICIES_UPDATE),
       security: [{ bearerAuth: [] }],
-      'x-qauth-class': 'security',
-      'x-qauth-permission': ['realms.policies.write', 'realms.policies.security'],
-      'x-qauth-effects': ['credential-path'],
-      'x-qauth-two-admin': 'recommended',
       'x-qauth-stability': 'stable',
       consumes: ['application/merge-patch+json'],
       params: z.object({ realmId: z.uuid() }),

@@ -21,7 +21,7 @@
 import { isSecurityEffect } from '@qauth-labs/shared-validation';
 
 import { OPERATION_REGISTRY, type OperationRegistry } from '../helpers/admin-operations';
-import { PERMISSION_ID_PATTERN, PERMISSION_REGISTRY } from '../helpers/admin-permissions';
+import { PERMISSION_ID_PATTERN, type PermissionRegistry } from '../helpers/admin-permissions';
 import type { OperationClass, OperationStability } from '../openapi-options';
 import { type ApiFamily, apiFamilyOf, isUnversionedFamilyPath } from './families';
 import { PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX } from './paging';
@@ -253,7 +253,16 @@ function checkSecurity({ operation, document, report }: OperationContext): void 
   }
 }
 
-function checkExtensions({ family, operation, report }: OperationContext): void {
+/**
+ * The extension rules. `catalog` is the admin permission catalog an admin
+ * operation's `x-qauth-permission` must name grantable permissions of: the one
+ * the selected operation registry was checked against, so a check run with a
+ * custom registry and catalog judges the document by that catalog.
+ */
+function checkExtensions(
+  { family, operation, report }: OperationContext,
+  catalog: PermissionRegistry
+): void {
   const stability = operation['x-qauth-stability'];
   if (!STABILITIES.includes(stability as OperationStability)) {
     report('stability', `x-qauth-stability must be one of ${STABILITIES.join(', ')}`);
@@ -285,7 +294,7 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
     // catalog does not know, or a retired one, could never be authorized.
     const classes = new Set<OperationClass>();
     for (const id of permissions as string[]) {
-      const granted = PERMISSION_REGISTRY.isGrantable(id) ? PERMISSION_REGISTRY.get(id) : undefined;
+      const granted = catalog.isGrantable(id) ? catalog.get(id) : undefined;
       if (granted === undefined) {
         report(
           'permission',
@@ -613,7 +622,11 @@ function checkConditionalUpdate(context: OperationContext): void {
 
 /** Options for {@link checkApiConventions}. */
 export interface ApiConventionsOptions {
-  /** The registry admin operations are compared with; the server's own by default. */
+  /**
+   * The registry admin operations are compared with; the server's own by
+   * default. An admin operation's `x-qauth-permission` is checked against the
+   * permission catalog this registry was built with (`registry.permissions`).
+   */
   operations?: OperationRegistry;
 }
 
@@ -688,7 +701,7 @@ export function checkApiConventions(
       const afterOperationId = violations.length;
       checkSecurity(context);
       const afterSecurity = violations.length;
-      checkExtensions(context);
+      checkExtensions(context, registry.permissions);
       if (
         family.family === 'admin' &&
         afterOperationId === start &&

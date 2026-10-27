@@ -1,3 +1,4 @@
+import { REMOVED_CONFIG_KEYS, type RemovedConfigKey } from './removed';
 import type { ConfigKey, KeyDefault, KeyOwner, KeyTier } from './types';
 import { KEY_TIERS } from './types';
 
@@ -149,14 +150,33 @@ function aliasSection(registry: readonly ConfigKey[]): string[] {
   return lines;
 }
 
+function removedSection(removed: readonly RemovedConfigKey[]): string[] {
+  if (removed.length === 0) return [];
+  const rows = [...removed]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((key) => [code(key.name), key.removedIn, key.replacement]);
+  return [
+    '## Removed keys',
+    '',
+    'The server no longer reads these keys and refuses to start while one is set, whatever its value. The error names the key and what replaces it.',
+    '',
+    table(['Key', 'Removed in', 'Instead'], rows),
+    '',
+  ];
+}
+
 /**
  * Render the configuration page (`operate/configuration.md`) from the registry:
- * stable keys first, then advanced, then experimental, then renamed keys.
+ * stable keys first, then advanced, then experimental, then renamed and
+ * removed keys.
  *
  * The output is Markdown that Oxfmt may still realign; the registry test
  * formats it before comparing it with the committed page.
  */
-export function renderConfigurationPage(registry: readonly ConfigKey[]): string {
+export function renderConfigurationPage(
+  registry: readonly ConfigKey[],
+  removed: readonly RemovedConfigKey[] = REMOVED_CONFIG_KEYS
+): string {
   const lines = [
     '---',
     'title: Configuration',
@@ -203,9 +223,10 @@ export function renderConfigurationPage(registry: readonly ConfigKey[]): string 
 
   lines.push(
     ...aliasSection(registry),
+    ...removedSection(removed),
     '## Adding a key',
     '',
-    'A pull request that adds, renames or removes a key registers the change in the same pull request: an entry in `libs/server/config/src/lib/registry/keys/`, with its tier, role, default and one sentence, and a regenerated page. A stable key also appears in `.env.example`. A test fails until all three agree.',
+    'A pull request that adds, renames or removes a key registers the change in the same pull request: an entry in `libs/server/config/src/lib/registry/keys/`, with its tier, role, default and one sentence, and a regenerated page; a removed key moves to `registry/removed.ts`. A stable key also appears in `.env.example`. A test fails until all three agree.',
     ''
   );
 

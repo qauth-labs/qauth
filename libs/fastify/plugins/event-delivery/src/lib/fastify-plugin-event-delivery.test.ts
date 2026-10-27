@@ -122,4 +122,24 @@ describe('registerDeliveryMetrics', () => {
     expect(text).toContain(`${DELIVERY_METRIC_NAMES.lag} Nan`);
     expect(warn).toHaveBeenCalledTimes(2);
   });
+
+  it('reports the deliveries held for an unavailable signer, 0 before the role starts (#495)', async () => {
+    const registry = new Registry();
+    const role: { held?: { count: number; oldestSeconds: number } } = {};
+    registerDeliveryMetrics(registry, {
+      store: { pendingByKind: async () => ({}), deliveryLagSeconds: async () => 0 },
+      kinds: ['ssf'],
+      now: () => 1_000,
+      warn: vi.fn(),
+      signerHeld: () => role.held,
+    });
+    let text = await registry.metrics();
+    expect(text).toContain(`${DELIVERY_METRIC_NAMES.signerHeld} 0`);
+    expect(text).toContain(`${DELIVERY_METRIC_NAMES.signerHeldOldest} 0`);
+
+    role.held = { count: 2, oldestSeconds: 900 };
+    text = await registry.metrics();
+    expect(text).toContain(`${DELIVERY_METRIC_NAMES.signerHeld} 2`);
+    expect(text).toContain(`${DELIVERY_METRIC_NAMES.signerHeldOldest} 900`);
+  });
 });

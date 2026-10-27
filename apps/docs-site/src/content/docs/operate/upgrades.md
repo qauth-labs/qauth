@@ -212,6 +212,18 @@ lifetimes with `EXPIRE` and its `NX` and `GT` options, which need **Redis 7.0
 or later**. The bundled Compose file runs Redis 7; check the version of a Redis
 you run yourself.
 
+### Migration 0042 holds sign-ins while it reads `authorization_codes`
+
+Migration 0042 ([#549](https://github.com/qauth-labs/qauth/issues/549)) records
+the browser session behind each authorization code. It adds a column that
+starts empty, so it rewrites no row, but its foreign key and index each read
+the whole of `authorization_codes`. It first locks `sessions` against writes,
+then `authorization_codes`, in the order a code's mint and a session's
+revocation take them, so it cannot deadlock with either. So a sign-in, a
+sign-out, minting a code and redeeming one wait until the runner commits, on
+nodes of either version. Codes live five minutes and the purge job deletes
+expired ones, so the table is usually small and the pause short.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

@@ -133,8 +133,8 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
   it('redeems exactly once — a replay of the same state returns undefined', async () => {
     const created = await seedState();
 
-    const first = await requestStates.redeem(created.stateHash, mintedCode());
-    const second = await requestStates.redeem(created.stateHash, mintedCode());
+    const first = await requestStates.redeem(created.realmId, created.stateHash, mintedCode());
+    const second = await requestStates.redeem(created.realmId, created.stateHash, mintedCode());
 
     expect(first?.id).toBe(created.id);
     expect(first?.redeemedAt).toBeGreaterThan(0);
@@ -147,7 +147,9 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
     const created = await seedState();
 
     const results = await Promise.all(
-      Array.from({ length: 12 }, () => requestStates.redeem(created.stateHash, mintedCode()))
+      Array.from({ length: 12 }, () =>
+        requestStates.redeem(created.realmId, created.stateHash, mintedCode())
+      )
     );
 
     const winners = results.filter((row) => row !== undefined);
@@ -159,7 +161,9 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
   it('refuses an expired state, and leaves it unredeemed', async () => {
     const created = await seedState({ expiresAt: Date.now() - 1 });
 
-    expect(await requestStates.redeem(created.stateHash, mintedCode())).toBeUndefined();
+    expect(
+      await requestStates.redeem(created.realmId, created.stateHash, mintedCode())
+    ).toBeUndefined();
 
     // Not "consumed then rejected": expiry is part of the same predicate, so
     // the row is simply never matched.
@@ -167,10 +171,24 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
     expect(remaining).toBe(1);
   });
 
-  it('refuses an unknown state', async () => {
-    await seedState();
+  it('refuses a state of another realm, as an unknown one, and leaves it live (#489)', async () => {
+    const created = await seedState();
+    const otherRealm = await seedRealm();
 
-    expect(await requestStates.redeem('never-issued', mintedCode())).toBeUndefined();
+    expect(await requestStates.redeem(otherRealm, created.stateHash, mintedCode())).toBeUndefined();
+    expect((await storedRow(created.id))?.redeemedAt).toBeNull();
+    // Still redeemable in its own realm: the refusal consumed nothing.
+    expect((await requestStates.redeem(created.realmId, created.stateHash, mintedCode()))?.id).toBe(
+      created.id
+    );
+  });
+
+  it('refuses an unknown state', async () => {
+    const seeded = await seedState();
+
+    expect(
+      await requestStates.redeem(seeded.realmId, 'never-issued', mintedCode())
+    ).toBeUndefined();
   });
 
   it('enforces the state_hash unique index', async () => {
@@ -202,7 +220,9 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
 
     await ctx.database.db.delete(realms);
 
-    expect(await requestStates.redeem(created.stateHash, mintedCode())).toBeUndefined();
+    expect(
+      await requestStates.redeem(created.realmId, created.stateHash, mintedCode())
+    ).toBeUndefined();
   });
 
   it('deleteExpired removes only past-TTL rows', async () => {
@@ -210,7 +230,9 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
     await seedState({ expiresAt: Date.now() - 1_000 });
 
     expect(await requestStates.deleteExpired()).toBe(1);
-    expect((await requestStates.redeem(live.stateHash, mintedCode()))?.id).toBe(live.id);
+    expect((await requestStates.redeem(live.realmId, live.stateHash, mintedCode()))?.id).toBe(
+      live.id
+    );
   });
 
   /**
@@ -242,8 +264,8 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       const created = await seedEncryptedState();
       const kid = created.responseEncryptionKid as string;
 
-      const first = await requestStates.redeemByEncryptionKid(kid, mintedCode());
-      const second = await requestStates.redeemByEncryptionKid(kid, mintedCode());
+      const first = await requestStates.redeemByEncryptionKid(created.realmId, kid, mintedCode());
+      const second = await requestStates.redeemByEncryptionKid(created.realmId, kid, mintedCode());
 
       expect(first?.id).toBe(created.id);
       expect(first?.stateHash).toBe(created.stateHash);
@@ -258,7 +280,11 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       // happened in the same statement, not in a later pass.
       const created = await seedEncryptedState({ kid: 'kid-handoff' });
 
-      const redeemed = await requestStates.redeemByEncryptionKid('kid-handoff', mintedCode());
+      const redeemed = await requestStates.redeemByEncryptionKid(
+        created.realmId,
+        'kid-handoff',
+        mintedCode()
+      );
 
       // The caller gets the row AS CONSUMED: redeemed, and carrying the key.
       expect(redeemed?.redeemedAt).toBeGreaterThan(0);
@@ -280,7 +306,7 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       // use for it, so it is not handed back either.
       const created = await seedEncryptedState({ kid: 'kid-cleartext-consumed' });
 
-      const redeemed = await requestStates.redeem(created.stateHash, mintedCode());
+      const redeemed = await requestStates.redeem(created.realmId, created.stateHash, mintedCode());
 
       expect(redeemed?.id).toBe(created.id);
       expect(redeemed?.responseEncryptionPrivateJwk).toBeNull();
@@ -299,16 +325,22 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       const byKid = await seedEncryptedState();
       expect(
         await requestStates.redeemByEncryptionKid(
+          byKid.realmId,
           byKid.responseEncryptionKid as string,
           mintedCode()
         )
       ).toBeDefined();
-      expect(await requestStates.redeem(byKid.stateHash, mintedCode())).toBeUndefined();
+      expect(
+        await requestStates.redeem(byKid.realmId, byKid.stateHash, mintedCode())
+      ).toBeUndefined();
 
       const byState = await seedEncryptedState();
-      expect(await requestStates.redeem(byState.stateHash, mintedCode())).toBeDefined();
+      expect(
+        await requestStates.redeem(byState.realmId, byState.stateHash, mintedCode())
+      ).toBeDefined();
       expect(
         await requestStates.redeemByEncryptionKid(
+          byState.realmId,
           byState.responseEncryptionKid as string,
           mintedCode()
         )
@@ -320,7 +352,9 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       const kid = created.responseEncryptionKid as string;
 
       const results = await Promise.all(
-        Array.from({ length: 12 }, () => requestStates.redeemByEncryptionKid(kid, mintedCode()))
+        Array.from({ length: 12 }, () =>
+          requestStates.redeemByEncryptionKid(created.realmId, kid, mintedCode())
+        )
       );
 
       const winners = results.filter((row) => row !== undefined);
@@ -336,6 +370,7 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
 
       expect(
         await requestStates.redeemByEncryptionKid(
+          created.realmId,
           created.responseEncryptionKid as string,
           mintedCode()
         )
@@ -343,11 +378,34 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       expect(await requestStates.deleteExpired()).toBe(1);
     });
 
-    it('refuses an unknown kid', async () => {
-      await seedEncryptedState();
+    it('refuses a kid of another realm, as an unknown one, and keeps its key (#489)', async () => {
+      const created = await seedEncryptedState();
+      const otherRealm = await seedRealm();
 
       expect(
-        await requestStates.redeemByEncryptionKid('never-published', mintedCode())
+        await requestStates.redeemByEncryptionKid(
+          otherRealm,
+          created.responseEncryptionKid as string,
+          mintedCode()
+        )
+      ).toBeUndefined();
+      expect((await storedRow(created.id))?.responseEncryptionPrivateJwk).not.toBeNull();
+      expect(
+        (
+          await requestStates.redeemByEncryptionKid(
+            created.realmId,
+            created.responseEncryptionKid as string,
+            mintedCode()
+          )
+        )?.id
+      ).toBe(created.id);
+    });
+
+    it('refuses an unknown kid', async () => {
+      const seeded = await seedEncryptedState();
+
+      expect(
+        await requestStates.redeemByEncryptionKid(seeded.realmId, 'never-published', mintedCode())
       ).toBeUndefined();
     });
 
@@ -356,8 +414,12 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       // from the encrypted path however the parameter is chosen.
       const plain = await seedState();
 
-      expect(await requestStates.redeemByEncryptionKid('', mintedCode())).toBeUndefined();
-      expect((await requestStates.redeem(plain.stateHash, mintedCode()))?.id).toBe(plain.id);
+      expect(
+        await requestStates.redeemByEncryptionKid(plain.realmId, '', mintedCode())
+      ).toBeUndefined();
+      expect((await requestStates.redeem(plain.realmId, plain.stateHash, mintedCode()))?.id).toBe(
+        plain.id
+      );
     });
 
     it('enforces kid uniqueness over LIVE rows only', async () => {
@@ -369,7 +431,9 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
 
       await expect(seedEncryptedState({ kid: 'kid-shared' })).rejects.toThrow();
 
-      expect(await requestStates.redeemByEncryptionKid('kid-shared', mintedCode())).toBeDefined();
+      expect(
+        await requestStates.redeemByEncryptionKid(first.realmId, 'kid-shared', mintedCode())
+      ).toBeDefined();
       const reused = await seedEncryptedState({ kid: 'kid-shared' });
       expect(reused.id).not.toBe(first.id);
     });
@@ -450,11 +514,24 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       expect(chosen.responseCodeRedeemedAt).toBeNull();
     });
 
+    it('does not spend a Response Code presented in another realm (#489)', async () => {
+      const created = await seedState({ sameDevice: true });
+      const otherRealm = await seedRealm();
+      const code = mintedCode();
+      await requestStates.redeem(created.realmId, created.stateHash, code);
+
+      expect(await requestStates.redeemResponseCode(otherRealm, code.codeHash)).toBeUndefined();
+      expect((await storedRow(created.id))?.responseCodeRedeemedAt).toBeNull();
+      expect(await requestStates.redeemResponseCode(created.realmId, code.codeHash)).toEqual({
+        stateHash: created.stateHash,
+      });
+    });
+
     it('writes the code at redemption, readable back ONLY by consuming it', async () => {
       const created = await seedState({ sameDevice: true });
       const code = mintedCode();
 
-      const redeemed = await requestStates.redeem(created.stateHash, code);
+      const redeemed = await requestStates.redeem(created.realmId, created.stateHash, code);
 
       // The caller sees the digest it handed in, on the row as consumed, and
       // the device choice it needs to decide whether to emit the code.
@@ -470,7 +547,7 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
 
       // The one read there is: the landing, which spends the code and learns
       // the state hash — and nothing else.
-      const landed = await requestStates.redeemResponseCode(code.codeHash);
+      const landed = await requestStates.redeemResponseCode(created.realmId, code.codeHash);
       expect(landed).toEqual({ stateHash: created.stateHash });
       expect(Object.keys(landed ?? {})).toEqual(['stateHash']);
 
@@ -484,13 +561,14 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       const code = mintedCode();
 
       const redeemed = await requestStates.redeemByEncryptionKid(
+        created.realmId,
         created.responseEncryptionKid as string,
         code
       );
       expect(redeemed?.responseCodeHash).toBe(code.codeHash);
       expect(redeemed?.sameDevice).toBe(true);
 
-      const landed = await requestStates.redeemResponseCode(code.codeHash);
+      const landed = await requestStates.redeemResponseCode(created.realmId, code.codeHash);
       expect(landed).toEqual({ stateHash: created.stateHash });
 
       // Erased at redemption, and in any case never projected by the landing.
@@ -504,10 +582,12 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
     it('survives concurrent landings: exactly one of N simultaneous redemptions wins', async () => {
       const created = await seedState({ sameDevice: true });
       const code = mintedCode();
-      await requestStates.redeem(created.stateHash, code);
+      await requestStates.redeem(created.realmId, created.stateHash, code);
 
       const results = await Promise.all(
-        Array.from({ length: 12 }, () => requestStates.redeemResponseCode(code.codeHash))
+        Array.from({ length: 12 }, () =>
+          requestStates.redeemResponseCode(created.realmId, code.codeHash)
+        )
       );
 
       const winners = results.filter((row) => row !== undefined);
@@ -518,10 +598,12 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
     it('refuses a replayed code', async () => {
       const created = await seedState({ sameDevice: true });
       const code = mintedCode();
-      await requestStates.redeem(created.stateHash, code);
+      await requestStates.redeem(created.realmId, created.stateHash, code);
 
-      expect(await requestStates.redeemResponseCode(code.codeHash)).toBeDefined();
-      expect(await requestStates.redeemResponseCode(code.codeHash)).toBeUndefined();
+      expect(await requestStates.redeemResponseCode(created.realmId, code.codeHash)).toBeDefined();
+      expect(
+        await requestStates.redeemResponseCode(created.realmId, code.codeHash)
+      ).toBeUndefined();
     });
 
     it('refuses an expired code, on its OWN deadline, and leaves it unspent', async () => {
@@ -529,9 +611,11 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       // `expires_at` plays no part in the landing.
       const created = await seedState({ sameDevice: true, expiresAt: Date.now() + 300_000 });
       const code = mintedCode({ codeExpiresAt: Date.now() - 1 });
-      await requestStates.redeem(created.stateHash, code);
+      await requestStates.redeem(created.realmId, created.stateHash, code);
 
-      expect(await requestStates.redeemResponseCode(code.codeHash)).toBeUndefined();
+      expect(
+        await requestStates.redeemResponseCode(created.realmId, code.codeHash)
+      ).toBeUndefined();
       // Not "consumed then rejected": expiry is in the predicate, so the
       // marker was never written.
       expect((await storedRow(created.id))?.responseCodeRedeemedAt).toBeNull();
@@ -539,10 +623,10 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
 
     it('refuses an unknown code', async () => {
       const created = await seedState({ sameDevice: true });
-      await requestStates.redeem(created.stateHash, mintedCode());
+      await requestStates.redeem(created.realmId, created.stateHash, mintedCode());
 
       expect(
-        await requestStates.redeemResponseCode('never-minted'.padEnd(64, '0'))
+        await requestStates.redeemResponseCode(created.realmId, 'never-minted'.padEnd(64, '0'))
       ).toBeUndefined();
     });
 
@@ -552,10 +636,12 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       // at the one place it could be spent.
       const created = await seedState({ sameDevice: false });
       const code = mintedCode();
-      await requestStates.redeem(created.stateHash, code);
+      await requestStates.redeem(created.realmId, created.stateHash, code);
 
       expect((await storedRow(created.id))?.responseCodeHash).toBe(code.codeHash);
-      expect(await requestStates.redeemResponseCode(code.codeHash)).toBeUndefined();
+      expect(
+        await requestStates.redeemResponseCode(created.realmId, code.codeHash)
+      ).toBeUndefined();
       expect((await storedRow(created.id))?.responseCodeRedeemedAt).toBeNull();
     });
 
@@ -579,7 +665,7 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       });
       expect(planted.redeemedAt).toBeNull();
 
-      expect(await requestStates.redeemResponseCode(code.codeHash)).toBeUndefined();
+      expect(await requestStates.redeemResponseCode(realmId, code.codeHash)).toBeUndefined();
     });
 
     it('enforces code-digest uniqueness over UNSPENT codes only', async () => {
@@ -591,13 +677,17 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       const second = await seedState({ sameDevice: true });
       const shared = mintedCode({ codeHash: 'code-shared'.padEnd(64, '0') });
 
-      expect(await requestStates.redeem(first.stateHash, shared)).toBeDefined();
-      await expect(requestStates.redeem(second.stateHash, shared)).rejects.toThrow();
+      expect(await requestStates.redeem(first.realmId, first.stateHash, shared)).toBeDefined();
+      await expect(
+        requestStates.redeem(second.realmId, second.stateHash, shared)
+      ).rejects.toThrow();
 
-      expect(await requestStates.redeemResponseCode(shared.codeHash)).toEqual({
+      expect(await requestStates.redeemResponseCode(first.realmId, shared.codeHash)).toEqual({
         stateHash: first.stateHash,
       });
-      expect((await requestStates.redeem(second.stateHash, shared))?.id).toBe(second.id);
+      expect((await requestStates.redeem(second.realmId, second.stateHash, shared))?.id).toBe(
+        second.id
+      );
     });
 
     it('deleteExpired spares a row with a live code and removes one whose code expired', async () => {
@@ -607,11 +697,12 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       // leg still works afterwards.
       const liveCode = await seedState({ sameDevice: true });
       const code = mintedCode({ codeExpiresAt: Date.now() + 180_000 });
-      await requestStates.redeem(liveCode.stateHash, code);
+      await requestStates.redeem(liveCode.realmId, liveCode.stateHash, code);
       await ageRequest(liveCode.id);
 
       const deadCode = await seedState({ sameDevice: true });
       await requestStates.redeem(
+        deadCode.realmId,
         deadCode.stateHash,
         mintedCode({ codeExpiresAt: Date.now() - 1_000 })
       );
@@ -623,7 +714,7 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       expect(await storedRow(liveCode.id)).toBeDefined();
       expect(await storedRow(deadCode.id)).toBeUndefined();
       expect(await storedRow(unanswered.id)).toBeUndefined();
-      expect(await requestStates.redeemResponseCode(code.codeHash)).toEqual({
+      expect(await requestStates.redeemResponseCode(liveCode.realmId, code.codeHash)).toEqual({
         stateHash: liveCode.stateHash,
       });
     });

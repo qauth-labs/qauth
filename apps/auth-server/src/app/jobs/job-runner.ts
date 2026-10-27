@@ -1,3 +1,4 @@
+import { SERVICE_ROLE_NAMES, type ServiceRole } from '@qauth-labs/server-config';
 import type { FastifyBaseLogger } from 'fastify';
 
 /**
@@ -45,16 +46,13 @@ import type { FastifyBaseLogger } from 'fastify';
  */
 
 /**
- * The service roles a job can be placed on (ADR-019 Decision 8).
- *
- * The names are the role switch's proposal (`SERVICE_ROLES`, #495), which owns
- * the set once it lands. Until then a deployment is a single process that holds
- * every role, so every job runs in it.
+ * The service roles a job can be placed on (ADR-019 Decision 8): the roles of
+ * the role switch (`SERVICE_ROLES`, #495). A single process holds every role,
+ * so every job runs in it.
  */
-export const SERVICE_ROLES = ['web', 'api', 'admin', 'signer', 'delivery'] as const;
+export const SERVICE_ROLES: readonly ServiceRole[] = SERVICE_ROLE_NAMES;
 
-/** One of {@link SERVICE_ROLES}. */
-export type ServiceRole = (typeof SERVICE_ROLES)[number];
+export type { ServiceRole };
 
 /** What a run is handed. */
 export interface JobContext {

@@ -50,6 +50,8 @@ function createRecordingDb(rows: (Record<string, unknown> | readonly unknown[])[
   return { db: drizzle(client as unknown as Pool) as unknown as DbClient, queries };
 }
 
+/** The realm the request was resolved to (#489). */
+const REALM_ID = '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b';
 const STATE_HASH = 'a'.repeat(64);
 const CODE_HASH = 'c'.repeat(64);
 const CODE_EXPIRES_AT = 1_800_000_180_000;
@@ -60,7 +62,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
   it('issues exactly ONE statement — never a select followed by an update', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeem(REALM_ID, STATE_HASH, RESPONSE_CODE);
 
     expect(queries).toHaveLength(1);
     expect(queries[0].text.toLowerCase()).not.toContain('select');
@@ -69,7 +71,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
   it('(OID4VP 1.0 §14.3.2) guards the update on unredeemed AND unexpired, and returns the row', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeem(REALM_ID, STATE_HASH, RESPONSE_CODE);
 
     const sql = queries[0].text.toLowerCase();
 
@@ -87,7 +89,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
     const { db } = createRecordingDb([]);
 
     await expect(
-      createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE)
+      createOid4vpRequestStatesRepository(db).redeem(REALM_ID, STATE_HASH, RESPONSE_CODE)
     ).resolves.toBeUndefined();
   });
 
@@ -95,7 +97,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
     const { db } = createRecordingDb([{ id: 'row-1', state_hash: STATE_HASH }]);
 
     await expect(
-      createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE)
+      createOid4vpRequestStatesRepository(db).redeem(REALM_ID, STATE_HASH, RESPONSE_CODE)
     ).resolves.toBeDefined();
   });
 
@@ -105,7 +107,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
     // a consumed row must not keep a key (#377 Phase C review, F1).
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeem(REALM_ID, STATE_HASH, RESPONSE_CODE);
 
     const sql = queries[0].text.toLowerCase();
     const setClause = sql.slice(sql.indexOf(' set '), sql.indexOf(' where '));
@@ -124,7 +126,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
   it('writes the Response Code digest and deadline in the SAME statement, alongside the erasure', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeem(REALM_ID, STATE_HASH, RESPONSE_CODE);
 
     expect(queries).toHaveLength(1);
     const sql = queries[0].text.toLowerCase();
@@ -173,7 +175,11 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
   it('issues exactly ONE statement — never a select followed by an update', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(
+      REALM_ID,
+      KID,
+      RESPONSE_CODE
+    );
 
     expect(queries).toHaveLength(1);
     expect(queries[0].text.toLowerCase()).not.toContain('select');
@@ -182,7 +188,11 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
   it('guards on the kid, unredeemed AND unexpired, and returns the row', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(
+      REALM_ID,
+      KID,
+      RESPONSE_CODE
+    );
 
     const sql = queries[0].text.toLowerCase();
 
@@ -200,7 +210,11 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
   it('binds the kid as a parameter, never interpolated', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(
+      REALM_ID,
+      KID,
+      RESPONSE_CODE
+    );
 
     expect(queries[0].values).toContain(KID);
     expect(queries[0].text).not.toContain(KID);
@@ -210,7 +224,7 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
     const { db } = createRecordingDb([]);
 
     await expect(
-      createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE)
+      createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(REALM_ID, KID, RESPONSE_CODE)
     ).resolves.toBeUndefined();
   });
 
@@ -218,7 +232,7 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
     const { db } = createRecordingDb([{ id: 'row-1', response_encryption_kid: KID }]);
 
     await expect(
-      createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE)
+      createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(REALM_ID, KID, RESPONSE_CODE)
     ).resolves.toBeDefined();
   });
 
@@ -232,7 +246,11 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
   it('erases the encrypted-response columns in the SAME statement that consumes the row', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(
+      REALM_ID,
+      KID,
+      RESPONSE_CODE
+    );
 
     expect(queries).toHaveLength(1);
     const sql = queries[0].text.toLowerCase();
@@ -247,7 +265,11 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
   it('projects the PRE-update key columns into RETURNING via a primary-key self-join', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(
+      REALM_ID,
+      KID,
+      RESPONSE_CODE
+    );
 
     const sql = queries[0].text.toLowerCase();
     const returning = sql.slice(sql.indexOf('returning'));
@@ -275,7 +297,11 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
     // as `redeem`, which is the point: one statement, whichever correlator.
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID, RESPONSE_CODE);
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(
+      REALM_ID,
+      KID,
+      RESPONSE_CODE
+    );
 
     expect(queries).toHaveLength(1);
     const sql = queries[0].text.toLowerCase();
@@ -307,7 +333,7 @@ describe('createOid4vpRequestStatesRepository.redeemResponseCode', () => {
   it('issues exactly ONE statement — never a select followed by an update', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemResponseCode(CODE_HASH);
+    await createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, CODE_HASH);
 
     expect(queries).toHaveLength(1);
     expect(queries[0].text.toLowerCase()).not.toContain('select');
@@ -316,7 +342,7 @@ describe('createOid4vpRequestStatesRepository.redeemResponseCode', () => {
   it('guards on all five predicates: digest, code unredeemed, code unexpired, row redeemed, same-device', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemResponseCode(CODE_HASH);
+    await createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, CODE_HASH);
 
     const sql = queries[0].text.toLowerCase();
     const whereClause = sql.slice(sql.indexOf(' where '), sql.indexOf('returning'));
@@ -342,7 +368,7 @@ describe('createOid4vpRequestStatesRepository.redeemResponseCode', () => {
   it('binds the digest as a parameter, never interpolated', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemResponseCode(CODE_HASH);
+    await createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, CODE_HASH);
 
     expect(queries[0].values).toContain(CODE_HASH);
     expect(queries[0].text).not.toContain(CODE_HASH);
@@ -355,7 +381,7 @@ describe('createOid4vpRequestStatesRepository.redeemResponseCode', () => {
     // DCQL query.
     const { db, queries } = createRecordingDb();
 
-    await createOid4vpRequestStatesRepository(db).redeemResponseCode(CODE_HASH);
+    await createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, CODE_HASH);
 
     const sql = queries[0].text.toLowerCase();
     const returning = sql.slice(sql.indexOf('returning'));
@@ -374,7 +400,7 @@ describe('createOid4vpRequestStatesRepository.redeemResponseCode', () => {
     const { db } = createRecordingDb([]);
 
     await expect(
-      createOid4vpRequestStatesRepository(db).redeemResponseCode(CODE_HASH)
+      createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, CODE_HASH)
     ).resolves.toBeUndefined();
   });
 
@@ -382,7 +408,7 @@ describe('createOid4vpRequestStatesRepository.redeemResponseCode', () => {
     const { db } = createRecordingDb([[STATE_HASH]]);
 
     await expect(
-      createOid4vpRequestStatesRepository(db).redeemResponseCode(CODE_HASH)
+      createOid4vpRequestStatesRepository(db).redeemResponseCode(REALM_ID, CODE_HASH)
     ).resolves.toEqual({ stateHash: STATE_HASH });
   });
 });

@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { API_FAMILY_AUDIENCES, type ApiFamily } from '../api-conventions/families';
 import { isClientUsable } from './client-status';
+import { realmTokenIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
 
@@ -13,10 +14,10 @@ import { inactiveSubjectError } from './token-subject';
  * claim after the signature check, and with the request, so a rule may depend
  * on what the request names.
  *
- * The default, {@link deploymentIssuer}, accepts only the deployment's issuer.
- * The admin family supplies its own (#510): an operator-realm admin's token
- * names the operator realm's issuer, and a realm-local admin's names its own
- * realm's.
+ * The default, {@link requestRealmIssuer}, accepts only the token issuer of
+ * the request's realm. The admin family supplies its own (#510): an
+ * operator-realm admin's token names the operator realm's issuer, and a
+ * realm-local admin's names its own realm's.
  */
 export type IssuerResolver = (
   issuer: string,
@@ -24,11 +25,17 @@ export type IssuerResolver = (
 ) => boolean | Promise<boolean>;
 
 /**
- * The default {@link IssuerResolver}: the deployment's issuer (`JWT_ISSUER`),
- * the one every token this server mints carries today.
+ * The default {@link IssuerResolver}: the token issuer of the request's realm,
+ * `realmTokenIssuer` (ADR-019 Decision 1, #490), as the issuer pins of
+ * introspection, revocation and logout.
+ *
+ * For the realm `JWT_ISSUER` names, that is `JWT_ISSUER` as written, the `iss`
+ * every token this server mints carries today. Any other realm accepts only its
+ * own issuer, so it refuses those tokens until each realm's tokens carry its
+ * own `iss` (#491).
  */
-export const deploymentIssuer: IssuerResolver = (issuer, request) =>
-  issuer === request.server.jwtUtils.getIssuer();
+export const requestRealmIssuer: IssuerResolver = (issuer, request) =>
+  issuer === realmTokenIssuer(request.server, requestRealm(request));
 
 /**
  * What a token's `sub` may name on a family route (#509):
@@ -41,7 +48,7 @@ export type FamilySubjectKind = 'user' | 'client';
 
 /** What a family route asks of a token beyond the family's own rules. */
 export interface FamilyTokenOptions {
-  /** The issuer rule. Default: {@link deploymentIssuer}. */
+  /** The issuer rule. Default: {@link requestRealmIssuer}. */
   readonly issuerResolver?: IssuerResolver;
   /**
    * Which subjects the route admits. Required, and never empty: the guard
@@ -110,9 +117,10 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  * Refuse a token whose subject is not an active user or client of the
  * request's realm (ADR-019 Decision 1, #509).
  *
- * A family audience reads the same in every realm, and an access token names
- * no realm: until each realm has its own issuer, the realm a token belongs to
- * is its subject's. So the guard resolves `sub` in `requestRealm(request)`:
+ * A family audience reads the same in every realm. The default issuer rule
+ * admits a token only at the realm whose token issuer it names, but a family
+ * may supply its own rule (#510), and the subject must belong to the realm
+ * whatever the rule. So the guard resolves `sub` in `requestRealm(request)`:
  *
  * - a `client_credentials` token (`sub` is its own `client_id`) names a client
  *   of this realm that is enabled and not suspended;
@@ -122,8 +130,8 @@ function assertFamilyClaims(family: ApiFamily, claims: JWTPayload): void {
  * user is refused with the one wording every route uses for a subject that is
  * not an active user (`inactiveSubjectError`), so the answer does not say
  * whether the account exists in another realm. A `client_id` names a client
- * per realm, so one that names an enabled client in two realms is admitted in
- * both: only per-realm issuers can tell those tokens apart.
+ * per realm; under the default issuer rule a token of a `client_id` that two
+ * realms enable passes only at the realm whose issuer it names.
  */
 async function assertSubjectOfRealm(
   request: FastifyRequest,
@@ -144,8 +152,10 @@ async function assertSubjectOfRealm(
   if (!subjects.has('user') || !uuidSubjectSchema.safeParse(claims.sub).success) {
     throw inactiveSubjectError();
   }
-  const user = await repositories.users.findById(claims.sub);
-  if (!user || !user.enabled || user.realmId !== realm.id) {
+  // Looked up in the request's realm (#489): a user of another realm is no
+  // user here, refused as an unknown one is.
+  const user = await repositories.users.findById(realm.id, claims.sub);
+  if (!user || !user.enabled) {
     throw inactiveSubjectError();
   }
 }
@@ -185,7 +195,7 @@ export function requireFamilyToken(
   family: ApiFamily,
   options: FamilyTokenOptions
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
-  const issuerResolver = options.issuerResolver ?? deploymentIssuer;
+  const issuerResolver = options.issuerResolver ?? requestRealmIssuer;
   const subjects = new Set(options.subjects);
   if (subjects.size === 0) {
     throw new Error('requireFamilyToken: a family route admits at least one kind of subject');

@@ -21,6 +21,8 @@ import {
   MisdirectedRequestError,
   MissingAccessTokenError,
   NotFoundError,
+  PreconditionFailedError,
+  PreconditionRequiredError,
   ProviderAlreadyRegisteredError,
   ProviderNotRegisteredError,
   TemporarilyUnavailableError,
@@ -95,6 +97,16 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
     oauthError: 'invalid_request',
   },
   { errorClass: NotFoundError, code: 'not_found', oauthError: 'invalid_request' },
+  {
+    errorClass: PreconditionFailedError,
+    code: 'precondition_failed',
+    oauthError: 'invalid_request',
+  },
+  {
+    errorClass: PreconditionRequiredError,
+    code: 'precondition_required',
+    oauthError: 'invalid_request',
+  },
   {
     errorClass: TemporarilyUnavailableError,
     code: 'service_unavailable',

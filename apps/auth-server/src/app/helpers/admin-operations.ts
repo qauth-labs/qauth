@@ -24,7 +24,10 @@
  *
  * REQUEST-DEPENDENT RULES. A policy patch or a realm-file import needs what
  * its content needs: lowering the password policy is a security operation,
- * changing a token lifespan is not. Such an operation declares the strictest
+ * and so is lengthening a token or session lifetime or the key rotation
+ * interval, or shortening or switching off audit-event retention
+ * (`posture-loosening`, by effect); shortening a lifetime or lengthening
+ * retention is not. Such an operation declares the strictest
  * classification any request can get (class `security`, every effect it may
  * have, every permission it may need) and a pure, synchronous `classify`
  * that returns what one request needs, within that declaration.
@@ -40,19 +43,35 @@
  * classification: `security`, every declared effect and every declared
  * permission.
  *
+ * STATE BINDING. An operation that reads state to classify (`loadState`)
+ * also says which version of that state it read (`stateVersion`). The
+ * classification carries the version, the pipeline answers 428 when the
+ * request has no `If-Match` and 412 when it names another version, and the
+ * handler's write must be
+ * conditional on `classification.stateVersion` (or load, classify and write
+ * in one transaction under `SELECT … FOR UPDATE`): a write to state that
+ * changed after the classification would run under a classification of
+ * other state.
+ *
  * RESERVED IDS. `admin-operations-reserved.ts` lists, for each effect, the
  * operation ids other areas register later. Registering one of them as
  * anything but a security operation that carries at least its reserved
  * effects fails, and so does an id that differs from one only in case. A
  * reserved operation may `classify` only where its entry says the request
  * decides (`requestDependent`); every other one needs its declaration on
- * every request.
+ * every request. A request-dependent entry carries security cases
+ * (`vectors`): the registry runs the operation's `classify` on each at boot
+ * and refuses one that classifies a case less strictly than its entry says,
+ * or fails closed on it (then it tests nothing), so a `classify` that answers
+ * `write` for everything cannot take the reservation.
  *
  * The docs page `reference/security-operations.md` is generated from this
  * registry (`admin-operations-page.ts`), and the API conventions check
  * (`api-conventions/openapi-conventions.ts`) fails when an admin operation of
  * the OpenAPI document disagrees with it.
  */
+import { createHash } from 'node:crypto';
+
 import {
   isSecurityEffect,
   SECURITY_EFFECTS,
@@ -60,7 +79,11 @@ import {
 } from '@qauth-labs/shared-validation';
 import type { FastifyRequest } from 'fastify';
 
-import { RESERVED_OPERATIONS, type ReservedOperation } from './admin-operations-reserved';
+import {
+  RESERVED_OPERATIONS,
+  type ReservedOperation,
+  type ReservedVector,
+} from './admin-operations-reserved';
 import {
   PERMISSION_ID_PATTERN,
   PERMISSION_REGISTRY,
@@ -126,9 +149,24 @@ export interface AdminOperationDefinition<State = unknown> {
   /**
    * Reads the state `classify` compares the request with, such as the realm's
    * current policies. The pipeline awaits it before `classify`; a rejection
-   * fails the request, which then runs nothing.
+   * fails the request, which then runs nothing. Requires `stateVersion`.
    */
   loadState?(request: FastifyRequest): Promise<State>;
+  /**
+   * The version of a state `loadState` read, such as its row version or a
+   * digest of it: an entity-tag's opaque value (`!` and `#` to `~`, at most
+   * 256 characters, no quotes), which the route sends quoted as its `ETag`.
+   * Required with `loadState`, and pure.
+   *
+   * The pipeline puts it on the classification (`stateVersion`), answers 428
+   * when the request has no `If-Match` and 412 when it names another version.
+   * The handler's
+   * write MUST be conditional on it (`… WHERE version = stateVersion`, 412
+   * when no row matches), or load, classify and write in one transaction
+   * under `SELECT … FOR UPDATE`: the classification holds only for the
+   * state it was made against.
+   */
+  stateVersion?(state: State): string;
 }
 
 /** A registered operation: a definition that {@link defineOperation} accepted, frozen. */
@@ -143,6 +181,7 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
   'description',
   'classify',
   'loadState',
+  'stateVersion',
 ]);
 
 /** A definition refused by {@link defineOperation} or {@link createOperationRegistry}. */
@@ -212,7 +251,7 @@ function snapshotOperation(operation: AdminOperationDefinition): AdminOperationD
  */
 function assertOperation(operation: AdminOperationDefinition): void {
   const where = `operation ${JSON.stringify(operation.id)}`;
-  const { id, effects, permissions, description, classify, loadState } = operation;
+  const { id, effects, permissions, description, classify, loadState, stateVersion } = operation;
   if (typeof id !== 'string' || !OPERATION_ID_PATTERN.test(id)) {
     throw new OperationDefinitionError(
       `${where}: an id is <resource>.<verb>, lower camelCase segments joined by dots, such as realms.get`
@@ -274,6 +313,19 @@ function assertOperation(operation: AdminOperationDefinition): void {
   if (loadState !== undefined && classify === undefined) {
     throw new OperationDefinitionError(`${where}: loadState is read only by classify`);
   }
+  if (stateVersion !== undefined && typeof stateVersion !== 'function') {
+    throw new OperationDefinitionError(`${where}: stateVersion is a function`);
+  }
+  // The classification holds for the state it was made against only; the
+  // version is what binds the handler's write to that state.
+  if (loadState !== undefined && stateVersion === undefined) {
+    throw new OperationDefinitionError(
+      `${where}: an operation with loadState names the version of the state it read (stateVersion), so its write can be conditional on it`
+    );
+  }
+  if (stateVersion !== undefined && loadState === undefined) {
+    throw new OperationDefinitionError(`${where}: stateVersion is read only with loadState`);
+  }
   // A request whose classification fails closed gets the declaration, which
   // must therefore be a security classification: otherwise a broken
   // `classify` would hand a request that may be a security operation the
@@ -333,9 +385,59 @@ const RESERVED_KEYS: ReadonlySet<string> = new Set([
   'id',
   'effects',
   'requestDependent',
+  'vectors',
   'source',
   'description',
 ]);
+
+/** The members a reserved vector has. */
+const VECTOR_KEYS: ReadonlySet<string> = new Set(['name', 'request', 'state', 'effects']);
+
+/** Throws {@link OperationDefinitionError} when a request-dependent entry's vectors are malformed. */
+function assertVectors(entry: ReservedOperation, where: string): void {
+  if (entry.requestDependent !== true) {
+    if (entry.vectors !== undefined) {
+      throw new OperationDefinitionError(
+        `${where}: only a request-dependent entry has vectors; every request of this one needs its declaration`
+      );
+    }
+    return;
+  }
+  // Without cases, a `classify` that answers `write` for every request would
+  // take the reservation.
+  if (!Array.isArray(entry.vectors) || entry.vectors.length === 0) {
+    throw new OperationDefinitionError(
+      `${where}: a request-dependent entry lists the security cases its classify must meet (vectors)`
+    );
+  }
+  const names = new Set<string>();
+  for (const vector of entry.vectors as readonly ReservedVector[]) {
+    const unknown =
+      typeof vector === 'object' && vector !== null
+        ? Reflect.ownKeys(vector).filter((key) => typeof key !== 'string' || !VECTOR_KEYS.has(key))
+        : ['(not an object)'];
+    const request = (vector as { request?: unknown } | null)?.request;
+    if (
+      unknown.length > 0 ||
+      !isOneLine(vector.name) ||
+      names.has(vector.name) ||
+      typeof request !== 'object' ||
+      request === null ||
+      typeof (request as { method?: unknown }).method !== 'string' ||
+      !Array.isArray(vector.effects) ||
+      vector.effects.length === 0 ||
+      !vector.effects.every(
+        (effect) => isSecurityEffect(effect) && entry.effects.includes(effect)
+      ) ||
+      new Set(vector.effects).size !== vector.effects.length
+    ) {
+      throw new OperationDefinitionError(
+        `${where}: a vector has a one-line name of its own, a request with a method, a state and one or more distinct effects of the entry`
+      );
+    }
+    names.add(vector.name);
+  }
+}
 
 /** Throws {@link OperationDefinitionError} when the reserved table is malformed. */
 function assertReservedTable(reserved: readonly ReservedOperation[]): void {
@@ -373,6 +475,34 @@ function assertReservedTable(reserved: readonly ReservedOperation[]): void {
     if (!isOneLine(entry.source) || !isOneLine(entry.description)) {
       throw new OperationDefinitionError(`${where}: the source and description are one line each`);
     }
+    assertVectors(entry, where);
+  }
+}
+
+/**
+ * Throws {@link OperationDefinitionError} when `operation`'s `classify` gives
+ * a case of its reservation less than the case needs, or fails closed on it.
+ * `classify` is pure and synchronous, so the cases run at boot.
+ */
+function assertVectorsMet(
+  operation: AdminOperation,
+  reservation: ReservedOperation,
+  permissions: PermissionRegistry,
+  where: string
+): void {
+  for (const vector of reservation.vectors ?? []) {
+    const result = classifyRequest({ permissions }, operation, vector.request, vector.state);
+    if (result.failedClosed !== null) {
+      throw new OperationDefinitionError(
+        `${where}: classify fails closed (${result.failedClosed}) on the reserved case "${vector.name}" (${reservation.source}); write the case in the representation the operation ships, so it tests the classification`
+      );
+    }
+    const missing = vector.effects.filter((effect) => !result.effects.includes(effect));
+    if (result.class !== 'security' || missing.length > 0) {
+      throw new OperationDefinitionError(
+        `${where}: classify gives the reserved case "${vector.name}" ${result.class}${result.effects.length > 0 ? ` with ${result.effects.join(', ')}` : ' with no effect'}, but it needs at least security with ${vector.effects.join(', ')} (${reservation.source})`
+      );
+    }
   }
 }
 
@@ -385,8 +515,9 @@ function assertReservedTable(reserved: readonly ReservedOperation[]): void {
  *   catalog cannot grant, or a class that is not the strictest class among
  *   its permissions; when it takes a reserved id with a weaker
  *   classification than the reserved table declares, takes a case variant of
- *   a reserved id, or classifies a reserved operation whose entry does not
- *   say the request decides
+ *   a reserved id, classifies a reserved operation whose entry does not say
+ *   the request decides, or classifies one of its entry's security cases
+ *   (`vectors`) less strictly than the case says or fails closed on it
  */
 export function createOperationRegistry(
   operations: readonly AdminOperation[],
@@ -457,6 +588,11 @@ export function createOperationRegistry(
           `${where} is reserved as a security operation on every request (${reservation.source}); it may not classify, unless its entry says the request decides (requestDependent)`
         );
       }
+      // A request-dependent reservation still holds its security cases: a
+      // `classify` that answered `write` for them would bypass it.
+      if (operation.classify !== undefined) {
+        assertVectorsMet(operation, reservation, permissions, where);
+      }
     }
 
     byId.set(operation.id, frozenOperation(operation));
@@ -505,6 +641,19 @@ export interface OperationClassification extends Classification {
   readonly operationId: string;
   /** Why the request got the operation's declaration, or `null` when the classification stood. */
   readonly failedClosed: FailClosedReason | null;
+  /**
+   * The version of the state the request was classified against
+   * (`stateVersion` of what `loadState` read), or `null` for an operation
+   * that reads none. The handler's write must be conditional on it.
+   */
+  readonly stateVersion: string | null;
+  /**
+   * The SHA-256 digest, base64url, of a binary body (a Buffer, typed array,
+   * DataView or ArrayBuffer), or `null` for any other body. A binary body
+   * cannot be frozen, so a stage that approves or applies it binds to this
+   * digest ({@link bodyDigestOf}) rather than to the bytes it holds.
+   */
+  readonly bodyDigest: string | null;
 }
 
 const UNKNOWN_FIELD_BRAND = Symbol.for('qauth.adminOperations.unknownField');
@@ -539,7 +688,9 @@ function isUnknownFieldError(error: unknown): boolean {
 
 /**
  * Freeze `value` in place, and every object and array it holds. A typed array
- * (a binary body) is left as it is: one with elements cannot be frozen.
+ * (a binary body) is left as it is: one with elements cannot be frozen, which
+ * is why the classification carries the digest of a binary body
+ * (`bodyDigest`).
  */
 export function deepFreeze<T>(value: T): T {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value;
@@ -656,7 +807,8 @@ function checkResult(
 function classificationOf(
   operation: AdminOperation,
   classification: Classification,
-  failedClosed: FailClosedReason | null
+  failedClosed: FailClosedReason | null,
+  bound: Pick<OperationClassification, 'stateVersion' | 'bodyDigest'>
 ): OperationClassification {
   return Object.freeze({
     operationId: operation.id,
@@ -664,11 +816,80 @@ function classificationOf(
     effects: Object.freeze([...classification.effects]),
     permissions: Object.freeze([...classification.permissions]),
     failedClosed,
+    stateVersion: bound.stateVersion,
+    bodyDigest: bound.bodyDigest,
   });
 }
 
 /**
+ * The SHA-256 digest, base64url, of `body` when it is binary (a Buffer, a
+ * typed array, a DataView or an ArrayBuffer), or `null` for any other value.
+ */
+export function bodyDigestOf(body: unknown): string | null {
+  let bytes: Uint8Array;
+  if (ArrayBuffer.isView(body)) {
+    bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  } else if (body instanceof ArrayBuffer) {
+    bytes = new Uint8Array(body);
+  } else {
+    return null;
+  }
+  return createHash('sha256').update(bytes).digest('base64url');
+}
+
+/** An entity-tag's opaque value: `etagc` of RFC 9110 §8.8.3 without obs-text, bounded. */
+const STATE_VERSION_PATTERN = /^[\x21\x23-\x7e]{1,256}$/;
+
+/**
+ * The version of `state` as `operation.stateVersion` gives it.
+ *
+ * @throws {Error} when the operation has no `stateVersion`, or it throws or
+ *   returns anything but an entity-tag's opaque value: the request then fails
+ *   and runs nothing, since its write could not be bound to the state
+ */
+export function operationStateVersion(operation: AdminOperation, state: unknown): string {
+  if (operation.stateVersion === undefined) {
+    throw new Error(`The admin operation ${operation.id} reads state but names no stateVersion`);
+  }
+  const version: unknown = operation.stateVersion(state);
+  if (typeof version !== 'string' || !STATE_VERSION_PATTERN.test(version)) {
+    throw new Error(
+      `The admin operation ${operation.id} gave a state version that is not an entity-tag's opaque value`
+    );
+  }
+  return version;
+}
+
+/** One entity-tag of an `If-Match` list: optional `W/`, then a quoted opaque value. */
+const ENTITY_TAG = /(?:[\t ]*,)*[\t ]*(W\/)?"([\x21\x23-\x7e\x80-\xff]*)"[\t ]*(?:,|$)/y;
+
+/**
+ * Whether an `If-Match` field (RFC 9110 §13.1.1) lets a request act on the
+ * state of version `stateVersion`: absent, `*`, or a list holding the strong
+ * entity-tag `"stateVersion"`. A weak tag never matches (strong comparison),
+ * empty list elements are skipped, and a field that does not parse matches
+ * nothing.
+ */
+export function ifMatchAllows(field: string | string[] | undefined, stateVersion: string): boolean {
+  if (field === undefined) return true;
+  const value = (Array.isArray(field) ? field.join(', ') : field).trim();
+  if (value === '*') return true;
+  if (value === '') return false;
+  let matched = false;
+  ENTITY_TAG.lastIndex = 0;
+  while (ENTITY_TAG.lastIndex < value.length) {
+    const tag = ENTITY_TAG.exec(value);
+    if (tag === null) return false;
+    if (tag[1] === undefined && tag[2] === stateVersion) matched = true;
+  }
+  return matched;
+}
+
+/**
  * What one request of `operation` needs.
+ *
+ * `stateVersion` is the version of `currentState` ({@link operationStateVersion})
+ * and the classification carries it, with the digest of a binary body.
  *
  * An operation without `classify` needs its declaration. Otherwise `classify`
  * runs on frozen deep copies of the request and of `currentState`, and its
@@ -681,12 +902,15 @@ export function classifyRequest(
   registry: Pick<OperationRegistry, 'permissions'>,
   operation: AdminOperation,
   request: ClassifyInput,
-  currentState?: unknown
+  currentState?: unknown,
+  stateVersion: string | null = null
 ): OperationClassification {
+  const bound = { stateVersion, bodyDigest: bodyDigestOf(request.body) };
   if (operation.classify === undefined) {
-    return classificationOf(operation, operation, null);
+    return classificationOf(operation, operation, null, bound);
   }
-  const failClosed = (reason: FailClosedReason) => classificationOf(operation, operation, reason);
+  const failClosed = (reason: FailClosedReason) =>
+    classificationOf(operation, operation, reason, bound);
 
   let input: ClassifyInput;
   let state: unknown;
@@ -720,7 +944,7 @@ export function classifyRequest(
   }
   return 'reason' in checked
     ? failClosed(checked.reason)
-    : classificationOf(operation, checked.classification, null);
+    : classificationOf(operation, checked.classification, null, bound);
 }
 
 /**
@@ -734,6 +958,52 @@ export function mergeClassifications(parts: readonly Classification[]): Classifi
     effects: [...new Set(parts.flatMap((part) => part.effects))],
     permissions: [...new Set(parts.flatMap((part) => part.permissions))],
   };
+}
+
+/** A JSON Pointer token (RFC 6901): `~` and `/` escaped. */
+const pointerToken = (key: string): string => key.replace(/~/g, '~0').replace(/\//g, '~1');
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+/**
+ * The fields a JSON Merge Patch (RFC 7396) changes, as JSON Pointers
+ * (`/passwordPolicy/minLength`), walked from the BODY's own keys, never from a
+ * list of fields the classifier expects: so a field the classifier has no
+ * rule for still comes out, and {@link classifyByField} fails it closed.
+ *
+ * - A member whose value is a non-empty plain object is walked into.
+ * - Every other member is a changed field: a primitive, an array (an array
+ *   replaces the target's array whole, so it is one leaf), `null` (which
+ *   removes the member) and an empty object (which may replace a non-object
+ *   member).
+ * - A body that is not a plain object replaces the whole target: `['']`.
+ *   An absent body changes nothing: `[]`.
+ *
+ * The canonical `changedFields` of a request-dependent operation whose
+ * request is a merge patch.
+ */
+export function mergePatchLeafPaths(body: unknown): string[] {
+  if (body === undefined) return [];
+  if (!isPlainObject(body)) return [''];
+  const paths: string[] = [];
+  const pending: Array<[string, Record<string, unknown>]> = [['', body]];
+  while (pending.length > 0) {
+    const [prefix, object] = pending.pop() as [string, Record<string, unknown>];
+    for (const key of Object.keys(object)) {
+      const path = `${prefix}/${pointerToken(key)}`;
+      const value = object[key];
+      if (isPlainObject(value) && Object.keys(value).length > 0) {
+        pending.push([path, value]);
+      } else {
+        paths.push(path);
+      }
+    }
+  }
+  return paths.sort();
 }
 
 /** A field's classification, fixed or computed from the request and the state. */

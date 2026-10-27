@@ -29,6 +29,7 @@ vi.mock('../../helpers/user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import { registerApiKeyRoutes } from './api-keys';
 
@@ -53,6 +54,8 @@ interface TestContext {
 const DEV_A = '0190a000-0000-7000-8000-00000000000a';
 const DEV_B = '0190a000-0000-7000-8000-00000000000b';
 const CLIENT_ID = '0190a000-0000-7000-8000-0000000000c1';
+/** The realm every request below was resolved to (#487); the client is looked up in it (#489). */
+const REALM = testRealm({ id: 'realm-1' });
 
 function createReply() {
   const state: { statusCode?: number; body?: unknown; headers: Record<string, string> } = {
@@ -146,6 +149,7 @@ function authedRequest(overrides: Record<string, unknown> = {}): FastifyRequest 
     body: { name: 'laptop' },
     headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     ip: '127.0.0.1',
+    realm: REALM,
     ...overrides,
   } as unknown as FastifyRequest;
 }
@@ -176,6 +180,9 @@ describe('POST create — development client (allowed)', () => {
 
     expect(state.statusCode).toBe(201);
     const body = state.body as Record<string, unknown>;
+
+    // The owned client is looked up in the request's realm (#489).
+    expect(fastify.repositories.oauthClients.findById).toHaveBeenCalledWith('realm-1', CLIENT_ID);
 
     // Plaintext key returned exactly once, in the expected format.
     expect(body.key).toMatch(/^qauth_[0-9a-f]{16}_[0-9a-f]{64}$/);
@@ -322,6 +329,9 @@ describe('GET list — masked', () => {
     });
     expect(JSON.stringify(body)).not.toContain('argon2id');
     expect(body.apiKeys[0]).not.toHaveProperty('keyHash');
+    // The client in the request's realm, then its keys in the client's realm (#489).
+    expect(fastify.repositories.oauthClients.findById).toHaveBeenCalledWith('realm-1', CLIENT_ID);
+    expect(fastify.repositories.apiKeys.listByClient).toHaveBeenCalledWith('realm-1', CLIENT_ID);
   });
 });
 
@@ -353,7 +363,9 @@ describe('DELETE revoke', () => {
     const request = authedRequest({ params: { clientId: CLIENT_ID, keyId: 'key-1' } });
     await route(ctx, 'DELETE /:clientId/api-keys/:keyId').handler(request, reply);
 
-    expect(fastify.repositories.apiKeys.revoke).toHaveBeenCalledWith('key-1');
+    // The key is read and revoked in the owned client's realm (#489).
+    expect(fastify.repositories.apiKeys.findById).toHaveBeenCalledWith('realm-1', 'key-1');
+    expect(fastify.repositories.apiKeys.revoke).toHaveBeenCalledWith('realm-1', 'key-1');
     expect((state.body as Record<string, unknown>).revokedAt).toBe(1900);
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
       request,

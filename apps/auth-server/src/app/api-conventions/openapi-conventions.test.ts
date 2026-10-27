@@ -16,6 +16,11 @@ import {
   createOperationRegistry,
   defineOperation,
 } from '../helpers/admin-operations';
+import {
+  createPermissionRegistry,
+  definePermission,
+  PERMISSION_REGISTRY,
+} from '../helpers/admin-permissions';
 import { openapiOptions } from '../openapi-options';
 import { checkApiConventions, type ConventionRule } from './openapi-conventions';
 import { pageQuerySchema, pageSchema } from './paging';
@@ -464,6 +469,52 @@ describe('the API conventions check — fixture document (#506)', () => {
 
     it('leaves the account and developer families to their own rules', () => {
       expect(rulesOf(mutated((d) => (CLIENTS(d).operationId = 'clients.search')))).toEqual([]);
+    });
+
+    it("checks x-qauth-permission against the selected registry's permission catalog", () => {
+      // A catalog in which realms.read is retired and realms.inspect is new:
+      // the two read operations need realms.inspect there.
+      const catalog = createPermissionRegistry([
+        ...PERMISSION_REGISTRY.all.map((permission) =>
+          permission.id === 'realms.read'
+            ? definePermission({ ...permission, retiredIn: 'v0.1.0' })
+            : permission
+        ),
+        definePermission({
+          id: 'realms.inspect',
+          class: 'read',
+          resource: 'realms',
+          description: 'Inspect a realm.',
+        }),
+      ]);
+      const registry = createOperationRegistry(
+        FIXTURE_OPERATIONS.all.map((operation) =>
+          operation.class === 'read'
+            ? defineOperation({ ...operation, permissions: ['realms.inspect'] })
+            : operation
+        ) as AdminOperation[],
+        { permissions: catalog, reserved: [] }
+      );
+      const rules = (doc: Doc) =>
+        checkApiConventions(doc, { operations: registry }).violations.map((violation) => [
+          violation.operation,
+          violation.rule,
+        ]);
+
+      // A permission only the selected catalog knows is grantable there...
+      const inspecting = mutated((d) => {
+        LIST(d)['x-qauth-permission'] = 'realms.inspect';
+        GET(d)['x-qauth-permission'] = 'realms.inspect';
+      });
+      expect(rules(inspecting)).toEqual([]);
+      // ...and not in the server's own catalog.
+      expect(rulesOf(inspecting)).toEqual(['permission']);
+      // A permission the selected catalog retired is refused, although the
+      // server's own catalog still grants it.
+      expect(rules(fixture)).toEqual([
+        ['GET /admin/v1-rc.0/realms', 'permission'],
+        ['GET /admin/v1-rc.0/realms/{realmId}', 'permission'],
+      ]);
     });
   });
 

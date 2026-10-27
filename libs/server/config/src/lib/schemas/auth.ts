@@ -529,18 +529,6 @@ export const authEnvSchema = z.object({
    */
   CIMD_FETCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
 
-  /**
-   * Allow CIMD fetches to non-public IP ranges (loopback, private,
-   * link-local). It disables the core SSRF guard. Exists only so an
-   * integration/dev harness can point a CIMD client_id at a localhost
-   * fixture server. The auth-server's env schema refuses `true` when
-   * `NODE_ENV='production'` (#435).
-   */
-  CIMD_ALLOW_PRIVATE_ADDRESSES: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
-
   // ------------------------------------------------------------------
   // Identity Assertion Authorization Grant (ID-JAG) — the Enterprise-Managed
   // Agents (EMA) cross-domain grant, ADR-011. QAuth implements BOTH sides:
@@ -656,18 +644,6 @@ export const authEnvSchema = z.object({
     .int()
     .min(256)
     .default(64 * 1024),
-
-  /**
-   * Allow ID-JAG discovery / JWKS fetches to non-public IP ranges (loopback,
-   * private, link-local). It disables the core SSRF guard. Exists only so an
-   * integration/dev harness can point a trusted issuer at a localhost fixture
-   * server. The auth-server's env schema refuses `true` when
-   * `NODE_ENV='production'` (#435).
-   */
-  ID_JAG_ALLOW_PRIVATE_ADDRESSES: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
 
   /**
    * Clock-skew leeway (seconds) applied when validating an inbound assertion's

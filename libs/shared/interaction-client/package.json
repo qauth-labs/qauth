@@ -1,0 +1,12 @@
+{
+  "name": "@qauth-labs/shared-interaction-client",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "tsx": "catalog:"
+  }
+}

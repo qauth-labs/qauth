@@ -188,11 +188,12 @@ describe('resolveRealmTrustRegistry — never permissive (#236)', () => {
 
 describe('isWalletAttributeIssuerStillTrusted — no wallet claim outlives its issuer (ANT-2026-ULJIA4P4)', () => {
   const PROVENANCE = { issuer: 'https://issuer.example', issuer_key_resolution: 'issuer-metadata' };
+  /** The account, as the caller read it in the request's realm (#489). */
+  const ACCOUNT = { id: 'user-1', realmId: 'realm-1' };
 
   function fastifyFor(realmName = 'master'): FastifyInstance {
     return {
       repositories: {
-        users: { findById: vi.fn().mockResolvedValue({ id: 'user-1', realmId: 'realm-1' }) },
         realms: { findById: vi.fn().mockResolvedValue({ id: 'realm-1', name: realmName }) },
       },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -201,17 +202,20 @@ describe('isWalletAttributeIssuerStillTrusted — no wallet claim outlives its i
 
   it("is true while the account's realm still trusts the recorded issuer", async () => {
     envMock.OID4VP_TRUSTED_ISSUERS = { master: ['https://issuer.example'] };
+    const fastify = fastifyFor();
 
-    await expect(
-      isWalletAttributeIssuerStillTrusted(fastifyFor(), 'user-1', PROVENANCE)
-    ).resolves.toBe(true);
+    await expect(isWalletAttributeIssuerStillTrusted(fastify, ACCOUNT, PROVENANCE)).resolves.toBe(
+      true
+    );
+    // The account's realm, as the caller read it: no second lookup by user id.
+    expect(fastify.repositories.realms.findById).toHaveBeenCalledWith('realm-1');
   });
 
   it('is false once the operator removes the issuer from OID4VP_TRUSTED_ISSUERS', async () => {
     envMock.OID4VP_TRUSTED_ISSUERS = { master: ['https://another-issuer.example'] };
 
     await expect(
-      isWalletAttributeIssuerStillTrusted(fastifyFor(), 'user-1', PROVENANCE)
+      isWalletAttributeIssuerStillTrusted(fastifyFor(), ACCOUNT, PROVENANCE)
     ).resolves.toBe(false);
   });
 
@@ -220,28 +224,27 @@ describe('isWalletAttributeIssuerStillTrusted — no wallet claim outlives its i
     envMock.WALLET_FEDERATION_ENABLED = false;
 
     await expect(
-      isWalletAttributeIssuerStillTrusted(fastifyFor(), 'user-1', PROVENANCE)
+      isWalletAttributeIssuerStillTrusted(fastifyFor(), ACCOUNT, PROVENANCE)
     ).resolves.toBe(false);
   });
 
-  it('is false for a row that recorded no provenance, without reading the account', async () => {
+  it('is false for a row that recorded no provenance, without reading the realm', async () => {
     envMock.OID4VP_TRUSTED_ISSUERS = { master: ['https://issuer.example'] };
     const fastify = fastifyFor();
 
-    await expect(isWalletAttributeIssuerStillTrusted(fastify, 'user-1', null)).resolves.toBe(false);
-    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    await expect(isWalletAttributeIssuerStillTrusted(fastify, ACCOUNT, null)).resolves.toBe(false);
+    expect(fastify.repositories.realms.findById).not.toHaveBeenCalled();
   });
 
-  it('is false, and logged, when the account cannot be read', async () => {
+  it("is false when the account's realm cannot be read", async () => {
     envMock.OID4VP_TRUSTED_ISSUERS = { master: ['https://issuer.example'] };
     const fastify = fastifyFor();
-    (fastify.repositories.users.findById as ReturnType<typeof vi.fn>).mockRejectedValue(
+    (fastify.repositories.realms.findById as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('db down')
     );
 
-    await expect(isWalletAttributeIssuerStillTrusted(fastify, 'user-1', PROVENANCE)).resolves.toBe(
+    await expect(isWalletAttributeIssuerStillTrusted(fastify, ACCOUNT, PROVENANCE)).resolves.toBe(
       false
     );
-    expect(fastify.log.error).toHaveBeenCalled();
   });
 });

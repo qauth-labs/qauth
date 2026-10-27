@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/totp_setup.json",
+  "title": "urn:qauth:ia:totp_setup:v1-rc.0",
+  "description": "TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal data: readable with the flow cookie while this step is current, and never after. It is bound only after a first valid code (ADR-017 Decision 8). A password-only account’s first binding also needs a code mailed to its address in the same transaction, and an unclaimed account never reaches this step. Enrolment adds no `amr` value. The page shows the secret as a QR code and as text.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:totp_setup:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:totp_setup:v1-rc.0",
+      "params": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      },
+      "answer": {
+        "otp": "482913"
+      },
+      "personal": {
+        "identifier": "alice@example.com",
+        "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        "otpauth_uri": "otpauth://totp/Example:alice%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Example&algorithm=SHA1&digits=6&period=30"
+      },
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "SHA1"
+          ],
+          "description": "The HMAC algorithm."
+        },
+        "digits": {
+          "type": "integer",
+          "enum": [
+            6
+          ],
+          "description": "How many digits a code has."
+        },
+        "period": {
+          "type": "integer",
+          "enum": [
+            30
+          ],
+          "description": "How many seconds a code lasts."
+        }
+      },
+      "required": [
+        "algorithm",
+        "digits",
+        "period"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "algorithm": "SHA1",
+          "digits": 6,
+          "period": 30
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "otp": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$",
+          "description": "The six digits the authenticator app shows."
+        }
+      },
+      "required": [
+        "otp"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "otp": "482913"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+          "x-qauth-display": "account",
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
+        },
+        "secret": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[A-Z2-7]{32}$",
+          "description": "The shared secret, 160 bits in base32 (RFC 4648 §6), unpadded."
+        },
+        "otpauth_uri": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 1024,
+          "pattern": "^otpauth://totp/[!#-;=?-\\[\\]-~]+$",
+          "description": "The same secret as an `otpauth://` URI, for the QR code."
+        }
+      },
+      "required": [
+        "secret",
+        "otpauth_uri"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "identifier": "alice@example.com",
+          "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+          "otpauth_uri": "otpauth://totp/Example:alice%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Example&algorithm=SHA1&digits=6&period=30"
+        }
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "invalid_credentials"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

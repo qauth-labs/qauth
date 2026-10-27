@@ -86,7 +86,6 @@ import { createEmailService, MockEmailProvider } from '@qauth-labs/server-email'
 const provider = new MockEmailProvider();
 const emailService = createEmailService(provider, {
   defaultFrom: 'noreply@example.com',
-  baseUrl: 'https://example.com',
   // Same value the call site uses to compute `expiresAt`, so the copy in the
   // email cannot drift from the lifetime actually enforced.
   verificationTokenExpiry: config.EMAIL_VERIFICATION_TOKEN_EXPIRY, // seconds
@@ -101,16 +100,20 @@ the server-config default. Never hardcode the expiry copy.
 
 ### sendVerificationEmail()
 
-Sends a verification email with a token.
+Sends a verification email with a token. The third argument says where the
+link points: `${baseUrl}/auth/verify?token=...`. It is given per mail, so a
+server with several realms links each account to its own realm's issuer.
 
 ```typescript
-await emailService.sendVerificationEmail('user@example.com', 'token123');
+await emailService.sendVerificationEmail('user@example.com', 'token123', {
+  baseUrl: 'https://auth.example.com',
+});
 ```
 
 With custom options:
 
 ```typescript
-await emailService.sendVerificationEmail('user@example.com', 'token123', {
+await emailService.sendVerificationEmail('user@example.com', 'token123', link, {
   subject: 'Custom Subject',
   from: 'custom@example.com',
   text: 'Custom text',
@@ -312,7 +315,6 @@ Creates an email service instance.
 | Field                     | Type     | Default              | Description                                                                                                             |
 | ------------------------- | -------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `defaultFrom`             | `string` | —                    | Default sender address, used when `options.from` is omitted.                                                            |
-| `baseUrl`                 | `string` | —                    | Base URL for verification links (`${baseUrl}/auth/verify?token=...`).                                                   |
 | `verificationTokenExpiry` | `number` | `86400` (`24 hours`) | Verification token lifetime **in seconds**. Only drives the expiry copy in the email; enforcement lives at the callers. |
 
 Pass the same value the caller uses to compute the token's `expiresAt`. The two
@@ -331,7 +333,7 @@ Formats a duration in seconds as English prose for email copy, e.g. `1 hour`,
 than rounded up so an email never overstates how long a link stays valid.
 Non-finite or negative input is treated as zero.
 
-#### `emailService.sendVerificationEmail(to: string, token: string, options?: Partial<EmailOptions>): Promise<EmailResult>`
+#### `emailService.sendVerificationEmail(to: string, token: string, link: VerificationLink, options?: Partial<EmailOptions>): Promise<EmailResult>`
 
 Sends a verification email.
 
@@ -339,6 +341,8 @@ Sends a verification email.
 
 - `to`: Recipient email address
 - `token`: Verification token
+- `link`: `{ baseUrl }`, the absolute URL the link starts at, with no trailing
+  slash (`${baseUrl}/auth/verify?token=...`)
 - `options`: Optional email options
 
 **Returns**: Promise resolving to email result
@@ -384,8 +388,8 @@ const { token, tokenHash } = generateVerificationToken();
 // Store tokenHash in database
 await db.emailVerificationTokens.create({ tokenHash, userId, expiresAt });
 
-// 2. Send token to user
-await emailService.sendVerificationEmail(user.email, token);
+// 2. Send token to user, linked to the issuer of the user's realm
+await emailService.sendVerificationEmail(user.email, token, { baseUrl: realm.issuer });
 
 // 3. Verify token when user clicks link
 const providedToken = request.query.token;

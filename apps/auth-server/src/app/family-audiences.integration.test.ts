@@ -43,17 +43,14 @@ import { API_FAMILIES, API_FAMILY_AUDIENCES, type ApiFamily } from './api-conven
  * - A bad token gets the RFC 6750 challenge; a missing scope 403 `forbidden`
  *   with the `insufficient_scope` challenge.
  *
- * Only the network fetch of the metadata document is replaced (`ssrfSafeGet`).
+ * Only the network fetch of the metadata document is replaced (`egressGet`).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
-vi.mock('./helpers/ssrf-safe-fetch', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, ssrfSafeGet };
-});
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
+vi.mock('./helpers/egress-get', () => ({ egressGet }));
 
 const CLIENT_SECRET = 'family-client-secret-of-sufficient-length-42';
 const PROBE_SCOPE = 'probe:read';
@@ -123,7 +120,7 @@ describe('one audience per API family and a guard for each (#509, real container
       ctx.skip();
       return;
     }
-    ssrfSafeGet.mockReset();
+    egressGet.mockReset();
     await resetE2eState(booted.app);
   });
 
@@ -288,9 +285,9 @@ describe('one audience per API family and a guard for each (#509, real container
           provisionedByOperator: true,
         });
         await app().repositories.oauthConsents.upsertGrant(
+          realm,
           userId,
           client.id,
-          realm,
           ['openid'],
           [account]
         );
@@ -358,9 +355,9 @@ describe('one audience per API family and a guard for each (#509, real container
         provisionedByOperator: true,
       });
       await app().repositories.oauthConsents.upsertGrant(
+        realm,
         userId,
         client.id,
-        realm,
         ['openid'],
         [account]
       );
@@ -467,7 +464,7 @@ describe('one audience per API family and a guard for each (#509, real container
     });
 
     function serveDocument(extra: Record<string, unknown>) {
-      ssrfSafeGet.mockImplementation(async (url: string) => {
+      egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
         expect(url).toBe(CIMD_CLIENT_ID);
         return {
           status: 200,
@@ -514,7 +511,7 @@ describe('one audience per API family and a guard for each (#509, real container
         serveDocument(extra);
         const response = await authorizeCimd();
         expect(response.statusCode).not.toBe(400);
-        expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+        expect(egressGet).toHaveBeenCalledTimes(1);
         const { rows } = await app().dbPool.query<{ audience: unknown }>(
           'SELECT audience FROM oauth_clients WHERE client_id = $1',
           [CIMD_CLIENT_ID]

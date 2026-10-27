@@ -9,10 +9,11 @@ import {
   startRedisContainer,
   truncateDomainTablesStatement,
 } from '@qauth-labs/shared-testing';
-import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify';
+import Fastify, { type FastifyInstance, type InjectOptions, type RouteOptions } from 'fastify';
 import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
+import type { AppOptions } from '../app/app';
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
 import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
 import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
@@ -203,6 +204,18 @@ export interface BootAuthServerOptions {
   readonly eventTelemetryLimits?: Partial<EventLogQueueLimits>;
   /** Event delivery routes for the delivery role (#460), for a suite that watches it. */
   readonly eventDeliveryRoutes?: readonly DeliveryRoute[];
+  /**
+   * Called with each route as the app registers it, for a suite that lists
+   * the routes a set of service roles registers (#495).
+   */
+  readonly onRoute?: (route: RouteOptions) => void;
+  /**
+   * Build the egress client with this factory (#481): `createTestEgressClient`
+   * from `@qauth-labs/fastify-plugin-egress`, for a suite that serves a CIMD
+   * document, a JWKS or an issuer from a local fixture server. Unset, the
+   * server uses the production client, which refuses localhost.
+   */
+  readonly egressClientFactory?: AppOptions['egressClientFactory'];
 }
 
 /**
@@ -248,8 +261,15 @@ export async function bootAuthServer(
       key.startsWith('EVENT_RETENTION_') ||
       key.startsWith('DPOP_') ||
       key.startsWith('SSF_') ||
+      key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
-      key === 'TRUST_PROXY'
+      key === 'TRUST_PROXY' ||
+      // The role switch (#495): a process without the signer refuses a key
+      // variable another boot left behind, so the JWT keys go too.
+      key === 'SERVICE_ROLES' ||
+      key === 'SIGNER_URL' ||
+      key.startsWith('INTERNAL_TLS_') ||
+      key.startsWith('JWT_')
     ) {
       delete process.env[key];
     }
@@ -297,6 +317,7 @@ export async function bootAuthServer(
   // `resetE2eState` truncate the database the server is actually looking at.
   // Nothing under test observes the difference.
   const defaultRealmBoot = options.defaultRealmBoot ?? true;
+  if (options.onRoute !== undefined) server.addHook('onRoute', options.onRoute);
   await server.register(fp(app), {
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined
@@ -305,6 +326,9 @@ export async function bootAuthServer(
     ...(options.eventDeliveryRoutes === undefined
       ? {}
       : { eventDeliveryRoutes: options.eventDeliveryRoutes }),
+    ...(options.egressClientFactory === undefined
+      ? {}
+      : { egressClientFactory: options.egressClientFactory }),
   });
   const { routes } = options;
   if (routes !== undefined) {
@@ -662,9 +686,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, options) => {
+  emailService.sendVerificationEmail = async (to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, options);
+    return original.call(emailService, to, token, link, options);
   };
   try {
     const response = await app.inject({

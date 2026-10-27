@@ -235,7 +235,10 @@ function bodyOf(response: { json: () => unknown }): Record<string, unknown> {
   return response.json() as Record<string, unknown>;
 }
 
-describe('error-handler plugin (#513)', () => {
+// The first test pays for loading Fastify and the plugin: half a second alone,
+// but more than Vitest's 5 s default while every project's suite runs at once
+// (`nx run-many -t test --all`).
+describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
   describe('the problem formatter, the default', () => {
     it('answers application/problem+json with type, title, status, instance, code and trace_id', async () => {
       const app = await buildApp();

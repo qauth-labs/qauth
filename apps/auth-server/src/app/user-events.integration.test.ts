@@ -208,9 +208,9 @@ describe('user events go to the event store (real containers)', () => {
       requirePkce: true,
     });
     const consent = await app.repositories.oauthConsents.upsertGrant(
+      realmId,
       userId,
       row.id,
-      realmId,
       client.scopes
     );
     return { realmId, row, consent };

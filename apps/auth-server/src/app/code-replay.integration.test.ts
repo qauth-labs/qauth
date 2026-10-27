@@ -126,7 +126,7 @@ describe('authorization code replay revokes its refresh family (#627, real conta
       requirePkce: true,
     });
     if (path === 'consent skip') {
-      await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, SCOPES);
     }
     // A confidential resource server for the client's tokens, which
     // introspects them (a public client cannot authenticate there).

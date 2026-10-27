@@ -7,6 +7,7 @@ import {
   type SigningKey,
   verifyWithHeader,
 } from '@qauth-labs/core-crypto';
+import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -18,6 +19,7 @@ import {
   type IdJagIssuerKeyResolver,
   isSupportedIdJagAlgorithm,
 } from './id-jag-issuer-keys';
+import { realmIssuer, type RealmUrlSource } from './realm-url';
 
 /**
  * Identity Assertion JWT Authorization Grant (ID-JAG) — the credential at the
@@ -287,6 +289,12 @@ export interface ValidateIdJagOptions {
    */
   readonly expectedClientId: string;
   /**
+   * The name of the realm the assertion is presented to. The issuer's
+   * discovery fetch is an operator-set destination of this realm, so the
+   * deployment allowlist entries that name it apply (ADR-019 Decision 8).
+   */
+  readonly realm: string;
+  /**
    * Injection seam for tests and for a future non-fetching backend. Defaults to
    * {@link createIdJagIssuerKeyResolver} over this server instance — production
    * never passes one.
@@ -328,6 +336,7 @@ export interface ValidateIdJagOptions {
  */
 export async function validateIdJagAssertion(
   fastify: FastifyInstance,
+  realm: RealmUrlSource,
   options: ValidateIdJagOptions
 ): Promise<ValidatedIdJag> {
   if (!env.ID_JAG_ENABLED) {
@@ -363,10 +372,11 @@ export async function validateIdJagAssertion(
     throw new IdJagValidationError('malformed', 'assertion has no iss claim');
   }
 
-  // The expected `aud` is THIS server's published issuer identifier — the exact
-  // string discovery advertises — because that is what an IdP allowlists and
-  // targets. Byte comparison, no normalisation (RFC 8414 §2).
-  const expectedAudience = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+  // The expected `aud` is the published issuer identifier of the realm the
+  // request was sent to (ADR-019 Decision 1, #490) — the exact string its
+  // discovery advertises — because that is what an IdP allowlists and targets.
+  // Byte comparison, no normalisation (RFC 8414 §2).
+  const expectedAudience = realmIssuer(realm);
 
   // ADR-011 gate 5 — NO SELF-ISSUANCE. Checked before the allowlist and before
   // any key lookup, and independently of both: an operator who lists this
@@ -383,7 +393,7 @@ export async function validateIdJagAssertion(
     );
   }
 
-  const resolver = options.resolver ?? createIdJagIssuerKeyResolver(fastify);
+  const resolver = options.resolver ?? createIdJagIssuerKeyResolver(fastify, options.realm);
 
   // The resolver itself enforces the allowlist and returns `undefined` for an
   // untrusted issuer, so an unlisted `iss` never becomes a fetch.
@@ -600,6 +610,13 @@ const signingKeyCache = new Map<string, Promise<SigningKey>>();
 
 function idJagSigningKey(): Promise<SigningKey> {
   const pem = env.JWT_PRIVATE_KEY;
+  // A process without the signer role holds no private key (#495): it cannot
+  // mint until signing moves to the signer service, and says so with a 503.
+  if (pem === undefined) {
+    return Promise.reject(
+      new TemporarilyUnavailableError(60, { reason: 'no_signing_key_on_this_process' })
+    );
+  }
   const cached = signingKeyCache.get(pem);
   if (cached) return cached;
   const imported = importPrivateSigningKey(pem, ID_JAG_SIGNING_ALGORITHM);
@@ -638,7 +655,7 @@ function idJagSigningKey(): Promise<SigningKey> {
  * string the target AS allowlists.
  */
 export async function mintIdJag(
-  fastify: FastifyInstance,
+  realm: RealmUrlSource,
   options: MintIdJagOptions
 ): Promise<MintedIdJag> {
   const jti = randomUUID();
@@ -656,7 +673,7 @@ export async function mintIdJag(
   };
 
   const assertion = await sign(claims, await idJagSigningKey(), ID_JAG_SIGNING_ALGORITHM, {
-    issuer: resolveIssuerIdentifier(fastify.jwtUtils.getIssuer()),
+    issuer: realmIssuer(realm),
     expiresIn,
     // Single-valued on purpose: `sign` passes a string straight through to
     // `aud`, and the consume side refuses a multi-valued `aud` for the reason

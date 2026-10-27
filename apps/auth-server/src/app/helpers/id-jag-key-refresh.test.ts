@@ -27,7 +27,7 @@ import {
  * (`libs/server/config`).
  */
 
-const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
+const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
     ID_JAG_ENABLED: true,
     ID_JAG_TRUSTED_ISSUERS: [] as string[],
@@ -36,19 +36,15 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     ID_JAG_JWKS_REFRESH_COOLDOWN: 30,
     ID_JAG_JWKS_NEGATIVE_CACHE_TTL: 30,
     ID_JAG_MAX_DOCUMENT_BYTES: 65536,
-    ID_JAG_ALLOW_PRIVATE_ADDRESSES: false,
     ID_JAG_CLOCK_SKEW_LEEWAY: 60,
     ID_JAG_MAX_ASSERTION_LIFETIME: 300,
   },
-  ssrfSafeGet: vi.fn(),
+  egressGet: vi.fn(),
 }));
 
 vi.mock('../../config/env', () => ({ env: ENV }));
 
-vi.mock('./ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('./ssrf-safe-fetch')>('./ssrf-safe-fetch');
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('./egress-get', () => ({ egressGet }));
 
 import { ID_JAG_TYP, IdJagValidationError, validateIdJagAssertion } from './id-jag';
 
@@ -71,11 +67,10 @@ beforeEach(async () => {
   redis = createExpiringRedis();
   fastify = {
     redis,
-    jwtUtils: { getIssuer: () => AS_ISSUER },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  ssrfSafeGet.mockReset();
-  ssrfSafeGet.mockImplementation((url: string) => idp.fetch(url));
+  egressGet.mockReset();
+  egressGet.mockImplementation((_fastify: unknown, url: string) => idp.fetch(url));
   ENV.ID_JAG_TRUSTED_ISSUERS = [idp.issuer];
   ENV.ID_JAG_JWKS_CACHE_TTL = 300;
   ENV.ID_JAG_JWKS_REFRESH_COOLDOWN = 30;
@@ -102,10 +97,15 @@ async function assertion(signer: { kid: string; privateKey: CryptoKey }): Promis
 /** Validate one assertion; the IdJagValidationError reason, or `'accepted'`. */
 async function present(signer: { kid: string; privateKey: CryptoKey }): Promise<string> {
   try {
-    await validateIdJagAssertion(fastify, {
-      assertion: await assertion(signer),
-      expectedClientId: CLIENT_ID,
-    });
+    await validateIdJagAssertion(
+      fastify,
+      { issuer: AS_ISSUER },
+      {
+        assertion: await assertion(signer),
+        expectedClientId: CLIENT_ID,
+        realm: 'master',
+      }
+    );
     return 'accepted';
   } catch (err) {
     if (err instanceof IdJagValidationError) return err.reason;
