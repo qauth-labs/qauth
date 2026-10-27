@@ -1141,10 +1141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     them, when their `client_id` also names a client of the default realm.
 
 - **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
-  Every lookup by an id that a request, a token, a code or a cookie carries
-  now takes the realm of the request's host: users, clients, consents, API
-  keys, credentials, refresh tokens, authorization codes, email verification
-  tokens and a wallet's OID4VP state, encryption `kid` and Response Code. The
+  The lookups by an id that a request, a token or a code carries now take the
+  realm of the request's host: users, clients, consents, API keys,
+  credentials, refresh tokens, authorization codes, email verification tokens
+  and a wallet's OID4VP state, encryption `kid` and Response Code. Browser
+  sessions, whose id a cookie carries, are not scoped yet ([#493]). The
   repository methods take the realm id as a required first argument;
   refresh tokens, codes and verification tokens, which have no realm column,
   are found through their client's or credential's realm. A value of another
@@ -1499,6 +1500,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#489]: https://github.com/qauth-labs/qauth/issues/489
 [#490]: https://github.com/qauth-labs/qauth/issues/490
 [#491]: https://github.com/qauth-labs/qauth/issues/491
+[#493]: https://github.com/qauth-labs/qauth/issues/493
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513

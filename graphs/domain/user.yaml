@@ -46,26 +46,29 @@ actions:
     source: libs/infra/db/src/lib/repositories/users.repository.ts:88
     body:
       type: object
-      required: [id]
+      required: [realmId, id]
       properties:
+        realmId: { type: string, format: uuid } # the realm the request's host names
         id: { type: string } # the credential's userId
     result: { returns: User }
     note: >-
-      It answers no user, without querying, for an id that is not a UUID, and no user for an id with no row. The sign-in
-      flows read the row only after the password checked out, for its enabled flag.
+      It answers no user, without querying, for an id that is not a UUID, and no user for an id with no row in the
+      realm, which includes a user of another realm (#489). The sign-in flows read the row only after the password
+      checked out, for its enabled flag.
 
   User.updateLastLogin:
     # internal: invoked by core.sign-in and core.sign-in-token, with no route and no actor policy
     source: libs/infra/db/src/lib/repositories/users.repository.ts:158
     body:
       type: object
-      required: [id]
+      required: [realmId, id]
       properties:
+        realmId: { type: string, format: uuid } # the realm the request's host names
         id: { type: string, format: uuid }
     result: { returns: User }
     refusals:
       NOT_FOUND:
-        note: 'the id is not a UUID, or names no row; the sign-in flows answer it with 500'
-        source: libs/infra/db/src/lib/repositories/users.repository.ts:175
+        note: 'the id is not a UUID, or names no row in the realm; the sign-in flows answer it with 500'
+        source: libs/infra/db/src/lib/repositories/users.repository.ts:174
     sideEffects:
       - 'the User gets lastLoginAt = now and updatedAt = now'
