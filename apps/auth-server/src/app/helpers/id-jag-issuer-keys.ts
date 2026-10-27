@@ -3,6 +3,7 @@ import {
   type JwsAlgorithm,
   type SigningKey,
 } from '@qauth-labs/core-crypto';
+import { type EgressSource, hostForLog, isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -10,7 +11,7 @@ import { env } from '../../config/env';
 import { REDIS_KEYS } from '../constants/redis-keys';
 import { ASSERTION_SIGNING_ALG_VALUES_SUPPORTED } from '../schemas/oauth';
 import { resolveIssuerIdentifier } from './discovery';
-import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
+import { egressGet } from './egress-get';
 
 /**
  * Trusted-issuer signing-key resolution for the Identity Assertion
@@ -59,12 +60,34 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
  *
  * ## Every fetch follows the CIMD pattern
  *
- * Both outbound requests go through {@link ssrfSafeGet}: https-only, no
- * credentials in the URL, DNS-pinned IP validation (TOCTOU-safe), redirects
- * surfaced as errors rather than followed, response size bound, per-request
- * timeout. Non-200 is rejected by this module (the fetcher reports status; it
- * does not judge it). See `fetchAndValidateCimdDocument` for the reference
- * shape this mirrors.
+ * Both outbound requests go through the egress client ({@link egressGet}):
+ * https-only, no credentials in the URL, DNS-pinned IP validation
+ * (TOCTOU-safe), redirects refused rather than followed, response size bound,
+ * per-request timeout. Non-200 is rejected by this module (the fetcher reports
+ * status; it does not judge it). See `fetchAndValidateCimdDocument` for the
+ * reference shape this mirrors.
+ *
+ * The two fetches have different sources (ADR-019 Decision 8). The discovery
+ * URL is built from the operator's `ID_JAG_TRUSTED_ISSUERS`, so it is an
+ * `operator` destination: a deployment allowlist entry that names its host or
+ * range for the request's realm lets it reach a private address. The
+ * `jwks_uri` is named by the fetched discovery document, a `remote_document`
+ * destination that never uses the allowlist. An issuer whose keys sit on a
+ * private address therefore cannot be used from discovery alone; that needs
+ * its endpoints in configuration (the upstream provider work, #432 to #435).
+ *
+ * The discovery cache is per issuer and realm: whether a realm's discovery
+ * fetch may reach a private address depends on the deployment allowlist, so a
+ * document one realm fetched through an allowlist entry never answers for a
+ * realm the allowlist does not open it for. The JWK Set cache and the negative
+ * cache are per issuer: the `jwks_uri` is a destination the allowlist never
+ * opens, and a realm reaches it only past its own discovery document. A
+ * discovery fetch the address check refuses is not a failure of the issuer:
+ * it is not written to the negative cache, where it would hold the issuer
+ * back for a realm the allowlist does open it for, but remembered for that
+ * realm alone for {@link REFUSED_FOR_REALM_TTL_SECONDS}, so the realm's
+ * requests stop resolving the name again. Concurrent discovery fetches are
+ * shared only within one realm.
  *
  * ## How often an issuer is dialled
  *
@@ -357,6 +380,39 @@ async function fetchRecentlyFailed(fastify: FastifyInstance, issuer: string): Pr
  */
 const fetchesInFlight = new WeakMap<FastifyInstance, Map<string, Promise<unknown>>>();
 
+/**
+ * What a fetch yields when the address check refused a destination the
+ * deployment allowlist may open for another realm: no document, and nothing
+ * learnt about the issuer.
+ */
+const REFUSED_FOR_REALM = Symbol('refused for this realm');
+
+/**
+ * How long, in seconds, a realm's refused discovery fetch is remembered
+ * (`ID_JAG_FETCH_REFUSED`): long enough that a burst of requests resolves the
+ * name once, short enough that an allowlist change (a restart) or a DNS change
+ * is picked up soon.
+ */
+const REFUSED_FOR_REALM_TTL_SECONDS = 60;
+
+/** Whether `realm`'s discovery fetch for `issuer` was refused recently. */
+async function fetchRecentlyRefused(
+  fastify: FastifyInstance,
+  issuer: string,
+  realm: string
+): Promise<boolean> {
+  try {
+    return (await fastify.redis.get(REDIS_KEYS.ID_JAG_FETCH_REFUSED(issuer, realm))) !== null;
+  } catch {
+    // As for the negative cache: an unreachable store reads as nothing on
+    // record, and the fetch still goes through the egress client's checks.
+    return false;
+  }
+}
+
+/** A document, `undefined` when the fetch failed, or {@link REFUSED_FOR_REALM}. */
+type Fetched<T> = T | undefined | typeof REFUSED_FOR_REALM;
+
 /** Run `fetch` unless the same `key` is already being fetched, then share that. */
 function shareInFlight<T>(
   fastify: FastifyInstance,
@@ -385,15 +441,19 @@ function shareInFlight<T>(
  * Every way a fetch can fail counts, not only a transport error: a non-200, a
  * body that does not parse or validate, a discovery document naming another
  * issuer. Each would fail the same way on the next request, and each costs the
- * issuer a request to find out.
+ * issuer a request to find out. A discovery fetch the address check refused
+ * ({@link REFUSED_FOR_REALM}) does not count: it sent nothing to the issuer,
+ * and another realm's allowlist entry may open the same address. Its run is
+ * shared only by requests of the same realm (`shareKey`).
  */
-function fetchUnlessRecentlyFailed<T>(
+async function fetchUnlessRecentlyFailed<T>(
   fastify: FastifyInstance,
   issuer: string,
   what: 'discovery' | 'jwks',
-  fetch: () => Promise<T | undefined>
+  shareKey: string,
+  fetch: () => Promise<Fetched<T>>
 ): Promise<T | undefined> {
-  return shareInFlight(fastify, `${what} ${issuer}`, async () => {
+  const fetched = await shareInFlight<Fetched<T>>(fastify, shareKey, async () => {
     if (await fetchRecentlyFailed(fastify, issuer)) {
       fastify.log.debug({ issuer, what }, 'ID-JAG issuer fetch skipped: a recent fetch failed');
       return undefined;
@@ -414,6 +474,7 @@ function fetchUnlessRecentlyFailed<T>(
     }
     return document;
   });
+  return fetched === REFUSED_FOR_REALM ? undefined : fetched;
 }
 
 /**
@@ -464,31 +525,40 @@ async function claimRefresh(fastify: FastifyInstance, issuer: string): Promise<b
  * non-200, unparseable body, schema mismatch) so no caller has to distinguish
  * them: for key resolution they are all "no key". The reason is logged at
  * `debug` for operators — never surfaced to the requester, which would turn the
- * AS into an oracle for what its network can reach.
+ * AS into an oracle for what its network can reach. An `operator` destination
+ * the address check refused yields {@link REFUSED_FOR_REALM} instead: the
+ * allowlist may open it for another realm.
  */
 async function fetchJsonDocument<T>(
   fastify: FastifyInstance,
   url: string,
   schema: z.ZodType<T>,
-  what: string
-): Promise<T | undefined> {
+  what: 'discovery' | 'jwks',
+  destination: { source: EgressSource; realm: string }
+): Promise<Fetched<T>> {
+  // The host only: a `jwks_uri` is named by a remote document, and its path
+  // and query string are not the server's to log.
+  const host = hostForLog(url);
   let result;
   try {
-    result = await ssrfSafeGet(url, {
+    result = await egressGet(fastify, url, {
+      purpose: what === 'discovery' ? 'id-jag-discovery' : 'id-jag-jwks',
+      source: destination.source,
+      realm: destination.realm,
       timeoutMs: env.ID_JAG_FETCH_TIMEOUT_MS,
       maxBytes: env.ID_JAG_MAX_DOCUMENT_BYTES,
-      allowPrivateAddresses: env.ID_JAG_ALLOW_PRIVATE_ADDRESSES,
     });
   } catch (err) {
-    fastify.log.debug(
-      { url, what, blocked: err instanceof SsrfBlockedError },
-      'ID-JAG issuer document fetch failed'
-    );
+    const blocked = isEgressError(err) && err.outcome === 'blocked';
+    fastify.log.debug({ host, what, blocked }, 'ID-JAG issuer document fetch failed');
+    if (blocked && err.reason === 'address' && destination.source === 'operator') {
+      return REFUSED_FOR_REALM;
+    }
     return undefined;
   }
 
   if (result.status !== 200) {
-    fastify.log.debug({ url, what, status: result.status }, 'ID-JAG issuer document not 200');
+    fastify.log.debug({ host, what, status: result.status }, 'ID-JAG issuer document not 200');
     return undefined;
   }
 
@@ -496,13 +566,13 @@ async function fetchJsonDocument<T>(
   try {
     json = JSON.parse(result.body);
   } catch {
-    fastify.log.debug({ url, what }, 'ID-JAG issuer document is not valid JSON');
+    fastify.log.debug({ host, what }, 'ID-JAG issuer document is not valid JSON');
     return undefined;
   }
 
   const parsed = schema.safeParse(json);
   if (!parsed.success) {
-    fastify.log.debug({ url, what }, 'ID-JAG issuer document failed schema validation');
+    fastify.log.debug({ host, what }, 'ID-JAG issuer document failed schema validation');
     return undefined;
   }
   return parsed.data;
@@ -525,16 +595,46 @@ async function fetchJsonDocument<T>(
 async function resolveIssuerMetadata(
   fastify: FastifyInstance,
   issuer: string,
+  realm: string,
   forceRefresh: boolean
 ): Promise<IssuerMetadata | undefined> {
-  const cacheKey = REDIS_KEYS.ID_JAG_DISCOVERY(issuer);
+  const cacheKey = REDIS_KEYS.ID_JAG_DISCOVERY(issuer, realm);
   if (!forceRefresh) {
     const cached = await readCache(fastify, cacheKey, issuerMetadataSchema);
     if (cached) return cached;
   }
 
-  const metadata = await fetchUnlessRecentlyFailed(fastify, issuer, 'discovery', () =>
-    fetchIssuerMetadata(fastify, issuer)
+  if (await fetchRecentlyRefused(fastify, issuer, realm)) {
+    fastify.log.debug(
+      { issuer, realm },
+      'ID-JAG issuer discovery skipped: the address check refused it recently'
+    );
+    return undefined;
+  }
+
+  // Shared only within the realm: whether the fetch may reach the issuer
+  // depends on the realm (the deployment allowlist).
+  const metadata = await fetchUnlessRecentlyFailed(
+    fastify,
+    issuer,
+    'discovery',
+    `discovery ${issuer} ${realm}`,
+    async () => {
+      const fetched = await fetchIssuerMetadata(fastify, issuer, realm);
+      if (fetched === REFUSED_FOR_REALM) {
+        try {
+          await fastify.redis.set(
+            REDIS_KEYS.ID_JAG_FETCH_REFUSED(issuer, realm),
+            '1',
+            'EX',
+            REFUSED_FOR_REALM_TTL_SECONDS
+          );
+        } catch {
+          // Best-effort: an unwritten entry only costs the next request a lookup.
+        }
+      }
+      return fetched;
+    }
   );
   if (!metadata) return undefined;
 
@@ -542,18 +642,24 @@ async function resolveIssuerMetadata(
   return metadata;
 }
 
-/** Fetch and validate an issuer's discovery document, uncached. */
+/**
+ * Fetch and validate an issuer's discovery document, uncached. The URL comes
+ * from the operator's trusted-issuer list, so it is an `operator` destination
+ * of `realm`.
+ */
 async function fetchIssuerMetadata(
   fastify: FastifyInstance,
-  issuer: string
-): Promise<IssuerMetadata | undefined> {
+  issuer: string,
+  realm: string
+): Promise<Fetched<IssuerMetadata>> {
   const metadata = await fetchJsonDocument(
     fastify,
     `${issuer}/.well-known/openid-configuration`,
     issuerMetadataSchema,
-    'discovery'
+    'discovery',
+    { source: 'operator', realm }
   );
-  if (!metadata) return undefined;
+  if (metadata === undefined || metadata === REFUSED_FOR_REALM) return metadata;
 
   if (resolveIssuerIdentifier(metadata.issuer) !== issuer) {
     fastify.log.debug(
@@ -565,9 +671,9 @@ async function fetchIssuerMetadata(
 
   // The jwks_uri comes from the TRUSTED issuer's own metadata — never from an
   // assertion — but it is still remote input, so it is re-checked here and then
-  // re-guarded by `ssrfSafeGet`. https-only is asserted explicitly so a plain
-  // `http://` value is refused with a clear reason instead of deep inside the
-  // fetcher.
+  // fetched as a `remote_document` destination, which the deployment allowlist
+  // never opens. https-only is asserted explicitly so a plain `http://` value
+  // is refused with a clear reason instead of deep inside the egress client.
   let jwksUrl: URL;
   try {
     jwksUrl = new URL(metadata.jwks_uri);
@@ -583,11 +689,15 @@ async function fetchIssuerMetadata(
   return metadata;
 }
 
-/** Fetch (or read from cache) an allowlisted issuer's JWK Set. */
+/**
+ * Fetch (or read from cache) an allowlisted issuer's JWK Set, from the
+ * `jwks_uri` its discovery document named: a `remote_document` destination.
+ */
 async function resolveIssuerJwks(
   fastify: FastifyInstance,
   issuer: string,
   jwksUri: string,
+  realm: string,
   forceRefresh: boolean
 ): Promise<IssuerJwks | undefined> {
   const cacheKey = REDIS_KEYS.ID_JAG_JWKS(issuer);
@@ -596,8 +706,13 @@ async function resolveIssuerJwks(
     if (cached) return cached;
   }
 
-  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', () =>
-    fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks')
+  // A remote document: the allowlist never applies, so the realm changes
+  // nothing and the fetch is shared across realms.
+  const jwks = await fetchUnlessRecentlyFailed(fastify, issuer, 'jwks', `jwks ${issuer}`, () =>
+    fetchJsonDocument(fastify, jwksUri, issuerJwksSchema, 'jwks', {
+      source: 'remote_document',
+      realm,
+    })
   );
   if (!jwks) return undefined;
 
@@ -628,9 +743,14 @@ function selectJwk(jwks: IssuerJwks, keyId: string | undefined) {
  * Build the deployment's ID-JAG issuer key resolver.
  *
  * @param fastify - Server instance (redis for the bounded cache, log for
- *   operator-visible refusal reasons).
+ *   operator-visible refusal reasons, the egress client for the fetches).
+ * @param realm - The name of the realm the assertion is presented to: the
+ *   deployment allowlist entries that name it apply to the discovery fetch.
  */
-export function createIdJagIssuerKeyResolver(fastify: FastifyInstance): IdJagIssuerKeyResolver {
+export function createIdJagIssuerKeyResolver(
+  fastify: FastifyInstance,
+  realm: string
+): IdJagIssuerKeyResolver {
   return async (request) => {
     // ALLOWLIST FIRST — before any network call, any cache read, any parsing.
     // An unlisted issuer costs one canonicalisation and one string comparison.
@@ -643,10 +763,16 @@ export function createIdJagIssuerKeyResolver(fastify: FastifyInstance): IdJagIss
     const forceRefresh = request.forceRefresh === true;
     if (forceRefresh && !(await claimRefresh(fastify, identifier))) return undefined;
 
-    const metadata = await resolveIssuerMetadata(fastify, identifier, forceRefresh);
+    const metadata = await resolveIssuerMetadata(fastify, identifier, realm, forceRefresh);
     if (!metadata) return undefined;
 
-    const jwks = await resolveIssuerJwks(fastify, identifier, metadata.jwks_uri, forceRefresh);
+    const jwks = await resolveIssuerJwks(
+      fastify,
+      identifier,
+      metadata.jwks_uri,
+      realm,
+      forceRefresh
+    );
     if (!jwks) return undefined;
 
     const jwk = selectJwk(jwks, request.keyId);

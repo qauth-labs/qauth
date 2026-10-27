@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { type CryptoKey, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
+const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
     CIMD_ENABLED: true,
     CIMD_TRUST_POLICY: 'accept-any-https' as 'accept-any-https' | 'allowlist',
@@ -12,25 +12,21 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
-  ssrfSafeGet: vi.fn(),
+  egressGet: vi.fn(),
 }));
 
 vi.mock('../../config/env', () => ({ env: ENV }));
 
-vi.mock('./ssrf-safe-fetch', async () => {
-  const actual = await vi.importActual<typeof import('./ssrf-safe-fetch')>('./ssrf-safe-fetch');
-  return { ...actual, ssrfSafeGet };
-});
+vi.mock('./egress-get', () => ({ egressGet }));
 
+import { blockedEgress } from '../../testing/egress';
 import {
   authenticateClientAssertion,
   CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS,
   CLIENT_ASSERTION_MAX_LIFETIME_SECONDS,
   type ClientAssertionCredentials,
 } from './client-assertion';
-import { SsrfBlockedError } from './ssrf-safe-fetch';
 
 const ISSUER = 'https://auth.example.com';
 /** The realm the request was resolved to, whose issuer is the only audience (#490). */
@@ -123,7 +119,6 @@ beforeEach(async () => {
   ENV.CIMD_ENABLED = true;
   ENV.CIMD_TRUST_POLICY = 'accept-any-https';
   ENV.CIMD_TRUSTED_DOMAINS = [];
-  ENV.CIMD_ALLOW_PRIVATE_ADDRESSES = false;
   es256 = await generateKeyPair('ES256', { extractable: true });
   es256Jwk = await exportJWK(es256.publicKey);
   otherKeys = await generateKeyPair('ES256', { extractable: true });
@@ -236,7 +231,7 @@ describe('authenticateClientAssertion — accepted', () => {
     const stub = fastifyStub(
       clientRow({ jwks: null, jwksUri: 'https://client.example.com/jwks.json' })
     );
-    ssrfSafeGet.mockResolvedValue({
+    egressGet.mockResolvedValue({
       status: 200,
       body: JSON.stringify({ keys: [es256Jwk] }),
       headers: {},
@@ -247,9 +242,11 @@ describe('authenticateClientAssertion — accepted', () => {
       authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).resolves.toMatchObject({ clientId: CLIENT_ID });
 
-    expect(ssrfSafeGet).toHaveBeenCalledWith(
+    // A client-supplied URL: never a deployment allowlist destination.
+    expect(egressGet).toHaveBeenCalledWith(
+      expect.anything(),
       'https://client.example.com/jwks.json',
-      expect.objectContaining({ allowPrivateAddresses: false })
+      expect.objectContaining({ source: 'client' })
     );
   });
 });
@@ -586,8 +583,8 @@ describe('authenticateClientAssertion — rejected', () => {
     const stub = fastifyStub(
       clientRow({ jwks: null, jwksUri: 'https://internal.example.com/jwks.json' })
     );
-    ssrfSafeGet.mockRejectedValue(
-      new SsrfBlockedError('host resolves to a non-public address (169.254.169.254)')
+    egressGet.mockRejectedValue(
+      blockedEgress('host resolves to a non-public address (169.254.169.254)')
     );
     const assertion = await makeAssertion();
 
@@ -600,7 +597,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const stub = fastifyStub(
       clientRow({ jwks: null, jwksUri: 'https://client.example.com/jwks.json' })
     );
-    ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+    egressGet.mockResolvedValue({ status: 404, body: '', headers: {} });
     const assertion = await makeAssertion();
 
     await expect(
@@ -732,7 +729,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
       stored = { ...row, id: 'row-cimd', audience: null };
       return stored;
     });
-    ssrfSafeGet.mockResolvedValue(cimdDocument(es256Jwk));
+    egressGet.mockResolvedValue(cimdDocument(es256Jwk));
 
     await expect(
       authenticateClientAssertion(
@@ -761,7 +758,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
 
   it('follows a key rotation in the document', async () => {
     const stub = await materialise();
-    ssrfSafeGet.mockResolvedValue(cimdDocument(await exportJWK(otherKeys.publicKey)));
+    egressGet.mockResolvedValue(cimdDocument(await exportJWK(otherKeys.publicKey)));
 
     await expect(
       authenticateClientAssertion(
@@ -808,7 +805,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
 
   it('fails closed when the document can no longer be fetched', async () => {
     const stub = await materialise();
-    ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+    egressGet.mockResolvedValue({ status: 404, body: '', headers: {} });
 
     await expect(
       authenticateClientAssertion(

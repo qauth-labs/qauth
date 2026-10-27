@@ -1,8 +1,8 @@
 import type { LookupAddress } from 'node:dns';
-import { Resolver } from 'node:dns/promises';
+import { lookup, Resolver } from 'node:dns/promises';
 
 import type { ResolveHost } from './destination';
-import type { ExchangeJob, ExchangeOutcome } from './exchange';
+import { dialPinned, exchange, type ExchangeJob, type ExchangeOutcome } from './exchange';
 import { sharedProcessPool } from './process-pool';
 
 /**
@@ -69,4 +69,22 @@ export const resolveWithCares: ResolveHost = async (hostname, { timeoutMs, signa
 export const NODE_TRANSPORT: EgressTransport = Object.freeze({
   resolveHost: resolveWithCares,
   exchange: (job: ExchangeJob, signal: AbortSignal) => sharedProcessPool().exchange(job, signal),
+});
+
+/**
+ * TEST SUPPORT — the network of `createTestEgressClient` (`egress-client.ts`),
+ * which exists only while `NODE_ENV` is `test`. Names resolve with the
+ * operating system's resolver, `/etc/hosts` included, so a fixture server's
+ * `localhost` resolves; each exchange runs in the test's process, over a
+ * connection to a checked address, as a fetch process would run it.
+ *
+ * IPv4 addresses come first, so that `localhost` is dialled at `127.0.0.1`,
+ * where a fixture listens, before `::1`. Node 26.10 crashes the process when
+ * TLS starts on a socket whose first address refused the connection and that
+ * moved on to the next one.
+ */
+export const LOCAL_TEST_TRANSPORT: EgressTransport = Object.freeze({
+  resolveHost: async (hostname: string): Promise<LookupAddress[]> =>
+    lookup(hostname, { all: true, order: 'ipv4first' }),
+  exchange: (job: ExchangeJob, signal: AbortSignal) => exchange(job, dialPinned, signal),
 });

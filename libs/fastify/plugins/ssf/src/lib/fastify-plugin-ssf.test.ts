@@ -71,6 +71,7 @@ describe('ssfPlugin', () => {
     await app.ssf?.checkEndpoint('https://receiver.example/events');
     expect(egress.validateDestination).toHaveBeenCalledWith('https://receiver.example/events', {
       purpose: 'ssf_push',
+      source: 'client',
     });
   });
 

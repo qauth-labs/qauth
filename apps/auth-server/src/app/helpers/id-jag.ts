@@ -288,6 +288,12 @@ export interface ValidateIdJagOptions {
    */
   readonly expectedClientId: string;
   /**
+   * The name of the realm the assertion is presented to. The issuer's
+   * discovery fetch is an operator-set destination of this realm, so the
+   * deployment allowlist entries that name it apply (ADR-019 Decision 8).
+   */
+  readonly realm: string;
+  /**
    * Injection seam for tests and for a future non-fetching backend. Defaults to
    * {@link createIdJagIssuerKeyResolver} over this server instance — production
    * never passes one.
@@ -386,7 +392,7 @@ export async function validateIdJagAssertion(
     );
   }
 
-  const resolver = options.resolver ?? createIdJagIssuerKeyResolver(fastify);
+  const resolver = options.resolver ?? createIdJagIssuerKeyResolver(fastify, options.realm);
 
   // The resolver itself enforces the allowlist and returns `undefined` for an
   // untrusted issuer, so an unlisted `iss` never becomes a fetch.

@@ -9,6 +9,7 @@ import {
   type FixtureNetwork,
   type FixtureServer,
 } from '../testing/fixture-network';
+import { parseEgressAllowlist } from './allowlist';
 import {
   createEgressClient,
   type EgressClient,
@@ -101,7 +102,13 @@ beforeEach(() => {
 const client = (options: EgressClientOptions = {}): EgressClient => createEgressClient(options);
 
 const get = (url: string, extra: Partial<EgressRequest> = {}, egress = client()) =>
-  egress.request({ method: 'GET', url, purpose: 'test', ...extra });
+  egress.request({
+    method: 'GET',
+    url,
+    purpose: 'test',
+    ...extra,
+    source: extra.source ?? 'client',
+  });
 
 /** The EgressError a call rejects with. */
 async function refusal(call: Promise<unknown>): Promise<EgressError> {
@@ -393,6 +400,7 @@ describe('redirects (local test servers)', () => {
       body: '{"a":1}',
       headers: { 'content-type': 'application/json' },
       purpose: 'test',
+      source: 'client',
     });
     expect(serverA.requests[1]).toMatchObject({ method: 'PUT' });
     expect(serverA.requests[1].body.toString()).toBe('{"a":1}');
@@ -406,6 +414,7 @@ describe('redirects (local test servers)', () => {
       body: 'payload',
       headers: { 'content-type': 'text/plain' },
       purpose: 'test',
+      source: 'client',
     });
     expect(serverB.requests[0]).toMatchObject({ method: 'GET' });
     expect(serverB.requests[0].body.length).toBe(0);
@@ -422,6 +431,7 @@ describe('methods and bodies (local test servers)', () => {
         method,
         url: 'https://api.egress.test/m',
         purpose: 'test',
+        source: 'client',
       });
       expect(res.status).toBe(200);
       expect(serverA.requests[0].method).toBe(method);
@@ -440,6 +450,7 @@ describe('methods and bodies (local test servers)', () => {
       body: new TextEncoder().encode('{"event":"x"}'),
       headers: { 'content-type': 'application/json' },
       purpose: 'test',
+      source: 'client',
     });
     expect(res.status).toBe(201);
     expect(res.headers['content-type']).toBe('application/json');
@@ -453,6 +464,7 @@ describe('methods and bodies (local test servers)', () => {
       url: 'https://api.egress.test/',
       body: 'x'.repeat(64),
       purpose: 'test',
+      source: 'client',
       limits: { maxRequestBytes: 64 },
     });
     expect(res.status).toBe(200);
@@ -465,6 +477,7 @@ describe('methods and bodies (local test servers)', () => {
         url: 'https://api.egress.test/',
         body: 'x'.repeat(65),
         purpose: 'test',
+        source: 'client',
         limits: { maxRequestBytes: 64 },
       })
     );
@@ -483,6 +496,7 @@ describe('methods and bodies (local test servers)', () => {
           url: 'https://api.egress.test/',
           body: big,
           purpose: 'test',
+          source: 'client',
           limits: { maxRequestBytes: 64 },
         })
       );
@@ -500,6 +514,7 @@ describe('methods and bodies (local test servers)', () => {
       url: 'https://api.egress.test/',
       body: backing.subarray(100, 164),
       purpose: 'test',
+      source: 'client',
       limits: { maxRequestBytes: 64 },
     });
     expect(res.status).toBe(200);
@@ -513,6 +528,7 @@ describe('methods and bodies (local test servers)', () => {
         url: 'https://api.egress.test/',
         body: 'é'.repeat(40),
         purpose: 'test',
+        source: 'client',
         limits: { maxRequestBytes: 64 },
       })
     );
@@ -622,6 +638,7 @@ describe('response size (local test servers)', () => {
       method: 'HEAD',
       url: 'https://api.egress.test/',
       purpose: 'test',
+      source: 'client',
       limits: { maxResponseBytes: 10 },
     });
     expect(res.status).toBe(200);
@@ -682,7 +699,10 @@ describe('validateDestination', () => {
     const exchange = vi.fn(net.transport.exchange);
     network.current = { ...net.transport, exchange };
     await expect(
-      client().validateDestination('https://api.egress.test/hook?token=abc', { purpose: 'webhook' })
+      client().validateDestination('https://api.egress.test/hook?token=abc', {
+        purpose: 'webhook',
+        source: 'client',
+      })
     ).resolves.toEqual({
       url: 'https://api.egress.test/hook?token=abc',
       host: 'api.egress.test',
@@ -701,9 +721,231 @@ describe('validateDestination', () => {
     ['https://internal.egress.test/', 'address'],
     ['https://[::1]:8443/', 'address'],
   ])('refuses %s with %s', async (url, reason) => {
-    const err = await refusal(client().validateDestination(url, { purpose: 'webhook' }));
+    const err = await refusal(
+      client().validateDestination(url, { purpose: 'webhook', source: 'client' })
+    );
     expect(err).toMatchObject({ reason, outcome: 'blocked', purpose: 'webhook' });
     expect(net.dialled).toEqual([]);
+  });
+});
+
+/*
+ * The deployment allowlist (ADR-019 Decision 8, issue #481): an entry opens a
+ * non-public host or range only for an `operator` or `admin` destination of a
+ * realm it names. `internal.egress.test` resolves to 10.0.0.7, whose server
+ * answers "internal secret".
+ */
+describe('the deployment allowlist', () => {
+  const allowlist = parseEgressAllowlist({
+    entries: [
+      { cidr: '10.0.0.0/24', realms: ['acme'] },
+      { host: 'internal.egress.test', realms: ['beta'] },
+      { host: 'loopback.egress.test', realms: ['beta'] },
+      { cidr: '169.254.0.0/16', realms: ['acme'] },
+      { cidr: '127.0.0.0/8', realms: ['acme'] },
+    ],
+  });
+  const listed = () => client({ allowlist });
+
+  beforeEach(() => {
+    net.dns.set('alias.egress.test', [PRIVATE]);
+    net.dns.set('metadata.egress.test', [METADATA]);
+    net.dns.set('loopback.egress.test', [LOOPBACK]);
+    net.dns.set('mixed.egress.test', [PRIVATE, '10.0.1.7']);
+  });
+
+  it.each(['operator', 'admin'] as const)(
+    'lets a %s destination reach a listed range for a realm the entry names',
+    async (source) => {
+      const res = await get('https://internal.egress.test/', { source, realm: 'acme' }, listed());
+      expect(res.status).toBe(200);
+      expect(res.body.toString()).toBe('internal secret');
+      expect(net.dialled).toEqual([[PRIVATE]]);
+    }
+  );
+
+  it('refuses the same destination for a realm no entry names', async () => {
+    const err = await refusal(
+      get('https://alias.egress.test/', { source: 'operator', realm: 'other' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(internal.connections).toBe(0);
+  });
+
+  it('refuses an operator destination that names no realm', async () => {
+    const err = await refusal(
+      get('https://internal.egress.test/', { source: 'operator' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(internal.connections).toBe(0);
+  });
+
+  it.each(['client', 'end_user', 'remote_document'] as const)(
+    'never lets a %s destination use an entry, even for a realm it names',
+    async (source) => {
+      for (const realm of ['acme', 'beta']) {
+        const err = await refusal(
+          get('https://internal.egress.test/', { source, realm }, listed())
+        );
+        expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+      }
+      expect(net.dialled).toEqual([]);
+      expect(internal.connections).toBe(0);
+    }
+  );
+
+  it('matches a host entry by the URL host only, not by the address it resolves to', async () => {
+    const res = await get(
+      'https://internal.egress.test/',
+      { source: 'admin', realm: 'beta' },
+      listed()
+    );
+    expect(res.status).toBe(200);
+
+    const err = await refusal(
+      get('https://alias.egress.test/', { source: 'admin', realm: 'beta' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+  });
+
+  it('refuses a name when one of its addresses lies outside every listed range', async () => {
+    const err = await refusal(
+      get('https://mixed.egress.test/', { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(net.dialled).toEqual([]);
+  });
+
+  it('never opens the cloud metadata address, even inside a listed range', async () => {
+    const err = await refusal(
+      get('https://metadata.egress.test/', { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(net.dialled).toEqual([]);
+
+    const literal = await refusal(
+      get('https://169.254.169.254/', { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(literal).toMatchObject({ reason: 'address', outcome: 'blocked' });
+
+    // The container credential range sits inside the listed 169.254.0.0/16 too.
+    const credentials = await refusal(
+      get('https://169.254.170.2/', { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(credentials).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(net.dialled).toEqual([]);
+  });
+
+  it('opens loopback through a range that lists it, never through a host entry', async () => {
+    const res = await get(
+      'https://loopback.egress.test/',
+      { source: 'operator', realm: 'acme' },
+      listed()
+    );
+    expect(res.status).toBe(200);
+    const err = await refusal(
+      get('https://loopback.egress.test/', { source: 'operator', realm: 'beta' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+  });
+
+  it('checks an IP literal in the URL against the ranges too', async () => {
+    // The fixture certificate names egress.test hosts only, so a literal that
+    // passes the address check then fails the certificate check.
+    const opened = await refusal(
+      get(`https://${PRIVATE}/`, { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(opened).toMatchObject({ reason: 'network', outcome: 'failed' });
+    expect(net.dialled).toEqual([[PRIVATE]]);
+
+    const refused = await refusal(
+      get(`https://${PRIVATE}/`, { source: 'operator', realm: 'beta' }, listed())
+    );
+    expect(refused).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(net.dialled).toEqual([[PRIVATE]]);
+  });
+
+  it('does not follow a redirect to another host onto a listed range', async () => {
+    serverA.handler = redirect('https://internal.egress.test/');
+    const err = await refusal(
+      get('https://api.egress.test/', { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(internal.connections).toBe(0);
+  });
+
+  it('follows a redirect that stays on the listed host', async () => {
+    let first = true;
+    internal.handler = (_req, _body, res) => {
+      if (first) {
+        first = false;
+        res.writeHead(302, { location: '/moved' });
+        res.end();
+        return;
+      }
+      res.end('internal secret');
+    };
+    const res = await get(
+      'https://internal.egress.test/',
+      { source: 'operator', realm: 'acme' },
+      listed()
+    );
+    expect(res).toMatchObject({ status: 200, redirects: 1 });
+    expect(internal.requests.map(({ url }) => url)).toEqual(['/', '/moved']);
+  });
+
+  it('applies the same rules in validateDestination', async () => {
+    const egress = listed();
+    await expect(
+      egress.validateDestination('https://internal.egress.test/', {
+        purpose: 'webhook',
+        source: 'admin',
+        realm: 'acme',
+      })
+    ).resolves.toMatchObject({ host: 'internal.egress.test', addresses: [PRIVATE] });
+    for (const options of [
+      { source: 'admin', realm: 'other' },
+      { source: 'client', realm: 'acme' },
+    ] as const) {
+      const err = await refusal(
+        egress.validateDestination('https://internal.egress.test/', {
+          purpose: 'webhook',
+          ...options,
+        })
+      );
+      expect(err).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    }
+    expect(net.dialled).toEqual([]);
+  });
+
+  it('names the source and the realm in the log line of a refusal', async () => {
+    const warn = vi.fn();
+    await refusal(
+      get(
+        'https://internal.egress.test/',
+        { source: 'operator', realm: 'other' },
+        client({ allowlist, logger: { warn } })
+      )
+    );
+    expect(warn).toHaveBeenCalledWith(
+      {
+        purpose: 'test',
+        source: 'operator',
+        realm: 'other',
+        host: 'internal.egress.test',
+        reason: 'address',
+        outcome: 'blocked',
+      },
+      'egress call blocked'
+    );
+  });
+
+  it('refuses an allowlist that did not come from the parser', () => {
+    expect(() =>
+      createEgressClient({
+        allowlist: { entries: [{ cidr: '10.0.0.0/8', realms: ['acme'] }] },
+      })
+    ).toThrow(TypeError);
   });
 });
 
@@ -788,11 +1030,23 @@ describe('counting and logging', () => {
       [{ purpose: 'cimd', outcome: 'failed', reason: 'network' }],
     ]);
     expect(warn).toHaveBeenCalledWith(
-      { purpose: 'webhook', host: 'internal.egress.test', reason: 'address', outcome: 'blocked' },
+      {
+        purpose: 'webhook',
+        source: 'client',
+        host: 'internal.egress.test',
+        reason: 'address',
+        outcome: 'blocked',
+      },
       'egress call blocked'
     );
     expect(warn).toHaveBeenCalledWith(
-      { purpose: 'cimd', host: 'nowhere.egress.test', reason: 'network', outcome: 'failed' },
+      {
+        purpose: 'cimd',
+        source: 'client',
+        host: 'nowhere.egress.test',
+        reason: 'network',
+        outcome: 'failed',
+      },
       'egress call failed'
     );
     const logged = JSON.stringify(warn.mock.calls);
@@ -840,7 +1094,10 @@ describe('counting and logging', () => {
   it('counts validateDestination refusals too', async () => {
     const egress = client();
     await refusal(
-      egress.validateDestination('https://internal.egress.test/', { purpose: 'webhook' })
+      egress.validateDestination('https://internal.egress.test/', {
+        purpose: 'webhook',
+        source: 'client',
+      })
     );
     expect(egress.counts()).toEqual({
       webhook: { blocked: 1, failed: 0, reasons: { address: 1 } },
@@ -853,6 +1110,10 @@ describe('caller mistakes', () => {
     ['an empty purpose', { purpose: '' }],
     ['a purpose with spaces', { purpose: 'web hook' }],
     ['an upper-case purpose', { purpose: 'Webhook' }],
+    ['an unknown source', { source: 'partner' }],
+    ['a missing source', { source: undefined }],
+    ['an empty realm', { realm: '' }],
+    ['a realm that is not a string', { realm: 7 }],
     ['an unknown method', { method: 'TRACE' }],
     ['a forbidden header', { headers: { host: 'internal' } }],
     ['a Content-Length header', { headers: { 'Content-Length': '1' } }],
@@ -867,6 +1128,7 @@ describe('caller mistakes', () => {
         method: 'GET',
         url: 'https://api.egress.test/',
         purpose: 'test',
+        source: 'client',
         ...(extra as Partial<EgressRequest>),
       })
     ).rejects.toThrow(TypeError);

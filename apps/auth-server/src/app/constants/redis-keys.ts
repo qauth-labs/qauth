@@ -132,12 +132,26 @@ export const REDIS_KEYS = {
   ID_JAG_JTI: (issuer: string, jti: string) => `id-jag:jti:${digest(issuer)}:${digest(jti)}`,
   /**
    * Cached OIDC discovery document of an ALLOWLISTED ID-JAG issuer (ADR-011),
-   * keyed by the canonical issuer identifier. Only the two members key
-   * resolution needs (`issuer`, `jwks_uri`) are stored. Best-effort with a
-   * bounded TTL (`ID_JAG_JWKS_CACHE_TTL`) — a miss re-fetches through the
-   * SSRF-guarded path.
+   * keyed by the canonical issuer identifier and the realm that fetched it:
+   * the deployment egress allowlist may open the discovery URL for one realm
+   * and not another (ADR-019 Decision 8), so one realm's document never
+   * answers for another. Only the two members key resolution needs (`issuer`,
+   * `jwks_uri`) are stored. Best-effort with a bounded TTL
+   * (`ID_JAG_JWKS_CACHE_TTL`) — a miss re-fetches through the SSRF-guarded
+   * path.
    */
-  ID_JAG_DISCOVERY: (issuer: string) => `id-jag:discovery:${digest(issuer)}`,
+  ID_JAG_DISCOVERY: (issuer: string, realm: string) =>
+    `id-jag:discovery:${digest(issuer)}:${digest(realm)}`,
+  /**
+   * A realm's discovery fetch for an ID-JAG issuer that the egress address
+   * check refused (#481): the issuer's discovery URL reaches a non-public
+   * address no allowlist entry opens for the realm. Written for a short,
+   * fixed time; while it exists the realm's requests fetch nothing, so they
+   * stop resolving the name again. Per realm, since another realm's
+   * allowlist entry may open the same address.
+   */
+  ID_JAG_FETCH_REFUSED: (issuer: string, realm: string) =>
+    `id-jag:fetch-refused:${digest(issuer)}:${digest(realm)}`,
   /**
    * Cached JWK Set of an ALLOWLISTED ID-JAG issuer, fetched from the `jwks_uri`
    * that issuer's OWN discovery document names — never a URL taken from an

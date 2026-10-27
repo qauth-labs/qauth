@@ -11,6 +11,7 @@ export { type BaseEnv, baseEnvSchema } from './base';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
 export { type DpopEnv, dpopEnvSchema } from './dpop';
+export { type EgressEnv, egressEnvSchema } from './egress';
 export { type EmailEnv, emailEnvSchema } from './email';
 export { type EventDeliveryEnv, eventDeliveryEnvSchema } from './event-delivery';
 export { type EventRetentionEnv, eventRetentionEnvSchema } from './event-retention';
