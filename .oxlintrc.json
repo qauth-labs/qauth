@@ -481,7 +481,9 @@
     // `excludeFiles`: the egress library itself; tests and their fixtures, which
     // stand up and call local servers; and the wallet status-list fetcher,
     // whose operator URI-prefix allowlist predates the egress client and which
-    // moves onto it separately. The KEK custody adapters (`libs/keys/*`, loaded
+    // moves onto it separately. The typed Interaction API client
+    // (`libs/shared/interaction-client`) runs in the browser and calls the auth
+    // server's own origin, so it is not server code. The KEK custody adapters (`libs/keys/*`, loaded
     // by `KEK_PROVIDER`) are outside `files`: their calls to the key service are
     // outside the egress client by ADR-019's amendment of 2026-10-27. The
     // operator's OpenTelemetry export goes through the SDK's exporter, outside
@@ -504,7 +506,8 @@
         "**/src/testing/**",
         "**/test/**",
         "libs/shared/testing/**",
-        "libs/server/federation/src/status/status-list-fetch.ts"
+        "libs/server/federation/src/status/status-list-fetch.ts",
+        "libs/shared/interaction-client/**"
       ],
       "rules": {
         "qauth/no-direct-network": "error"
