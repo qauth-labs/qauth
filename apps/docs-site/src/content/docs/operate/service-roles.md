@@ -81,9 +81,10 @@ at boot:
 
 Token verification (with each realm's published keys), the realm JWKS,
 `/ssf/jwks.json`, discovery and the endpoints that sign nothing keep working.
-Hybrid signing (`HYBRID_SIGNING_ENABLED=true`) signs with the ML-DSA-65 key,
-which only the signer holds, so a process without the signer refuses to boot
-with it on.
+Hybrid signing (`HYBRID_SIGNING_ENABLED=true`) describes what the signer
+issues, so every process of a hybrid deployment sets it: a process without the
+signer verifies hybrid tokens with the realm's published ML-DSA-65 keys, and
+answers `503` when asked to sign one.
 
 So the split that works today keeps every signing role together:
 

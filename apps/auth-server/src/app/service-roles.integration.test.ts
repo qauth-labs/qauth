@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
@@ -374,5 +374,67 @@ describe('service roles (#495)', () => {
     expect(() => app.repositories.users).toThrow(/The users repository is not loaded/);
     expect(() => app.repositories.oauthClients).toThrow(/not loaded/);
     await expect(app.repositories.realms.findByName(E2E_REALM_NAME)).resolves.toBeDefined();
+    // Every role reads the realms' published keys (#491), and only them: the
+    // signer's own key table is no repository at all.
+    expect(app.repositories.realmPublicKeys).toBeDefined();
+    expect('realmKeys' in app.repositories).toBe(false);
+  });
+
+  // Last: it gives the realm a new hybrid pair.
+  it("boots a process without the signer with hybrid signing on, verifying the signer's hybrid tokens and refusing to sign one (#491)", async () => {
+    const HYBRID = {
+      HYBRID_SIGNING_ENABLED: 'true',
+      SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65',
+    };
+    // The signer imports a new pair: an Ed25519 key and an ML-DSA-65 seed.
+    const pair = await generateJwtPem();
+    const { app: signerApp } = await boot('all', {
+      ...HYBRID,
+      JWT_PRIVATE_KEY: pair.privateKey,
+      JWT_PUBLIC_KEY: pair.publicKey,
+      JWT_MLDSA_PRIVATE_KEY: randomBytes(32).toString('base64url'),
+    });
+    const realm = await signerApp.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm?.issuer) throw new Error('the default realm was not booted');
+    const tokenRealm = { id: realm.id, issuer: realm.issuer };
+    const clientId = `hybrid-${randomUUID()}`;
+    const hybrid = await signerApp.jwtUtils.signHybridAccessToken(tokenRealm, {
+      sub: clientId,
+      clientId,
+    });
+
+    // The switch on, no key: the process boots.
+    const { app } = await boot('api', HYBRID);
+    await expect(
+      app.jwtUtils.verifyHybridAccessToken(tokenRealm, hybrid, { requirePqc: true })
+    ).resolves.toMatchObject({ sub: clientId, iss: realm.issuer });
+    await expect(
+      app.jwtUtils.signHybridAccessToken(tokenRealm, { sub: clientId, clientId })
+    ).rejects.toMatchObject({ name: 'TemporarilyUnavailableError' });
+
+    // Its bearer half introspects active here, as the client it was issued to.
+    const secret = 'secret-of-the-hybrid-client-0123456789';
+    await app.repositories.oauthClients.create({
+      realmId: realm.id,
+      clientId,
+      clientSecretHash: await signerApp.passwordHasher.hashPassword(secret),
+      tokenEndpointAuthMethod: 'client_secret_post',
+      name: 'Roles hybrid client',
+      redirectUris: [],
+      scopes: [MACHINE_SCOPE],
+      grantTypes: ['client_credentials'],
+      enabled: true,
+    });
+    const introspection = await app.inject({
+      method: 'POST',
+      url: '/oauth/introspect',
+      headers: FORM,
+      payload: new URLSearchParams({
+        token: hybrid.token,
+        client_id: clientId,
+        client_secret: secret,
+      }).toString(),
+    });
+    expect(introspection.json()).toMatchObject({ active: true, client_id: clientId });
   });
 });

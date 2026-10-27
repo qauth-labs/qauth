@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { z } from 'zod';
 
-import { serviceRolesEnvSchema } from './service-roles';
 
 /**
  * Crypto / signing environment configuration (ADR-005, #243 + #245).
@@ -105,12 +104,6 @@ export const cryptoEnvSchema = z
       .enum(['true', 'false', '1', '0'])
       .default('false')
       .transform((v) => v === 'true' || v === '1'),
-
-    /**
-     * The roles of this process (#495), read here only to decide whether
-     * hybrid signing can run in it. `serviceRolesEnvSchema` owns the key.
-     */
-    SERVICE_ROLES: serviceRolesEnvSchema.shape.SERVICE_ROLES,
   })
   .superRefine((data, ctx) => {
     // #248 F8: a CONFIGURED seed must be well-formed whether or not hybrid is
@@ -137,20 +130,10 @@ export const cryptoEnvSchema = z
     }
 
     if (!data.HYBRID_SIGNING_ENABLED) return;
-    // #495: hybrid tokens are signed with the realm's ML-DSA-65 key, which
-    // only the signer holds. A process without it could verify them with the
-    // realm's published keys (#491), but issues none until it can call the
-    // signer service (#497), so hybrid signing keeps every role in the
-    // processes that hold the signer, for now.
-    if (!data.SERVICE_ROLES.includes('signer')) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['HYBRID_SIGNING_ENABLED'],
-        message:
-          'HYBRID_SIGNING_ENABLED=true needs the signer role in this process: it signs hybrid tokens with the ML-DSA-65 key, which only the signer holds. Add signer to SERVICE_ROLES, or run hybrid signing as a single process (SERVICE_ROLES=all).',
-      });
-      return;
-    }
+    // The switch describes what the deployment's signer issues, so every
+    // process of a hybrid deployment sets it, whatever its roles (#495): a
+    // process without the signer verifies hybrid tokens with the realm's
+    // published ML-DSA-65 keys (#491), and answers 503 when asked to sign.
     if (data.SIGNING_ALGORITHM_MODE !== 'ed25519+ml-dsa-65') {
       ctx.addIssue({
         code: 'custom',

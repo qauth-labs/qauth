@@ -1802,14 +1802,25 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     return { fastify, state };
   }
 
-  it('answers a refused token with access_denied, and lets a key store failure fail closed (#491)', async () => {
+  it('answers a refused token with access_denied, and a key store failure with temporarily_unavailable (#491)', async () => {
     for (const refused of [new JWTInvalidError('bad'), new JWTExpiredError('old')]) {
       const { fastify, state } = await runBearer('email', {}, { verifyError: refused });
       expect(state.redirected).toContain('error=access_denied');
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     }
-    const outage = new Error('the key store is unreachable');
-    await expect(runBearer('email', {}, { verifyError: outage })).rejects.toBe(outage);
+    // RFC 6749 §4.1.2.1: the redirect URI is validated by now, so the client
+    // hears it there, never as a bad token, and no code is issued.
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      { verifyError: new Error('the key store is unreachable') }
+    );
+    const location = new URL(state.redirected as string);
+    expect(location.searchParams.get('error')).toBe('temporarily_unavailable');
+    expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
+    expect(location.searchParams.get('iss')).not.toBeNull();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.log.error).toHaveBeenCalled();
   });
 
   it('refuses a dangerous scope on the Bearer path with access_denied (no interactive step-up)', async () => {
@@ -2051,7 +2062,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the denylist cannot be read: the failure propagates, no code (#491)', async () => {
+  it('fails closed when the denylist cannot be read: temporarily_unavailable, no code (#491)', async () => {
     const { fastify, ctx } = makeFastify();
     const redisDown = new Error('redis down');
     (fastify.redis.exists as unknown as Mock).mockRejectedValue(redisDown);
@@ -2067,18 +2078,17 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       aud: DANGEROUS_CLIENT.clientId,
     });
     const { reply, state } = createReply();
-    await expect(
-      ctx.handler!(
-        {
-          query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
-          url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
-          headers: { authorization: 'Bearer bearer.token' },
-          ip: '127.0.0.1',
-        },
-        reply
-      )
-    ).rejects.toBe(redisDown);
-    expect(state.redirected).toBeUndefined();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=temporarily_unavailable');
+    expect(fastify.log.error).toHaveBeenCalledWith({ err: redisDown }, expect.any(String));
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });

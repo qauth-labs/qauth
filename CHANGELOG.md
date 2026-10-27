@@ -869,9 +869,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without spending attempts (the delivery role now holds a delivery whose
   signer is unavailable). It verifies a realm's tokens, and serves its JWKS,
   from the realm's published public keys (`realm_public_keys`), which it reads
-  without a KEK ([#491]): no public key variable is needed, and the
-  verification keys and JWKS are the signer's own. It refuses
-  `HYBRID_SIGNING_ENABLED=true`. `@fastify/autoload` is no longer a
+  without a KEK through the new `realmPublicKeys` repository, which every
+  role builds ([#491]): no public key variable is needed, and the
+  verification keys and JWKS are the signer's own. `HYBRID_SIGNING_ENABLED`
+  describes what the deployment's signer issues, so every process of a
+  hybrid deployment sets it: one without the signer verifies hybrid tokens
+  with the realm's published ML-DSA-65 keys and answers `503` when asked to
+  sign one. `@fastify/autoload` is no longer a
   dependency. The docs site's new **Service roles** page
   (`operate/service-roles`) describes the split that works today. The egress
   client (`fastify.egress`) is registered where a route makes an outbound call

@@ -634,7 +634,10 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   } else {
     fastify.decorate(
       'signer',
-      createUnavailableSigner(env.SIGNER_URL, createRepositoryPublishedKeyReader(fastify.db))
+      createUnavailableSigner(
+        env.SIGNER_URL,
+        createRepositoryPublishedKeyReader(fastify.repositories.realmPublicKeys)
+      )
     );
   }
 

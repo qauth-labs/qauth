@@ -120,15 +120,10 @@ describe('jwtEnvSchema under the role switch', () => {
 describe('cryptoEnvSchema under the role switch', () => {
   const hybrid = { HYBRID_SIGNING_ENABLED: 'true', SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65' };
 
-  it('refuses hybrid signing on a process without the signer, naming the switch', () => {
+  it('allows hybrid signing on a process without the signer, which verifies hybrid tokens (#491)', () => {
     const result = cryptoEnvSchema.safeParse({ ...hybrid, SERVICE_ROLES: 'api,web' });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues).toEqual([
-      expect.objectContaining({
-        path: ['HYBRID_SIGNING_ENABLED'],
-        message: expect.stringContaining('needs the signer role'),
-      }),
-    ]);
+    expect(result.success).toBe(true);
+    expect(result.data?.HYBRID_SIGNING_ENABLED).toBe(true);
   });
 
   it('allows it where the signer runs, with no ML-DSA key variable: the key store holds the pair (#491)', () => {

@@ -16,6 +16,7 @@ import type {
 } from '../../types';
 import { DbClient } from '../db';
 import { realmKeys, realmPublicKeys } from '../schema/keys';
+import { createRealmPublicKeysRepository } from './realm-public-keys.repository';
 
 /**
  * Every `realm_keys` column except the wrapped material (`ciphertext`, `iv`,
@@ -134,16 +135,7 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
     },
 
     async listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]> {
-      const invoker = tx ?? defaultDb;
-      return invoker
-        .select()
-        .from(realmPublicKeys)
-        .where(eq(realmPublicKeys.realmId, realmId))
-        .orderBy(
-          asc(realmPublicKeys.purpose),
-          asc(realmPublicKeys.publishAt),
-          asc(realmPublicKeys.kid)
-        );
+      return createRealmPublicKeysRepository(defaultDb).listByRealm(realmId, tx);
     },
 
     async anotherRealmPublishes(

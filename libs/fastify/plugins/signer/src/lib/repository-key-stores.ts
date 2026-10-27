@@ -2,6 +2,7 @@ import {
   createRealmKeysRepository,
   createRealmsRepository,
   type DbClient,
+  type RealmPublicKeysRepository,
 } from '@qauth-labs/infra-db';
 import { createPublishedKeyReader, type PublishedKeyReader } from '@qauth-labs/server-keys';
 import type {
@@ -49,11 +50,14 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
  * signer role, which has no KEK and must not read `realm_keys`. It reads
  * public material only, the same rows the in-process signer publishes, so a
  * token verifies there exactly as on the signer's process.
+ *
+ * @param realmPublicKeys - the database plugin's `realmPublicKeys` repository
  */
-export function createRepositoryPublishedKeyReader(db: DbClient): PublishedKeyReader {
-  const keys = createRealmKeysRepository(db);
+export function createRepositoryPublishedKeyReader(
+  realmPublicKeys: Pick<RealmPublicKeysRepository, 'listByRealm'>
+): PublishedKeyReader {
   return createPublishedKeyReader({
-    listPublicKeys: (realmId: string) => keys.listPublicByRealm(realmId),
+    listPublicKeys: (realmId: string) => realmPublicKeys.listByRealm(realmId),
   });
 }
 

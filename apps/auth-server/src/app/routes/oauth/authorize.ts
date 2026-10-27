@@ -383,11 +383,26 @@ export default async function (fastify: FastifyInstance) {
         userId = payload.sub;
       } catch (error) {
         // Only a refused token is the client's `access_denied`. Anything else
-        // (the key store or the denylist unreachable) is the server's: it
-        // propagates and the request fails closed, as at revocation,
-        // introspection and token exchange (#491), rather than reading as a
-        // bad token.
-        if (!(error instanceof JWTInvalidError || error instanceof JWTExpiredError)) throw error;
+        // (the key store or the denylist unreachable) is the server's, never
+        // a bad token (#491): the client and its redirect URI are validated by
+        // now, so it hears `temporarily_unavailable` there (RFC 6749
+        // §4.1.2.1), with `state` and `iss` as every authorization error
+        // carries them, and no code is issued.
+        if (!(error instanceof JWTInvalidError || error instanceof JWTExpiredError)) {
+          fastify.log.error({ err: error }, 'authorize: the Bearer token could not be checked');
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:authorization.failed:v1-rc.0',
+            { error: 'temporarily_unavailable' },
+            clientEvent
+          );
+          return sendAuthorizationError(reply, client, redirectUri, {
+            error: 'temporarily_unavailable',
+            error_description: 'The authorization server cannot check the token right now',
+            state: state ?? undefined,
+            iss,
+          });
+        }
         await emitUserEvent(
           request,
           'urn:qauth:event:authorization.failed:v1-rc.0',

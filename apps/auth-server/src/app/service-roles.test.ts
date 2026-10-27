@@ -94,9 +94,9 @@ describe('what each role loads (the boot-time list)', () => {
     );
   });
 
-  it('gives signer and admin only the realms the resolver reads', () => {
-    expect(repositoriesFor(['signer'])).toEqual(['realms']);
-    expect(repositoriesFor(['admin'])).toEqual(['realms']);
+  it('gives signer and admin only the realms the resolver reads and their published keys', () => {
+    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys']);
+    expect(repositoriesFor(['admin'])).toEqual(['realms', 'realmPublicKeys']);
     expect([...pluginsFor(['signer'])]).toEqual([]);
     expect([...pluginsFor(['admin'])]).toEqual([]);
   });
@@ -108,6 +108,7 @@ describe('what each role loads (the boot-time list)', () => {
       'eventDeliveries',
       'eventRetention',
       'ssfStreams',
+      'realmPublicKeys',
     ]);
     expect([...pluginsFor(['delivery'])]).toEqual(['ssf', 'eventDelivery']);
   });
