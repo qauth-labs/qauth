@@ -10,6 +10,8 @@ import {
   CookieJar,
   decodeHtmlEntities,
   type E2eInfrastructure,
+  extractCsrfToken,
+  extractInvocationUri,
   followRedirect,
   generateJwtPem,
   linkWalletToNewAccount,
@@ -937,8 +939,95 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       // pre-granted so this drives the code-mint path rather than the consent
       // screen.
       expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
-      await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
       expect(await canMintAuthorizationCode(app, flow.jar)).toBe(true);
+    });
+  }, 180_000);
+
+  it('builds the request_uri, response_uri and same-device redirect_uri on the issuer, whatever an untrusted peer forwards (ADR-019 Decision 1, #490)', async () => {
+    const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+    const wallet = await walletHolding(issuer);
+    const proxy = '10.0.4.12';
+    const issuerUrl = REQUIRED_TEST_ENVIRONMENT['JWT_ISSUER'] as string;
+
+    await withDeployment(haipEnv([issuer], { TRUST_PROXY: proxy }), async ({ app }) => {
+      const asserted = 'haip-spoofed@example.com';
+      await linkedAccount(app, wallet, asserted);
+
+      // Every wallet-facing request of the flow comes from a peer TRUST_PROXY
+      // does not list, naming another host, scheme, port and prefix.
+      const spoofed = {
+        'x-forwarded-host': 'evil.example.net',
+        'x-forwarded-proto': 'http',
+        'x-forwarded-port': '8443',
+        'x-forwarded-prefix': '/evil',
+        forwarded: 'host=evil.example.net;proto=http',
+      };
+      const jar = new CookieJar();
+      const send = (options: {
+        method: 'GET' | 'POST';
+        url: string;
+        headers?: Record<string, string>;
+        payload?: string;
+      }) =>
+        app.inject({
+          ...options,
+          headers: {
+            ...spoofed,
+            ...options.headers,
+            ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
+          },
+          remoteAddress: '192.0.2.7',
+        });
+
+      const form = await send({ method: 'GET', url: '/ui/wallet-login' });
+      expect(form.statusCode).toBe(200);
+      jar.absorb(form.headers['set-cookie']);
+      const started = await send({
+        method: 'POST',
+        url: '/ui/wallet-login',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        payload: new URLSearchParams({
+          identifier: asserted,
+          csrf_token: extractCsrfToken(form.body),
+          device: 'this',
+        }).toString(),
+      });
+      expect(started.statusCode).toBe(200);
+      jar.absorb(started.headers['set-cookie']);
+
+      // The request_uri the wallet is handed.
+      const reference = parseOid4vpRequestReference(extractInvocationUri(started.body));
+      expect(reference.requestUri.startsWith(`${issuerUrl}/`)).toBe(true);
+
+      // The response_uri inside the signed JAR.
+      const fetched = await send({ method: 'GET', url: new URL(reference.requestUri).pathname });
+      expect(fetched.statusCode).toBe(200);
+      const { request } = await verifyOid4vpRequestObject(fetched.body, {
+        trustAnchorPem: pki.walletTrustAnchorPem,
+      });
+      expect(request.responseUri).toBe(`${issuerUrl}/oid4vp/response`);
+
+      // The same-device redirect_uri in the acknowledgement.
+      const answer = await wallet.buildResponseForRequest(request);
+      const posted = await send({
+        method: 'POST',
+        url: '/oid4vp/response',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        payload: new URLSearchParams(answer.formBody).toString(),
+      });
+      expect(posted.statusCode).toBe(200);
+      const ack = parseOid4vpResponseAck(JSON.parse(posted.body) as unknown);
+      if (ack.redirectUri === undefined) throw new Error('no redirect_uri in the ack');
+      const target = new URL(ack.redirectUri);
+      expect(`${target.origin}${target.pathname}`).toBe(`${issuerUrl}/ui/wallet-login/return`);
+
+      for (const response of [form, started, fetched, posted]) {
+        for (const text of [response.body, JSON.stringify(response.headers)]) {
+          expect(text).not.toContain('evil.example.net');
+          expect(text).not.toContain('8443');
+        }
+      }
     });
   }, 180_000);
 
@@ -951,7 +1040,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       // An account this presentation WOULD sign in to, with consent granted,
       // so "neither browser can mint" below is about the return leg alone.
       const userId = await linkedAccount(app, wallet, asserted);
-      await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
       const { flow, answer } = await walletAnswers(app, wallet, asserted, { device: 'this' });
       const ack = await acknowledged(app, answer.formBody);
       if (ack.redirectUri === undefined) throw new Error('no redirect_uri in the ack');

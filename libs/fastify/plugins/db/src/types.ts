@@ -4,7 +4,7 @@ import type {
   EventTelemetrySink,
   RealmPolicySeeds,
 } from '@qauth-labs/infra-db';
-import type { FastifyPluginOptions } from 'fastify';
+import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 
 export type { AdminRoleCatalog, EventTelemetrySink, RealmPolicySeeds };
 
@@ -33,4 +33,13 @@ export interface DatabasePluginOptions extends FastifyPluginOptions {
    * built-in role; they still read.
    */
   adminRoleCatalog?: AdminRoleCatalog;
+  /**
+   * The repositories to build (#495): those the process's service roles use.
+   * Every one when absent. Reading any other from `fastify.repositories`
+   * throws, naming it, so a role cannot use a repository its list leaves out.
+   */
+  repositories?: readonly RepositoryName[];
 }
+
+/** The name of one repository on `fastify.repositories`. */
+export type RepositoryName = keyof FastifyInstance['repositories'];

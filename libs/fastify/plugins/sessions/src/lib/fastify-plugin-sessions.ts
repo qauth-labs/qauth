@@ -73,7 +73,10 @@ export function repositorySessionStore(
     },
     touchLastSeen: (realmId, sid, minIntervalMs) =>
       repositories.sessions.updateLastSeen(realmId, sid, { minIntervalMs }),
-    revoke: (realmId, sid, reason) => repositories.sessions.revoke(realmId, sid, reason),
+    // The repository also returns the clients the session served (#549). The
+    // service has no use for them yet: back-channel logout will read them.
+    revoke: async (realmId, sid, reason) =>
+      (await repositories.sessions.revoke(realmId, sid, reason))?.session,
   };
 }
 

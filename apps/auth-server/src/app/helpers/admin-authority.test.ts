@@ -113,10 +113,18 @@ function server(
         ),
         findById: vi.fn(async (id: string) => realms[id]),
       },
-      users: { findById: vi.fn(async (id: string) => users[id]) },
+      // Realm-first (#489): an account, and its grants, are found only in
+      // the account's own realm.
+      users: {
+        findById: vi.fn(async (realmId: string, id: string) =>
+          users[id]?.realmId === realmId ? users[id] : undefined
+        ),
+      },
       adminGrants: {
-        listLive: vi.fn(async (userId: string) =>
-          grants.filter((live) => live.grant.userId === userId)
+        listLive: vi.fn(async (realmId: string, userId: string) =>
+          users[userId]?.realmId === realmId
+            ? grants.filter((live) => live.grant.userId === userId)
+            : []
         ),
       },
     },

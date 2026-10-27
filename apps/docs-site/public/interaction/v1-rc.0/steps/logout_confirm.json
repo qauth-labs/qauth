@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/logout_confirm.json",
+  "title": "urn:qauth:ia:logout_confirm:v1-rc.0",
+  "description": "The confirmation of an RP-initiated logout (ADR-019 Decision 4). The interaction’s `client` names the app that asked, when the request identified one. A browser may hold several accounts’ sessions, so the person signs out of this account or of every account on the browser (ADR-019 Decision 3). Works without JavaScript, without the account list.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:logout_confirm:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:logout_confirm:v1-rc.0",
+      "params": {},
+      "answer": {
+        "decision": "logout"
+      },
+      "personal": {
+        "accounts": [
+          {
+            "identifier": "alice@example.com",
+            "current": true
+          },
+          {
+            "identifier": "alice@work.example",
+            "current": false
+          }
+        ]
+      },
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "logout",
+            "logout_all",
+            "stay"
+          ],
+          "description": "Sign out of this account, of every account on the browser, or stay signed in."
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "decision": "logout"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "description": "The accounts signed in on this browser, the one being signed out first.",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "properties": {
+              "identifier": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 254,
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                "x-qauth-display": "account",
+                "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
+              },
+              "current": {
+                "type": "boolean",
+                "description": "Whether this is the account the logout request is for."
+              }
+            },
+            "required": [
+              "identifier",
+              "current"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "accounts"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "accounts": [
+            {
+              "identifier": "alice@example.com",
+              "current": true
+            },
+            {
+              "identifier": "alice@work.example",
+              "current": false
+            }
+          ]
+        }
+      ]
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

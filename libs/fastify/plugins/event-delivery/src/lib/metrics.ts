@@ -1,5 +1,9 @@
 import type { EventDeliveriesRepository } from '@qauth-labs/infra-db';
-import type { DeliveryAttemptResult, DeliveryMetrics } from '@qauth-labs/server-event-delivery';
+import type {
+  DeliveryAttemptResult,
+  DeliveryMetrics,
+  SignerHeldDeliveries,
+} from '@qauth-labs/server-event-delivery';
 import { Counter, Gauge, type Registry } from 'prom-client';
 
 /** The metric names of the delivery role (issue #460). */
@@ -7,6 +11,8 @@ export const DELIVERY_METRIC_NAMES = Object.freeze({
   pending: 'qauth_events_pending',
   lag: 'qauth_events_delivery_lag_seconds',
   attempts: 'qauth_events_delivery_attempts_total',
+  signerHeld: 'qauth_events_delivery_signer_held',
+  signerHeldOldest: 'qauth_events_delivery_signer_held_oldest_seconds',
 } as const);
 
 /** What {@link registerDeliveryMetrics} reads and where it logs a failed read. */
@@ -17,6 +23,8 @@ export interface DeliveryMetricsSources {
   /** The role's clock, in epoch milliseconds. */
   readonly now: () => number;
   readonly warn: (error: unknown, message: string) => void;
+  /** The deliveries the role holds for an unavailable signer; `undefined` before it starts. */
+  readonly signerHeld?: () => SignerHeldDeliveries | undefined;
 }
 
 /**
@@ -28,7 +36,12 @@ export interface DeliveryMetricsSources {
  *   waits for a delivery has waited, the fan-out included;
  * - `qauth_events_delivery_attempts_total{kind,result}` — attempts by route
  *   kind and result (`delivered`, `retry`, `failed`): `retry` and `failed`
- *   are the failures, `failed` the deliveries that ended failed.
+ *   are the failures, `failed` the deliveries that ended failed;
+ * - `qauth_events_delivery_signer_held` and
+ *   `qauth_events_delivery_signer_held_oldest_seconds` — the deliveries this
+ *   node holds because the signer is unavailable (#495), and how long it has
+ *   held the oldest: such a hold spends no attempt, so it shows only here and
+ *   in the role's warnings.
  *
  * A read that fails reports NaN, not a stale or a reassuring value.
  *
@@ -67,6 +80,24 @@ export function registerDeliveryMetrics(
         sources.warn(error, 'Could not read the event delivery lag for /metrics');
         this.set(Number.NaN);
       }
+    },
+  });
+
+  new Gauge({
+    name: DELIVERY_METRIC_NAMES.signerHeld,
+    help: 'Event deliveries this node holds because the signer is unavailable; they spend no attempt.',
+    registers: [registry],
+    collect() {
+      this.set(sources.signerHeld?.()?.count ?? 0);
+    },
+  });
+
+  new Gauge({
+    name: DELIVERY_METRIC_NAMES.signerHeldOldest,
+    help: 'Seconds since this node first held the oldest delivery it holds for an unavailable signer; 0 when it holds none.',
+    registers: [registry],
+    collect() {
+      this.set(sources.signerHeld?.()?.oldestSeconds ?? 0);
     },
   });
 

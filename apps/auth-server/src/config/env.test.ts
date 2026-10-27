@@ -10,14 +10,14 @@ import {
   federationEnvSchema,
   keyAttestationEnvSchema,
 } from '@qauth-labs/server-config';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Env-schema parsing tests for config fields added in the env-hardening
  * batch. Covers the REQUIRE_VERIFIED_ACCOUNT `z.coerce.boolean()` footgun
  * (F-08) and its deprecated REQUIRE_EMAIL_VERIFIED alias, the
- * SESSION_COOKIE_SECRET production guard (F-12), the production refusal of
- * the private-address SSRF switches (#435), and the
+ * SESSION_COOKIE_SECRET production guard (F-12), the boot refusal of the
+ * removed private-address SSRF switches (#481), EGRESS_ALLOWLIST_PATH, and the
  * ENABLE_SWAGGER default (F-07). Without these, a future refactor could
  * silently re-introduce the bug.
  *
@@ -58,14 +58,15 @@ function setEnv(overrides: Record<string, string | undefined>) {
 beforeEach(() => {
   // Both names of the verified-account gate are cleared here, because a case
   // that leaves an invalid value behind would fail every later import. The
-  // private-address switches too: one left at `true` fails every later
-  // production import. And DB_POOL_MAX, which a pool of one refuses.
+  // removed private-address switches too: one left set fails every later
+  // import. And DB_POOL_MAX, which a pool of one refuses.
   setEnv({
     NODE_ENV: 'development',
     REQUIRE_VERIFIED_ACCOUNT: undefined,
     REQUIRE_EMAIL_VERIFIED: undefined,
     CIMD_ALLOW_PRIVATE_ADDRESSES: undefined,
     ID_JAG_ALLOW_PRIVATE_ADDRESSES: undefined,
+    EGRESS_ALLOWLIST_PATH: undefined,
     DB_POOL_MAX: undefined,
     WEBAUTHN_ENABLED: undefined,
     DPOP_ENABLED: undefined,
@@ -187,6 +188,69 @@ describe('REQUIRE_EMAIL_VERIFIED deprecated alias', () => {
   });
 });
 
+describe('service roles and key material (#495)', () => {
+  /** A process without the signer: no private key of its own. */
+  function setApiEnv(overrides: Record<string, string | undefined> = {}) {
+    setEnv({
+      NODE_ENV: 'development',
+      SERVICE_ROLES: 'api',
+      JWT_PRIVATE_KEY: undefined,
+      JWT_PRIVATE_KEY_PATH: undefined,
+      HYBRID_SIGNING_ENABLED: undefined,
+      SIGNING_ALGORITHM_MODE: undefined,
+      ...overrides,
+    });
+  }
+
+  afterEach(() => {
+    setEnv({
+      SERVICE_ROLES: undefined,
+      JWT_PRIVATE_KEY_PATH: undefined,
+      HYBRID_SIGNING_ENABLED: undefined,
+      SIGNING_ALGORITHM_MODE: undefined,
+      KEK: undefined,
+    });
+  });
+
+  it('parses a process without the signer and without a private key', async () => {
+    setApiEnv();
+    const mod = await import('./env');
+    expect(mod.env.SERVICE_ROLES).toEqual(['api']);
+    expect(mod.env.JWT_PRIVATE_KEY).toBeUndefined();
+  });
+
+  it('refuses a key file by name before reading it', async () => {
+    // The file does not exist: the refusal must name the variable, not the
+    // missing file the JWT schema would report if it read it first.
+    setApiEnv({ JWT_PRIVATE_KEY_PATH: '/nonexistent/qauth-ed25519.pem' });
+    const refused = import('./env');
+    await expect(refused).rejects.toThrow(
+      /JWT_PRIVATE_KEY_PATH is set, but SERVICE_ROLES=api does not hold the signer role/
+    );
+    await expect(refused).rejects.not.toThrow(/not found/);
+  });
+
+  it('refuses the KEK by name', async () => {
+    setApiEnv({ KEK: Buffer.alloc(32, 1).toString('base64') });
+    await expect(import('./env')).rejects.toMatchObject({
+      name: 'ServiceRoleBootError',
+      problems: [expect.objectContaining({ variable: 'KEK' })],
+    });
+  });
+
+  it('refuses hybrid signing without the signer, naming the switch', async () => {
+    setApiEnv({ HYBRID_SIGNING_ENABLED: 'true', SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65' });
+    await expect(import('./env')).rejects.toMatchObject({
+      issues: [
+        expect.objectContaining({
+          path: ['HYBRID_SIGNING_ENABLED'],
+          message: expect.stringContaining('needs the signer role'),
+        }),
+      ],
+    });
+  });
+});
+
 describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
   it('rejects the dev default when NODE_ENV=production', async () => {
     setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: undefined });
@@ -199,6 +263,41 @@ describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
     expect(mod.env.SESSION_COOKIE_SECRET.length).toBeGreaterThanOrEqual(32);
   });
 
+  it('does not ask for it on a process whose roles never read the cookie (#495)', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: undefined,
+      SERVICE_ROLES: 'signer,delivery',
+    });
+    try {
+      const mod = await import('./env');
+      expect(mod.env.SERVICE_ROLES).toEqual(['signer', 'delivery']);
+    } catch (error) {
+      // Production asks other things of a bare test environment; the session
+      // secret must not be among them.
+      expect(String(error)).not.toMatch(/SESSION_COOKIE_SECRET/);
+    } finally {
+      setEnv({ SERVICE_ROLES: undefined });
+    }
+  });
+
+  it('still asks for it on a process holding web or api', async () => {
+    try {
+      for (const roles of ['web', 'api', 'delivery,api']) {
+        setEnv({
+          NODE_ENV: 'production',
+          SESSION_COOKIE_SECRET: undefined,
+          SERVICE_ROLES: roles,
+          // No signer here: its key would be refused first.
+          JWT_PRIVATE_KEY: undefined,
+        });
+        await expect(import('./env'), roles).rejects.toThrow(/SESSION_COOKIE_SECRET/);
+      }
+    } finally {
+      setEnv({ SERVICE_ROLES: undefined });
+    }
+  });
+
   it('accepts a strong secret when NODE_ENV=production', async () => {
     setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET });
     const mod = await import('./env');
@@ -207,25 +306,35 @@ describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
 });
 
 /**
- * The private-address switches in production (#435).
+ * The removed private-address switches (#481).
  *
- * `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` turn the
- * SSRF guard off on outbound fetches so a test can use a localhost server. A
- * production process must not start with either one on, and the error must
- * name the variable the operator has to change.
+ * `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` turned
+ * the SSRF guard off on outbound fetches. The egress allowlist
+ * (`EGRESS_ALLOWLIST_PATH`) and the test-only egress client replace them, so a
+ * deployment that still sets one must not boot, whatever the value and the
+ * NODE_ENV, and the error must name the replacement.
  */
-describe('private-address switches are refused in production (#435)', () => {
+describe('the removed private-address switches stop the boot (#481)', () => {
   const SWITCHES = ['CIMD_ALLOW_PRIVATE_ADDRESSES', 'ID_JAG_ALLOW_PRIVATE_ADDRESSES'] as const;
 
-  it.each(SWITCHES)('%s=true fails the boot when NODE_ENV=production', async (name) => {
-    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET, [name]: 'true' });
+  it.each(
+    SWITCHES.flatMap((name) =>
+      (['production', 'development', 'test'] as const).flatMap((nodeEnv) =>
+        ['true', 'false'].map((value) => [name, value, nodeEnv] as const)
+      )
+    )
+  )(
+    '%s=%s fails the boot when NODE_ENV=%s, naming the replacement',
+    async (name, value, nodeEnv) => {
+      setEnv({ NODE_ENV: nodeEnv, SESSION_COOKIE_SECRET: PROD_SECRET, [name]: value });
 
-    await expect(import('./env')).rejects.toThrow(
-      `${name}=true is not allowed when NODE_ENV=production`
-    );
-  });
+      const boot = import('./env');
+      await expect(boot).rejects.toThrow(`${name} was removed in 0.2.0 and is set.`);
+      await expect(boot).rejects.toThrow('EGRESS_ALLOWLIST_PATH');
+    }
+  );
 
-  it('names both variables when both are on in production', async () => {
+  it('names both variables when both are set', async () => {
     setEnv({
       NODE_ENV: 'production',
       SESSION_COOKIE_SECRET: PROD_SECRET,
@@ -234,34 +343,38 @@ describe('private-address switches are refused in production (#435)', () => {
     });
 
     const boot = import('./env');
-    await expect(boot).rejects.toThrow('CIMD_ALLOW_PRIVATE_ADDRESSES=true');
-    await expect(boot).rejects.toThrow('ID_JAG_ALLOW_PRIVATE_ADDRESSES=true');
+    await expect(boot).rejects.toThrow('CIMD_ALLOW_PRIVATE_ADDRESSES was removed');
+    await expect(boot).rejects.toThrow('ID_JAG_ALLOW_PRIVATE_ADDRESSES was removed');
   });
 
-  it.each(SWITCHES)('%s=false boots in production', async (name) => {
-    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET, [name]: 'false' });
+  it('boots when they are blank, as docker-compose forwards an unset variable', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      CIMD_ALLOW_PRIVATE_ADDRESSES: '',
+      ID_JAG_ALLOW_PRIVATE_ADDRESSES: '',
+    });
     const mod = await import('./env');
 
-    expect(mod.env[name]).toBe(false);
+    expect(mod.env).not.toHaveProperty('CIMD_ALLOW_PRIVATE_ADDRESSES');
+    expect(mod.env).not.toHaveProperty('ID_JAG_ALLOW_PRIVATE_ADDRESSES');
+  });
+});
+
+/** EGRESS_ALLOWLIST_PATH (#481): a path, read by the egress plugin at boot. */
+describe('EGRESS_ALLOWLIST_PATH', () => {
+  it('is unset by default, and blank is unset', async () => {
+    setEnv({ EGRESS_ALLOWLIST_PATH: '' });
+    const mod = await import('./env');
+
+    expect(mod.env.EGRESS_ALLOWLIST_PATH).toBeUndefined();
   });
 
-  it('unset boots in production, with both switches off', async () => {
-    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET });
+  it('carries the path as written', async () => {
+    setEnv({ EGRESS_ALLOWLIST_PATH: '/etc/qauth/egress-allowlist.json' });
     const mod = await import('./env');
 
-    expect(mod.env.CIMD_ALLOW_PRIVATE_ADDRESSES).toBe(false);
-    expect(mod.env.ID_JAG_ALLOW_PRIVATE_ADDRESSES).toBe(false);
-  });
-
-  it.each(
-    (['development', 'test'] as const).flatMap((nodeEnv) =>
-      SWITCHES.map((name) => [name, nodeEnv] as const)
-    )
-  )('%s=true still works when NODE_ENV=%s', async (name, nodeEnv) => {
-    setEnv({ NODE_ENV: nodeEnv, [name]: 'true' });
-    const mod = await import('./env');
-
-    expect(mod.env[name]).toBe(true);
+    expect(mod.env.EGRESS_ALLOWLIST_PATH).toBe('/etc/qauth/egress-allowlist.json');
   });
 });
 

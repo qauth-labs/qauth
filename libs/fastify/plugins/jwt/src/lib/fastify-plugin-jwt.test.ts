@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from 'node:crypto';
+
 import {
   getSignatureBackend,
   type MlDsaKey,
@@ -918,6 +920,130 @@ describe('RFC 9068 typ rollout switch (#283)', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('jwtPlugin without a private key (a process without the signer role, #495)', () => {
+  const ISSUER = 'https://auth.test.example.com';
+
+  async function keyPems() {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    return {
+      privateKeyPem: await exportPKCS8(privateKey),
+      publicKeyPem: await exportSPKI(publicKey),
+    };
+  }
+
+  async function verifyOnlyApp(publicKeyPem: string) {
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      publicKey: publicKeyPem,
+      issuer: ISSUER,
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 604800,
+    });
+    await app.ready();
+    return app;
+  }
+
+  it('verifies a token the signer issued with the matching key', async () => {
+    const { privateKeyPem, publicKeyPem } = await keyPems();
+    const app = await verifyOnlyApp(publicKeyPem);
+    const token = await signAccessToken(
+      { sub: 'user-1', clientId: 'client-1' },
+      await importPrivateKey(privateKeyPem),
+      ISSUER,
+      900
+    );
+    await expect(app.jwtUtils.verifyAccessToken(token, { issuer: ISSUER })).resolves.toMatchObject({
+      sub: 'user-1',
+    });
+    await app.close();
+  });
+
+  it('publishes the public key in the JWKS', async () => {
+    const { publicKeyPem } = await keyPems();
+    const app = await verifyOnlyApp(publicKeyPem);
+    const jwks = await app.jwtUtils.getJwks();
+    expect(jwks.keys).toHaveLength(1);
+    expect(jwks.keys[0]).not.toHaveProperty('d');
+    await app.close();
+  });
+
+  it('refuses every signature with a 503', async () => {
+    const { publicKeyPem } = await keyPems();
+    const app = await verifyOnlyApp(publicKeyPem);
+    for (const sign of [
+      () => app.jwtUtils.signAccessToken({ sub: 'user-1', clientId: 'client-1' }),
+      () => app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' }),
+    ]) {
+      await expect(sign()).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'TEMPORARILY_UNAVAILABLE',
+      });
+    }
+    await app.close();
+  });
+
+  it('publishes an RS256 public key given without its private key, and advertises RS256', async () => {
+    const { publicKeyPem } = await keyPems();
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      publicKey: publicKeyPem,
+      rs256PublicKey: rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      rs256KeyId: 'rs-1',
+      issuer: ISSUER,
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 604800,
+    });
+    await app.ready();
+    const jwks = await app.jwtUtils.getJwks();
+    expect(jwks.keys.map((key) => key.kty)).toEqual(['OKP', 'RSA']);
+    expect(jwks.keys[1]).toMatchObject({ kid: 'rs-1', alg: 'RS256' });
+    expect(jwks.keys[1]).not.toHaveProperty('d');
+    expect(app.jwtUtils.getIdTokenSigningAlgValuesSupported()).toEqual(['RS256', 'EdDSA']);
+    await expect(
+      app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' })
+    ).rejects.toMatchObject({ statusCode: 503 });
+    await app.close();
+  });
+
+  it('refuses to start with neither key', async () => {
+    const app = Fastify({ logger: false });
+    await expect(
+      (async () => {
+        await app.register(jwtPlugin, {
+          issuer: ISSUER,
+          accessTokenLifespan: 900,
+          refreshTokenLifespan: 604800,
+        });
+        await app.ready();
+      })()
+    ).rejects.toThrow(/JWT_PUBLIC_KEY/);
+    await app.close();
+  });
+
+  it('refuses hybrid signing without the Ed25519 private key', async () => {
+    const backend = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
+    const seed = backend.exportKey(backend.generateKeyPair({ extractable: true }).privateKey);
+    const { publicKeyPem } = await keyPems();
+    const app = Fastify({ logger: false });
+    await expect(
+      (async () => {
+        await app.register(jwtPlugin, {
+          publicKey: publicKeyPem,
+          issuer: ISSUER,
+          accessTokenLifespan: 900,
+          refreshTokenLifespan: 604800,
+          mlDsaSeed: seed,
+          hybridSigningEnabled: true,
+          enabledSignatureAlgorithms: [...PQC_ENABLED],
+        });
+        await app.ready();
+      })()
+    ).rejects.toThrow(/no Ed25519 key/);
+    await app.close();
   });
 });
 

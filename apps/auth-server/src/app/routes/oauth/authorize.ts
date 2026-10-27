@@ -5,7 +5,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { AUTHORIZE_BODY_LIMIT_BYTES, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
+import {
+  AUTHORIZE_BODY_LIMIT_BYTES,
+  MINT_TRANSACTION,
+  STEP_UP_FRESH_AUTH_WINDOW_MS,
+} from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
@@ -18,7 +22,6 @@ import {
 import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
 import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
-import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { assertManagementToken } from '../../helpers/management-token';
@@ -33,6 +36,7 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   evaluateStepUp,
@@ -150,15 +154,15 @@ export default async function (fastify: FastifyInstance) {
     const redirectUri = query.redirect_uri;
     const state = query.state;
 
-    // RFC 9207 §2 (#282): the issuer identifier echoed as `iss` in EVERY
-    // authorization response below. Derived from the same `getIssuer()` +
-    // `resolveIssuerIdentifier()` pair that builds the `issuer` member of the
-    // discovery documents, so the value a client compares against its cached
-    // metadata is byte-identical. Resolved once, up front, so no branch can
-    // reach a redirect with a differently-shaped issuer.
-    const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
-
     const realm = requestRealm(request);
+
+    // RFC 9207 §2 (#282): the issuer identifier echoed as `iss` in EVERY
+    // authorization response below. The request realm's issuer from its row
+    // (ADR-019 Decision 1, #490), the same value the realm's discovery
+    // documents publish as `issuer`, so the value a client compares against
+    // its cached metadata is byte-identical. Resolved once, up front, so no
+    // branch can reach a redirect with a differently-shaped issuer.
+    const iss = realmIssuer(realm);
 
     // Client resolution priority (MCP 2025-11-25): pre-registered (DB) →
     // CIMD (https-URL client_id, fetched + SSRF-guarded + validated, then
@@ -345,8 +349,8 @@ export default async function (fastify: FastifyInstance) {
       // bearer path
       try {
         const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
-          // RFC 9700 mix-up defence: only accept a token this AS issued.
-          issuer: fastify.jwtUtils.getIssuer(),
+          // RFC 9700 mix-up defence: only accept a token this realm issued.
+          issuer: realmTokenIssuer(fastify, realm),
         });
         // Only the first-party login token: the system client's `client_id`,
         // its audience (or, for a token minted before #509, its `client_id`
@@ -366,7 +370,7 @@ export default async function (fastify: FastifyInstance) {
         // The token outlives the login that minted it; a user disabled in
         // between must not get a code from it, as the session path (via
         // `resolveBrowserSession`) and every grant at `/oauth/token` refuse.
-        const user = await fastify.repositories.users.findById(payload.sub);
+        const user = await fastify.repositories.users.findById(realm.id, payload.sub);
         if (!user || !user.enabled) {
           throw inactiveSubjectError();
         }
@@ -515,7 +519,11 @@ export default async function (fastify: FastifyInstance) {
       }
     }
 
-    const existingConsent = await fastify.repositories.oauthConsents.findActive(userId, client.id);
+    const existingConsent = await fastify.repositories.oauthConsents.findActive(
+      realm.id,
+      userId,
+      client.id
+    );
 
     // The consent decision does not depend on HOW the user authenticated.
     // Any client that resolved above can be named on the Bearer path too —
@@ -669,15 +677,25 @@ export default async function (fastify: FastifyInstance) {
     // locked `FOR SHARE` in the transaction that inserts the code: a
     // revocation either waits for this transaction to commit, or committed
     // first and the re-read finds no covering consent, in which case no code
-    // is issued (`null`). The issued code's event commits with it.
-    const code = await fastify.db.transaction(async (tx) => {
+    // is issued (`consent_withdrawn`). The issued code's event commits with it.
+    //
+    // The browser session gets the same treatment (#549), inside
+    // `mintAuthorizationCode`: its row is locked `FOR SHARE` while the
+    // transaction records which client it served and stores its `sid` on the
+    // code; a sign-out that committed first leaves no code (`session_ended`).
+    // READ COMMITTED (`MINT_TRANSACTION`), so a re-read that waited sees the
+    // revocation that made it wait.
+    const outcome = await fastify.db.transaction(async (tx) => {
       const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
+        realm.id,
         userId,
         client.id,
         tx
       );
-      if (!canSkipConsent(lockedConsent, client, scopes, resources)) return null;
-      const issued = await mintAuthorizationCode(
+      if (!canSkipConsent(lockedConsent, client, scopes, resources)) {
+        return 'consent_withdrawn' as const;
+      }
+      const minted = await mintAuthorizationCode(
         fastify,
         {
           oauthClientId: client.id,
@@ -701,6 +719,13 @@ export default async function (fastify: FastifyInstance) {
           // refresh family this code starts never outlives the session. Null
           // on the legacy Bearer path (no interactive session).
           sessionExpiresAt: browserSession?.expiresAt ?? null,
+          // ADR-019 Decisions 3 and 4 (#549): the session whose `sid` the code
+          // exchange puts in the ID token, and which records this client.
+          // Null on the legacy Bearer path (no interactive session), whose ID
+          // token has no `sid` and which records no client.
+          session: browserSession
+            ? { realmId: browserSession.realmId, sid: browserSession.sid }
+            : null,
           scopes,
           // RFC 8707: bind the resource indicator(s) to the authorization
           // code so /oauth/token can set the access token's `aud` claim to
@@ -716,16 +741,38 @@ export default async function (fastify: FastifyInstance) {
         },
         tx
       );
+      if (minted === 'session_ended') return minted;
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.completed:v1-rc.0',
         {},
         { ...userEvent, tx }
       );
-      return issued;
-    });
+      return minted;
+    }, MINT_TRANSACTION);
 
-    if (code === null) {
+    if (outcome === 'session_ended') {
+      // The session ended under this request (#549). Fail closed, once, with
+      // the answer a request arriving after the sign-out gets: no session, so
+      // `login_required` under `prompt=none`, else the login page.
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'login_required', reason: 'session_ended_during_authorization' },
+        userEvent
+      );
+      if (parsePromptMode(query.prompt) === 'none') {
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'login_required',
+          error_description: 'authentication is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
+      }
+      return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
+    }
+
+    if (outcome === 'consent_withdrawn') {
       // The consent went away under this request. Fail closed, once — never
       // by re-running the handler — with the answer a request arriving after
       // the revocation gets: `access_denied` on the Bearer path (no screen
@@ -762,7 +809,7 @@ export default async function (fastify: FastifyInstance) {
       return reply.redirect(`/ui/consent${returnQuery}`, 302);
     }
     return reply.redirect(
-      buildRedirectUrl(redirectUri, { code, state: state ?? undefined, iss }),
+      buildRedirectUrl(redirectUri, { code: outcome.code, state: state ?? undefined, iss }),
       302
     );
   };

@@ -53,6 +53,7 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
 import {
   refreshFamilyEnd,
   refreshFamilyEnded,
@@ -269,7 +270,7 @@ export default async function (fastify: FastifyInstance) {
         try {
           client = await authenticateClientRequest(
             fastify,
-            realm.id,
+            realm,
             request as FastifyRequest,
             body,
             {
@@ -758,7 +759,11 @@ async function issuableScopes(
   /** The user a refusal's event names; the grant's user even when it is decided for none. */
   eventUserId: string | null = issuance.userId
 ): Promise<string[]> {
-  const decision = await adminIssuance(ctx.fastify, { client: ctx.client, ...issuance });
+  const decision = await adminIssuance(ctx.fastify, {
+    client: ctx.client,
+    realmId: ctx.realmId,
+    ...issuance,
+  });
   if (decision.audienceRefused) {
     await emitRequestFailed(ctx, 'invalid_target', 'admin_audience_without_grant', eventUserId);
     throw new InvalidTargetError(
@@ -787,11 +792,16 @@ async function handleAuthorizationCode(
     throw new UnauthorizedClientError();
   }
 
-  // Authorization code lookup. A spent code is read too, so that a second
-  // redemption is recognised as the replay it is (below) instead of looking
-  // like a code that never existed. An unspent code past its expiry is as
-  // good as unknown.
-  const authCode = await fastify.repositories.authorizationCodes.findByCodeIncludingUsed(body.code);
+  // Authorization code lookup, in the request's realm (#489): a code issued
+  // by another realm is not found, and answers as an unknown code does, its
+  // replay included. A spent code is read too, so that a second redemption
+  // is recognised as the replay it is (below) instead of looking like a code
+  // that never existed. An unspent code past its expiry is as good as
+  // unknown.
+  const authCode = await fastify.repositories.authorizationCodes.findByCodeIncludingUsed(
+    ctx.realmId,
+    body.code
+  );
   if (!authCode || (!authCode.used && authCode.expiresAt <= Date.now())) {
     await emitRequestFailed(ctx, 'invalid_grant', 'code_invalid');
     throw new InvalidGrantError('Invalid or expired authorization code');
@@ -905,7 +915,7 @@ async function handleAuthorizationCode(
   // unspent code.
   if (authCode.used) return rejectCodeReplay(ctx, authCode);
 
-  const user = await fastify.repositories.users.findById(authCode.userId);
+  const user = await fastify.repositories.users.findById(ctx.realmId, authCode.userId);
   if (!user) {
     // The code names no user any more, so the event has none. Answered as the
     // disabled user below is (RFC 6749 §5.2 `invalid_grant`), so the answer
@@ -949,7 +959,11 @@ async function handleAuthorizationCode(
   // since the code was issued, and the legacy Bearer authorize path (which
   // stores no consent) yield the access token (and ID token) alone; the client
   // returns through /oauth/authorize when it expires.
-  const consent = await fastify.repositories.oauthConsents.findActive(user.id, client.id);
+  const consent = await fastify.repositories.oauthConsents.findActive(
+    ctx.realmId,
+    user.id,
+    client.id
+  );
   const familyCreatedAt = Date.now();
   const refresh =
     consent && isScopeSubset(authCode.scopes, consent.scopes)
@@ -1003,7 +1017,7 @@ async function handleAuthorizationCode(
   // BREAKING (#259, then ANT-2026-2O0T72HY): released only under the `email`
   // scope, in BOTH tokens. The access token is a JWT the client reads in the
   // same response as the ID token, so gating only the ID token gated nothing.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, issuedScopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
   // Spend the code and store the refresh token it buys in ONE transaction, so
   // the grant is never observable in between: code already used, refresh
@@ -1096,6 +1110,13 @@ async function handleAuthorizationCode(
           // issuer the realm assures nothing about — spreads to NOTHING, so the
           // claim is absent rather than present-and-low.
           ...resolveAcrClaims(authCode.assuranceLevel),
+          // ADR-019 Decisions 3 and 4 (#549): the browser session behind the
+          // code, as back-channel logout will name it. The only place an ID
+          // token gets `sid` (`id-token-sid.test.ts`). A code from the legacy
+          // Bearer path has none, and neither does one minted before
+          // migration 0042: the claim is then absent. Never on the access
+          // token, the introspection response or the refresh row.
+          sid: authCode.sessionId ?? undefined,
         })
       : undefined;
 
@@ -1327,9 +1348,13 @@ async function handleRefreshToken(
   const presentedHash = fastify.jwtUtils.hashRefreshToken(body.refresh_token);
 
   // Fetch the row without any active-state filter so replay of a
-  // revoked token is detectable; downstream checks enforce liveness.
-  const storedToken =
-    await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(presentedHash);
+  // revoked token is detectable; downstream checks enforce liveness. Only a
+  // token of the request's realm is found (#489): another realm's token is
+  // unknown here, and never reaches the replay logic that revokes a family.
+  const storedToken = await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(
+    ctx.realmId,
+    presentedHash
+  );
 
   if (!storedToken) {
     await emitRequestFailed(ctx, 'invalid_grant', 'refresh_token_unknown');
@@ -1385,7 +1410,7 @@ async function handleRefreshToken(
   }
 
   // Load the subject user; reject if missing or disabled (RFC 9700 §4.14).
-  const user = await fastify.repositories.users.findById(storedToken.userId);
+  const user = await fastify.repositories.users.findById(ctx.realmId, storedToken.userId);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_grant', 'user_not_found');
     throw new InvalidGrantError('Invalid or expired refresh token');
@@ -1495,7 +1520,7 @@ async function handleRefreshToken(
 
   // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
   // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, issuedScopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
   const accessToken = await fastify.db.transaction(async (tx) => {
     const revoked = await fastify.repositories.refreshTokens.revokeIfActive(
@@ -1705,8 +1730,9 @@ async function handleTokenExchange(
   // token minted by a different AS — even one sharing our signing key — fails
   // verification here. Only QAuth's signing key + issuer verifies, so success
   // establishes provenance; an unverifiable / expired / foreign-issuer token is
-  // "unacceptable" → invalid_request.
-  const expectedIssuer = fastify.jwtUtils.getIssuer();
+  // "unacceptable" → invalid_request. The issuer is the one the request realm's
+  // tokens carry (#489, #490), so a token naming another realm's issuer fails too.
+  const expectedIssuer = realmTokenIssuer(fastify, requestRealm(request));
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
     subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token, {
@@ -1821,7 +1847,7 @@ async function handleTokenExchange(
   // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
   // the delegated token's `sub` to the *current* user record, not blindly to
   // the token's `sub` string.
-  const user = await fastify.repositories.users.findById(subjectPayload.sub);
+  const user = await fastify.repositories.users.findById(ctx.realmId, subjectPayload.sub);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_request', 'user_not_found');
     throw inactiveSubjectTokenError();
@@ -1938,11 +1964,17 @@ async function handleTokenExchange(
   }
 
   const aud = arrayToAud(effectiveAudience);
-  // The agent itself must list a QAuth API audience (#509), and the admin
-  // scopes and audience follow the user's live admin grants and the agent's
-  // own `audience` (#510), whatever the subject token carried.
+  // The agent itself must list a QAuth API audience (#509). An admin acts as
+  // itself, never through an exchanged token (ADR-019 Decision 7, #510): the
+  // admin scopes and audience are decided as for a token that names no
+  // account, as the jwt-bearer grant decides them, whatever grants the user
+  // holds and whatever the subject token carried.
   await assertReservedAudiencesListed(ctx, aud, user.id);
-  const issuedScopes = await issuableScopes(ctx, { userId: user.id, scopes: grantedScopes, aud });
+  const issuedScopes = await issuableScopes(
+    ctx,
+    { userId: null, scopes: grantedScopes, aud },
+    user.id
+  );
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
   // Clamp lifespan so the delegated token NEVER outlives the subject token's
@@ -1967,7 +1999,7 @@ async function handleTokenExchange(
   // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
   // under the delegated (narrowed) scope's `email` (ANT-2026-2O0T72HY): an
   // agent learns the address only when the user's grant included it.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, issuedScopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -2145,10 +2177,7 @@ async function mintIdJagForExchange(args: {
   // The consume side refuses a self-issued assertion too; refusing here keeps the
   // pair from ever forming a loop, and keeps a misconfigured allowlist from
   // handing a client a way around the delegation path's audience narrowing.
-  if (
-    resolveIssuerIdentifier(targetAuthorizationServer) ===
-    resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())
-  ) {
+  if (resolveIssuerIdentifier(targetAuthorizationServer) === realmIssuer(requestRealm(request))) {
     await emitFailure('invalid_target', 'id_jag_audience_is_self');
     throw new InvalidTargetError('an ID-JAG cannot be minted for this authorization server');
   }
@@ -2189,6 +2218,7 @@ async function mintIdJagForExchange(args: {
   // target of an assertion (#510): decided as for no account.
   const issuance = await adminIssuance(fastify, {
     client,
+    realmId,
     userId: null,
     scopes: grantedScopes,
     aud: targetAuthorizationServer,
@@ -2206,7 +2236,7 @@ async function mintIdJagForExchange(args: {
   const issuedScopes = issuance.scopes;
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
-  const minted = await mintIdJag(fastify, {
+  const minted = await mintIdJag(requestRealm(request), {
     subject: user.id,
     audience: targetAuthorizationServer,
     resource: targetResource,
@@ -2320,9 +2350,10 @@ async function handleJwtBearer(
   // once and being refused a step later.
   let assertion: ValidatedIdJag;
   try {
-    assertion = await validateIdJagAssertion(fastify, {
+    assertion = await validateIdJagAssertion(fastify, requestRealm(request), {
       assertion: body.assertion,
       expectedClientId: client.clientId,
+      realm: requestRealm(request).name,
     });
   } catch (err) {
     // Every distinct refusal reason is recorded for the operator and collapsed
@@ -2422,7 +2453,7 @@ async function handleJwtBearer(
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
-  const user = await fastify.repositories.users.findById(credential.userId);
+  const user = await fastify.repositories.users.findById(realmId, credential.userId);
   if (!user || !user.enabled) {
     await emitRequestFailed(
       ctx,
@@ -2460,7 +2491,7 @@ async function handleJwtBearer(
 
   // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other
   // grant: the assertion's scope, narrowed and capped by GATE 5, decides.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, issuedScopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,

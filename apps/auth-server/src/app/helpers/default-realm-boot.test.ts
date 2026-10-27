@@ -6,6 +6,8 @@ import {
   type DefaultRealmBootDependencies,
   DefaultRealmBootError,
   defaultRealmIssuerFrom,
+  EMAIL_BASE_URL_IGNORED_WARNING,
+  emailBaseUrlWarning,
   JWT_ISSUER_PATH_WARNING,
   JWT_ISSUER_TRAILING_SLASH_WARNING,
 } from './default-realm-boot';
@@ -16,6 +18,33 @@ import type { RealmRow } from './request-realm';
  * becomes the stored issuer and primary host, and what the boot logs. The
  * steps against a real Postgres are in `default-realm-boot.integration.test.ts`.
  */
+
+describe('emailBaseUrlWarning (#490)', () => {
+  it('says nothing when EMAIL_BASE_URL is unset, the key being optional', () => {
+    expect(emailBaseUrlWarning(undefined, 'https://auth.example.com')).toBe(undefined);
+  });
+
+  it('says nothing when EMAIL_BASE_URL is the issuer, a trailing slash aside', () => {
+    expect(emailBaseUrlWarning('https://auth.example.com', 'https://auth.example.com')).toBe(
+      undefined
+    );
+    expect(emailBaseUrlWarning('https://auth.example.com/', 'https://auth.example.com')).toBe(
+      undefined
+    );
+    expect(emailBaseUrlWarning('https://auth.example.com', 'https://auth.example.com/')).toBe(
+      undefined
+    );
+  });
+
+  it('warns when the mailed links move from EMAIL_BASE_URL to the issuer', () => {
+    expect(emailBaseUrlWarning('https://qauth.dev', 'https://auth.qauth.dev')).toBe(
+      EMAIL_BASE_URL_IGNORED_WARNING
+    );
+    expect(emailBaseUrlWarning('https://auth.example.com/app', 'https://auth.example.com')).toBe(
+      EMAIL_BASE_URL_IGNORED_WARNING
+    );
+  });
+});
 
 describe('defaultRealmIssuerFrom', () => {
   it('stores https://auth.example.com:8443/ as https://auth.example.com:8443 on the host auth.example.com', () => {
@@ -102,6 +131,7 @@ function emptyDatabase(): {
       host: { host: 'auth.example.com', realmId: created.id, kind: 'primary', createdAt: 0 },
     })),
     update: vi.fn(async (_id: string, data: Partial<RealmRow>) => ({ ...created, ...data })),
+    setOperator: vi.fn(async (_id: string, isOperator: boolean) => ({ ...created, isOperator })),
     setWebAuthnRpId: vi.fn(async (_id: string, webauthnRpId: string | null) => ({
       ...created,
       webauthnRpId,

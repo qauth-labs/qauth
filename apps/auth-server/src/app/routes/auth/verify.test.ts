@@ -20,6 +20,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import verifyRoute from './verify';
 
@@ -126,7 +127,7 @@ function createFastifyStub() {
       },
       // A disabled account cannot complete verification.
       users: {
-        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+        findById: vi.fn(async (realmId: string, id: string) => ({ id, realmId, enabled: true })),
       },
     },
     emailVerificationTokenUtils: {
@@ -142,7 +143,13 @@ function createFastifyStub() {
   return { fastify: fastify as FastifyInstance, ctx };
 }
 
-const request = { body: { token: 'a'.repeat(64), password: 'registrant-password' } };
+/** The realm the realm resolver (#486) decorated the request with. */
+const REALM = testRealm({ id: 'realm-1' });
+
+const request = {
+  body: { token: 'a'.repeat(64), password: 'registrant-password' },
+  realm: REALM,
+};
 
 describe('POST /auth/verify', () => {
   it('is registered as POST with the token in the body — never a state-changing GET', async () => {
@@ -174,6 +181,14 @@ describe('POST /auth/verify', () => {
 
     const result = await ctx.handler(request);
 
+    // The token, its credential and its user are looked up in the request's
+    // realm (#489).
+    expect(fastify.repositories.emailVerificationTokens.findByTokenHash).toHaveBeenCalledWith(
+      REALM.id,
+      'hashed'
+    );
+    expect(fastify.repositories.userCredentials.findById).toHaveBeenCalledWith(REALM.id, 'cred-1');
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, 'user-1');
     expect(fastify.db.transaction).toHaveBeenCalledOnce();
     // The complete dual-write set, all on the same transaction client:
     expect(fastify.repositories.emailVerificationTokens.markUsed).toHaveBeenCalledWith(
@@ -234,7 +249,10 @@ describe('POST /auth/verify', () => {
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
 
     await expect(
-      ctx.handler({ body: { token: 'a'.repeat(64), password: 'mailbox-owner-guess' } })
+      ctx.handler({
+        body: { token: 'a'.repeat(64), password: 'mailbox-owner-guess' },
+        realm: REALM,
+      })
     ).rejects.toThrow(InvalidCredentialsError);
     // The token survives, so the genuine registrant can still verify.
     expect(fastify.db.transaction).not.toHaveBeenCalled();
@@ -249,9 +267,10 @@ describe('POST /auth/verify', () => {
   // lockout, with the same identifiers (UZ1HDHZP).
   describe("shares the login routes' failed-login lockout", () => {
     const EMAIL_ID = `email:${hashEmail('user@example.com')}`;
-    // Counted in the account's realm, the realm the login routes count it in
+    // Counted in the request's realm, the account's (its credential is looked
+    // up in that realm only, #489), the realm the login routes count it in
     // (#487).
-    const REALM_ID = credentialFixture().realmId;
+    const REALM_ID = REALM.id;
 
     function createReply() {
       const headers: Record<string, string> = {};
@@ -346,16 +365,23 @@ describe('POST /auth/verify', () => {
       expect(redis._store.get(`failed-login:attempts:${REALM_ID}:ip:127.0.0.1`)).toBe('2');
     });
 
-    it("counts the attempt in the realm of the token's account (#487)", async () => {
+    it("counts the attempt in the request's realm, the token's account's (#487, #489)", async () => {
       const { fastify, redis, handler } = await setup({ verifies: false });
+      // A request to another realm's host: its token and credential are that
+      // realm's, the only realm they are looked up in.
+      const otherRealm = testRealm({ id: 'realm-2', name: 'other' });
       (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
         credentialFixture({ realmId: 'realm-2' })
       );
 
-      await expect(handler({ ...request, ip: '127.0.0.1' }, createReply().reply)).rejects.toThrow(
-        InvalidCredentialsError
-      );
+      await expect(
+        handler({ ...request, realm: otherRealm, ip: '127.0.0.1' }, createReply().reply)
+      ).rejects.toThrow(InvalidCredentialsError);
 
+      expect(fastify.repositories.userCredentials.findById).toHaveBeenCalledWith(
+        'realm-2',
+        'cred-1'
+      );
       expect(redis._store.get(`failed-login:attempts:realm-2:${EMAIL_ID}`)).toBe('1');
       expect(redis._store.get('failed-login:attempts:realm-2:ip:127.0.0.1')).toBe('1');
       expect(redis._store.has(`failed-login:attempts:${REALM_ID}:${EMAIL_ID}`)).toBe(false);
@@ -394,7 +420,7 @@ describe('POST /auth/verify', () => {
     });
 
     await expect(ctx.handler(request)).rejects.toBeInstanceOf(InvalidTokenError);
-    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('user-1');
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, 'user-1');
     expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
     expect(fastify.db.transaction).not.toHaveBeenCalled();
     expect(fastify.repositories.emailVerificationTokens.markUsed).not.toHaveBeenCalled();
@@ -411,6 +437,43 @@ describe('POST /auth/verify', () => {
     ).mockResolvedValue(undefined);
 
     await expect(ctx.handler(request)).rejects.toThrow(InvalidTokenError);
+    expect(fastify.db.transaction).not.toHaveBeenCalled();
+  });
+
+  // #489: the token is looked up in the request's realm only. A token mailed
+  // for another realm's account is no row here, refused exactly as an unknown
+  // token is, so the answer does not tell that it exists in another realm.
+  it("answers another realm's token exactly as an unknown token (#489)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+    const findByTokenHash = fastify.repositories.emailVerificationTokens
+      .findByTokenHash as unknown as Mock;
+    // The token is realm-2's: the realm-scoped lookup finds it there only.
+    findByTokenHash.mockImplementation(async (realmId: string, tokenHash: string) =>
+      realmId === 'realm-2' && tokenHash === 'hashed' ? tokenFixture() : undefined
+    );
+    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+      credentialFixture({ realmId: 'realm-2' })
+    );
+
+    const otherRealmToken = await ctx.handler(request).catch((error: unknown) => error);
+    findByTokenHash.mockResolvedValue(undefined);
+    const unknownToken = await ctx.handler(request).catch((error: unknown) => error);
+
+    expect(findByTokenHash).toHaveBeenNthCalledWith(1, REALM.id, 'hashed');
+    expect(otherRealmToken).toBeInstanceOf(InvalidTokenError);
+    expect(unknownToken).toBeInstanceOf(InvalidTokenError);
+    const answer = (error: unknown) => {
+      const { name, message, statusCode, code } = error as InvalidTokenError;
+      return { name, message, statusCode, code };
+    };
+    expect(answer(otherRealmToken)).toEqual(answer(unknownToken));
+    // Nothing of the other realm's account is read, checked or counted.
+    expect(fastify.repositories.userCredentials.findById).not.toHaveBeenCalled();
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(fastify.redis.incr).not.toHaveBeenCalled();
     expect(fastify.db.transaction).not.toHaveBeenCalled();
   });
 

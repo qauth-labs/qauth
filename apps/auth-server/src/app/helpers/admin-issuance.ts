@@ -19,8 +19,11 @@
  * Grants are read when the token is issued, so a refresh after a revocation
  * no longer carries what the grant gave. A request decided for no account
  * (`userId: null`) never gets either: a `client_credentials` token, which
- * names none, and the two ID-JAG grants, whose authority comes from another
- * identity provider or goes to another authorization server.
+ * names none, the two ID-JAG grants, whose authority comes from another
+ * identity provider or goes to another authorization server, and a delegated
+ * token of token exchange, since an admin acts as itself, never through an
+ * agent. The account and its grants are read in the request's realm only
+ * (#489).
  *
  * Nothing is read from the database unless the request asks for a `qauth:`
  * scope or the admin audience.
@@ -38,6 +41,11 @@ import { type OAuthClientLike, unlistedReservedAudiences } from './client-auth';
 export interface AdminIssuanceRequest {
   /** The client the token is issued to. */
   readonly client: Pick<OAuthClientLike, 'audience' | 'metadata' | 'dynamicRegisteredAt'>;
+  /**
+   * The request's realm (#489): the account is read, and its grants found, in
+   * this realm only.
+   */
+  readonly realmId: string;
   /** The account the token is for; `null` when it names none (`client_credentials`). */
   readonly userId: string | null;
   /** The scopes the grant would issue. */
@@ -64,18 +72,18 @@ export interface AdminIssuance {
  */
 async function heldPermissionClasses(
   fastify: FastifyInstance,
+  realmId: string,
   userId: string | null,
   registry: PermissionRegistry
 ): Promise<ReadonlySet<PermissionClass>> {
   const none = new Set<PermissionClass>();
   if (userId === null) return none;
-  const user = await fastify.repositories.users.findById(userId);
+  const user = await fastify.repositories.users.findById(realmId, userId);
   if (!user || !user.enabled) return none;
-  const accountRealm = await fastify.repositories.realms.findById(user.realmId);
+  const accountRealm = await fastify.repositories.realms.findById(realmId);
   if (accountRealm === undefined) return none;
-  const fitting = (await fastify.repositories.adminGrants.listLive(user.id)).filter((grant) =>
-    grantFitsRealmRule(grant, accountRealm)
-  );
+  const live = await fastify.repositories.adminGrants.listLive(realmId, user.id);
+  const fitting = live.filter((grant) => grantFitsRealmRule(grant, accountRealm));
   const classes = new Set<PermissionClass>();
   for (const grant of fitting) {
     for (const id of grantedPermissionIds(grant)) {
@@ -101,7 +109,7 @@ export async function adminIssuance(
     return { scopes: [...request.scopes], withheld: [], audienceRefused: false };
   }
 
-  const held = await heldPermissionClasses(fastify, request.userId, registry);
+  const held = await heldPermissionClasses(fastify, request.realmId, request.userId, registry);
   const clientListsAdmin =
     unlistedReservedAudiences(request.client, API_FAMILY_AUDIENCES.admin).length === 0;
   const issuable = (scope: string): boolean => {
@@ -114,19 +122,4 @@ export async function adminIssuance(
     withheld: request.scopes.filter((scope) => !issuable(scope)),
     audienceRefused: namesAdminAudience && held.size === 0,
   };
-}
-
-/**
- * `aud` without the admin API's audience, for a token minted where no admin
- * grant is checked: `/auth/login`, from the system client's stored audience
- * (#510). The client id when nothing else is left, as for a client with no
- * audience.
- */
-export function withoutAdminAudience(
-  aud: string | readonly string[],
-  clientId: string
-): string | string[] {
-  const rest = [aud].flat().filter((value) => value !== API_FAMILY_AUDIENCES.admin);
-  if (rest.length === 0) return clientId;
-  return rest.length === 1 ? rest[0] : rest;
 }

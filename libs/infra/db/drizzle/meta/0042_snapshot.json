@@ -1,5 +1,5 @@
 {
-  "id": "e960aa8f-a830-44fa-af8b-3b5ec54c986f",
+  "id": "95b9ccd4-502e-4c76-9d2f-3b97e97133e7",
   "prevId": "62142a63-f8a6-4664-a701-e9b37dd6fd9d",
   "version": "7",
   "dialect": "postgresql",
@@ -224,284 +224,6 @@
         "admin_audit_log_checkpoints_row_hash_sha256": {
           "name": "admin_audit_log_checkpoints_row_hash_sha256",
           "value": "octet_length(\"admin_audit_log_checkpoints\".\"row_hash\") = 32"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.admin_grants": {
-      "name": "admin_grants",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "built_in_role": {
-          "name": "built_in_role",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "role_id": {
-          "name": "role_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "target_realm_id": {
-          "name": "target_realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "revoked_at": {
-          "name": "revoked_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_security_change_at": {
-          "name": "last_security_change_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {
-        "idx_admin_grants_live_unique": {
-          "name": "idx_admin_grants_live_unique",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "coalesce('custom:' || \"role_id\"::text, 'built-in:' || \"built_in_role\")",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "coalesce(\"target_realm_id\"::text, '*')",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"admin_grants\".\"revoked_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_admin_grants_user_id": {
-          "name": "idx_admin_grants_user_id",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_admin_grants_role_id": {
-          "name": "idx_admin_grants_role_id",
-          "columns": [
-            {
-              "expression": "role_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_admin_grants_target_realm_id": {
-          "name": "idx_admin_grants_target_realm_id",
-          "columns": [
-            {
-              "expression": "target_realm_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "admin_grants_user_id_users_id_fk": {
-          "name": "admin_grants_user_id_users_id_fk",
-          "tableFrom": "admin_grants",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "admin_grants_role_id_admin_roles_id_fk": {
-          "name": "admin_grants_role_id_admin_roles_id_fk",
-          "tableFrom": "admin_grants",
-          "tableTo": "admin_roles",
-          "columnsFrom": ["role_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_grants_target_realm_id_realms_id_fk": {
-          "name": "admin_grants_target_realm_id_realms_id_fk",
-          "tableFrom": "admin_grants",
-          "tableTo": "realms",
-          "columnsFrom": ["target_realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "admin_grants_created_by_users_id_fk": {
-          "name": "admin_grants_created_by_users_id_fk",
-          "tableFrom": "admin_grants",
-          "tableTo": "users",
-          "columnsFrom": ["created_by"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "admin_grants_one_role": {
-          "name": "admin_grants_one_role",
-          "value": "(\"admin_grants\".\"built_in_role\" IS NULL) <> (\"admin_grants\".\"role_id\" IS NULL)"
-        },
-        "admin_grants_built_in_role_grammar": {
-          "name": "admin_grants_built_in_role_grammar",
-          "value": "\"admin_grants\".\"built_in_role\" ~ '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'"
-        },
-        "admin_grants_revoked_after_created": {
-          "name": "admin_grants_revoked_after_created",
-          "value": "\"admin_grants\".\"revoked_at\" IS NULL OR \"admin_grants\".\"revoked_at\" >= \"admin_grants\".\"created_at\""
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.admin_roles": {
-      "name": "admin_roles",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "realm_id": {
-          "name": "realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "permission_ids": {
-          "name": "permission_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "disabled_at": {
-          "name": "disabled_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "admin_roles_realm_id_realms_id_fk": {
-          "name": "admin_roles_realm_id_realms_id_fk",
-          "tableFrom": "admin_roles",
-          "tableTo": "realms",
-          "columnsFrom": ["realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "admin_roles_realm_name_unique": {
-          "name": "admin_roles_realm_name_unique",
-          "nullsNotDistinct": false,
-          "columns": ["realm_id", "name"]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "admin_roles_name_grammar": {
-          "name": "admin_roles_name_grammar",
-          "value": "\"admin_roles\".\"name\" ~ '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'"
-        },
-        "admin_roles_permission_ids_strings": {
-          "name": "admin_roles_permission_ids_strings",
-          "value": "jsonb_typeof(\"admin_roles\".\"permission_ids\") = 'array' AND NOT jsonb_path_exists(\"admin_roles\".\"permission_ids\", '$[*] ? (@.type() != \"string\")')"
         }
       },
       "isRLSEnabled": false
@@ -4336,6 +4058,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "scopes": {
           "name": "scopes",
           "type": "jsonb",
@@ -4456,6 +4184,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "idx_authorization_codes_session_id": {
+          "name": "idx_authorization_codes_session_id",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -4475,6 +4218,15 @@
           "columnsFrom": ["user_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "authorization_codes_session_id_sessions_id_fk": {
+          "name": "authorization_codes_session_id_sessions_id_fk",
+          "tableFrom": "authorization_codes",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

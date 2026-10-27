@@ -18,7 +18,6 @@ vi.mock('../../config/env', () => ({
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
-    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
 }));
 
@@ -417,6 +416,9 @@ describe('classifyClientAuthentication (RFC 6749 §2.3 — one mechanism only)',
 });
 
 describe('authenticateClientRequest', () => {
+  /** The realm the token request was resolved to (#490). */
+  const REQUEST_REALM = { id: 'realm', issuer: 'https://auth.example.com' };
+
   function stub(client: OAuthClientLike | null, passwordValid = true) {
     return {
       repositories: {
@@ -424,7 +426,6 @@ describe('authenticateClientRequest', () => {
       },
       passwordHasher: { verifyPassword: vi.fn().mockResolvedValue(passwordValid) },
       redis: { get: vi.fn(), set: vi.fn() },
-      jwtUtils: { getIssuer: () => 'https://auth.example.com' },
     } as unknown as FastifyInstance;
   }
 
@@ -444,7 +445,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid', client_secret: 'secret' },
         { allowPublic: false }
@@ -461,7 +462,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         stub(publicClient),
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid' },
         { allowPublic: true }
@@ -470,7 +471,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         stub({ ...publicClient, suspended: true }),
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid' },
         { allowPublic: true }
@@ -483,7 +484,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         { client_id: 'cid' },
         { allowPublic: false }
@@ -497,7 +498,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         {
           client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
@@ -515,7 +516,7 @@ describe('authenticateClientRequest', () => {
     await expect(
       authenticateClientRequest(
         fastify,
-        'realm',
+        REQUEST_REALM,
         requestWith(undefined),
         {
           client_id: 'cid',

@@ -5,6 +5,7 @@ import {
   databaseEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   dpopEnvSchema,
+  egressEnvSchema,
   emailEnvSchema,
   eventDeliveryEnvSchema,
   eventRetentionEnvSchema,
@@ -16,7 +17,9 @@ import {
   otlpExporterProblems,
   passwordEnvSchema,
   rateLimitEnvSchema,
+  readsSessionCookie,
   redisEnvSchema,
+  serviceRolesEnvSchema,
   ssfEnvSchema,
   trustRegistryEnvSchema,
   webauthnEnvSchema,
@@ -24,21 +27,12 @@ import {
 import { z } from 'zod';
 
 /**
- * The switches that turn the SSRF guard off for an outbound fetch, each with
- * the fetches it covers. They exist so a test can point a fetch at a localhost
- * server, and the schema below refuses either one in production (#435).
- */
-const PRIVATE_ADDRESS_SWITCHES = [
-  ['CIMD_ALLOW_PRIVATE_ADDRESSES', 'CIMD document and client jwks_uri fetches'],
-  ['ID_JAG_ALLOW_PRIVATE_ADDRESSES', 'ID-JAG issuer discovery and JWKS fetches'],
-] as const;
-
-/**
  * The smallest `DB_POOL_MAX` the background jobs allow (#452). A running job
  * holds one pool connection for its advisory lock while its own queries take
  * others, so a pool of one would leave requests waiting until the lock is
- * released. Every node runs the jobs today; once roles land (#495), the rule
- * applies to a node whose roles hold a job.
+ * released. The rule applies to every process, whatever its roles (#495):
+ * each role but `admin` holds a job or will, and a pool of one connection
+ * would starve the requests of any role.
  */
 export const JOBS_MIN_DB_POOL_MAX = 2;
 
@@ -53,6 +47,10 @@ export const JOBS_MIN_DB_POOL_MAX = 2;
 export const envSchema = z
   .object({
     ...baseEnvSchema.shape,
+    // The role switch (ADR-019 Decision 8, #495): SERVICE_ROLES, default
+    // `all`, and the signer service's address and internal TLS files for a
+    // process without the signer. The app checks them at boot.
+    ...serviceRolesEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,
@@ -134,6 +132,12 @@ export const envSchema = z
     // The Shared Signals Framework transmitter (ADR-018 §3, #410):
     // SSF_TRANSMITTER_ENABLED, off by default; each realm has its own switch too.
     ...ssfEnvSchema.shape,
+    // The egress allowlist (ADR-019 Decision 8, #481): EGRESS_ALLOWLIST_PATH,
+    // the file of non-public hosts and ranges that operator- and admin-set
+    // destinations may reach, per realm. The egress plugin reads it at boot.
+    // It replaces CIMD_ALLOW_PRIVATE_ADDRESSES and
+    // ID_JAG_ALLOW_PRIVATE_ADDRESSES, which `readConfiguredEnv` now refuses.
+    ...egressEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production
@@ -156,33 +160,20 @@ export const envSchema = z
     // F-12 — reject the dev-default SESSION_COOKIE_SECRET in production. The
     // schema's own `.default()` ships a test-only value; without this guard a
     // production deployment that forgets to set the env var silently signs
-    // session cookies with a publicly-known secret.
+    // session cookies with a publicly-known secret. Only a process whose roles
+    // read the cookie needs it (#495): `admin`, `signer` and `delivery` alone
+    // never sign or check one.
     if (
       env.NODE_ENV === 'production' &&
-      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT
+      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT &&
+      readsSessionCookie(env.SERVICE_ROLES)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['SESSION_COOKIE_SECRET'],
         message:
-          'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production (the dev default is not allowed).',
+          'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production on a process holding web or api (the dev default is not allowed).',
       });
-    }
-
-    // #435 — refuse the private-address switches in production. Either one
-    // lets a client_id URL, a client's jwks_uri or a trusted issuer's discovery
-    // reach loopback, private and link-local addresses. The rule keys on
-    // NODE_ENV, like the guard above, not on a realm's ADR-008 profile.
-    if (env.NODE_ENV === 'production') {
-      for (const [name, fetches] of PRIVATE_ADDRESS_SWITCHES) {
-        if (env[name]) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [name],
-            message: `${name}=true is not allowed when NODE_ENV=production. It turns off the SSRF guard on ${fetches} and exists only for test servers on localhost. Unset it or set it to false.`,
-          });
-        }
-      }
     }
 
     // #541 — the OTLP exporter variables are process-wide: another

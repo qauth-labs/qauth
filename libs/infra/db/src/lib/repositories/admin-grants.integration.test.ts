@@ -184,7 +184,7 @@ describe('admin roles and grants (real Postgres)', () => {
         code: '23514',
         constraint: 'admin_grants_all_realms_operator_only',
       });
-      expect(await grants.listByUser(d.adminOfA)).toEqual([]);
+      expect(await grants.listByUser(d.a, d.adminOfA)).toEqual([]);
     });
 
     it("keeps a realm-local account's grants on its own realm, in the repository and in the trigger", async () => {
@@ -385,6 +385,50 @@ describe('admin roles and grants (real Postgres)', () => {
     });
   });
 
+  describe('a grant is written live, at the time of its writing', () => {
+    it('refuses a revoked row and takes its times from the database', async () => {
+      const d = await deployment();
+      await expect(
+        pgError(
+          pool().query(
+            `INSERT INTO admin_grants (user_id, built_in_role, target_realm_id, created_at, revoked_at, last_security_change_at)
+             VALUES ($1, 'viewer', $2, 1000, 1000, 1000)`,
+            [d.adminOfA, d.a]
+          )
+        )
+      ).resolves.toEqual({ code: '23514', constraint: 'admin_grants_insert_live' });
+
+      const before = Math.floor(Date.now() / 1000) * 1000;
+      const { rows } = await pool().query<{ created_at: string; last_security_change_at: string }>(
+        `INSERT INTO admin_grants (user_id, built_in_role, target_realm_id, created_at, last_security_change_at)
+         VALUES ($1, 'viewer', $2, 1000, 1000)
+         RETURNING created_at, last_security_change_at`,
+        [d.adminOfA, d.a]
+      );
+      expect(Number(rows[0].created_at)).toBeGreaterThanOrEqual(before);
+      expect(rows[0].last_security_change_at).toBe(rows[0].created_at);
+    });
+
+    it('refuses a revocation that leaves the security-change time before it', async () => {
+      const d = await deployment();
+      const created = await grants.create({
+        userId: d.adminOfA,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      await expect(
+        pgError(
+          pool().query(
+            `UPDATE admin_grants SET revoked_at = last_security_change_at + 1000 WHERE id = $1`,
+            [created.id]
+          )
+        )
+      ).resolves.toEqual({ code: '23514', constraint: 'admin_grants_revoke_only' });
+      await expect(grants.revoke(d.a, created.id)).resolves.toMatchObject({ id: created.id });
+    });
+  });
+
   describe('a grant is revoked, never changed', () => {
     it('refuses every other change by hand, and lets a revocation and a deleted creator through', async () => {
       const d = await deployment();
@@ -408,7 +452,7 @@ describe('admin roles and grants (real Postgres)', () => {
         });
       }
 
-      const revoked = await grants.revoke(created.id);
+      const revoked = await grants.revoke(d.operator, created.id);
       for (const statement of [
         `UPDATE admin_grants SET revoked_at = NULL WHERE id = $1`,
         `UPDATE admin_grants SET revoked_at = revoked_at + 1 WHERE id = $1`,
@@ -419,7 +463,10 @@ describe('admin roles and grants (real Postgres)', () => {
         });
       }
       await pool().query(`UPDATE admin_grants SET created_by = NULL WHERE id = $1`, [created.id]);
-      expect(await grants.findById(created.id)).toEqual({ ...revoked, createdBy: null });
+      expect(await grants.findById(d.operator, created.id)).toEqual({
+        ...revoked,
+        createdBy: null,
+      });
     });
   });
 
@@ -445,7 +492,9 @@ describe('admin roles and grants (real Postgres)', () => {
       });
 
       await expect(realms.delete(d.a)).resolves.toBe(true);
-      expect(await grants.listByUser(d.operatorAdmin)).toEqual([{ ...kept, createdBy: null }]);
+      expect(await grants.listByUser(d.operator, d.operatorAdmin)).toEqual([
+        { ...kept, createdBy: null },
+      ]);
       const { rows } = await pool().query(`SELECT count(*)::int AS n FROM admin_roles`);
       expect(rows).toEqual([{ n: 0 }]);
     });
@@ -467,12 +516,12 @@ describe('admin roles and grants (real Postgres)', () => {
       // The same role on every realm is another grant.
       await grants.create({ ...input, targetRealmId: null });
 
-      const revoked = await grants.revoke(first.id);
+      const revoked = await grants.revoke(d.operator, first.id);
       expect(revoked?.revokedAt).toEqual(expect.any(Number));
       expect(revoked?.lastSecurityChangeAt).toBe(revoked?.revokedAt);
-      expect(await grants.revoke(first.id)).toBeUndefined();
+      expect(await grants.revoke(d.operator, first.id)).toBeUndefined();
       await expect(grants.create(input)).resolves.toMatchObject({ revokedAt: null });
-      expect(await grants.listByUser(d.operatorAdmin)).toHaveLength(3);
+      expect(await grants.listByUser(d.operator, d.operatorAdmin)).toHaveLength(3);
     });
 
     it('lists only grants that give their role now: not revoked, and the custom role enabled', async () => {
@@ -495,7 +544,7 @@ describe('admin roles and grants (real Postgres)', () => {
         createdBy: null,
       });
 
-      const live = await grants.listLive(d.adminOfA);
+      const live = await grants.listLive(d.a, d.adminOfA);
       expect(live.map(({ grant, role }) => [grant.id, role?.id ?? null])).toEqual([
         [builtIn.id, null],
         [custom.id, ops.id],
@@ -503,13 +552,74 @@ describe('admin roles and grants (real Postgres)', () => {
       expect(live[1].role?.permissionIds).toEqual(['realms.read', 'realms.policies.write']);
 
       await roles.update(d.a, ops.id, { disabled: true });
-      expect((await grants.listLive(d.adminOfA)).map(({ grant }) => grant.id)).toEqual([
+      expect((await grants.listLive(d.a, d.adminOfA)).map(({ grant }) => grant.id)).toEqual([
         builtIn.id,
       ]);
       await roles.update(d.a, ops.id, { disabled: false });
-      await grants.revoke(builtIn.id);
-      expect((await grants.listLive(d.adminOfA)).map(({ grant }) => grant.id)).toEqual([custom.id]);
-      expect(await grants.listLive('not-a-uuid')).toEqual([]);
+      await grants.revoke(d.a, builtIn.id);
+      expect((await grants.listLive(d.a, d.adminOfA)).map(({ grant }) => grant.id)).toEqual([
+        custom.id,
+      ]);
+      expect(await grants.listLive(d.a, 'not-a-uuid')).toEqual([]);
+    });
+
+    it("finds a grant only in the realm it covers or its account's realm (#489)", async () => {
+      const d = await deployment();
+      const ofA = await grants.create({
+        userId: d.adminOfA,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      const onA = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: d.a,
+        createdBy: null,
+      });
+      const onAll = await grants.create({
+        userId: d.operatorAdmin,
+        role: { kind: 'built-in', name: 'editor' },
+        targetRealmId: null,
+        createdBy: null,
+      });
+
+      // A realm a grant neither covers nor holds finds nothing.
+      for (const [realmId, grantId, userId] of [
+        [d.b, ofA.id, d.adminOfA],
+        [d.operator, ofA.id, d.adminOfA],
+        [d.b, onA.id, d.operatorAdmin],
+        [d.a, onAll.id, d.operatorAdmin],
+        [d.b, onAll.id, d.operatorAdmin],
+      ]) {
+        expect(await grants.findById(realmId, grantId)).toBeUndefined();
+        expect(await grants.revoke(realmId, grantId)).toBeUndefined();
+        expect((await grants.listByUser(realmId, userId)).map(({ id }) => id)).not.toContain(
+          grantId
+        );
+        expect((await grants.listLive(realmId, userId)).map(({ grant }) => grant.id)).not.toContain(
+          grantId
+        );
+      }
+      expect(await grants.findById('not-a-uuid', ofA.id)).toBeUndefined();
+
+      // The operator admin's grant on A: in A, which it covers, and in the
+      // operator realm, which holds the account; the grant on every realm
+      // only there.
+      expect((await grants.listLive(d.a, d.operatorAdmin)).map(({ grant }) => grant.id)).toEqual([
+        onA.id,
+      ]);
+      expect(
+        (await grants.listLive(d.operator, d.operatorAdmin)).map(({ grant }) => grant.id)
+      ).toEqual([onA.id, onAll.id]);
+      expect(await grants.findById(d.a, onA.id)).toMatchObject({ id: onA.id });
+      expect(await grants.findById(d.a, ofA.id)).toMatchObject({ id: ofA.id });
+      // A revocation only from the account's realm: A sees the operator
+      // admin's grant on A but cannot revoke it; the operator realm can.
+      expect(await grants.revoke(d.a, onA.id)).toBeUndefined();
+      expect(await grants.findById(d.a, onA.id)).toMatchObject({ revokedAt: null });
+      expect(await grants.revoke(d.operator, onA.id)).toMatchObject({ id: onA.id });
+      expect(await grants.revoke(d.a, ofA.id)).toMatchObject({ id: ofA.id });
     });
   });
 
@@ -619,7 +729,7 @@ describe('admin roles and grants (real Postgres)', () => {
         targetRealmId: d.a,
         createdBy: null,
       });
-      await grants.revoke(revoked.id);
+      await grants.revoke(d.operator, revoked.id);
       // Moving the times back is what `admin_grants_revoke_only` refuses, so
       // the fixture steps past it, as only the table owner can.
       const setOld = () =>
@@ -632,7 +742,7 @@ describe('admin roles and grants (real Postgres)', () => {
            COMMIT;`
         );
       const changedAt = async (grantId: string) =>
-        (await grants.findById(grantId))?.lastSecurityChangeAt;
+        (await grants.findById(d.a, grantId))?.lastSecurityChangeAt;
 
       // No change: same ids in another order, the state it already has.
       await setOld();
@@ -650,7 +760,7 @@ describe('admin roles and grants (real Postgres)', () => {
         expect(await changedAt(live.id)).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
       }
       // A revoked grant keeps the time of its revocation.
-      const revokedRow = await grants.findById(revoked.id);
+      const revokedRow = await grants.findById(d.operator, revoked.id);
       expect(revokedRow?.lastSecurityChangeAt).toBe(revokedRow?.revokedAt);
     });
 

@@ -246,7 +246,7 @@ describe('default realm boot step on a real Postgres', () => {
         { name: 'operator', issuer: 'https://admin.example.com' },
         'admin.example.com'
       );
-      await realms().update(tenant.realm.id, { isOperator: true });
+      await realms().setOperator(tenant.realm.id, true);
 
       const node = await bootNode();
 

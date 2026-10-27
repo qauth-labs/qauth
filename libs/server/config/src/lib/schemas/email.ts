@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+/** Blank is read as unset, since Docker Compose passes an absent variable as `''`. */
+function blankAsUnset(value: unknown): unknown {
+  return typeof value === 'string' && value.trim() === '' ? undefined : value;
+}
+
 /**
  * Email environment configuration schema
  */
@@ -39,9 +44,12 @@ export const emailEnvSchema = z.object({
   EMAIL_FROM_NAME: z.string().default('QAuth'),
 
   /**
-   * Base URL for email links (e.g., verification links)
+   * Optional and not read since 0.2.0 (#490): a link in mail starts at the
+   * issuer of the account's realm. Still accepted, so a deployment that sets it
+   * keeps starting; the auth server warns at boot when it names another base
+   * than `JWT_ISSUER`. Blank is unset.
    */
-  EMAIL_BASE_URL: z.url(),
+  EMAIL_BASE_URL: z.preprocess(blankAsUnset, z.url().optional()),
 
   /**
    * Resend API key (required if EMAIL_PROVIDER is 'resend')

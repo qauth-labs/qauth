@@ -26,7 +26,9 @@ import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 ```typescript
 import Fastify from 'fastify';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
-import { env } from '@qauth-labs/server-config';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
 
@@ -53,7 +55,9 @@ await fastify.listen({ port: 3000 });
 import Fastify from 'fastify';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { env } from '@qauth-labs/server-config';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
 
@@ -433,10 +437,23 @@ fastify.get('/safe-query', async (request, reply) => {
 import Fastify from 'fastify';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
+
 const fastify = Fastify();
 
 // Register database plugin
-await fastify.register(databasePlugin);
+await fastify.register(databasePlugin, {
+  config: {
+    connectionString: env.DATABASE_URL,
+    pool: {
+      max: env.DB_POOL_MAX,
+      min: env.DB_POOL_MIN,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+    },
+  },
+});
 
 // Health check using connection pool
 fastify.get('/health', async (request, reply) => {

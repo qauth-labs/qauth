@@ -76,6 +76,27 @@ export const JWT_ISSUER_TRAILING_SLASH_WARNING =
 export const JWT_ISSUER_PATH_WARNING =
   "JWT_ISSUER has a path: it keeps working, since only its host routes requests to the default realm, but a new realm's issuer is an origin with no path";
 
+/** Logged when `EMAIL_BASE_URL` is not the default realm's issuer. */
+export const EMAIL_BASE_URL_IGNORED_WARNING =
+  "EMAIL_BASE_URL is not read since 0.2.0: a link in mail starts at the issuer of the account's realm, which for the default realm is JWT_ISSUER without a trailing slash, so mailed links no longer point at EMAIL_BASE_URL";
+
+/**
+ * The warning to log when `EMAIL_BASE_URL` names another base than the default
+ * realm's issuer (#490): mailed links used to start at `EMAIL_BASE_URL` and
+ * now start at the realm's issuer, so a deployment that set the two apart
+ * sees its links move. Undefined when `EMAIL_BASE_URL` is unset, the key being
+ * optional, or when the two agree, a trailing slash aside.
+ */
+export function emailBaseUrlWarning(
+  emailBaseUrl: string | undefined,
+  jwtIssuer: string
+): string | undefined {
+  if (emailBaseUrl === undefined) return undefined;
+  return resolveIssuerIdentifier(emailBaseUrl) === resolveIssuerIdentifier(jwtIssuer)
+    ? undefined
+    : EMAIL_BASE_URL_IGNORED_WARNING;
+}
+
 /**
  * A boot refusal of the default realm step. The message names the values the
  * operator has to change: they come from the deployment's own configuration
@@ -186,7 +207,7 @@ export async function bootDefaultRealm(
     let realm = await provisionIssuer(deps.realms, tx, settings, identity);
 
     if (!realm.isOperator && !(await deps.realms.findOperator(tx))) {
-      realm = await deps.realms.update(realm.id, { isOperator: true }, tx);
+      realm = await deps.realms.setOperator(realm.id, true, tx);
     }
 
     const endpointHostsAdded = await addEndpointHosts(deps.realms, tx, realm, settings);

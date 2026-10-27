@@ -15,11 +15,21 @@ import type {
 import { DbClient } from '../db';
 import { oauthClients } from '../schema/core';
 
+/** The client row `id` names in `realmId`: a client of another realm matches nothing (#489). */
+function clientOfRealm(realmId: string, id: string) {
+  return and(eq(oauthClients.realmId, realmId), eq(oauthClients.id, id));
+}
+
+/** The clients of `realmId` a developer owns. */
+function ownedBy(realmId: string, developerId: string) {
+  return and(eq(oauthClients.realmId, realmId), eq(oauthClients.developerId, developerId));
+}
+
 /**
  * Factory function that creates an OAuth clients repository with CRUD operations
  *
  * @param defaultDb - Database client to use for queries
- * @returns Repository object with CRUD methods implementing BaseRepository
+ * @returns Repository object with realm-scoped CRUD methods (#489)
  */
 export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsRepository {
   return {
@@ -48,32 +58,35 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
-     * Find an OAuth client by ID
+     * Find an OAuth client of the realm by ID
      *
+     * @param realmId - Realm the request was resolved to
      * @param id - OAuth client ID
      * @param tx - Optional transaction client
-     * @returns OAuth client if found, undefined otherwise
+     * @returns OAuth client if found, undefined otherwise — including for a
+     * client of another realm
      */
-    async findById(id: string, tx?: DbClient): Promise<OAuthClient | undefined> {
+    async findById(realmId: string, id: string, tx?: DbClient): Promise<OAuthClient | undefined> {
       const invoker = tx ?? defaultDb;
       const [client] = await invoker
         .select()
         .from(oauthClients)
-        .where(eq(oauthClients.id, id))
+        .where(clientOfRealm(realmId, id))
         .limit(1);
       return client;
     },
 
     /**
-     * Find an OAuth client by ID, throwing an error if not found
+     * Find an OAuth client of the realm by ID, throwing an error if not found
      *
+     * @param realmId - Realm the request was resolved to
      * @param id - OAuth client ID
      * @param tx - Optional transaction client
      * @returns OAuth client
-     * @throws NotFoundError if OAuth client is not found
+     * @throws NotFoundError if the realm has no such OAuth client
      */
-    async findByIdOrThrow(id: string, tx?: DbClient): Promise<OAuthClient> {
-      const client = await this.findById(id, tx);
+    async findByIdOrThrow(realmId: string, id: string, tx?: DbClient): Promise<OAuthClient> {
+      const client = await this.findById(realmId, id, tx);
       if (!client) {
         throw new NotFoundError('OAuthClient', id);
       }
@@ -103,22 +116,27 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
-     * List the OAuth clients owned by a developer, newest first.
+     * List the OAuth clients of the realm owned by a developer, newest first.
      *
      * Scoped strictly by `developer_id` so a developer only ever sees their
      * own clients. Dynamically registered clients (RFC 7591) carry a null
      * `developer_id` and are excluded by the equality filter.
      *
+     * @param realmId - Realm the request was resolved to
      * @param developerId - Owning developer's user id
      * @param tx - Optional transaction client
      * @returns Owned OAuth clients ordered by creation time, newest first
      */
-    async listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]> {
+    async listByDeveloper(
+      realmId: string,
+      developerId: string,
+      tx?: DbClient
+    ): Promise<OAuthClient[]> {
       const invoker = tx ?? defaultDb;
       return invoker
         .select()
         .from(oauthClients)
-        .where(eq(oauthClients.developerId, developerId))
+        .where(ownedBy(realmId, developerId))
         .orderBy(desc(oauthClients.createdAt));
     },
 
@@ -128,16 +146,17 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
      * Same filter as {@link listByDeveloper}. The per-developer client ceiling
      * (`MAX_CLIENTS_PER_DEVELOPER`) is checked against this before a create.
      *
+     * @param realmId - Realm the request was resolved to
      * @param developerId - Owning developer's user id
      * @param tx - Optional transaction client
-     * @returns Number of OAuth clients the developer owns
+     * @returns Number of OAuth clients of the realm the developer owns
      */
-    async countByDeveloper(developerId: string, tx?: DbClient): Promise<number> {
+    async countByDeveloper(realmId: string, developerId: string, tx?: DbClient): Promise<number> {
       const invoker = tx ?? defaultDb;
       const [row] = await invoker
         .select({ value: count() })
         .from(oauthClients)
-        .where(eq(oauthClients.developerId, developerId));
+        .where(ownedBy(realmId, developerId));
       return row?.value ?? 0;
     },
 
@@ -205,16 +224,22 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
-     * Update an OAuth client by ID
+     * Update an OAuth client of the realm by ID
      *
+     * @param realmId - Realm the request was resolved to
      * @param id - OAuth client ID
      * @param data - Fields to update
      * @param tx - Optional transaction client
      * @returns Updated OAuth client
-     * @throws NotFoundError if OAuth client is not found
+     * @throws NotFoundError if the realm has no such OAuth client
      * @throws UniqueConstraintError if client_id would violate uniqueness
      */
-    async update(id: string, data: UpdateOAuthClient, tx?: DbClient): Promise<OAuthClient> {
+    async update(
+      realmId: string,
+      id: string,
+      data: UpdateOAuthClient,
+      tx?: DbClient
+    ): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
       const updateData = {
         ...data,
@@ -225,7 +250,7 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         const [client] = await invoker
           .update(oauthClients)
           .set(updateData)
-          .where(eq(oauthClients.id, id))
+          .where(clientOfRealm(realmId, id))
           .returning();
 
         if (!client) {
@@ -244,17 +269,18 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
-     * Delete an OAuth client by ID
+     * Delete an OAuth client of the realm by ID
      *
+     * @param realmId - Realm the request was resolved to
      * @param id - OAuth client ID
      * @param tx - Optional transaction client
-     * @returns True if deleted, false if not found
+     * @returns True if deleted, false if the realm has no such OAuth client
      */
-    async delete(id: string, tx?: DbClient): Promise<boolean> {
+    async delete(realmId: string, id: string, tx?: DbClient): Promise<boolean> {
       const invoker = tx ?? defaultDb;
       const [client] = await invoker
         .delete(oauthClients)
-        .where(eq(oauthClients.id, id))
+        .where(clientOfRealm(realmId, id))
         .returning();
       return !!client;
     },

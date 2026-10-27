@@ -169,7 +169,9 @@ describe('setClientSuspension (real Postgres)', () => {
 
     // PATCH /api/clients/:id writes `enabled` through `update`; whatever an
     // owner sends, the suspension stands.
-    await createOAuthClientsRepository(db()).update(client.id, { enabled: true });
+    await createOAuthClientsRepository(db()).update(client.realmId, client.id, {
+      enabled: true,
+    });
 
     const stored = await row(client.id);
     expect(stored.enabled).toBe(true);

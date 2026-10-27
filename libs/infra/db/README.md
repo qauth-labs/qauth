@@ -804,7 +804,7 @@ libs/infra/db/
 ### Token Tables
 
 - **email_verification_tokens**: Email verification tokens with expiration, pointed at a `credential_id`
-- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010)
+- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010); `session_id` (0042, #549) names the browser session behind the code, the ID token's `sid`, and a deleted session sets it to NULL
 - **refresh_tokens**: Refresh tokens with rotation support
 
 ### Federation Tables
@@ -828,11 +828,13 @@ libs/infra/db/
 
 - **admin_audit_log**: One row per admin operation, written in the transaction of the change. Keyed by `(realm_id, seq)`: one hash chain per target realm, `seq` from 1 without a gap, each row carrying the previous row's hash (`prev_hash`) and its own (`row_hash`). It records the actor kind (`human_admin`, `service_account`, `break_glass_operator`, `host_operator`), the actor and the actor's realm, the full act chain when the actor acted for a user, the operation id and class, its effects and outcome, the diff with secrets masked, the approvals, the request digest, the trace id and the time. No foreign keys: a realm's record outlives the realm row. Append-only by trigger; a writing role is granted `INSERT` and `SELECT` only
 - **admin_audit_log_checkpoints**: The `seq` and `row_hash` of the last row each prune removed, so the oldest retained row still verifies. Written by `admin_audit_log_prune()`; a trigger accepts a checkpoint only over an unbroken run of rows at least 90 days old. Append-only too
+- **admin_roles**: A realm's custom admin roles (migration 0043, ADR-019 Decision 7, #510): a name unique in the realm, never a built-in role's, and permission ids from the auth server's catalog; disabled, never deleted while a grant names it. Read by realm id first (#489)
+- **admin_grants**: Which account administers which realm through which role (migration 0043, #510): a built-in role by name or a custom role by id, one target realm or every realm (NULL), the creator, and the creation, revocation and last security-change times in epoch ms. The triggers `admin_grants_realm_rule` (only an operator-realm account holds a grant on every realm or another realm; a custom role only within its realm), `admin_grants_insert_live` (written live, at the database's time) and `admin_grants_revoke_only` (revoked, never changed) hold for every writer. Read by realm id first: the realm a grant covers, or its account's realm; revoked only from its account's realm (#489)
 
 ### Additional Tables
 
 - **sessions**: Browser sessions (ADR-019 Decision 3, #468): one row per account signed in on one browser, in one realm. The `id` (`uuidv7()`) is the session's `sid`. Holds the authentication (`auth_time`, `amr`, `assurance_level`), the address and user agent at creation, `last_seen_at`, the absolute end `expires_at`, and `revoked_at` with `revoked_reason` (set together). `(user_id, realm_id)` references `users (id, realm_id)`, so a session never names a user of another realm. Not stored here: the cookie, the CSRF values and the consent scopes. The auth server writes it through the session service (#469) at every browser sign-in and reads it whenever it resolves the session cookie (#488)
-- **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Deleting the session or the client deletes its rows
+- **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Written in the transaction that mints an authorization code, under a share lock on the live session (`recordClient`, #549); read by session, by user or by client within a realm, for live sessions only. Revoking the session deletes its rows and returns them; deleting the session or the client deletes them too
 - **audit_logs**: The audit log of the releases before the event store; read-only since #458, its rows copied into `events`
 - **api_keys**: Environment-gated static developer API keys (ADR-008 §6)
 - **roles**: Role-based access control (currently unused)

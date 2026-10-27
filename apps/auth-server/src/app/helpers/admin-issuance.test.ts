@@ -7,7 +7,8 @@ vi.mock('../../config/env', () => ({ env: {} }));
 
 import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import type { LiveAdminGrant } from './admin-authority';
-import { adminIssuance, withoutAdminAudience } from './admin-issuance';
+import { adminIssuance } from './admin-issuance';
+import { withoutAdminAudience } from './admin-scopes';
 
 const ADMIN = API_FAMILY_AUDIENCES.admin;
 const OPERATOR = '01900000-0000-7000-8000-00000000000a';
@@ -53,7 +54,12 @@ function server(
 ) {
   const fastify = {
     repositories: {
-      users: { findById: vi.fn(async () => ({ id: USER, ...user })) },
+      // Realm-first (#489): the account is found only in its own realm.
+      users: {
+        findById: vi.fn(async (realmId: string, id: string) =>
+          realmId === user.realmId && id === USER ? { id: USER, ...user } : undefined
+        ),
+      },
       realms: {
         findById: vi.fn(async (id: string) => ({ id, isOperator: id === OPERATOR })),
       },
@@ -71,6 +77,7 @@ describe('adminIssuance', () => {
     const fastify = server([]);
     await expect(
       adminIssuance(fastify, {
+        realmId: OPERATOR,
         client: ADMIN_CLIENT,
         userId: USER,
         scopes: ['openid', 'admin:org'],
@@ -85,6 +92,7 @@ describe('adminIssuance', () => {
     const fastify = server([grant(REALM_A, 'viewer')]);
     await expect(
       adminIssuance(fastify, {
+        realmId: OPERATOR,
         client: ADMIN_CLIENT,
         userId: USER,
         scopes: ['openid', ...ALL_ADMIN_SCOPES, 'profile'],
@@ -100,6 +108,7 @@ describe('adminIssuance', () => {
   it('issues every class a security-admin grant reaches, on any target', async () => {
     const fastify = server([grant(null, 'security-admin')]);
     const decision = await adminIssuance(fastify, {
+      realmId: OPERATOR,
       client: ADMIN_CLIENT,
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
@@ -113,6 +122,7 @@ describe('adminIssuance', () => {
       grant(REALM_B, { realmId: OPERATOR, permissionIds: ['approvals.approve'] }),
     ]);
     const decision = await adminIssuance(fastify, {
+      realmId: OPERATOR,
       client: ADMIN_CLIENT,
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
@@ -125,6 +135,7 @@ describe('adminIssuance', () => {
     const fastify = server([]);
     await expect(
       adminIssuance(fastify, {
+        realmId: OPERATOR,
         client: ADMIN_CLIENT,
         userId: USER,
         scopes: ['openid', ...ALL_ADMIN_SCOPES],
@@ -143,7 +154,13 @@ describe('adminIssuance', () => {
       grant(REALM_A, 'retired-built-in'),
     ]);
     await expect(
-      adminIssuance(fastify, { client: ADMIN_CLIENT, userId: USER, scopes: ['openid'], aud: ADMIN })
+      adminIssuance(fastify, {
+        client: ADMIN_CLIENT,
+        realmId: OPERATOR,
+        userId: USER,
+        scopes: ['openid'],
+        aud: ADMIN,
+      })
     ).resolves.toMatchObject({ scopes: ['openid'], audienceRefused: true });
   });
 
@@ -151,6 +168,7 @@ describe('adminIssuance', () => {
     const fastify = server([grant(null, 'security-admin')]);
     await expect(
       adminIssuance(fastify, {
+        realmId: OPERATOR,
         client: ADMIN_CLIENT,
         userId: null,
         scopes: ['read:foo', ...ALL_ADMIN_SCOPES],
@@ -167,6 +185,7 @@ describe('adminIssuance', () => {
   it('gives nothing to a disabled account', async () => {
     const fastify = server([grant(null, 'security-admin')], { realmId: OPERATOR, enabled: false });
     const decision = await adminIssuance(fastify, {
+      realmId: OPERATOR,
       client: ADMIN_CLIENT,
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
@@ -184,6 +203,7 @@ describe('adminIssuance', () => {
       { audience: [ADMIN], metadata: null, dynamicRegisteredAt: 1 },
     ]) {
       const decision = await adminIssuance(fastify, {
+        realmId: OPERATOR,
         client,
         userId: USER,
         scopes: ALL_ADMIN_SCOPES,
@@ -197,6 +217,7 @@ describe('adminIssuance', () => {
     const fastify = server([grant(null, 'security-admin')]);
     const odd = ['qauth:other', 'QAuth:admin:read', 'qauth:admin:READ', 'qauth:admin:read '];
     const decision = await adminIssuance(fastify, {
+      realmId: OPERATOR,
       client: ADMIN_CLIENT,
       userId: USER,
       scopes: odd,
@@ -214,12 +235,37 @@ describe('adminIssuance', () => {
     });
     await expect(
       adminIssuance(fastify, {
+        realmId: REALM_A,
         client: ADMIN_CLIENT,
         userId: USER,
         scopes: ALL_ADMIN_SCOPES,
         aud: ADMIN,
       })
     ).resolves.toMatchObject({ scopes: [], audienceRefused: true });
+  });
+
+  it("reads the account and its grants in the request's realm only (#489)", async () => {
+    const fastify = server([grant(null, 'security-admin')]);
+    await expect(
+      adminIssuance(fastify, {
+        client: ADMIN_CLIENT,
+        realmId: REALM_A,
+        userId: USER,
+        scopes: ALL_ADMIN_SCOPES,
+        aud: ADMIN,
+      })
+    ).resolves.toMatchObject({ scopes: [], audienceRefused: true });
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM_A, USER);
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+
+    await adminIssuance(fastify, {
+      client: ADMIN_CLIENT,
+      realmId: OPERATOR,
+      userId: USER,
+      scopes: ALL_ADMIN_SCOPES,
+      aud: ADMIN,
+    });
+    expect(fastify.repositories.adminGrants.listLive).toHaveBeenCalledWith(OPERATOR, USER);
   });
 });
 

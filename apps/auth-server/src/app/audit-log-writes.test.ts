@@ -31,6 +31,7 @@ const WRITES: readonly RegExp[] = [
 
 const SKIPPED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.nx', '.astro']);
 
+/** Every JavaScript or TypeScript source file under `dir`, build output skipped. */
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (SKIPPED_DIRS.has(entry.name)) return [];
@@ -40,6 +41,10 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+/**
+ * The files under `dir`, relative to the repository root, that write to
+ * `audit_logs`, leaving out the allowed ones, and the test files unless `tests`.
+ */
 function writesIn(dir: string, { tests }: { tests: boolean }): string[] {
   return sourceFiles(join(REPO_ROOT, dir))
     .map((file) => relative(REPO_ROOT, file))
@@ -51,16 +56,31 @@ function writesIn(dir: string, { tests }: { tests: boolean }): string[] {
     });
 }
 
-describe('audit_logs is read-only (#458)', () => {
-  it('finds no write to audit_logs in apps/, test files included', () => {
-    expect(writesIn('apps', { tests: true })).toEqual([]);
-  });
+/**
+ * The two searches read every source file of a tree synchronously: well under
+ * a second alone, but more than Vitest's 5 s default while every project's
+ * suite runs at once (`nx run-many -t test --all`).
+ */
+const TREE_SEARCH_TIMEOUT_MS = 30_000;
 
-  it('finds no write to audit_logs in the libraries outside its repository', () => {
-    // Test files of the libraries may seed old audit rows: the backfill's
-    // own suite does, to prove the copy.
-    expect(writesIn('libs', { tests: false })).toEqual([]);
-  });
+describe('audit_logs is read-only (#458)', () => {
+  it(
+    'finds no write to audit_logs in apps/, test files included',
+    () => {
+      expect(writesIn('apps', { tests: true })).toEqual([]);
+    },
+    TREE_SEARCH_TIMEOUT_MS
+  );
+
+  it(
+    'finds no write to audit_logs in the libraries outside its repository',
+    () => {
+      // Test files of the libraries may seed old audit rows: the backfill's
+      // own suite does, to prove the copy.
+      expect(writesIn('libs', { tests: false })).toEqual([]);
+    },
+    TREE_SEARCH_TIMEOUT_MS
+  );
 
   it('would find one', () => {
     // A guard on the search itself, so a change to the patterns cannot pass

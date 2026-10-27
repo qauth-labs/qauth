@@ -12,6 +12,8 @@ export type * from './lib/reserved-audiences';
 export * from './lib/reserved-audiences';
 export type * from './lib/reserved-scopes';
 export * from './lib/reserved-scopes';
+export type * from './lib/security-effects';
+export * from './lib/security-effects';
 export type * from './lib/url';
 export * from './lib/url';
 export type * from './lib/webauthn-origin';

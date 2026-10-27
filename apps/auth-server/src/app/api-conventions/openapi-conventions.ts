@@ -10,10 +10,18 @@
  * generates. The check reads the document only, so a rule it enforces is a
  * rule a client can see.
  *
+ * On the admin API it also compares each operation with the admin operation
+ * registry (#508, `helpers/admin-operations.ts`): its `operationId` must be
+ * registered, and its `x-qauth-class`, `x-qauth-permission` and
+ * `x-qauth-effects` must be the registry's.
+ *
  * Pure: no I/O, no Fastify. It takes the parsed document and returns one
  * violation per broken rule, so a failing test names every problem at once.
  */
-import { PERMISSION_ID_PATTERN, PERMISSION_REGISTRY } from '../helpers/admin-permissions';
+import { isSecurityEffect } from '@qauth-labs/shared-validation';
+
+import { OPERATION_REGISTRY, type OperationRegistry } from '../helpers/admin-operations';
+import { PERMISSION_ID_PATTERN, type PermissionRegistry } from '../helpers/admin-permissions';
 import type { OperationClass, OperationStability } from '../openapi-options';
 import { type ApiFamily, apiFamilyOf, isUnversionedFamilyPath } from './families';
 import { PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX } from './paging';
@@ -28,6 +36,7 @@ export type ConventionRule =
   | 'class'
   | 'permission'
   | 'effects'
+  | 'registry'
   | 'two-admin'
   | 'stability'
   | 'naming'
@@ -244,7 +253,16 @@ function checkSecurity({ operation, document, report }: OperationContext): void 
   }
 }
 
-function checkExtensions({ family, operation, report }: OperationContext): void {
+/**
+ * The extension rules. `catalog` is the admin permission catalog an admin
+ * operation's `x-qauth-permission` must name grantable permissions of: the one
+ * the selected operation registry was checked against, so a check run with a
+ * custom registry and catalog judges the document by that catalog.
+ */
+function checkExtensions(
+  { family, operation, report }: OperationContext,
+  catalog: PermissionRegistry
+): void {
   const stability = operation['x-qauth-stability'];
   if (!STABILITIES.includes(stability as OperationStability)) {
     report('stability', `x-qauth-stability must be one of ${STABILITIES.join(', ')}`);
@@ -276,7 +294,7 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
     // catalog does not know, or a retired one, could never be authorized.
     const classes = new Set<OperationClass>();
     for (const id of permissions as string[]) {
-      const granted = PERMISSION_REGISTRY.isGrantable(id) ? PERMISSION_REGISTRY.get(id) : undefined;
+      const granted = catalog.isGrantable(id) ? catalog.get(id) : undefined;
       if (granted === undefined) {
         report(
           'permission',
@@ -312,6 +330,12 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
       new Set(effects).size !== effects.length
     ) {
       report('effects', 'x-qauth-effects must be a list of distinct kebab-case effect tags');
+    } else if (!effects.every(isSecurityEffect)) {
+      // The list is closed (#508): a tag outside it names no effect.
+      report(
+        'effects',
+        `x-qauth-effects names ${effects.filter((effect) => !isSecurityEffect(effect)).join(', ')}, which is not an effect tag (reference/security-operations)`
+      );
     }
   }
   const effectCount = Array.isArray(effects) ? effects.length : 0;
@@ -326,6 +350,52 @@ function checkExtensions({ family, operation, report }: OperationContext): void 
     report('two-admin', 'is a security operation, so x-qauth-two-admin must be "recommended"');
   } else if (!isSecurity && twoAdmin !== undefined) {
     report('two-admin', 'has x-qauth-two-admin, which only a security operation carries');
+  }
+}
+
+const sameMembers = (a: readonly unknown[], b: readonly unknown[]): boolean =>
+  a.length === b.length && new Set(a).size === a.length && a.every((value) => b.includes(value));
+
+const listed = (values: readonly unknown[]): string =>
+  values.length === 0 ? 'none' : values.map(String).join(', ');
+
+/**
+ * The registry rule (#508): an admin operation is registered under its
+ * `operationId`, and its class, permissions and effects are the registry's.
+ * Run only on an operation whose id and extensions passed their own rules, so
+ * a malformed member is reported once, by its rule.
+ */
+function checkRegistry({ operation, report }: OperationContext, registry: OperationRegistry): void {
+  const id = operation['operationId'] as string;
+  const registered = registry.get(id);
+  if (registered === undefined) {
+    report(
+      'registry',
+      `operationId "${id}" is not in the admin operation registry (helpers/admin-operations.ts), which defines every admin operation`
+    );
+    return;
+  }
+  if (operation['x-qauth-class'] !== registered.class) {
+    report(
+      'registry',
+      `x-qauth-class is ${String(operation['x-qauth-class'])}, but the registry gives ${id} the class ${registered.class}`
+    );
+  }
+  const permission = operation['x-qauth-permission'];
+  const permissions = Array.isArray(permission) ? permission : [permission];
+  if (!sameMembers(permissions, registered.permissions)) {
+    report(
+      'registry',
+      `x-qauth-permission is ${listed(permissions)}, but the registry gives ${id} ${listed(registered.permissions)}`
+    );
+  }
+  const effects = operation['x-qauth-effects'];
+  const declared = Array.isArray(effects) ? effects : [];
+  if (!sameMembers(declared, registered.effects)) {
+    report(
+      'registry',
+      `x-qauth-effects is ${listed(declared)}, but the registry gives ${id} ${listed(registered.effects)}`
+    );
   }
 }
 
@@ -550,12 +620,26 @@ function checkConditionalUpdate(context: OperationContext): void {
   }
 }
 
+/** Options for {@link checkApiConventions}. */
+export interface ApiConventionsOptions {
+  /**
+   * The registry admin operations are compared with; the server's own by
+   * default. An admin operation's `x-qauth-permission` is checked against the
+   * permission catalog this registry was built with (`registry.permissions`).
+   */
+  operations?: OperationRegistry;
+}
+
 /**
  * Check every API family operation of `document` against the conventions.
  *
  * @param document a parsed OpenAPI 3.1 document, such as `stable-surface/openapi.json`
  */
-export function checkApiConventions(document: unknown): ConventionReport {
+export function checkApiConventions(
+  document: unknown,
+  options: ApiConventionsOptions = {}
+): ConventionReport {
+  const registry = options.operations ?? OPERATION_REGISTRY;
   const root = isObject(document) ? document : {};
   const paths = isObject(root['paths']) ? root['paths'] : {};
   const resolve = resolver(root);
@@ -612,9 +696,19 @@ export function checkApiConventions(document: unknown): ConventionReport {
         resolve,
         report: (rule, message) => violations.push({ operation: key, rule, message }),
       };
+      const start = violations.length;
       checkOperationId(context);
+      const afterOperationId = violations.length;
       checkSecurity(context);
-      checkExtensions(context);
+      const afterSecurity = violations.length;
+      checkExtensions(context, registry.permissions);
+      if (
+        family.family === 'admin' &&
+        afterOperationId === start &&
+        violations.length === afterSecurity
+      ) {
+        checkRegistry(context, registry);
+      }
       checkParameters(context);
       checkRequestBody(context);
       checkResponses(context);

@@ -427,16 +427,17 @@ For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` an
 
 CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/reference/records/adr/007-mcp-first-positioning/)) — MCP Authorization 2026-07-28 says authorization servers and MCP clients **SHOULD** support it, and deprecates RFC 7591 dynamic registration in its favour. When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
 
-| Variable                       | Required | Default            | Description                                                                                                                                                                                                                                                 |
-| ------------------------------ | -------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CIMD_ENABLED`                 | No       | `true`             | Master switch. When `false`, URL-formatted `client_id`s are rejected with `invalid_client`.                                                                                                                                                                 |
-| `CIMD_TRUST_POLICY`            | No       | `accept-any-https` | `accept-any-https` (any validating HTTPS document) or `allowlist` (only hosts in `CIMD_TRUSTED_DOMAINS`).                                                                                                                                                   |
-| `CIMD_TRUSTED_DOMAINS`         | No       | _(empty)_          | Comma/space-separated host allowlist for `allowlist` policy. A leading `*.` permits subdomains.                                                                                                                                                             |
-| `CIMD_CACHE_DEFAULT_TTL`       | No       | `300`              | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                                                                                                                                                                          |
-| `CIMD_CACHE_MAX_TTL`           | No       | `3600`             | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                                                                                                                                                                        |
-| `CIMD_MAX_DOCUMENT_BYTES`      | No       | `65536`            | Maximum document size in bytes.                                                                                                                                                                                                                             |
-| `CIMD_FETCH_TIMEOUT_MS`        | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                                                                                                                                                                          |
-| `CIMD_ALLOW_PRIVATE_ADDRESSES` | No       | `false`            | Allow CIMD document and client `jwks_uri` fetches to non-public IPs (loopback/private/link-local). It disables the SSRF guard; for dev/integration harnesses only. **Refused when `NODE_ENV=production`**: the server does not start with it set to `true`. |
+| Variable                  | Required | Default            | Description                                                                                               |
+| ------------------------- | -------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`            | No       | `true`             | Master switch. When `false`, URL-formatted `client_id`s are rejected with `invalid_client`.               |
+| `CIMD_TRUST_POLICY`       | No       | `accept-any-https` | `accept-any-https` (any validating HTTPS document) or `allowlist` (only hosts in `CIMD_TRUSTED_DOMAINS`). |
+| `CIMD_TRUSTED_DOMAINS`    | No       | _(empty)_          | Comma/space-separated host allowlist for `allowlist` policy. A leading `*.` permits subdomains.           |
+| `CIMD_CACHE_DEFAULT_TTL`  | No       | `300`              | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                        |
+| `CIMD_CACHE_MAX_TTL`      | No       | `3600`             | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                      |
+| `CIMD_MAX_DOCUMENT_BYTES` | No       | `65536`            | Maximum document size in bytes.                                                                           |
+| `CIMD_FETCH_TIMEOUT_MS`   | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                        |
+
+A metadata document and a client's `jwks_uri` are fetched through the egress client and never reach a private, loopback or link-local address, whatever the configuration: the client named them, and the [egress allowlist](#outbound-calls-and-the-egress-allowlist) applies only to destinations the operator or an admin set.
 
 > **Note:** the `CIMD_*` variables are optional and default-safe, so the stack runs without them, and `.env.docker.example` does not list them. The `auth-server` `environment:` map does, so setting them in `.env` takes effect. Be deliberate about `CIMD_TRUST_POLICY`: it defaults to `accept-any-https`, which returns before `CIMD_TRUSTED_DOMAINS` is consulted — so populating the domain list alone changes nothing until you also set `CIMD_TRUST_POLICY=allowlist`.
 
@@ -529,13 +530,14 @@ of the discovery metadata. See
 | `ID_JAG_JWKS_NEGATIVE_CACHE_TTL` | No                | `30`      | Seconds a failed discovery or JWKS fetch is remembered. Meanwhile nothing is fetched from that issuer, so an outage costs one attempt per window; keys already cached keep working. 1 to 300.                                                                                                                        |
 | `ID_JAG_FETCH_TIMEOUT_MS`        | No                | `5000`    | Timeout for issuer discovery / JWKS fetches.                                                                                                                                                                                                                                                                         |
 | `ID_JAG_MAX_DOCUMENT_BYTES`      | No                | `65536`   | Size cap on a fetched discovery or JWKS document.                                                                                                                                                                                                                                                                    |
-| `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | No                | `false`   | Allow issuer discovery and JWKS fetches to non-public IPs (loopback/private/link-local). It disables the SSRF guard; for local development and tests only. **Refused when `NODE_ENV=production`**: the server does not start with it set to `true`.                                                                  |
 
 > **Note:** the `auth-server` `environment:` map forwards every `ID_JAG_*`
-> variable, so setting them in `.env` takes effect. Compose defaults
-> `NODE_ENV` to `production`, so `ID_JAG_ALLOW_PRIVATE_ADDRESSES=true` (or
-> `CIMD_ALLOW_PRIVATE_ADDRESSES=true`) stops the container at boot unless `.env`
-> also sets `NODE_ENV=development`.
+> variable, so setting them in `.env` takes effect. A trusted issuer's
+> discovery URL is an operator-set destination: an
+> [egress allowlist](#outbound-calls-and-the-egress-allowlist) entry can open
+> its private host for a realm. The `jwks_uri` its discovery document names
+> never reaches a private address, so an issuer whose keys sit on a private
+> network cannot be used from discovery alone yet.
 
 #### Provisioning a client for ID-JAG
 
@@ -589,6 +591,79 @@ Two client columns hold resource identifiers, and each does one job:
 - Before migration 0027 the targets were read from `audience`. The migration
   copies nothing, so a client set up that way mints and redeems nothing until its
   targets are listed here.
+
+### Outbound calls and the egress allowlist
+
+The outbound calls the server makes for a configuration value or a request (the
+CIMD, client `jwks_uri` and ID-JAG issuer fetches, the SSF push) go through one
+SSRF-safe egress client: `https` only, every address of the
+host checked, the connection pinned to the checked addresses, redirects checked
+the same way, time and size capped
+([ADR-019 Decision 8](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
+It never reaches a private, loopback or link-local address, unless the
+deployment allowlist names the host or range **and** the destination was set by
+the operator or a realm admin, for a realm the entry names. A destination that a
+client, an end user or a fetched document supplies (a CIMD `client_id`, a
+client's `jwks_uri`, the `jwks_uri` of an issuer's discovery document) never
+uses the allowlist. The wallet status-list fetch keeps its own URI-prefix
+allowlist for now, and the OpenTelemetry export and a KEK custody adapter
+(`KEK_PROVIDER`) make their own connections: their destinations are
+deployment-wide configuration, outside the egress client by ADR-019's
+amendments of 2026-10-24 and 2026-10-27.
+
+`EGRESS_ALLOWLIST_PATH` names the allowlist, a JSON file the operator writes:
+
+```json
+{
+  "entries": [
+    { "host": "idp.corp.example", "realms": ["master"] },
+    { "cidr": "10.20.0.0/16", "realms": ["master", "acme"], "note": "partner VPN" }
+  ]
+}
+```
+
+- Each entry names one `host` (exact, no wildcard) or one `cidr` range, and the
+  realms it applies to, by realm name.
+- A `host` entry opens the private (`10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`), shared (`100.64.0.0/10`) and unique-local (`fc00::/7`)
+  addresses its name resolves to. Loopback, link-local and other special
+  ranges open only through a `cidr` entry that names them.
+- A `cidr` entry is not tied to a host: any operator or admin destination of
+  the realms it names that resolves into the range is allowed. It may be no
+  wider than `/8` (IPv4) or `/32` (IPv6), and may not overlap a range that
+  reaches other addresses only through translation (IPv4-mapped
+  `::ffff:0:0/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4
+  `2002::/16`, Teredo `2001::/32`).
+- The server reads the file once, at boot. A file that cannot be read, does
+  not validate or others can write stops the boot, naming the variable, the
+  file and the mistake; a file its group can write, or that neither root nor
+  the server's user owns, gives a warning.
+- The list is not in the database, and no API reads or edits it, so a realm
+  admin cannot widen it.
+- No entry opens an unspecified (`0.0.0.0`) or multicast address, or a cloud
+  metadata endpoint (`169.254.169.254`, `169.254.170.0/24`, `100.100.100.200`,
+  `fd00:ec2::/32`), and a redirect to another host never uses the entry that
+  let the first request through.
+
+With Compose, mount the file read-only and name its path in `.env`:
+
+```yaml
+# docker-compose.override.yml
+services:
+  auth-server:
+    volumes:
+      - ./egress-allowlist.json:/etc/qauth/egress-allowlist.json:ro
+```
+
+```bash
+# .env
+EGRESS_ALLOWLIST_PATH=/etc/qauth/egress-allowlist.json
+```
+
+`CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are gone:
+set to any value, they stop the boot with a message that names
+`EGRESS_ALLOWLIST_PATH`. Tests reach a local fixture server through the
+test-only `createTestEgressClient` instead.
 
 ### Wallet federation (OID4VP, T4)
 

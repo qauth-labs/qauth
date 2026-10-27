@@ -47,6 +47,7 @@ export const eventDeliveryPlugin = fp<EventDeliveryPluginOptions>(
     const clock = options.clock;
     const now = () => (clock ? clock.now() : Date.now());
 
+    let role: DeliveryRole | undefined;
     const metrics =
       options.registry === undefined
         ? undefined
@@ -55,9 +56,9 @@ export const eventDeliveryPlugin = fp<EventDeliveryPluginOptions>(
             kinds: routes.map((route) => route.kind),
             now,
             warn: (error, message) => fastify.log.warn({ err: error }, message),
+            signerHeld: () => role?.signerHeld(),
           });
 
-    let role: DeliveryRole | undefined;
     fastify.addHook('onReady', async () => {
       role = startDeliveryRole({
         store,

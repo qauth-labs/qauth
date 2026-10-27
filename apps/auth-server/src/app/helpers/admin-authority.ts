@@ -266,7 +266,9 @@ export async function resolveAdminAuthority(
   if (!uuidSchema.safeParse(request.sub).success) {
     return { allowed: false, refusal: 'account_inactive' };
   }
-  const user = await fastify.repositories.users.findById(request.sub);
+  // Read in the issuer's realm (#489): an account of another realm is not
+  // found, as an unknown one is not.
+  const user = await fastify.repositories.users.findById(issuerRealm.id, request.sub);
   if (!user || !user.enabled || user.realmId !== issuerRealm.id) {
     return { allowed: false, refusal: 'account_inactive' };
   }
@@ -282,7 +284,7 @@ export async function resolveAdminAuthority(
     return { allowed: false, refusal: 'realm_not_found' };
   }
 
-  const live = await fastify.repositories.adminGrants.listLive(user.id);
+  const live = await fastify.repositories.adminGrants.listLive(issuerRealm.id, user.id);
   const matching = live.filter(
     (grant) =>
       grantFitsRealmRule(grant, issuerRealm) &&

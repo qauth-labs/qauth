@@ -317,6 +317,15 @@ catalog:
   # that day. Caret: a transport client, whose fixes should arrive with a
   # lockfile refresh.
   '@aws-sdk/client-kms': '^3.1152.0'
+  # JSON Schema 2020-12 validation in the Interaction API contract's tests
+  # (#590): the OpenAPI document against the official OpenAPI 3.1 schema, every
+  # step example against its step's schema, and every schema compiled in strict
+  # mode. Dev only, in libs/shared/interaction-contract. Both were already in the
+  # tree through Fastify's own validator, so no new package is resolved. ajv
+  # 8.20.0 is past GHSA-2g4f-4pwh-qvx6 (patched in 8.18.0), and no advisory names
+  # ajv-formats (GHSA advisory database, checked 2026-10-26).
+  ajv: '^8.20.0'
+  ajv-formats: '^3.0.1'
   '@commitlint/cli': '^21.2.3'
   '@commitlint/config-conventional': '^21.2.3'
   # Nx core and every @nx/* plugin move in lockstep (nx, @nx/vite, @nx/web and
@@ -467,7 +476,6 @@ catalog:
   # a dev-tagged build, so a move is a reviewed change.
   '@typescript/native-preview': '7.0.0-dev.20260707.2'
   vitest: '^5.0.5'
-  '@fastify/autoload': '^6.5.1'
   '@fastify/cors': '^11.3.1'
   '@fastify/formbody': '^9.0.1'
   '@fastify/helmet': '^13.2.0'

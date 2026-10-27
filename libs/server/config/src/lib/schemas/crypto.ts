@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { z } from 'zod';
 
+import { serviceRolesEnvSchema } from './service-roles';
+
 /**
  * Crypto / signing environment configuration (ADR-005, #243 + #245).
  *
@@ -103,6 +105,12 @@ export const cryptoEnvSchema = z
       .enum(['true', 'false', '1', '0'])
       .default('false')
       .transform((v) => v === 'true' || v === '1'),
+
+    /**
+     * The roles of this process (#495), read here only to decide whether
+     * hybrid signing can run in it. `serviceRolesEnvSchema` owns the key.
+     */
+    SERVICE_ROLES: serviceRolesEnvSchema.shape.SERVICE_ROLES,
   })
   .superRefine((data, ctx) => {
     // #248 F8: a CONFIGURED seed must be well-formed whether or not hybrid is
@@ -129,6 +137,19 @@ export const cryptoEnvSchema = z
     }
 
     if (!data.HYBRID_SIGNING_ENABLED) return;
+    // #495: the ML-DSA-65 seed is a private key, which only the signer holds,
+    // and a process without it has no public-only form of the key to verify
+    // hybrid tokens with. Hybrid signing therefore keeps every role in the
+    // processes that hold the signer, for now.
+    if (!data.SERVICE_ROLES.includes('signer')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['HYBRID_SIGNING_ENABLED'],
+        message:
+          'HYBRID_SIGNING_ENABLED=true needs the signer role in this process: it signs and verifies hybrid tokens with the ML-DSA-65 key, which only the signer holds. Add signer to SERVICE_ROLES, or run hybrid signing as a single process (SERVICE_ROLES=all).',
+      });
+      return;
+    }
     if (data.SIGNING_ALGORITHM_MODE !== 'ed25519+ml-dsa-65') {
       ctx.addIssue({
         code: 'custom',

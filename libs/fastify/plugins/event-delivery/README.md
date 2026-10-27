@@ -25,7 +25,9 @@ await fastify.register(eventDeliveryPlugin, {
   `fastify.close()` waits for the attempts in flight up to the role's shutdown limit, then releases
   the rest. Register the plugin after the database plugin.
 - **Metrics.** With a `registry`: `qauth_events_pending{kind}`, `qauth_events_delivery_lag_seconds`
-  and `qauth_events_delivery_attempts_total{kind,result}` (`delivered`, `retry`, `failed`).
+  and `qauth_events_delivery_attempts_total{kind,result}` (`delivered`, `retry`, `failed`), and
+  `qauth_events_delivery_signer_held` and `qauth_events_delivery_signer_held_oldest_seconds`, the
+  deliveries this node holds because the signer is unavailable (#495).
 
 `pnpm nx run fastify-plugin-event-delivery:test-integration` runs the acceptance suite of #460
 against Postgres: a worker that died after its claim, two workers, retries on a fake clock, a

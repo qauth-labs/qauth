@@ -77,9 +77,9 @@ async function ensureApiCsrfToken(
 }
 
 export default async function (fastify: FastifyInstance) {
-  // Paths are relative to this module's directory. `@fastify/autoload` is
-  // registered without `dirNameRoutePrefix: false` (app.ts), so the `consents/`
-  // directory already contributes the `/consents` prefix — the same way
+  // Paths are relative to this module's directory. The route manifest
+  // (`route-manifest.ts`) registers it under its directory's name, so the
+  // `consents/` directory already contributes the `/consents` prefix — the same way
   // `routes/oauth/authorize.ts` declares `/authorize` and is served at
   // `/oauth/authorize`. Declaring `/consents` here would publish
   // `/consents/consents`.
@@ -101,7 +101,7 @@ export default async function (fastify: FastifyInstance) {
       if (!session) throw new SignInRequiredError(SIGN_IN_TO_MANAGE_CONSENTS);
 
       const csrfToken = await ensureApiCsrfToken(fastify, session);
-      const consents = await listConsentsForUser(fastify, session.userId);
+      const consents = await listConsentsForUser(fastify, session.realmId, session.userId);
       return reply.send({ consents, csrfToken });
     }
   );
@@ -145,7 +145,7 @@ export default async function (fastify: FastifyInstance) {
       // Ownership check + event live in `helpers/consent-management` so this
       // surface and the Bearer-authenticated `/api/consents` cannot drift on
       // the security boundary (#366).
-      await revokeConsentForUser(fastify, request, session.userId, id);
+      await revokeConsentForUser(fastify, request, session.realmId, session.userId, id);
 
       reply.code(204);
       return reply.send(null);

@@ -33,6 +33,8 @@ import {
   reservedQauthScopesIn,
 } from '@qauth-labs/shared-validation';
 
+import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
+
 export { isReservedQauthScope, QAUTH_SCOPE_NAMESPACE, reservedQauthScopesIn };
 
 /**
@@ -98,4 +100,20 @@ export function allowedPermissionClasses(
     if (permissionClass !== undefined) allowed.add(permissionClass);
   }
   return allowed;
+}
+
+/**
+ * `aud` without the admin API's audience, for a token minted where no admin
+ * grant is checked: `/auth/login`, from the system client's stored audience
+ * (#510). The client id when nothing else is left, as for a client with no
+ * audience. Here, away from the grant checks of `admin-issuance.ts`, so the
+ * route reaches no admin grant (#495's route manifest).
+ */
+export function withoutAdminAudience(
+  aud: string | readonly string[],
+  clientId: string
+): string | string[] {
+  const rest = [aud].flat().filter((value) => value !== API_FAMILY_AUDIENCES.admin);
+  if (rest.length === 0) return clientId;
+  return rest.length === 1 ? rest[0] : rest;
 }

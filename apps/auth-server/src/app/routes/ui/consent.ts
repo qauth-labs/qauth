@@ -4,11 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import {
-  OAUTH_OPAQUE_PARAM_MAX_LENGTH,
-  OAUTH_SCOPE_PARAM_MAX_LENGTH,
-  STEP_UP_FRESH_AUTH_WINDOW_MS,
-} from '../../constants';
+import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
@@ -31,7 +27,6 @@ import {
   isLoopbackRedirect,
   redirectHost,
 } from '../../helpers/consent';
-import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
@@ -44,6 +39,7 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
@@ -55,14 +51,8 @@ import {
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { emitUserEvent } from '../../helpers/user-events';
 import { markRelaxedCsp } from '../../plugins/security-headers';
-import { clientIdParamSchema, exactUrl } from '../../schemas/common';
-import {
-  authorizeQuerySchema,
-  codeChallengeParamSchema,
-  dpopJktParamSchema,
-  maxAgeParamSchema,
-  resourceParamSchema,
-} from '../../schemas/oauth';
+import { type ConsentForm, consentFormSchema } from '../../schemas/consent';
+import { authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
  * Order-independent equality of two scope sets. Used by the consent POST to
@@ -100,44 +90,6 @@ function resourceSetsEqual(a: readonly string[], b: readonly string[]): boolean 
  *                    §4.1.2.1). CSRF-protected via a form token bound to
  *                    the signed session cookie.
  */
-
-const consentFormSchema = z.object({
-  decision: z.enum(['allow', 'deny']),
-  allow_forever: z.string().optional(),
-  csrf_token: z.string().min(1),
-  // Mirror of the original authorize params so we don't need to stash them
-  // in the session (keeps the session payload small + stateless enough).
-  // Same bound as `authorizeQuerySchema.client_id`.
-  client_id: clientIdParamSchema,
-  // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
-  redirect_uri: exactUrl(),
-  state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  // Mirrors `authorizeQuerySchema`'s bound — the two silently drifted once
-  // (#316) and this form POST reaches the same pending-authorization stash.
-  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
-  nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
-  // Same bound as `authorizeQuerySchema.code_challenge`, which is the one
-  // `mintAuthorizationCode` holds the code to: a form the screen did not
-  // render cannot reach the mint with a challenge it refuses.
-  code_challenge: codeChallengeParamSchema,
-  code_challenge_method: z.literal('S256'),
-  response_type: z.literal('code'),
-  // ADR-007 §2 (#185): step-up params carried through so the POST mint path
-  // re-evaluates them server-side (the hidden `scope` field is
-  // attacker-controlled, so the dangerous-elevation re-auth gate must run HERE
-  // too, not only pre-consent). Empty string ⇒ treated as absent.
-  prompt: z.enum(['none', 'login', 'consent']).optional(),
-  max_age: maxAgeParamSchema,
-  // RFC 8707: carried through as hidden form field(s). `resourceParamSchema`
-  // populates an array on `body.resource`.
-  resource: resourceParamSchema,
-  // RFC 9449 §10 (#480): the DPoP key the code is bound to, as
-  // `authorizeQuerySchema` takes it. Rendered, and read, only while DPoP is
-  // on.
-  dpop_jkt: dpopJktParamSchema,
-});
-
-type ConsentForm = z.infer<typeof consentFormSchema>;
 
 function buildAuthorizeUrl(query: Record<string, string | string[] | number | undefined>): string {
   const u = new URL('/oauth/authorize', 'http://placeholder');
@@ -391,8 +343,9 @@ export default async function (fastify: FastifyInstance) {
       // advertise, echoed as `iss` on every authorization response this route
       // emits. The consent screen terminates the authorization request on both
       // Allow and Deny, so its redirects are authorization responses too and
-      // carry the mix-up defence exactly like /oauth/authorize's.
-      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+      // carry the mix-up defence exactly like /oauth/authorize's. The issuer
+      // is the request realm's, from its row (ADR-019 Decision 1, #490).
+      const iss = realmIssuer(requestRealm(request));
 
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {
@@ -625,8 +578,9 @@ export default async function (fastify: FastifyInstance) {
       // advertise, echoed as `iss` on every authorization response this route
       // emits. The consent screen terminates the authorization request on both
       // Allow and Deny, so its redirects are authorization responses too and
-      // carry the mix-up defence exactly like /oauth/authorize's.
-      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+      // carry the mix-up defence exactly like /oauth/authorize's. The issuer
+      // is the request realm's, from its row (ADR-019 Decision 1, #490).
+      const iss = realmIssuer(requestRealm(request));
 
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {
@@ -832,19 +786,10 @@ export default async function (fastify: FastifyInstance) {
         // force step-up in every environment.
         enforceDangerousStepUp: policy.agentStepUpEnforced,
       });
-      if (stepUp.requiresFreshLogin) {
-        await emitUserEvent(
-          request,
-          'urn:qauth:event:step_up.required:v1-rc.0',
-          {
-            reason: 'fresh_authentication_required',
-            ...(stepUp.dangerous.length > 0 ? { dangerousScopes: stepUp.dangerous } : {}),
-            ...(prompt === null ? {} : { prompt }),
-            ...(body.max_age === undefined ? {} : { maxAge: body.max_age }),
-          },
-          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
-        );
-        const returnTo = buildAuthorizeUrl({
+      // The authorization request again, to come back to through the login
+      // page: what the step-up below and a session ended mid-mint do.
+      const authorizeReturnTo = (): string =>
+        buildAuthorizeUrl({
           client_id: body.client_id,
           redirect_uri: body.redirect_uri,
           state: body.state,
@@ -858,53 +803,94 @@ export default async function (fastify: FastifyInstance) {
           resource: resources,
           dpop_jkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : undefined,
         });
+      if (stepUp.requiresFreshLogin) {
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          {
+            reason: 'fresh_authentication_required',
+            ...(stepUp.dangerous.length > 0 ? { dangerousScopes: stepUp.dangerous } : {}),
+            ...(prompt === null ? {} : { prompt }),
+            ...(body.max_age === undefined ? {} : { maxAge: body.max_age }),
+          },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
         // #316 follow-up: short handle in the URL, full authorize URL in Redis.
-        return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
+        return redirectToLoginWithPendingAuthorization(fastify, reply, authorizeReturnTo());
       }
 
-      // Allow: persist the grant if the user checked the box, then issue a
-      // code. The grant upsert merges with any prior record so subsequent
+      // Allow: issue a code and, if the user checked the box, persist the
+      // grant. The grant upsert merges with any prior record so subsequent
       // requests with a subset of these scopes, for the resource(s) this
       // screen named as the audience, skip the screen. An approval that is
       // not persisted is one-time: /oauth/token mints a refresh token only
       // under a stored consent, the row the user can list and revoke.
-      if (body.allow_forever === '1') {
-        await fastify.repositories.oauthConsents.upsertGrant(
-          session.userId,
-          client.id,
-          realm.id,
-          scopes,
-          resources
+      //
+      // #549: the code, the record of the client this session served
+      // (`session_clients`, what back-channel logout reads) and the
+      // remembered grant commit together, in one READ COMMITTED transaction
+      // (`MINT_TRANSACTION`). A sign-out that committed first leaves no live
+      // session, and neither a code nor a grant is written: the code's ID
+      // token would name a session no logout reaches.
+      const minted = await fastify.db.transaction(async (tx) => {
+        const outcome = await mintAuthorizationCode(
+          fastify,
+          {
+            oauthClientId: client.id,
+            userId: session.userId,
+            redirectUri: body.redirect_uri,
+            codeChallenge: body.code_challenge,
+            codeChallengeMethod: body.code_challenge_method,
+            nonce: body.nonce ?? null,
+            // OIDC Core §2 `auth_time`: the REAL end-user authentication time
+            // (browser-session establishment, epoch MS), so /oauth/token can
+            // assert `auth_time` in the ID token and `max_age` evaluates the
+            // actual session age rather than this code's mint time.
+            authTime: session.authTime,
+            // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
+            // the code so /oauth/token can assert `acr`. NULL for a password
+            // login (`'low'`), which is the "omit the claim" outcome.
+            assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
+            // ADR-019 Decision 3 (#552): the session's absolute end, so the
+            // refresh family this code starts never outlives the session.
+            sessionExpiresAt: session.expiresAt,
+            // ADR-019 Decisions 3 and 4 (#549): the session whose `sid` the
+            // code exchange puts in the ID token, and which records this client.
+            session: { realmId: session.realmId, sid: session.sid },
+            scopes,
+            // RFC 8707: bind the resource(s) the screen named to this code so
+            // /oauth/token can set the issued access token's `aud` claim.
+            resource: resources,
+            state: body.state ?? null,
+            // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+            dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
+          },
+          tx
         );
+        if (outcome !== 'session_ended' && body.allow_forever === '1') {
+          await fastify.repositories.oauthConsents.upsertGrant(
+            realm.id,
+            session.userId,
+            client.id,
+            scopes,
+            resources,
+            tx
+          );
+        }
+        return outcome;
+      }, MINT_TRANSACTION);
+      if (minted === 'session_ended') {
+        // The session ended under this request: the answer a request arriving
+        // after the sign-out gets, the login page and back to authorize.
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:authorization.failed:v1-rc.0',
+          { error: 'login_required', reason: 'session_ended_during_authorization' },
+          { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
+        );
+        return redirectToLoginWithPendingAuthorization(fastify, reply, authorizeReturnTo());
       }
-
-      const code = await mintAuthorizationCode(fastify, {
-        oauthClientId: client.id,
-        userId: session.userId,
-        redirectUri: body.redirect_uri,
-        codeChallenge: body.code_challenge,
-        codeChallengeMethod: body.code_challenge_method,
-        nonce: body.nonce ?? null,
-        // OIDC Core §2 `auth_time`: the REAL end-user authentication time
-        // (browser-session establishment, epoch MS), so /oauth/token can
-        // assert `auth_time` in the ID token and `max_age` evaluates the
-        // actual session age rather than this code's mint time.
-        authTime: session.authTime,
-        // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
-        // the code so /oauth/token can assert `acr`. NULL for a password
-        // login (`'low'`), which is the "omit the claim" outcome.
-        assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
-        // ADR-019 Decision 3 (#552): the session's absolute end, so the
-        // refresh family this code starts never outlives the session.
-        sessionExpiresAt: session.expiresAt,
-        scopes,
-        // RFC 8707: bind the resource(s) the screen named to this code so
-        // /oauth/token can set the issued access token's `aud` claim.
-        resource: resources,
-        state: body.state ?? null,
-        // RFC 9449 §10 (#480): the DPoP key the token request must prove.
-        dpopJkt: dpopJkt.kind === 'bound' ? dpopJkt.jkt : null,
-      });
+      const { code } = minted;
 
       // ADR-007 §2 (#185): every elevation that grants a dangerous scope is
       // recorded as a distinct step-up event (in addition to the normal

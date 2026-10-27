@@ -8,9 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // The error handler reads the validated env; stub it so no env parse runs.
 vi.mock('../../config/env', () => ({ env: { NODE_ENV: 'test' } }));
 
+// The real helper, watched: the default issuer rule must go through it.
+vi.mock('./realm-url', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./realm-url')>();
+  return { ...actual, realmTokenIssuer: vi.fn(actual.realmTokenIssuer) };
+});
+
 import { API_FAMILIES, API_FAMILY_AUDIENCES, type ApiFamily } from '../api-conventions/families';
 import errorHandler from '../plugins/error-handler';
 import { type IssuerResolver, requireFamilyToken } from './family-token';
+import { realmTokenIssuer } from './realm-url';
 
 /**
  * The API family guards (#509, ADR-019 Decision 7), against the real JWT
@@ -29,12 +36,14 @@ const REVOKED_JTI = 'revoked-jti';
 
 /**
  * Two realms, told apart by the host, as the realm resolver tells them
- * (ADR-019 Decision 1). A family audience and the deployment issuer read the
- * same in both.
+ * (ADR-019 Decision 1). A family audience reads the same in both. Realm A's
+ * issuer is the JWT plugin's, `JWT_ISSUER`; realm B has its own, so it admits
+ * only a token naming B's issuer, which the server does not mint before #491.
  */
-const REALM_A = { id: 'aaaaaaaa-0000-4000-8000-00000000000a', name: 'a' };
-const REALM_B = { id: 'bbbbbbbb-0000-4000-8000-00000000000b', name: 'b' };
 const HOST_B = 'b.test.example.com';
+const ISSUER_B = `https://${HOST_B}`;
+const REALM_A = { id: 'aaaaaaaa-0000-4000-8000-00000000000a', name: 'a', issuer: ISSUER };
+const REALM_B = { id: 'bbbbbbbb-0000-4000-8000-00000000000b', name: 'b', issuer: ISSUER_B };
 
 const USERS = new Map([
   [USER_ID, { id: USER_ID, enabled: true, realmId: REALM_A.id }],
@@ -53,7 +62,11 @@ const CLIENTS = new Map([
   [`${REALM_A.id}/held`, { clientId: 'held', enabled: true, suspended: true }],
 ]);
 
-const findUserById = vi.fn(async (id: string) => USERS.get(id));
+/** Realm-scoped as the repository is (#489): a user of another realm is no row. */
+const findUserById = vi.fn(async (realmId: string, id: string) => {
+  const user = USERS.get(id);
+  return user?.realmId === realmId ? user : undefined;
+});
 const findClientByClientId = vi.fn(async (realmId: string, clientId: string) =>
   CLIENTS.get(`${realmId}/${clientId}`)
 );
@@ -82,6 +95,7 @@ function withRealms(instance: FastifyInstance): void {
 beforeEach(async () => {
   findUserById.mockClear();
   findClientByClientId.mockClear();
+  vi.mocked(realmTokenIssuer).mockClear();
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
   publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -159,6 +173,14 @@ async function signRaw(
   return new SignJWT({ sub: USER_ID, client_id: 'client-1', iat: now, ...claims })
     .setProtectedHeader({ alg: 'EdDSA', ...header })
     .sign(await importPKCS8(privateKeyPem, 'EdDSA'));
+}
+
+/**
+ * A well-formed `account` token naming realm B's issuer, as realm B's own
+ * tokens will once each realm signs with its issuer (#491).
+ */
+function signForB(claims: Record<string, unknown> = {}): Promise<string> {
+  return signRaw({ typ: 'at+jwt' }, { ...familyClaims('account'), iss: ISSUER_B, ...claims });
 }
 
 /** The claims of a well-formed family token, to vary one at a time. */
@@ -314,12 +336,71 @@ describe('requireFamilyToken (#509)', () => {
   });
 
   describe('the issuer rule', () => {
-    it('accepts only the deployment issuer by default', async () => {
+    it('accepts only the token issuer of the request realm by default', async () => {
       const response = await call(
         probePath('admin'),
         await signRaw({ typ: 'at+jwt' }, { ...familyClaims('admin'), iss: OTHER_ISSUER })
       );
       expect(response.statusCode).toBe(401);
+    });
+
+    it("admits at each realm only a token naming that realm's issuer (ADR-019 Decision 1, #490)", async () => {
+      const account = API_FAMILY_AUDIENCES.account;
+      // What the server mints today: `iss` is JWT_ISSUER, realm A's issuer.
+      const minted = await mint({ aud: account });
+      // A token of realm B's user that names realm B's issuer.
+      const ofB = await signForB({ sub: USER_OF_B_ID });
+
+      expect((await call(probePath('account'), minted)).statusCode).toBe(200);
+      expect((await call(probePath('account'), ofB, 'Bearer', HOST_B)).statusCode).toBe(200);
+
+      // Each refused on its issuer, before its subject is looked up.
+      findUserById.mockClear();
+      const mintedAtB = await call(probePath('account'), minted, 'Bearer', HOST_B);
+      expect(mintedAtB.statusCode).toBe(401);
+      expect(mintedAtB.json()).toMatchObject({ code: 'invalid_access_token' });
+      expect((await call(probePath('account'), ofB)).statusCode).toBe(401);
+      expect(findUserById).not.toHaveBeenCalled();
+    });
+
+    it("pins the request realm's token issuer through realmTokenIssuer", async () => {
+      const token = await mint({ aud: API_FAMILY_AUDIENCES.account });
+      expect((await call(probePath('account'), token)).statusCode).toBe(200);
+      expect(realmTokenIssuer).toHaveBeenCalledWith(app, REALM_A);
+    });
+
+    it('admits the tokens of a JWT_ISSUER with a trailing slash at its realm', async () => {
+      // Tokens keep the slash; the realm row and discovery drop it.
+      const local = Fastify({ logger: false });
+      withRealms(local);
+      await local.register(jwtPlugin, {
+        privateKey: privateKeyPem,
+        publicKey: publicKeyPem,
+        issuer: `${ISSUER}/`,
+        accessTokenLifespan: 900,
+        refreshTokenLifespan: 86400,
+      });
+      await local.register(errorHandler);
+      local.get(
+        '/account/v1-rc.0/probe',
+        { preHandler: requireFamilyToken('account', { subjects: ['user'] }) },
+        async () => ({ ok: true })
+      );
+      try {
+        const token = await local.jwtUtils.signAccessToken({
+          sub: USER_ID,
+          clientId: 'client-1',
+          aud: API_FAMILY_AUDIENCES.account,
+        });
+        const response = await local.inject({
+          method: 'GET',
+          url: '/account/v1-rc.0/probe',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(response.statusCode).toBe(200);
+      } finally {
+        await local.close();
+      }
     });
 
     it('is a hook: a family may accept another issuer, and refuse its own', async () => {
@@ -400,15 +481,21 @@ describe('requireFamilyToken (#509)', () => {
     it("checks the subject's realm before the scopes", async () => {
       const token = await mint({ aud: API_FAMILY_AUDIENCES.admin, scope: 'probe:read' });
       expect((await call(probePath('admin', 'scoped'), token)).statusCode).toBe(403);
-      expect((await call(probePath('admin', 'scoped'), token, 'Bearer', HOST_B)).statusCode).toBe(
+      // Realm A's user, in a token that names realm B's issuer.
+      const atB = await signRaw(
+        { typ: 'at+jwt' },
+        { ...familyClaims('admin'), iss: ISSUER_B, scope: 'probe:read' }
+      );
+      expect((await call(probePath('admin', 'scoped'), atB, 'Bearer', HOST_B)).statusCode).toBe(
         401
       );
     });
   });
 
   // ADR-019 Decision 1: a token from another realm is refused. A family
-  // audience and the issuer read the same in every realm, so the guard
-  // resolves the subject in the request's realm.
+  // audience reads the same in every realm, so the guard also resolves the
+  // subject in the request's realm. The tokens sent to realm B name realm B's
+  // issuer, so its issuer rule lets them through to the subject check.
   describe("the subject, in the request's realm", () => {
     const account = API_FAMILY_AUDIENCES.account;
 
@@ -417,7 +504,7 @@ describe('requireFamilyToken (#509)', () => {
 
       expect((await call(probePath('account'), token)).statusCode).toBe(200);
 
-      const atB = await call(probePath('account'), token, 'Bearer', HOST_B);
+      const atB = await call(probePath('account'), await signForB(), 'Bearer', HOST_B);
       expect(atB.statusCode).toBe(401);
       expect(atB.json()).toMatchObject({
         code: 'invalid_access_token',
@@ -427,9 +514,12 @@ describe('requireFamilyToken (#509)', () => {
     });
 
     it("admits a realm-B user's token at realm B only", async () => {
-      const token = await mint({ aud: account, sub: USER_OF_B_ID });
+      const token = await signForB({ sub: USER_OF_B_ID });
       expect((await call(probePath('account'), token, 'Bearer', HOST_B)).statusCode).toBe(200);
+      // At realm A, neither its issuer nor its subject is realm A's.
       expect((await call(probePath('account'), token)).statusCode).toBe(401);
+      const minted = await mint({ aud: account, sub: USER_OF_B_ID });
+      expect((await call(probePath('account'), minted)).statusCode).toBe(401);
     });
 
     it('refuses a disabled user, an unknown one and a subject that is no user id', async () => {
@@ -439,7 +529,7 @@ describe('requireFamilyToken (#509)', () => {
         expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
       }
       // A subject that is no UUID never reaches the users table.
-      expect(findUserById).not.toHaveBeenCalledWith('not-a-uuid');
+      expect(findUserById).not.toHaveBeenCalledWith(expect.anything(), 'not-a-uuid');
     });
 
     it('resolves a client_credentials token as the client of the request realm', async () => {
@@ -447,14 +537,16 @@ describe('requireFamilyToken (#509)', () => {
       // admitted at A and refused at B.
       const twin = await mint({ aud: account, sub: 'twin', clientId: 'twin' });
       expect((await call(probePath('account'), twin)).statusCode).toBe(200);
-      const atB = await call(probePath('account'), twin, 'Bearer', HOST_B);
+      const twinOfB = await signForB({ sub: 'twin', client_id: 'twin' });
+      const atB = await call(probePath('account'), twinOfB, 'Bearer', HOST_B);
       expect(atB.statusCode).toBe(401);
       expect(atB.json()).toMatchObject({ code: 'invalid_access_token' });
       expect(findClientByClientId).toHaveBeenCalledWith(REALM_B.id, 'twin');
 
       // `solo` names no client of realm B; `held` is suspended.
-      const solo = await mint({ aud: account, sub: 'solo', clientId: 'solo' });
+      const solo = await signForB({ sub: 'solo', client_id: 'solo' });
       expect((await call(probePath('account'), solo, 'Bearer', HOST_B)).statusCode).toBe(401);
+      expect(findClientByClientId).toHaveBeenCalledWith(REALM_B.id, 'solo');
       const held = await mint({ aud: account, sub: 'held', clientId: 'held' });
       expect((await call(probePath('account'), held)).statusCode).toBe(401);
     });

@@ -4,9 +4,19 @@ import {
   isUniqueConstraintError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, asc, eq, getTableColumns, type InferSelectModel, isNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  getTableColumns,
+  inArray,
+  type InferSelectModel,
+  isNull,
+  or,
+  sql,
+} from 'drizzle-orm';
 
-import type { Database, DbClient } from '../../types';
+import type { DbClient } from '../../types';
 import { adminGrants, adminRoles } from '../schema/admin-grants';
 import { realms, users } from '../schema/core';
 import { EPOCH_MS_NOW } from '../schema/sql-helpers';
@@ -67,28 +77,77 @@ export interface AdminGrantsRepository {
    */
   create(grant: NewAdminGrant, tx?: DbClient): Promise<AdminGrant>;
 
-  /** The grant with this id, live or revoked. */
-  findById(grantId: string, tx?: DbClient): Promise<AdminGrant | undefined>;
+  /**
+   * The grant with this id, live or revoked, as `realmId` sees it (#489): a
+   * grant covering `realmId` or of an account of `realmId`. Any other grant
+   * is not found.
+   */
+  findById(realmId: string, grantId: string, tx?: DbClient): Promise<AdminGrant | undefined>;
 
-  /** Every grant of the account, revoked ones included, oldest first. */
-  listByUser(userId: string, tx?: DbClient): Promise<AdminGrant[]>;
+  /**
+   * Every grant of the account, revoked ones included, oldest first, as
+   * `realmId` sees them (#489): all of them for the account's own realm, those
+   * covering `realmId` for another.
+   */
+  listByUser(realmId: string, userId: string, tx?: DbClient): Promise<AdminGrant[]>;
 
   /**
    * The account's grants that give their role's permissions now: not revoked,
    * and naming a built-in role or an enabled custom role. Read on every admin
    * request, so a revocation or a disabled role counts from the next one. The
    * account's own state and the realm rule are the caller's to check
-   * (`resolveAdminAuthority`).
+   * (`resolveAdminAuthority`). Only those `realmId` sees (#489): all of them
+   * for the account's own realm.
    */
-  listLive(userId: string, tx?: DbClient): Promise<LiveAdminGrant[]>;
+  listLive(realmId: string, userId: string, tx?: DbClient): Promise<LiveAdminGrant[]>;
 
   /**
    * Revoke a live grant. Its `revoked_at` and `last_security_change_at` are
    * set to now.
    *
-   * @returns the revoked grant, or `undefined` when no live grant has this id
+   * Only from the realm of the grant's account (#489, ADR-019 Decision 7): a
+   * grant belongs to the administration of its holder's realm, so the realm it
+   * covers sees an operator-realm admin's grant but cannot revoke it; the
+   * operator realm does.
+   *
+   * @returns the revoked grant, or `undefined` when no live grant of an
+   *   account of `realmId` has this id
    */
-  revoke(grantId: string, tx?: DbClient): Promise<AdminGrant | undefined>;
+  revoke(realmId: string, grantId: string, tx?: DbClient): Promise<AdminGrant | undefined>;
+}
+
+/**
+ * The grants a realm sees (#489): those whose target is `realmId`, and those
+ * of an account of `realmId`. A grant has two realms, the one it covers and
+ * its account's, and is found through either, never through a third:
+ *
+ * - a realm-local admin's grant covers its own realm only (the realm rule),
+ *   so its two realms are one;
+ * - an operator-realm admin's grant on realm B is found in B, which it
+ *   covers, and in the operator realm, which holds the account;
+ * - a grant on every realm (`target_realm_id` NULL) is found only in the
+ *   operator realm.
+ *
+ * A grant id or an account id that a request carries is then looked up within
+ * the realm the request was resolved to, and a grant of a realm it neither
+ * covers nor holds is no grant: the answer an unknown id gets. This is the
+ * rule for reads; a revocation takes {@link heldInRealm}.
+ */
+function seenFromRealm(db: DbClient, realmId: string) {
+  return or(eq(adminGrants.targetRealmId, realmId), heldInRealm(db, realmId));
+}
+
+/**
+ * The grants of the accounts of `realmId` (#489): those a realm administers,
+ * and so may revoke. The realm a grant covers does not count, so a
+ * realm-local admin never revokes an operator-realm admin's grant on its
+ * realm (ADR-019 Decision 7).
+ */
+function heldInRealm(db: DbClient, realmId: string) {
+  return inArray(
+    adminGrants.userId,
+    db.select({ id: users.id }).from(users).where(eq(users.realmId, realmId))
+  );
 }
 
 /**
@@ -99,7 +158,7 @@ export interface AdminGrantsRepository {
  * @param options - the auth server's admin role catalog, for built-in roles
  */
 export function createAdminGrantsRepository(
-  defaultDb: Database,
+  defaultDb: DbClient,
   options: AdminRolesRepositoryOptions = {}
 ): AdminGrantsRepository {
   return {
@@ -195,33 +254,37 @@ export function createAdminGrantsRepository(
       }
     },
 
-    async findById(grantId, tx) {
-      if (!isAdminRecordId(grantId)) return undefined;
-      const [row] = await (tx ?? defaultDb)
+    async findById(realmId, grantId, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(grantId)) return undefined;
+      const db = tx ?? defaultDb;
+      const [row] = await db
         .select()
         .from(adminGrants)
-        .where(eq(adminGrants.id, grantId));
+        .where(and(eq(adminGrants.id, grantId), seenFromRealm(db, realmId)));
       return row;
     },
 
-    async listByUser(userId, tx) {
-      if (!isAdminRecordId(userId)) return [];
-      return (tx ?? defaultDb)
+    async listByUser(realmId, userId, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(userId)) return [];
+      const db = tx ?? defaultDb;
+      return db
         .select()
         .from(adminGrants)
-        .where(eq(adminGrants.userId, userId))
+        .where(and(eq(adminGrants.userId, userId), seenFromRealm(db, realmId)))
         .orderBy(asc(adminGrants.createdAt), asc(adminGrants.id));
     },
 
-    async listLive(userId, tx) {
-      if (!isAdminRecordId(userId)) return [];
-      const rows = await (tx ?? defaultDb)
+    async listLive(realmId, userId, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(userId)) return [];
+      const db = tx ?? defaultDb;
+      const rows = await db
         .select({ grant: getTableColumns(adminGrants), role: getTableColumns(adminRoles) })
         .from(adminGrants)
         .leftJoin(adminRoles, eq(adminRoles.id, adminGrants.roleId))
         .where(
           and(
             eq(adminGrants.userId, userId),
+            seenFromRealm(db, realmId),
             isNull(adminGrants.revokedAt),
             or(isNull(adminGrants.roleId), isNull(adminRoles.disabledAt))
           )
@@ -233,17 +296,20 @@ export function createAdminGrantsRepository(
       }));
     },
 
-    async revoke(grantId, tx) {
-      if (!isAdminRecordId(grantId)) return undefined;
+    async revoke(realmId, grantId, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(grantId)) return undefined;
+      const db = tx ?? defaultDb;
       // `greatest` keeps both times at or after the last change, which is at
       // or after the creation time; the epoch-ms default rounds to the second,
       // and the trigger `admin_grants_revoke_only` refuses a time that moves
       // back.
       const now = sql`greatest(${EPOCH_MS_NOW}, ${adminGrants.lastSecurityChangeAt})`;
-      const [row] = await (tx ?? defaultDb)
+      const [row] = await db
         .update(adminGrants)
         .set({ revokedAt: now, lastSecurityChangeAt: now })
-        .where(and(eq(adminGrants.id, grantId), isNull(adminGrants.revokedAt)))
+        .where(
+          and(eq(adminGrants.id, grantId), isNull(adminGrants.revokedAt), heldInRealm(db, realmId))
+        )
         .returning();
       return row;
     },

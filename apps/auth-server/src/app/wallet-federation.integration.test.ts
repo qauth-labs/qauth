@@ -383,7 +383,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
     ids: { realmId: string; clientId: string },
     userId: string
   ): Promise<Record<string, unknown>> {
-    await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+    await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
 
     const pkce = pkcePair();
     const authorize = await app.inject({
@@ -1286,7 +1286,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         // An account this presentation WOULD sign in to, with consent granted,
         // so "nobody can mint a code" below is about the return leg alone.
         const userId = await linkedAccount(app, wallet, asserted);
-        await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+        await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
         const { flow, redirectUri } = await presentOnThisDevice(app, wallet, asserted);
 
         // The wallet opens a DIFFERENT browser: an in-app webview, a private
@@ -1328,7 +1328,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         // An account this presentation WOULD sign in to, with consent granted,
         // so "no code" below is about the deadline alone.
         const userId = await linkedAccount(app, wallet, asserted);
-        await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+        await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
         const { flow, redirectUri } = await presentOnThisDevice(app, wallet, asserted);
 
         // The wallet posted and stopped. However often the original tab asks,

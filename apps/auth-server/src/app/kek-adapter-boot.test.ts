@@ -6,7 +6,7 @@ import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
 /**
- * KEK adapters are optional packages (ADR-019 Decision 9, #577). The auth
+ * KEK adapters are optional packages (ADR-019 Decision 9, #577, #578). The auth
  * server depends on none of them, and its boot loads one only when
  * `KEK_PROVIDER` names it.
  *
@@ -18,10 +18,23 @@ import { describe, expect, it } from 'vitest';
 
 const APP_ROOT = resolve(__dirname, '../..');
 const WORKSPACE_ROOT = resolve(APP_ROOT, '../..');
-const ADAPTER = '@qauth-labs/keys-aws-kms';
 const NO_DB = {} as SignerPluginOptions['db'];
 const KEK = Buffer.alloc(32, 0x5c).toString('base64');
 const KEY_ARN = 'arn:aws:kms:eu-central-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab';
+
+/** Each adapter package with settings it accepts, so the boot reaches the package lookup. */
+const ADAPTERS: ReadonlyArray<readonly [string, string, Record<string, string>]> = [
+  ['aws-kms', '@qauth-labs/keys-aws-kms', { KEK_AWS_KMS_KEY_ID: KEY_ARN }],
+  [
+    'vault',
+    '@qauth-labs/keys-vault',
+    {
+      KEK_VAULT_ADDR: 'https://vault.invalid:8200',
+      KEK_VAULT_TRANSIT_KEY: 'qauth-kek',
+      KEK_VAULT_TOKEN_FILE: '/nonexistent/vault-token',
+    },
+  ],
+];
 
 function dependencies(packageJsonPath: string): string[] {
   const manifest = JSON.parse(readFileSync(join(WORKSPACE_ROOT, packageJsonPath), 'utf8')) as {
@@ -74,20 +87,19 @@ describe('the auth server and the KEK adapter packages', () => {
 
   // The lookup `loadKekProvider` itself makes: the package is not installed
   // where the auth server would find it.
-  it('loads the adapter only when KEK_PROVIDER=aws-kms, naming the package to install', async () => {
-    const error = await boot({
-      KEK_PROVIDER: 'aws-kms',
-      KEK_AWS_KMS_KEY_ID: KEY_ARN,
-      NODE_ENV: 'production',
-    }).then(
-      () => undefined,
-      (reason: unknown) => reason
-    );
+  it.each(ADAPTERS)(
+    'loads the adapter only when KEK_PROVIDER=%s, naming the package to install',
+    async (name, adapter, settings) => {
+      const error = await boot({ KEK_PROVIDER: name, ...settings, NODE_ENV: 'production' }).then(
+        () => undefined,
+        (reason: unknown) => reason
+      );
 
-    expect(error).toMatchObject({
-      name: 'InvalidConfigurationError',
-      details: { variable: 'KEK_PROVIDER', value: 'aws-kms', package: ADAPTER },
-    });
-    expect((error as Error).message).toContain('whose package is not installed');
-  });
+      expect(error).toMatchObject({
+        name: 'InvalidConfigurationError',
+        details: { variable: 'KEK_PROVIDER', value: name, package: adapter },
+      });
+      expect((error as Error).message).toContain('whose package is not installed');
+    }
+  );
 });

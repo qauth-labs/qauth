@@ -201,8 +201,8 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
     const ops = await tenant('ops');
     const defaultRealm = await defaultRealmId();
     await app().db.transaction(async (tx) => {
-      await app().repositories.realms.update(defaultRealm, { isOperator: false }, tx);
-      await app().repositories.realms.update(ops, { isOperator: true }, tx);
+      await app().repositories.realms.setOperator(defaultRealm, false, tx);
+      await app().repositories.realms.setOperator(ops, true, tx);
     });
     return ops;
   }
@@ -342,7 +342,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const token = await adminToken(admin);
 
       expect((await probe(a, token)).statusCode).toBe(200);
-      await app().repositories.adminGrants.revoke(live.id);
+      await app().repositories.adminGrants.revoke(operator, live.id);
       expect((await probe(a, token)).statusCode).toBe(404);
     });
 
@@ -377,7 +377,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const token = await adminToken(admin);
 
       expect((await probe(operator, token)).statusCode).toBe(200);
-      await app().repositories.users.update(admin, { enabled: false });
+      await app().repositories.users.update(operator, admin, { enabled: false });
       const refused = await probe(operator, token);
       expect(refused.statusCode).toBe(401);
       expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
@@ -520,7 +520,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
 
       // The grant is revoked: the refresh is refused, and the refresh token is
       // left as it was.
-      await app().repositories.adminGrants.revoke(viewer.id);
+      await app().repositories.adminGrants.revoke(await defaultRealmId(), viewer.id);
       const refresh = () =>
         tokenRequest({
           grant_type: 'refresh_token',

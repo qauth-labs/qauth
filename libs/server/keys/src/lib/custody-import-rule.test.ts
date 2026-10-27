@@ -68,6 +68,7 @@ const WIRING = [
   'libs/server/keys/src/lib/sample.ts',
   // A KEK adapter implements the provider and runs in the signer's process.
   'libs/keys/aws-kms/src/lib/sample.ts',
+  'libs/keys/vault/src/lib/sample.ts',
 ];
 
 const FORBIDDEN: [string, string][] = [
@@ -188,6 +189,7 @@ describe('key custody import guard', () => {
       'libs/server/keys/**',
       'libs/fastify/plugins/signer/**',
       'libs/keys/aws-kms/**',
+      'libs/keys/vault/**',
     ]);
   });
 

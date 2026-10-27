@@ -354,7 +354,7 @@ describe('userinfo and logout refuse a token whose subject is not a user (real c
       enabled: true,
       requirePkce: true,
     });
-    await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm, OIDC_SCOPES);
+    await app.repositories.oauthConsents.upsertGrant(realm, userId, client.id, OIDC_SCOPES);
 
     const pkce = pkcePair();
     const authorize = await app.inject({

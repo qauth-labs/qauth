@@ -212,14 +212,29 @@ lifetimes with `EXPIRE` and its `NX` and `GT` options, which need **Redis 7.0
 or later**. The bundled Compose file runs Redis 7; check the version of a Redis
 you run yourself.
 
+### Migration 0042 holds sign-ins while it reads `authorization_codes`
+
+Migration 0042 ([#549](https://github.com/qauth-labs/qauth/issues/549)) records
+the browser session behind each authorization code. It adds a column that
+starts empty, so it rewrites no row, but its foreign key and index each read
+the whole of `authorization_codes`. It first locks `sessions` against writes,
+then `authorization_codes`, in the order a code's mint and a session's
+revocation take them, so it cannot deadlock with either. So a sign-in, a
+sign-out, minting a code and redeeming one wait until the runner commits, on
+nodes of either version. Codes live five minutes and the purge job deletes
+expired ones, so the table is usually small and the pause short.
+
 ### Admin scopes and the admin audience need an admin grant
 
 From this release the token endpoint issues a `qauth:admin:*` scope only to an
 account that holds an admin grant reaching that scope's class, through a client
 that lists the admin API's audience, and the admin audience only to an account
 that holds an admin grant ([#510](https://github.com/qauth-labs/qauth/issues/510)).
-A `client_credentials` token gets neither, and neither do the ID-JAG grants. Migration 0042 only adds the empty
-`admin_grants` and `admin_roles` tables. No admin route ships in this release,
+A `client_credentials` token gets neither, and neither do the ID-JAG grants or a
+delegated token from token exchange. Migration 0043 adds the empty
+`admin_grants` and `admin_roles` tables. Their foreign keys briefly lock
+`realms` and then `users` against writes (reads go on), so a realm or account
+change waits for the runner's commit. No admin route ships in this release,
 so nothing that works today stops working; before you use the admin API, give
 each account that will use it a grant. During a rolling upgrade a node of the
 previous release still issues those scopes without the check, which reaches no

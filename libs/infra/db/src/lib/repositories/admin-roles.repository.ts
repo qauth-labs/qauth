@@ -6,7 +6,7 @@ import {
 } from '@qauth-labs/shared-errors';
 import { and, asc, eq, type InferSelectModel, isNull, sql } from 'drizzle-orm';
 
-import type { Database, DbClient } from '../../types';
+import type { DbClient } from '../../types';
 import {
   ADMIN_ROLE_NAME_MAX_LENGTH,
   ADMIN_ROLE_NAME_PATTERN,
@@ -172,7 +172,7 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * @param options - the auth server's admin role catalog
  */
 export function createAdminRolesRepository(
-  defaultDb: Database,
+  defaultDb: DbClient,
   options: AdminRolesRepositoryOptions = {}
 ): AdminRolesRepository {
   return {

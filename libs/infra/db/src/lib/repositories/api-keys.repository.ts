@@ -9,6 +9,11 @@ import type { ApiKey, ApiKeysRepository, NewApiKey } from '../../types/repositor
 import { DbClient } from '../db';
 import { apiKeys } from '../schema/core';
 
+/** The key row `id` names in `realmId`: a key of another realm matches nothing (#489). */
+function keyOfRealm(realmId: string, id: string) {
+  return and(eq(apiKeys.realmId, realmId), eq(apiKeys.id, id));
+}
+
 /**
  * Factory for the static developer API keys repository (ADR-008 §6, issue #97).
  *
@@ -17,6 +22,9 @@ import { apiKeys } from '../schema/core';
  * lives at the route/helper layer. The plaintext key is never passed here: the
  * caller supplies a pre-computed argon2id `keyHash` and the non-secret `prefix`
  * / `last4` display handles, mirroring how client secrets are stored.
+ *
+ * Every lookup takes the realm the request was resolved to (#489): a key, a
+ * prefix or a client of another realm is answered as an unknown one.
  *
  * @param defaultDb - Database client to use for queries
  * @returns Repository implementing {@link ApiKeysRepository}
@@ -37,32 +45,36 @@ export function createApiKeysRepository(defaultDb: DbClient): ApiKeysRepository 
       }
     },
 
-    async findByPrefix(prefix: string, tx?: DbClient): Promise<ApiKey | undefined> {
+    async findByPrefix(
+      realmId: string,
+      prefix: string,
+      tx?: DbClient
+    ): Promise<ApiKey | undefined> {
       const invoker = tx ?? defaultDb;
       const [apiKey] = await invoker
         .select()
         .from(apiKeys)
-        .where(eq(apiKeys.prefix, prefix))
+        .where(and(eq(apiKeys.realmId, realmId), eq(apiKeys.prefix, prefix)))
         .limit(1);
       return apiKey;
     },
 
-    async findById(id: string, tx?: DbClient): Promise<ApiKey | undefined> {
+    async findById(realmId: string, id: string, tx?: DbClient): Promise<ApiKey | undefined> {
       const invoker = tx ?? defaultDb;
-      const [apiKey] = await invoker.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+      const [apiKey] = await invoker.select().from(apiKeys).where(keyOfRealm(realmId, id)).limit(1);
       return apiKey;
     },
 
-    async listByClient(clientId: string, tx?: DbClient): Promise<ApiKey[]> {
+    async listByClient(realmId: string, clientId: string, tx?: DbClient): Promise<ApiKey[]> {
       const invoker = tx ?? defaultDb;
       return invoker
         .select()
         .from(apiKeys)
-        .where(eq(apiKeys.clientId, clientId))
+        .where(and(eq(apiKeys.realmId, realmId), eq(apiKeys.clientId, clientId)))
         .orderBy(desc(apiKeys.createdAt));
     },
 
-    async revoke(id: string, tx?: DbClient): Promise<ApiKey | undefined> {
+    async revoke(realmId: string, id: string, tx?: DbClient): Promise<ApiKey | undefined> {
       const invoker = tx ?? defaultDb;
       // Idempotent: only stamp `revokedAt` on a row that is still live. A
       // second revoke matches no row (already revoked) and returns the existing
@@ -70,12 +82,12 @@ export function createApiKeysRepository(defaultDb: DbClient): ApiKeysRepository 
       const [updated] = await invoker
         .update(apiKeys)
         .set({ revokedAt: Date.now() })
-        .where(and(eq(apiKeys.id, id), isNull(apiKeys.revokedAt)))
+        .where(and(keyOfRealm(realmId, id), isNull(apiKeys.revokedAt)))
         .returning();
       if (updated) {
         return updated;
       }
-      return this.findById(id, tx);
+      return this.findById(realmId, id, tx);
     },
 
     async touchLastUsed(id: string, tx?: DbClient): Promise<void> {
