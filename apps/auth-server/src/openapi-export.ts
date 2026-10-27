@@ -46,9 +46,9 @@
  * boot the app twice under different flags.
  *
  * Each surface sets every switch that decides whether a route registers
- * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, `SSF_TRANSMITTER_ENABLED`, and
- * the passkey app lists `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`)
- * explicitly, so a value in
+ * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, `SSF_TRANSMITTER_ENABLED`,
+ * `SERVICE_ROLES`, and the passkey app lists `WEBAUTHN_APPLE_APP_IDS` and
+ * `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
  * the caller's shell cannot change which operations an export contains.
  * The maximal surface also turns on every built experimental item of the
  * registry (`@qauth-labs/shared-stability`), and the default surface none, or
@@ -209,6 +209,10 @@ function setEphemeralEnv(surface: FlagSurface): void {
     // On by default; pinned so that a caller's `METRICS_ENABLED=false` cannot
     // drop `GET /metrics` from either export.
     METRICS_ENABLED: 'true',
+
+    // Every role (#495), the default; pinned so that a caller's
+    // `SERVICE_ROLES=api` cannot drop the browser routes from either export.
+    SERVICE_ROLES: 'all',
   });
 
   if (surface === 'default') {

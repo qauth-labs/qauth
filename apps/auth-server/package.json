@@ -5,7 +5,6 @@
   "dependencies": {
     "fastify": "catalog:",
     "fastify-type-provider-zod": "catalog:",
-    "@fastify/autoload": "catalog:",
     "@fastify/cors": "catalog:",
     "@fastify/formbody": "catalog:",
     "@fastify/helmet": "catalog:",

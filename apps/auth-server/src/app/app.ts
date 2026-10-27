@@ -1,6 +1,3 @@
-import * as path from 'node:path';
-
-import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
@@ -31,7 +28,7 @@ import {
   resolveVerifierCertificateChainPems,
   resolveVerifierSigningKeyPem,
 } from '@qauth-labs/server-config';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, RouteOptions } from 'fastify';
 
 import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
@@ -51,6 +48,7 @@ import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { realmIssuer } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
+import { createUnavailableSigner } from './helpers/unavailable-signer';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
@@ -60,6 +58,16 @@ import { rateLimitPlugin } from './plugins/rate-limit';
 import { realmResolverPlugin } from './plugins/realm-resolver';
 import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
+import { routeModulesFor } from './route-manifest';
+import {
+  checkServiceRoles,
+  describeServiceRoles,
+  holdsSigner,
+  pluginsFor,
+  repositoriesFor,
+  routeRolesProblem,
+  ServiceRoleBootError,
+} from './service-roles';
 
 /**
  * What this deployment's crypto layer can do, handed to the VerifierProfile gate
@@ -154,161 +162,11 @@ declare module 'fastify' {
   }
 }
 
-export async function app(fastify: FastifyInstance, opts: AppOptions) {
-  const {
-    defaultRealmBoot = true,
-    realmLookup,
-    eventTelemetryLimits,
-    eventDeliveryRoutes,
-    egressClientFactory,
-    ...pluginOptions
-  } = opts;
-
-  // ADR-018 §5: an experimental feature may change in a minor release, so a
-  // deployment that turns one on is told so at every boot: one `warn` line per
-  // item, with its id and docs link. Logged here rather than in `main.ts`, so
-  // every boot of the app, a test harness's included, says it.
-  logExperimentalFeatures(fastify.log);
-
-  // The OpenTelemetry log export of events (ADR-018 §3, #541), before the
-  // database: the event store hands each event to it once the event's
-  // transaction commits. Off by default, and then no exporter exists. It
-  // sends what is queued, for a few seconds at most, when the server closes.
-  const eventTelemetry = createEventTelemetry(eventTelemetrySettings(env), {
-    log: fastify.log,
-    ...(eventTelemetryLimits === undefined ? {} : { limits: eventTelemetryLimits }),
-  });
-  if (eventTelemetry !== undefined) {
-    fastify.decorate('eventTelemetry', eventTelemetry);
-    fastify.addHook('onClose', () => eventTelemetry.shutdown());
-  }
-
-  await fastify.register(databasePlugin, {
-    eventTelemetry,
-    // Realm policies the environment seeds into a new realm (ADR-019
-    // Decision 10): the realm row owns them once it exists (#536).
-    realmPolicySeeds: {
-      userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
-      adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
-    },
-    config: {
-      connectionString: env.DATABASE_URL,
-      pool: {
-        max: env.DB_POOL_MAX,
-        min: env.DB_POOL_MIN,
-        idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
-        connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
-      },
-    },
-  });
-
-  // The default realm's boot step (ADR-019 Decision 1, #484): find or create
-  // the realm named DEFAULT_REALM_NAME, give it its issuer and primary host
-  // from JWT_ISSUER, mark it the operator realm when there is none, and add
-  // DEFAULT_REALM_ENDPOINT_HOSTS. It runs in an `onReady` hook, so before the
-  // server listens, and refuses the boot when the stored issuer differs from
-  // JWT_ISSUER, or the realm's passkeys are bound to another RP ID. Registered right after the database so its hook runs before
-  // the job runner starts.
-  if (defaultRealmBoot) {
-    await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
-
-    // The signer's wiring and the default realm's key boot step (ADR-019
-    // Decision 9, #485). The plugin loads the KEK: NODE_ENV=production refuses
-    // to start without one. Its `onReady` hook runs after the default realm's,
-    // which creates the realm: under the realm's key lock it imports each key
-    // variable the realm's encrypted store lacks, creates the standard keys
-    // still missing (an RS256 signing key too on a fresh deployment), and
-    // warns about every key variable still set. Tokens and the session cookie
-    // keep using the variables until they move onto the signer (#491, #493).
-    // A signing variable that holds a new key replaces the stored key until
-    // rotation through the store ships (#544, #551).
-    await fastify.register(signerPlugin, {
-      db: fastify.db,
-      kekEnv: process.env,
-      enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
-      hybridSigning: env.HYBRID_SIGNING_ENABLED,
-      realmKeysBoot: {
-        realmName: env.DEFAULT_REALM_NAME,
-        environmentKeys: keyVariableSettings(env, process.env),
-      },
-    });
-  }
-
-  // Request-id propagation (#128), ahead of the realm resolver below: both
-  // are `onRequest` hooks of this scope and run in registration order, so a
-  // 421 the resolver throws still echoes the request id an operator needs to
-  // find its reason in the log.
-  await fastify.register(requestIdPlugin);
-
-  // Realm resolution by host (ADR-019 Decision 1, #486). Every request but a
-  // `none` route's finds its realm through the host it names, or gets 421.
-  // This position IS load-bearing, for the rate limiter's reason below: the
-  // plugin checks each route's `config.surface` in an `onRoute` hook, which is
-  // not retroactive, so it must load before any route, @fastify/cors's
-  // `OPTIONS *` included. Its `onRequest` hook belongs to this scope, so it
-  // runs before every route's own hooks, the rate limiter's among them,
-  // wherever the limiter is registered: a refused host is never counted, and
-  // a per-realm limit can read `request.realm`.
-  await fastify.register(realmResolverPlugin, {
-    ...(realmLookup === undefined ? {} : { lookup: realmLookup }),
-  });
-
-  await fastify.register(cachePlugin, {
-    config: {
-      url: env.REDIS_URL,
-      host: env.REDIS_HOST,
-      port: env.REDIS_PORT,
-      password: env.REDIS_PASSWORD,
-      db: env.REDIS_DB,
-      maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
-      connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
-      commandTimeout: env.REDIS_COMMAND_TIMEOUT,
-      lazyConnect: true,
-    },
-  });
-
-  // The SSRF-safe egress client (ADR-019 Decision 8, #481): `fastify.egress`,
-  // over the deployment allowlist that EGRESS_ALLOWLIST_PATH names, read once
-  // here. Every outbound call the routes make for a configuration value or a
-  // request — CIMD documents, client and issuer JWKS, ID-JAG discovery — goes
-  // through it, naming who set the destination. The list lives only in that
-  // file: not in the database, and no route reads or edits it.
-  await fastify.register(egressPlugin, {
-    ...(env.EGRESS_ALLOWLIST_PATH === undefined
-      ? {}
-      : { allowlistPath: env.EGRESS_ALLOWLIST_PATH }),
-    ...(egressClientFactory === undefined ? {} : { createClient: egressClientFactory }),
-  });
-
-  // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the
-  // shared verifier over the cache plugin's Redis, which records used proofs.
-  // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
-  // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
-  // included) of the request's realm and the request path, the endpoint URL
-  // that realm's discovery publishes (ADR-019 Decision 1, #490), never the
-  // `Host` header. A request to one of the realm's endpoint hosts must
-  // therefore name the published URL in `htu` too.
-  await fastify.register(dpopPlugin, {
-    enabled: env.DPOP_ENABLED,
-    baseUrl: (request) => realmIssuer(requestRealm(request)),
-  });
-
-  await fastify.register(passwordPlugin, {
-    hashConfig: {
-      memoryCost: env.PASSWORD_MEMORY_COST,
-      timeCost: env.PASSWORD_TIME_COST,
-      parallelism: env.PASSWORD_PARALLELISM,
-      // Client-secret checks beyond this many waiting Argon2 jobs are shed
-      // with 503 and `Retry-After` (#751); see `helpers/client-auth.ts`.
-      queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
-    },
-    validationConfig: {
-      minScore: env.PASSWORD_MIN_SCORE,
-    },
-  });
-
-  await fastify.register(pkcePlugin);
-
+/**
+ * The credential-provider registry and the wallet configuration's boot checks,
+ * for a process whose roles sign users in (#495: `web` and `api`).
+ */
+async function registerFederation(fastify: FastifyInstance): Promise<void> {
   // Credential-provider registry (ADR-003, #228). The bootstrap remains the
   // single registration point, but WHICH providers exist is now a pure function
   // of config (`createConfiguredProviders`) so the decision is unit-testable
@@ -467,7 +325,10 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       provisionedVerifierMaterial: provisioned,
     }),
   });
+}
 
+/** The mail service, for a process whose roles send mail (#495: `api`). */
+async function registerEmail(fastify: FastifyInstance): Promise<void> {
   // Configure email provider from environment variables
   const emailProvider = env.EMAIL_PROVIDER;
 
@@ -525,20 +386,31 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
     },
   });
+}
 
+/**
+ * The JWT plugin, for a process whose roles issue or verify tokens (#495:
+ * `web` and `api`).
+ */
+async function registerJwt(fastify: FastifyInstance): Promise<void> {
   // The `kid`s the key store gives the imported keys (#485): the RFC 7638
   // thumbprint, or JWT_RS256_KID when set. Published here too, so the JWKS
   // names each key as the store does. The ML-DSA key keeps JWT_MLDSA_KID
   // alone: the plugin resolves a hybrid token's ML-DSA key by `pqc_kid`, and
   // a kid that appeared now would refuse every hybrid token issued without one.
-  const ed25519KeyId = await thumbprintKid(env.JWT_PRIVATE_KEY);
+  //
+  // A process without the signer role (#495) has only the public key, which
+  // names the key the same way.
+  const ed25519KeyPem = env.JWT_PRIVATE_KEY ?? env.JWT_PUBLIC_KEY;
+  const ed25519KeyId = ed25519KeyPem === undefined ? undefined : await thumbprintKid(ed25519KeyPem);
+  const rs256KeyPem = env.JWT_RS256_PRIVATE_KEY ?? env.JWT_RS256_PUBLIC_KEY;
   const rs256KeyId =
-    env.JWT_RS256_PRIVATE_KEY === undefined
-      ? undefined
-      : env.JWT_RS256_KID || (await thumbprintKid(env.JWT_RS256_PRIVATE_KEY));
+    rs256KeyPem === undefined ? undefined : env.JWT_RS256_KID || (await thumbprintKid(rs256KeyPem));
 
   await fastify.register(jwtPlugin, {
-    privateKey: env.JWT_PRIVATE_KEY,
+    // Absent on a process without the signer role (#495): the plugin then
+    // only verifies, and every signature answers 503.
+    ...(env.JWT_PRIVATE_KEY === undefined ? {} : { privateKey: env.JWT_PRIVATE_KEY }),
     publicKey: env.JWT_PUBLIC_KEY,
     ...(ed25519KeyId === undefined ? {} : { keyId: ed25519KeyId }),
     issuer: env.JWT_ISSUER,
@@ -550,13 +422,23 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     // RS256 — unblocking OIDC Basic/Config OP certification (#286). Absent →
     // EdDSA-only, exactly as before. Access tokens always stay EdDSA. Spread
     // conditionally so unset keys never appear as `undefined` options.
+    //
+    // A process without the signer role (#495) holds the public key alone,
+    // and the plugin publishes it so the JWKS and discovery match the
+    // signer's; a process with the Ed25519 private key ignores a lone public
+    // key, as before.
     ...(env.JWT_RS256_PRIVATE_KEY
       ? {
           rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
           ...(env.JWT_RS256_PUBLIC_KEY ? { rs256PublicKey: env.JWT_RS256_PUBLIC_KEY } : {}),
           ...(rs256KeyId ? { rs256KeyId } : {}),
         }
-      : {}),
+      : env.JWT_RS256_PUBLIC_KEY
+        ? {
+            rs256PublicKey: env.JWT_RS256_PUBLIC_KEY,
+            ...(rs256KeyId ? { rs256KeyId } : {}),
+          }
+        : {}),
     // RFC 7009 revocation: the shared `requireJwt` preHandler consults this
     // Redis-backed denylist after verification so a revoked access token is
     // rejected everywhere it is used as a bearer credential. Resolved lazily
@@ -592,13 +474,248 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         }
       : {}),
   });
+}
+
+export async function app(fastify: FastifyInstance, opts: AppOptions) {
+  const {
+    defaultRealmBoot = true,
+    realmLookup,
+    eventTelemetryLimits,
+    eventDeliveryRoutes,
+    egressClientFactory,
+  } = opts;
+
+  // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
+  // repositories and jobs this process registers. Checked before anything
+  // else, so a process that must hold no key refuses to boot before it reads
+  // one, naming each variable at fault.
+  const roles = env.SERVICE_ROLES;
+  const roleCheck = checkServiceRoles(env, process.env);
+  if (roleCheck.problems.length > 0) {
+    throw new ServiceRoleBootError(roleCheck.problems);
+  }
+  for (const warning of roleCheck.warnings) {
+    fastify.log.warn({ variable: warning.variable }, warning.message);
+  }
+  const plugins = pluginsFor(roles);
+
+  // The route modules of this process's roles, imported now, all at once and
+  // while the plugins below register. avvio gives a plugin only what is left
+  // of this plugin's start-up time (`pluginTimeout`), so importing them one by
+  // one at the routes would spend it under load. A rejection is awaited below;
+  // the catch only keeps it from counting as unhandled if the boot fails first.
+  const routeModules = Promise.all(
+    routeModulesFor(roles).map(async (entry) => ({ entry, plugin: (await entry.load()).default }))
+  );
+  routeModules.catch(() => undefined);
+
+  // Every route of the app names the roles that register it (#495): the route
+  // manifest tags its modules' routes below, and the check after them refuses
+  // to boot when a route registered here has no role. @fastify/cors's
+  // `OPTIONS *` belongs to every role this process holds. Collected from the
+  // first plugin on, so no route escapes the check.
+  const registeredRoutes: RouteOptions[] = [];
+  fastify.addHook('onRoute', (route) => {
+    if (
+      route.config?.serviceRoles === undefined &&
+      route.method === 'OPTIONS' &&
+      route.url === '*'
+    ) {
+      route.config = { ...route.config, serviceRoles: roles };
+    }
+    registeredRoutes.push(route);
+  });
+
+  fastify.log.info(
+    { serviceRoles: describeServiceRoles(roles), plugins: [...plugins] },
+    'Starting the service roles'
+  );
+
+  // ADR-018 §5: an experimental feature may change in a minor release, so a
+  // deployment that turns one on is told so at every boot: one `warn` line per
+  // item, with its id and docs link. Logged here rather than in `main.ts`, so
+  // every boot of the app, a test harness's included, says it.
+  logExperimentalFeatures(fastify.log);
+
+  // The OpenTelemetry log export of events (ADR-018 §3, #541), before the
+  // database: the event store hands each event to it once the event's
+  // transaction commits. Off by default, and then no exporter exists. It
+  // sends what is queued, for a few seconds at most, when the server closes.
+  const eventTelemetry = createEventTelemetry(eventTelemetrySettings(env), {
+    log: fastify.log,
+    ...(eventTelemetryLimits === undefined ? {} : { limits: eventTelemetryLimits }),
+  });
+  if (eventTelemetry !== undefined) {
+    fastify.decorate('eventTelemetry', eventTelemetry);
+    fastify.addHook('onClose', () => eventTelemetry.shutdown());
+  }
+
+  await fastify.register(databasePlugin, {
+    eventTelemetry,
+    // Only the repositories this process's roles use (#495): reading another
+    // throws, naming it.
+    repositories: repositoriesFor(roles),
+    // Realm policies the environment seeds into a new realm (ADR-019
+    // Decision 10): the realm row owns them once it exists (#536).
+    realmPolicySeeds: {
+      userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
+      adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
+    },
+    config: {
+      connectionString: env.DATABASE_URL,
+      pool: {
+        max: env.DB_POOL_MAX,
+        min: env.DB_POOL_MIN,
+        idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+        connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+      },
+    },
+  });
+
+  // The default realm's boot step (ADR-019 Decision 1, #484): find or create
+  // the realm named DEFAULT_REALM_NAME, give it its issuer and primary host
+  // from JWT_ISSUER, mark it the operator realm when there is none, and add
+  // DEFAULT_REALM_ENDPOINT_HOSTS. It runs in an `onReady` hook, so before the
+  // server listens, and refuses the boot when the stored issuer differs from
+  // JWT_ISSUER, or the realm's passkeys are bound to another RP ID. Registered right after the database so its hook runs before
+  // the job runner starts.
+  if (defaultRealmBoot) {
+    await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
+
+    // The signer's wiring and the default realm's key boot step (ADR-019
+    // Decision 9, #485). The plugin loads the KEK: NODE_ENV=production refuses
+    // to start without one. Its `onReady` hook runs after the default realm's,
+    // which creates the realm: under the realm's key lock it imports each key
+    // variable the realm's encrypted store lacks, creates the standard keys
+    // still missing (an RS256 signing key too on a fresh deployment), and
+    // warns about every key variable still set. Tokens and the session cookie
+    // keep using the variables until they move onto the signer (#491, #493).
+    // A signing variable that holds a new key replaces the stored key until
+    // rotation through the store ships (#544, #551).
+    //
+    // Only a process that holds the `signer` role loads it (#495). Any other
+    // holds no KEK and no key, and its `fastify.signer` refuses every
+    // operation with 503 until it can call the signer service (#497).
+    if (holdsSigner(roles)) {
+      await fastify.register(signerPlugin, {
+        db: fastify.db,
+        kekEnv: process.env,
+        enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+        hybridSigning: env.HYBRID_SIGNING_ENABLED,
+        realmKeysBoot: {
+          realmName: env.DEFAULT_REALM_NAME,
+          environmentKeys: keyVariableSettings(env, process.env),
+        },
+      });
+    } else {
+      fastify.decorate('signer', createUnavailableSigner(env.SIGNER_URL));
+    }
+  }
+
+  // Request-id propagation (#128), ahead of the realm resolver below: both
+  // are `onRequest` hooks of this scope and run in registration order, so a
+  // 421 the resolver throws still echoes the request id an operator needs to
+  // find its reason in the log.
+  await fastify.register(requestIdPlugin);
+
+  // Realm resolution by host (ADR-019 Decision 1, #486). Every request but a
+  // `none` route's finds its realm through the host it names, or gets 421.
+  // This position IS load-bearing, for the rate limiter's reason below: the
+  // plugin checks each route's `config.surface` in an `onRoute` hook, which is
+  // not retroactive, so it must load before any route, @fastify/cors's
+  // `OPTIONS *` included. Its `onRequest` hook belongs to this scope, so it
+  // runs before every route's own hooks, the rate limiter's among them,
+  // wherever the limiter is registered: a refused host is never counted, and
+  // a per-realm limit can read `request.realm`.
+  await fastify.register(realmResolverPlugin, {
+    ...(realmLookup === undefined ? {} : { lookup: realmLookup }),
+  });
+
+  await fastify.register(cachePlugin, {
+    config: {
+      url: env.REDIS_URL,
+      host: env.REDIS_HOST,
+      port: env.REDIS_PORT,
+      password: env.REDIS_PASSWORD,
+      db: env.REDIS_DB,
+      maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+      connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+      commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+      lazyConnect: true,
+    },
+  });
+
+  // The SSRF-safe egress client (ADR-019 Decision 8, #481): `fastify.egress`,
+  // over the deployment allowlist that EGRESS_ALLOWLIST_PATH names, read once
+  // here. Every outbound call the routes make for a configuration value or a
+  // request — CIMD documents, client and issuer JWKS, ID-JAG discovery — goes
+  // through it, naming who set the destination. The list lives only in that
+  // file: not in the database, and no route reads or edits it.
+  //
+  // A process registers it when its routes make such a call (#495): the
+  // route manifest names `egress` for each module that reaches it.
+  if (plugins.has('egress')) {
+    await fastify.register(egressPlugin, {
+      ...(env.EGRESS_ALLOWLIST_PATH === undefined
+        ? {}
+        : { allowlistPath: env.EGRESS_ALLOWLIST_PATH }),
+      ...(egressClientFactory === undefined ? {} : { createClient: egressClientFactory }),
+    });
+  }
+
+  // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the
+  // shared verifier over the cache plugin's Redis, which records used proofs.
+  // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
+  // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
+  // included) of the request's realm and the request path, the endpoint URL
+  // that realm's discovery publishes (ADR-019 Decision 1, #490), never the
+  // `Host` header. A request to one of the realm's endpoint hosts must
+  // therefore name the published URL in `htu` too.
+  if (plugins.has('dpop')) {
+    await fastify.register(dpopPlugin, {
+      enabled: env.DPOP_ENABLED,
+      baseUrl: (request) => realmIssuer(requestRealm(request)),
+    });
+  }
+
+  if (plugins.has('password')) {
+    await fastify.register(passwordPlugin, {
+      hashConfig: {
+        memoryCost: env.PASSWORD_MEMORY_COST,
+        timeCost: env.PASSWORD_TIME_COST,
+        parallelism: env.PASSWORD_PARALLELISM,
+        // Client-secret checks beyond this many waiting Argon2 jobs are shed
+        // with 503 and `Retry-After` (#751); see `helpers/client-auth.ts`.
+        queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
+      },
+      validationConfig: {
+        minScore: env.PASSWORD_MIN_SCORE,
+      },
+    });
+  }
+
+  if (plugins.has('pkce')) {
+    await fastify.register(pkcePlugin);
+  }
+
+  if (plugins.has('federation')) {
+    await registerFederation(fastify);
+  }
+
+  if (plugins.has('email')) {
+    await registerEmail(fastify);
+  }
+
+  if (plugins.has('jwt')) {
+    await registerJwt(fastify);
+  }
 
   // Rate limiting (T3). This position IS load-bearing: it MUST stay ahead of
-  // the routes AutoLoad below. @fastify/rate-limit applies both the global
+  // the routes of the manifest below. @fastify/rate-limit applies both the global
   // ceiling and every per-route `config.rateLimit` override through an
   // `onRoute` hook, and `onRoute` is NOT retroactive — Fastify fires it as each
   // route is added, so routes already registered by the time this plugin loads
-  // are simply never seen. Moving it after the AutoLoad would not throw, warn
+  // are simply never seen. Moving it after the routes would not throw, warn
   // or fail a boot check; it would silently drop every per-route limit,
   // including the brute-force ceiling on /auth/login and the
   // `config: { rateLimit: false }` scrape exemption on /metrics.
@@ -633,22 +750,31 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // On, it builds the push route over the stream repository and the egress
   // client; the routes, the metadata and the deliveries then serve each realm
   // whose own switch is on.
-  await fastify.register(ssfPlugin, { enabled: env.SSF_TRANSMITTER_ENABLED });
+  //
+  // A process registers it when its roles serve the SSF routes (`api`) or
+  // deliver (`delivery`, #495); `ssf` is the transmitter, or null.
+  if (plugins.has('ssf')) {
+    await fastify.register(ssfPlugin, { enabled: env.SSF_TRANSMITTER_ENABLED });
+  }
+  const ssf = plugins.has('ssf') ? fastify.ssf : null;
   const deliveryRoutes: readonly DeliveryRoute[] = [
-    ...(fastify.ssf === null ? [] : [fastify.ssf.deliveryRoute]),
+    ...(ssf === null ? [] : [ssf.deliveryRoute]),
     ...(eventDeliveryRoutes ?? []),
   ];
 
-  // Background jobs (ADR-019 Decision 8): purge-expired, and event retention
-  // (#536), which reads the delivery routes' enabled destinations and falls
-  // back to the retention seeds for a realm whose row is gone. With the SSF
-  // transmitter off no node serves `ssf`, so an SSF position or delivery left
-  // from when it was on holds no event back. The runner starts on `onReady`
-  // and stops on `onClose`, so it needs the database and metrics plugins
-  // above it; it registers no route, so nothing below depends on its position.
+  // Background jobs (ADR-019 Decision 8): purge-expired on `api`, and event
+  // retention (#536) on `delivery`, which reads the delivery routes' enabled
+  // destinations and falls back to the retention seeds for a realm whose row
+  // is gone. A process builds and runs only the jobs of its roles (#495).
+  // With the SSF transmitter off no node serves `ssf`, so an SSF position or
+  // delivery left from when it was on holds no event back. The runner starts
+  // on `onReady` and stops on `onClose`, so it needs the database and metrics
+  // plugins above it; it registers no route, so nothing below depends on its
+  // position.
   await fastify.register(jobsPlugin, {
+    roles,
     deliveryRoutes,
-    unservedDeliveryKinds: fastify.ssf === null ? [SSF_DELIVERY_KIND] : [],
+    unservedDeliveryKinds: ssf === null ? [SSF_DELIVERY_KIND] : [],
     eventRetentionFallback: {
       userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
@@ -664,8 +790,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // of the signer. Its routes are the SSF route while the transmitter is on
   // and a test's own; with none it does nothing but publish its metrics. It
   // rides the default realm boot switch, as every database step at boot
-  // does: a boot without a database has no signer either.
-  if (defaultRealmBoot) {
+  // does: a boot without a database has no signer either. Only a process
+  // that holds the `delivery` role runs it (#495).
+  if (defaultRealmBoot && plugins.has('eventDelivery')) {
     await fastify.register(eventDeliveryPlugin, {
       db: fastify.db,
       signer: fastify.signer,
@@ -685,22 +812,24 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // source of truth, Redis as a cache. It needs the database, cache and
   // metrics plugins above it and only decorates the instance; the browser
   // sign-in and the session lookup use it (#488).
-  await fastify.register(sessionServicePlugin, {
-    settings: {
-      defaultMaxLifespanSeconds: env.SESSION_COOKIE_TTL,
-      lastSeenIntervalSeconds: env.SESSION_LAST_SEEN_INTERVAL,
-    },
-    metrics: {
-      cacheLookups: fastify.metrics.sessionCacheLookups,
-      storeReads: fastify.metrics.sessionPostgresReads,
-      lastSeenWrites: fastify.metrics.sessionLastSeenWrites,
-    },
-  });
+  if (plugins.has('sessions')) {
+    await fastify.register(sessionServicePlugin, {
+      settings: {
+        defaultMaxLifespanSeconds: env.SESSION_COOKIE_TTL,
+        lastSeenIntervalSeconds: env.SESSION_LAST_SEEN_INTERVAL,
+      },
+      metrics: {
+        cacheLookups: fastify.metrics.sessionCacheLookups,
+        storeReads: fastify.metrics.sessionPostgresReads,
+        lastSeenWrites: fastify.metrics.sessionLastSeenWrites,
+      },
+    });
+  }
 
   // Global error handler (#365). This MUST precede every route registration
-  // below — it used to sit after both AutoLoads, under a comment claiming the
-  // last position "catches all unhandled errors", and that is exactly
-  // backwards. A route does not look its error handler up at request time:
+  // below — it used to sit after both folder autoloads (since replaced by the
+  // route manifest), under a comment claiming the last position "catches all
+  // unhandled errors", and that is exactly backwards. A route does not look its error handler up at request time:
   // Fastify snapshots it while closing the route's enclosing plugin
   // (`context.errorHandler = this[kErrorHandler]` in the `after()` callback of
   // `lib/route.js`). Since avvio runs queued plugins in registration order, a
@@ -716,7 +845,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // RFC 6749 §5.2 OAuth error shapes; and the `error_description` sanitisation
   // that keeps that challenge header well-formed.
   //
-  // It sits ahead of `cors` deliberately, not merely ahead of the AutoLoads:
+  // It sits ahead of `cors` deliberately, not merely ahead of the routes:
   // @fastify/cors registers a route of its own — `fastify.options('*')` — so a
   // handler installed after it would leave that one route on the built-in
   // envelope. Cors answers most preflights from its `onRequest` hook before the
@@ -757,16 +886,24 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // Register before routes so /oauth/* receives decoded form bodies.
   await fastify.register(formbody);
 
-  fastify.register(AutoLoad, {
-    dir: path.join(__dirname, 'plugins'),
-    options: { ...pluginOptions },
-    ignorePattern:
-      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs|default-realm|realm-resolver)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
-  });
+  // The routes of this process's roles (ADR-019 Decision 8, #495), from the
+  // route manifest that replaced the folder autoload: each module is its own
+  // encapsulated plugin, under the prefix the autoload gave it. A module the
+  // manifest does not list is never registered, and every process registers
+  // `/health` and `/metrics`.
+  for (const { entry, plugin } of await routeModules) {
+    await fastify.register(async (scope) => {
+      scope.addHook('onRoute', (route) => {
+        route.config = { ...route.config, serviceRoles: entry.roles };
+      });
+      await scope.register(plugin, entry.prefix === undefined ? {} : { prefix: entry.prefix });
+    });
+  }
 
-  fastify.register(AutoLoad, {
-    dir: path.join(__dirname, 'routes'),
-    options: { ...pluginOptions },
-    ignorePattern: /\.(test|spec)\.(ts|js)$/,
-  });
+  const unassigned = registeredRoutes
+    .map((route) => routeRolesProblem(route, roles))
+    .filter((problem) => problem !== undefined);
+  if (unassigned.length > 0) {
+    throw new Error(unassigned.join('\n'));
+  }
 }

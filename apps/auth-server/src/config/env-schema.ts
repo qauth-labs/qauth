@@ -17,7 +17,9 @@ import {
   otlpExporterProblems,
   passwordEnvSchema,
   rateLimitEnvSchema,
+  readsSessionCookie,
   redisEnvSchema,
+  serviceRolesEnvSchema,
   ssfEnvSchema,
   trustRegistryEnvSchema,
   webauthnEnvSchema,
@@ -28,8 +30,9 @@ import { z } from 'zod';
  * The smallest `DB_POOL_MAX` the background jobs allow (#452). A running job
  * holds one pool connection for its advisory lock while its own queries take
  * others, so a pool of one would leave requests waiting until the lock is
- * released. Every node runs the jobs today; once roles land (#495), the rule
- * applies to a node whose roles hold a job.
+ * released. The rule applies to every process, whatever its roles (#495):
+ * each role but `admin` holds a job or will, and a pool of one connection
+ * would starve the requests of any role.
  */
 export const JOBS_MIN_DB_POOL_MAX = 2;
 
@@ -44,6 +47,10 @@ export const JOBS_MIN_DB_POOL_MAX = 2;
 export const envSchema = z
   .object({
     ...baseEnvSchema.shape,
+    // The role switch (ADR-019 Decision 8, #495): SERVICE_ROLES, default
+    // `all`, and the signer service's address and internal TLS files for a
+    // process without the signer. The app checks them at boot.
+    ...serviceRolesEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,
@@ -153,16 +160,19 @@ export const envSchema = z
     // F-12 — reject the dev-default SESSION_COOKIE_SECRET in production. The
     // schema's own `.default()` ships a test-only value; without this guard a
     // production deployment that forgets to set the env var silently signs
-    // session cookies with a publicly-known secret.
+    // session cookies with a publicly-known secret. Only a process whose roles
+    // read the cookie needs it (#495): `admin`, `signer` and `delivery` alone
+    // never sign or check one.
     if (
       env.NODE_ENV === 'production' &&
-      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT
+      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT &&
+      readsSessionCookie(env.SERVICE_ROLES)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['SESSION_COOKIE_SECRET'],
         message:
-          'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production (the dev default is not allowed).',
+          'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production on a process holding web or api (the dev default is not allowed).',
       });
     }
 

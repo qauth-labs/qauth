@@ -3,7 +3,7 @@ title: Request lifecycle
 description: A walk through apps/auth-server's bootstrap in execution order — which registration orders are load-bearing and which only look it, what the fail-closed boot checks refuse, and the two security invariants a contributor can silently undo.
 sidebar:
   order: 2
-lastVerified: '2026-07-27'
+lastVerified: '2026-10-26'
 ---
 
 The auth server is assembled in two files, and reading them in the order they execute is the
@@ -83,10 +83,10 @@ Every line below is `await`ed except where noted, so the order in the file is th
 Then three registrations whose **relative** order is the subject of the rest of this page, so this
 table deliberately does not pin them to line numbers:
 
-- `errorHandler` — the global error handler, which must be registered **before** the route sweep
+- `errorHandler` — the global error handler, which must be registered **before** the routes
   (issue [#365]).
-- `AutoLoad` over `plugins/` — not `await`ed; see [below](#the-two-autoload-calls).
-- `AutoLoad` over `routes/` — not `await`ed; every route in the app.
+- The route manifest's loop — every route module of the process's service roles, each
+  `await`ed; see [below](#the-route-manifest).
 
 [#365]: https://github.com/qauth-labs/qauth/issues/365
 
@@ -130,8 +130,8 @@ to send JSON keeps working.
 
 **The failure would be uniform, and that is the one merciful thing about it.** Every route file
 under `apps/auth-server/src/app/routes/` exports a plain plugin function
-(`export default async function (fastify: FastifyInstance)`), so `@fastify/autoload` encapsulates
-all of them and none would pick up a parser registered afterwards. Nothing in that tree is wrapped
+(`export default async function (fastify: FastifyInstance)`), so the route manifest registers each
+as its own encapsulated plugin and none would pick up a parser registered afterwards. Nothing in that tree is wrapped
 in `fastify-plugin` — the one file without a default export,
 `apps/auth-server/src/app/routes/clients/api-keys.ts`, is registered by hand from its sibling
 `index.ts` and shares that directory's context, so it is covered too.
@@ -201,38 +201,38 @@ What genuinely matters about the security headers plugin is inside it, not aroun
   so that one prefix is served a relaxed policy. The exception is scoped to the prefix; every
   other route keeps the strict policy (`apps/auth-server/src/app/plugins/security-headers.ts`).
 
-## The two `AutoLoad` calls
+## The route manifest
 
 ```ts
 // apps/auth-server/src/app/app.ts
-fastify.register(AutoLoad, {
-  dir: path.join(__dirname, 'plugins'),
-  options: { ...opts },
-  ignorePattern:
-    /(error-handler|rate-limit|security-headers|metrics|request-id)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
-});
+for (const entry of routeModulesFor(roles)) {
+  await fastify.register(async (scope) => {
+    scope.addHook('onRoute', (route) => {
+      route.config = { ...route.config, serviceRoles: entry.roles };
+    });
+    const { default: plugin } = await entry.load();
+    await scope.register(plugin, entry.prefix === undefined ? {} : { prefix: entry.prefix });
+  });
+}
 ```
 
-Note what the `ignorePattern` names: every plugin `app.ts` registers **explicitly** above. That is
-the design — those five need a chosen position in the order, so they are registered by hand and
-excluded from the sweep to avoid being registered twice. As of `HEAD` the `plugins/` directory
-contains nothing else, so this first `AutoLoad` call registers zero plugins. It is the escape
-hatch for a future plugin whose position does not matter, not a place to read the current plugin
-set from.
+`apps/auth-server/src/app/route-manifest.ts` lists every route module with the service roles
+that register it ([#495], ADR-019 Decision 8), its URL prefix, the plugins its routes call and
+the repositories they read. It replaced two `@fastify/autoload` sweeps, over `plugins/` and over
+`routes/`: a module the manifest does not list is never registered, and a process registers only
+the modules of the roles in `SERVICE_ROLES` (all of them by default). Each module is imported
+only when its role is held. Every route is tagged with its roles in `config.serviceRoles`, and the
+boot is refused for a route registered in the app without one. See
+[Service roles](/operate/service-roles/) for the roles.
 
-The routes sweep is the one that matters day to day.
-`@fastify/autoload` derives each plugin's URL prefix from its **directory**, not its filename —
-`routes/auth/login.ts` registering `'/login'` serves `/auth/login` — with one override: a
-directory whose entry file exports `autoPrefix` uses that string instead of the directory name,
-and every file in that directory shares it (see
-`apps/auth-server/src/app/routes/clients/index.ts`). If you add a route file and it 404s, that
-mapping is the first thing to check.
+The prefix is the one the autoload used to derive: a module's **directory**, not its filename —
+`routes/auth/login.ts` registering `'/login'` serves `/auth/login` — or, for a directory whose
+entry file exports `autoPrefix`, that string (see
+`apps/auth-server/src/app/routes/clients/index.ts`). `route-manifest.test.ts` pins that rule, the
+completeness of the list, and each entry's plugins and repositories against what its import
+graph reaches. If you add a route file and it 404s, check its manifest entry first.
 
-Neither `AutoLoad` call is `await`ed. That is harmless in itself — `fastify.register` enqueues, and
-the next `await`ed registration flushes the queue in order — but it is what makes the surrounding
-order easy to misread: an un-`await`ed `register` does not finish where it is written, so "the line
-below it runs afterwards" is true of the queue, not of the plugin's effects. That distinction is
-the whole of the next section.
+[#495]: https://github.com/qauth-labs/qauth/issues/495
 
 ## The error handler
 
@@ -243,7 +243,7 @@ weak passwords, `retryAfter` for rate limits, and — importantly — suppressio
 stack for unknown errors when `env.NODE_ENV === 'production'`. Routes throw
 (`throw new InvalidGrantError(...)` and friends) and never build these bodies themselves.
 
-> **⚠️ This registration must come before the route sweep, and it is load-bearing.** It is the
+> **⚠️ This registration must come before the routes, and it is load-bearing.** It is the
 > third entry in the binding-time table above and the least obvious of the three, because a
 > misordering here produces error responses rather than no response — so it looks like it works.
 > [#365] found it misordered, fixed it, and left a guard behind; the section below records what
@@ -272,10 +272,10 @@ moment each route decides who will handle them.
 ### What silently regresses when it is wrong
 
 > **Fixed in [#365]; kept because the failure mode is the point.** `app.ts` now registers the
-> error handler ahead of both sweeps, and `error-handler-wiring.test.ts` fails if it moves back.
+> error handler ahead of the routes, and `error-handler-wiring.test.ts` fails if it moves back.
 > What follows is what the misordering actually cost, which is the argument for the guard.
 
-`app.ts` used to register the error handler after both `AutoLoad` sweeps, under a comment
+`app.ts` used to register the error handler after both folder-autoload sweeps, under a comment
 saying that is what makes it catch everything. It did the opposite — the plugin reached no route in
 the application. Three consequences, all confirmed against the real assembled app in [#365]:
 
@@ -296,7 +296,7 @@ every visible behaviour intact.
 
 `apps/auth-server/src/app/error-handler-wiring.test.ts` builds the **real assembled app** — not a
 hand-rolled Fastify instance — and asserts that the application's handler is the one answering. Its
-`[#365 ORDERING GUARD]` cases are mutation-checked: moving the registration back below either sweep
+`[#365 ORDERING GUARD]` cases are mutation-checked: moving the registration back below the routes
 flips every one of them to Fastify's built-in envelope.
 
 The same file also pins the two orderings that have **no** runtime signal at all — `rateLimitPlugin`
@@ -512,12 +512,13 @@ even with the Zod compiler intact.
 
 ## Before you change the bootstrap
 
-- **Adding a plugin routes depend on:** register it before the `AutoLoad` sweeps, `await` it, and
-  if the dependency is hard, declare it with `dependencies:` in the plugin's `fastify-plugin`
-  options rather than relying on line order.
-- **Adding a plugin whose position genuinely does not matter:** drop it in
-  `apps/auth-server/src/app/plugins/` and let the first `AutoLoad` sweep pick it up.
-- **Adding a route:** nothing in `app.ts` changes. The directory determines the prefix.
+- **Adding a plugin routes depend on:** register it before the route manifest's loop, `await` it,
+  and if the dependency is hard, declare it with `dependencies:` in the plugin's `fastify-plugin`
+  options rather than relying on line order. If only some roles need it, add it to
+  `ROLE_PLUGINS` and register it under `plugins.has(...)`.
+- **Adding a route:** add its module to the route manifest with its roles; nothing else in
+  `app.ts` changes. The directory determines the prefix, and `route-manifest.test.ts` tells you
+  which plugins and repositories the entry must name.
 - **Adding a credential provider:** nothing in `app.ts` changes either — see
   [Adding a credential provider](/extend/adding-a-credential-provider/).
 - **Moving anything:** check the binding-time table above first, and do not trust the comment above

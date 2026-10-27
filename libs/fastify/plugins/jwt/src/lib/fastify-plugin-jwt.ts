@@ -32,7 +32,11 @@ import {
   verifyAccessToken,
   verifyHybridAccessToken,
 } from '@qauth-labs/server-jwt';
-import { JWTInvalidError, MissingAccessTokenError } from '@qauth-labs/shared-errors';
+import {
+  JWTInvalidError,
+  MissingAccessTokenError,
+  TemporarilyUnavailableError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -103,14 +107,29 @@ export function refuseBoundTokenAsBearer(claims: { cnf?: unknown }): void {
  */
 export const jwtPlugin = fp<JwtPluginOptions>(
   async (fastify: FastifyInstance, options: JwtPluginOptions) => {
-    // Import private key once at plugin registration
-    const privateKey = await importPrivateKey(options.privateKey);
+    // Import private key once at plugin registration. A process without the
+    // signer role has none (#495): it verifies with the public key, and every
+    // signing call below refuses.
+    const privateKey =
+      options.privateKey === undefined ? undefined : await importPrivateKey(options.privateKey);
+    const signingKey = (): NonNullable<typeof privateKey> => {
+      if (privateKey === undefined) {
+        // 503: the signer holds the key, and this process has no way to reach
+        // it yet. The reason is for the operator's log line only.
+        throw new TemporarilyUnavailableError(60, { reason: 'no_signing_key_on_this_process' });
+      }
+      return privateKey;
+    };
 
     // Import or derive public key for verification
     let publicKey: Awaited<ReturnType<typeof importPublicKey>>;
     if (options.publicKey) {
       // Use provided public key
       publicKey = await importPublicKey(options.publicKey);
+    } else if (privateKey === undefined) {
+      throw new Error(
+        'jwtPlugin: `publicKey` is required without a `privateKey`. A process without the signer role verifies tokens with the public key: set JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH.'
+      );
     } else {
       // Derive public key from private key
       // For EdDSA keys, we can export the public key from the private key
@@ -142,6 +161,12 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         ? options.rs256PublicKey
         : derivePublicKeyPemFromPrivate(options.rs256PrivateKey);
       const rs256PublicKey = await importRs256PublicKey(rs256PublicPem);
+      rs256Jwk = await exportRs256PublicJwk(rs256PublicKey, options.rs256KeyId);
+    } else if (options.rs256PublicKey && privateKey === undefined) {
+      // A process without the signer role (#495) publishes the RS256 key the
+      // signer signs ID tokens with, so its JWKS and discovery match the
+      // signer's; it signs nothing itself.
+      const rs256PublicKey = await importRs256PublicKey(options.rs256PublicKey);
       rs256Jwk = await exportRs256PublicJwk(rs256PublicKey, options.rs256KeyId);
     }
 
@@ -225,8 +250,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
      * SIGNED `pqc_kid` protected-header member — the only copy a verifier may
      * resolve a key from (#248 F5).
      */
+    if (hybridSigningEnabled && privateKey === undefined) {
+      throw new Error(
+        'hybridSigningEnabled requires privateKey: refusing to start with hybrid signing enabled but no Ed25519 key.'
+      );
+    }
     const hybridSigningKey: HybridSigningKey | undefined =
-      hybridSigningEnabled && mlDsaPrivateKey
+      hybridSigningEnabled && mlDsaPrivateKey && privateKey
         ? {
             ed: privateKey,
             mlDsa: mlDsaPrivateKey,
@@ -260,7 +290,7 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         // verbatim and callers compute the clamped seconds. Never widens here.
         const { expiresInOverride, ...claims } = payload;
         const expiresIn = expiresInOverride ?? options.accessTokenLifespan;
-        return signAccessToken(claims, privateKey, options.issuer, expiresIn);
+        return signAccessToken(claims, signingKey(), options.issuer, expiresIn);
       },
       isHybridSigningEnabled() {
         return hybridSigningEnabled;
@@ -316,7 +346,7 @@ export const jwtPlugin = fp<JwtPluginOptions>(
             options.rs256KeyId
           );
         }
-        return signIdToken(payload, privateKey, options.issuer, options.accessTokenLifespan);
+        return signIdToken(payload, signingKey(), options.issuer, options.accessTokenLifespan);
       },
       generateRefreshToken() {
         return generateRefreshToken();

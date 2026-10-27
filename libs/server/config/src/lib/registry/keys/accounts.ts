@@ -118,7 +118,10 @@ export const ACCOUNT_KEYS = defineKeys([
     tier: 'advanced',
     role: 'deployment',
     owner: 'key-custody',
-    default: { computed: 'a development-only value, refused when `NODE_ENV=production`' },
+    default: {
+      computed:
+        'a development-only value, refused when `NODE_ENV=production` on a process holding `web` or `api`',
+    },
     since: '0.1.0',
     secret: true,
     docs: 'The HMAC secret, at least 32 characters, that signs the `__Host-qauth_session` cookie.',

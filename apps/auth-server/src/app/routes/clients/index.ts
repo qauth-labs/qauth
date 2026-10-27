@@ -50,8 +50,8 @@ type OAuthClientRow = Awaited<
  * This module is the shared foundation for the whole T2 client-management
  * surface (#85 list, #86 create, #87 get-one, #88 update, #89 delete,
  * #90 regenerate-secret). It is mounted at `/api/clients` via the
- * `autoPrefix` export below — `@fastify/autoload` honours `autoPrefix` over
- * the directory-derived prefix, so sibling routes added here register
+ * `autoPrefix` export below — the route manifest registers it under
+ * `autoPrefix` rather than the directory-derived prefix, so sibling routes added here register
  * against the resource root (`/`, `/:id`, `/:id/secret`, …) and land under
  * `/api/clients`.
  *
@@ -80,7 +80,7 @@ type OAuthClientRow = Awaited<
  *   POST   /api/clients/:id/regenerate-secret — issue a new secret (#90)
  */
 
-// `@fastify/autoload` mounts this module under `/api/clients` regardless of
+// The route manifest mounts this module under `/api/clients` regardless of
 // the `clients/` directory name. Keep route paths resource-relative.
 export const autoPrefix = '/api/clients';
 

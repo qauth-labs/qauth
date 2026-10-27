@@ -13,6 +13,7 @@ import { PASSKEY_KEYS } from './passkeys';
 import { RATE_LIMIT_KEYS } from './rate-limits';
 import { REGISTRATION_KEYS } from './registration';
 import { SERVER_KEYS } from './server';
+import { SERVICE_ROLE_KEYS } from './service-roles';
 import { SSF_KEYS } from './ssf';
 import { STORAGE_KEYS } from './storage';
 import { TOKEN_KEYS } from './tokens';
@@ -25,6 +26,7 @@ export { AUTH_SERVER_KEYS, DEVELOPER_PORTAL_KEYS };
  */
 export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...SERVER_KEYS,
+  ...SERVICE_ROLE_KEYS,
   ...EGRESS_KEYS,
   ...EVENT_TELEMETRY_KEYS,
   ...EVENT_DELIVERY_KEYS,

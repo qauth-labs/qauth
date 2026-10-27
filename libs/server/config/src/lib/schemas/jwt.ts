@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 
 import { z } from 'zod';
 
+import { serviceRolesEnvSchema } from './service-roles';
+
 /**
  * Helper function to read key from file path
  */
@@ -53,8 +55,14 @@ function resolveKey(
  * JWT token generation and validation settings
  *
  * Supports both environment variables and file paths:
- * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (one required)
+ * - JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH (one required on a process that
+ *   holds the `signer` role; see below)
  * - JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH (both optional)
+ *
+ * The private key is required only where the signer runs (ADR-019 Decision 9,
+ * issue #495): with `SERVICE_ROLES` unset or `all`, as before, or with a list
+ * that names `signer`. A process without the signer must not hold one; the
+ * auth server refuses to boot such a process and names the variable.
  */
 export const jwtEnvSchema = z
   .object({
@@ -158,13 +166,20 @@ export const jwtEnvSchema = z
      * Refresh token expiration in seconds (default: 604800 = 7 days)
      */
     REFRESH_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(604800),
+
+    /**
+     * The roles of this process (#495), read here only to decide whether the
+     * private key is required. `serviceRolesEnvSchema` owns the key.
+     */
+    SERVICE_ROLES: serviceRolesEnvSchema.shape.SERVICE_ROLES,
   })
   .superRefine((data, ctx) => {
-    // Validate that at least one private key source is provided
+    // Validate that at least one private key source is provided, on a process
+    // that holds the signer
     const hasPrivateKey = data.JWT_PRIVATE_KEY && data.JWT_PRIVATE_KEY.trim().length > 0;
     const hasPrivateKeyPath = !!data.JWT_PRIVATE_KEY_PATH;
 
-    if (!hasPrivateKey && !hasPrivateKeyPath) {
+    if (data.SERVICE_ROLES.includes('signer') && !hasPrivateKey && !hasPrivateKeyPath) {
       ctx.addIssue({
         code: 'custom',
         message:
@@ -177,14 +192,14 @@ export const jwtEnvSchema = z
     // Resolve private key: prefer file path, fallback to direct key
     const privateKey = resolveKey(data.JWT_PRIVATE_KEY, data.JWT_PRIVATE_KEY_PATH);
 
-    // Private key is guaranteed to be defined after superRefine validation
-    if (!privateKey) {
+    // Defined after superRefine validation wherever the signer runs
+    if (!privateKey && data.SERVICE_ROLES.includes('signer')) {
       throw new Error(
         'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH'
       );
     }
 
-    // Resolve public key only if private key exists: prefer file path, fallback to direct key
+    // Resolve public key: prefer file path, fallback to direct key
     const publicKey = resolveKey(data.JWT_PUBLIC_KEY, data.JWT_PUBLIC_KEY_PATH);
 
     // Resolve the OPTIONAL RS256 key pair (#309). Undefined when unconfigured,

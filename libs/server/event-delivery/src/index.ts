@@ -12,6 +12,8 @@ export {
   type DeliverySettings,
   type DeliverySettingsInput,
   resolveDeliverySettings,
+  SIGNER_HOLD_WARN_INTERVAL_MS,
+  type SignerHeldDeliveries,
   startDeliveryRole,
 } from './lib/delivery-role';
 export {

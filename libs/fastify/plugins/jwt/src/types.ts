@@ -14,9 +14,17 @@ import type { FastifyPluginOptions, FastifyRequest } from 'fastify';
  * JWT plugin configuration options
  */
 export interface JwtPluginOptions extends FastifyPluginOptions {
-  /** JWT private key in PEM format */
-  privateKey: string;
-  /** JWT public key in PEM format (optional, can be derived from private key) */
+  /**
+   * JWT private key in PEM format. Absent on a process that does not hold the
+   * signer role (ADR-019 Decision 9, #495): the plugin then only verifies, with
+   * {@link publicKey}, and every signing call fails with a 503
+   * `TemporarilyUnavailableError`.
+   */
+  privateKey?: string;
+  /**
+   * JWT public key in PEM format: derived from the private key when absent,
+   * and required without one.
+   */
   publicKey?: string;
   /** JWT issuer URL */
   issuer: string;
@@ -49,7 +57,10 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
   /**
    * Optional RS256 public key in SPKI PEM (#309). When omitted, the public key
    * is derived from {@link rs256PrivateKey} (public material only). Provide it
-   * only when the private key is not available to this process.
+   * only when the private key is not available to this process. Without
+   * {@link privateKey} and {@link rs256PrivateKey}, on a process without the
+   * signer role (#495), it is published alone and ID tokens are advertised as
+   * RS256, as the signer signs them; this process signs none.
    */
   rs256PublicKey?: string;
   /**

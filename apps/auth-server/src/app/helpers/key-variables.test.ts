@@ -99,6 +99,10 @@ describe('thumbprintKid', () => {
     await expect(thumbprintKid(ED25519_PEM)).resolves.toBe(expected);
   });
 
+  it('is the same from the public key alone, as a process without the signer has it (#495)', async () => {
+    await expect(thumbprintKid(ED25519_PUBLIC_PEM)).resolves.toBe(await thumbprintKid(ED25519_PEM));
+  });
+
   it('is undefined for a value that is not a PEM key', async () => {
     await expect(thumbprintKid('not a key')).resolves.toBeUndefined();
   });

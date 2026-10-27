@@ -45,7 +45,7 @@ The auth-server's source for each option is named in parentheses.
 
 | Option                       | Type                            | Required         | Description                                                                                       |
 | ---------------------------- | ------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------- |
-| `privateKey`                 | `string`                        | yes              | Ed25519 private key, PKCS#8 PEM (`JWT_PRIVATE_KEY`)                                               |
+| `privateKey`                 | `string`                        | no               | Ed25519 private key, PKCS#8 PEM (`JWT_PRIVATE_KEY`); without it the plugin only verifies          |
 | `publicKey`                  | `string`                        | no, but set it   | Ed25519 public key, SPKI PEM (`JWT_PUBLIC_KEY`); registration fails without it                    |
 | `issuer`                     | `string`                        | yes              | JWT `iss` claim (`JWT_ISSUER`)                                                                    |
 | `accessTokenLifespan`        | `number`                        | yes              | Access and ID token TTL in seconds (`ACCESS_TOKEN_LIFESPAN`)                                      |
@@ -72,6 +72,7 @@ The auth-server's source for each option is named in parentheses.
 - `mlDsaSeed` needs `enabledSignatureAlgorithms` with `ML-DSA-65` in it, or registration fails.
 - With `mlDsaSeed` and hybrid signing off, only the ML-DSA-65 public key is kept, for the JWKS.
 - `getJwks()` lists the Ed25519 key, the RS256 key, the retired Ed25519 keys, then the ML-DSA-65 keys. It throws when two keys share a `kid`.
+- Without `privateKey` the plugin only verifies: the JWKS still lists the public keys (`rs256PublicKey` too), and every signature answers 503 `temporarily_unavailable`. Hybrid signing then fails registration. The auth-server leaves the private keys out on a process without the `signer` role (#495).
 - Registration fails without `publicKey`: the plugin cannot export the public half of an imported Ed25519 private key. See [the EdDSA public key](https://docs.qauth.dev/operate/keys/#the-eddsa-public-key-is-not-actually-optional-359).
 
 The auth-server passes the ML-DSA-65 seed only when `HYBRID_SIGNING_ENABLED` is on. At boot it also imports the `JWT_*` keys into the default realm's encrypted key store. Tokens are still signed with the variables until token signing moves onto the store (#491). See [Keys](https://docs.qauth.dev/operate/keys/) and the [PQC verifier guide](https://docs.qauth.dev/operate/pqc-verifier-guide/).

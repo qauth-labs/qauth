@@ -9,7 +9,7 @@ import {
   startRedisContainer,
   truncateDomainTablesStatement,
 } from '@qauth-labs/shared-testing';
-import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify';
+import Fastify, { type FastifyInstance, type InjectOptions, type RouteOptions } from 'fastify';
 import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
@@ -205,6 +205,11 @@ export interface BootAuthServerOptions {
   /** Event delivery routes for the delivery role (#460), for a suite that watches it. */
   readonly eventDeliveryRoutes?: readonly DeliveryRoute[];
   /**
+   * Called with each route as the app registers it, for a suite that lists
+   * the routes a set of service roles registers (#495).
+   */
+  readonly onRoute?: (route: RouteOptions) => void;
+  /**
    * Build the egress client with this factory (#481): `createTestEgressClient`
    * from `@qauth-labs/fastify-plugin-egress`, for a suite that serves a CIMD
    * document, a JWKS or an issuer from a local fixture server. Unset, the
@@ -258,7 +263,13 @@ export async function bootAuthServer(
       key.startsWith('SSF_') ||
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
-      key === 'TRUST_PROXY'
+      key === 'TRUST_PROXY' ||
+      // The role switch (#495): a process without the signer refuses a key
+      // variable another boot left behind, so the JWT keys go too.
+      key === 'SERVICE_ROLES' ||
+      key === 'SIGNER_URL' ||
+      key.startsWith('INTERNAL_TLS_') ||
+      key.startsWith('JWT_')
     ) {
       delete process.env[key];
     }
@@ -306,6 +317,7 @@ export async function bootAuthServer(
   // `resetE2eState` truncate the database the server is actually looking at.
   // Nothing under test observes the difference.
   const defaultRealmBoot = options.defaultRealmBoot ?? true;
+  if (options.onRoute !== undefined) server.addHook('onRoute', options.onRoute);
   await server.register(fp(app), {
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined

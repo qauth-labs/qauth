@@ -52,6 +52,22 @@ export {
   REFUSED_CUSTOM_REDIRECT_URI_SCHEMES,
 } from './redirect-uri-schemes';
 export { type RedisEnv, redisEnvSchema } from './redis';
+export {
+  ALL_SERVICE_ROLES,
+  describeServiceRoles,
+  isKeyMaterialVariable,
+  isServiceRole,
+  keyMaterialProblems,
+  parseServiceRoles,
+  readsSessionCookie,
+  SERVICE_ROLE_NAMES,
+  type ServiceRole,
+  ServiceRoleBootError,
+  type ServiceRoleProblem,
+  type ServiceRolesEnv,
+  serviceRolesEnvSchema,
+  SESSION_COOKIE_ROLES,
+} from './service-roles';
 export { type SsfEnv, ssfEnvSchema } from './ssf';
 export {
   type PerRealmIssuerAllowlist,

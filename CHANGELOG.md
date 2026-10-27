@@ -820,6 +820,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The typed client rejects a redirect a browser hides from `fetch` with
     `UnexpectedRedirectError` rather than as status 0.
 
+- **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
+  `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
+  unchanged single process, or as a comma-separated list of `web`, `api`,
+  `admin`, `signer` and `delivery`. A route manifest
+  (`apps/auth-server/src/app/route-manifest.ts`) replaces the folder autoload:
+  it names every route module with its roles, and a process registers only
+  the routes, plugins, repositories and jobs of its roles. `web` serves the
+  browser-session endpoints; `api` token, introspection, revocation,
+  userinfo, registration, discovery, JWKS, the account and developer APIs,
+  SSF and the legacy `/auth` routes, and runs `purge-expired`; `delivery`
+  runs the event delivery reader and event retention; every role answers
+  `/health` and `/metrics`. A read of a repository its roles leave unbuilt
+  throws, naming it, and the boot is refused for a route without a role.
+  Only a process with the `signer` role holds the KEK and the private keys:
+  any other refuses to boot when `KEK`, `KEK_PATH`, a KEK provider adapter, a
+  `JWT_*_PRIVATE_KEY*` or an `OID4VP_VERIFIER_SIGNING_KEY*` variable is set,
+  naming it, and needs `SIGNER_URL` and `INTERNAL_TLS_CERT_PATH`,
+  `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH` (advanced). The key
+  variables are refused before the configuration reads any key file. Until
+  the signer service ships, such a process answers a request that needs a
+  signature with `503` `temporarily_unavailable`, and its event deliveries wait
+  without spending attempts (the delivery role now holds a delivery whose
+  signer is unavailable). It verifies tokens with `JWT_PUBLIC_KEY`, which it
+  needs where tokens are verified, publishes `JWT_RS256_PUBLIC_KEY` when set,
+  and refuses `HYBRID_SIGNING_ENABLED=true`. `@fastify/autoload` is no longer a
+  dependency. The docs site's new **Service roles** page
+  (`operate/service-roles`) describes the split that works today. The egress
+  client (`fastify.egress`) is registered where a route makes an outbound call
+  (`web` and `api`); `GET /auth/verify`, the email verification page, and
+  `POST /ui/verify` are `web` routes, while `POST /auth/verify` stays on `api`.
+  A route tagged only with roles the process does not hold refuses the boot.
+  `SESSION_COOKIE_SECRET` is required in production only on a process holding
+  `web` or `api`, and the Swagger UI under `/docs` is served only on one
+  holding `api`. A delivery held because the signer is unavailable is logged at
+  `warn` when first held and every 15 minutes while it lasts, and the new
+  gauges `qauth_events_delivery_signer_held` and
+  `qauth_events_delivery_signer_held_oldest_seconds` show such holds.
+
 ### Changed
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
@@ -1501,6 +1539,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#490]: https://github.com/qauth-labs/qauth/issues/490
 [#491]: https://github.com/qauth-labs/qauth/issues/491
 [#493]: https://github.com/qauth-labs/qauth/issues/493
+[#495]: https://github.com/qauth-labs/qauth/issues/495
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513
