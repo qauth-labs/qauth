@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
-import { testRealm } from '../../../testing/request-realm';
+import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import errorHandler, { type ErrorFormat } from '../../plugins/error-handler';
 import userinfoRoute from './userinfo';
@@ -42,7 +42,12 @@ vi.mock('../../../config/env', () => ({
 
 const ISSUER = 'http://localhost:3000';
 
-/** The realm the realm resolver (#486) decorated every request with. */
+/**
+ * The realm the realm resolver (#486) decorated every request with. Its issuer
+ * is the one the tokens name: userinfo refuses a token whose `iss` is not the
+ * request realm's before anything else (#489), so every fixture carries
+ * `iss: ISSUER`.
+ */
 const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
 
 type Handler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
@@ -69,7 +74,6 @@ const USERINFO_URL = `${ISSUER}/oauth/userinfo`;
  * about the audience rule carries it, so it reaches the claim logic.
  */
 const OWN_AUDIENCE = { clientId: 'client-1', aud: 'client-1' };
-
 interface TestContext {
   handler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   options?: {
@@ -243,6 +247,7 @@ describe('GET /userinfo route', () => {
 
     const request = {
       jwtPayload: {
+        iss: ISSUER,
         ...OWN_AUDIENCE,
         sub: 'user-1',
         email: 'user@example.com',
@@ -251,6 +256,7 @@ describe('GET /userinfo route', () => {
         scope: 'openid email',
       },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: {
         authorization: 'Bearer token',
         'user-agent': 'vitest',
@@ -272,6 +278,8 @@ describe('GET /userinfo route', () => {
       email: 'user@example.com',
       email_verified: true,
     });
+    // The subject is looked up in the request's realm (#489).
+    expect(findByIdMock).toHaveBeenCalledWith(REALM.id, 'user-1');
 
     expect(emitUserEventMock).toHaveBeenCalledWith(
       request,
@@ -314,8 +322,9 @@ describe('GET /userinfo route', () => {
 
     const request = {
       // `profile` releases the name claim; `email` releases the email claims.
-      jwtPayload: { sub: 'user-3', scope: 'openid profile email', ...OWN_AUDIENCE },
+      jwtPayload: { sub: 'user-3', scope: 'openid profile email', iss: ISSUER, ...OWN_AUDIENCE },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
 
@@ -351,8 +360,9 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-4', scope: 'openid', ...OWN_AUDIENCE },
+      jwtPayload: { sub: 'user-4', scope: 'openid', iss: ISSUER, ...OWN_AUDIENCE },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
@@ -395,8 +405,9 @@ describe('GET /userinfo route', () => {
     ]);
 
     const request = {
-      jwtPayload: { sub: 'user-5', scope: 'openid email', ...OWN_AUDIENCE },
+      jwtPayload: { sub: 'user-5', scope: 'openid email', iss: ISSUER, ...OWN_AUDIENCE },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
@@ -428,8 +439,9 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-6', scope: 'openid profile', ...OWN_AUDIENCE },
+      jwtPayload: { sub: 'user-6', scope: 'openid profile', iss: ISSUER, ...OWN_AUDIENCE },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
@@ -452,10 +464,12 @@ describe('GET /userinfo route', () => {
 
     const request = {
       jwtPayload: {
+        iss: ISSUER,
         ...OWN_AUDIENCE,
         sub: 'missing-user',
       },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: {
         authorization: 'Bearer token',
         'user-agent': 'vitest',
@@ -497,8 +511,9 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-7', scope: 'openid email profile', ...OWN_AUDIENCE },
+      jwtPayload: { sub: 'user-7', scope: 'openid email profile', iss: ISSUER, ...OWN_AUDIENCE },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
     const reply = {
@@ -541,6 +556,7 @@ describe('GET /userinfo route', () => {
 
     const request = {
       jwtPayload: {
+        iss: ISSUER,
         ...OWN_AUDIENCE,
         sub: 'user-2',
         // The `email` scope IS granted, but with no verified attribute BOTH
@@ -548,6 +564,7 @@ describe('GET /userinfo route', () => {
         scope: 'openid email',
       },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: {
         authorization: 'Bearer token',
         'user-agent': 'vitest',
@@ -580,6 +597,7 @@ describe('GET /userinfo route', () => {
     const request = {
       // No jwtPayload
       ip: '127.0.0.1',
+      realm: REALM,
       headers: {
         authorization: 'Bearer token',
         'user-agent': 'vitest',
@@ -752,7 +770,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
     };
     (fastify.requireJwt as unknown as Mock).mockImplementation(
       async (req: { jwtPayload?: unknown }) => {
-        req.jwtPayload = { sub: 'user-1', scope: 'openid email', ...OWN_AUDIENCE };
+        req.jwtPayload = { sub: 'user-1', scope: 'openid email', iss: ISSUER, ...OWN_AUDIENCE };
       }
     );
     withUser(fastify);
@@ -764,6 +782,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
       body: {},
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
 
@@ -786,7 +805,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
         // The body token MUST be normalised to a Bearer credential so the
         // shared verification path handles it identically to the header method.
         expect(req.headers.authorization).toBe('Bearer body.token');
-        req.jwtPayload = { sub: 'user-1', scope: 'openid email', ...OWN_AUDIENCE };
+        req.jwtPayload = { sub: 'user-1', scope: 'openid email', iss: ISSUER, ...OWN_AUDIENCE };
       }
     );
     withUser(fastify);
@@ -798,6 +817,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
       body: { access_token: 'body.token' },
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
 
@@ -824,6 +844,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
       body: {},
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = {} as unknown as FastifyReply;
 
@@ -846,6 +867,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
       body: { access_token: 'body.token' },
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = {} as unknown as FastifyReply;
 
@@ -867,6 +889,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
       body: {},
       query: { access_token: 'query.token' },
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = {} as unknown as FastifyReply;
 
@@ -897,6 +920,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
       body: { access_token: 'body.token' },
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = {} as unknown as FastifyReply;
 
@@ -923,7 +947,7 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     const handler = ctx.handler;
     if (!handler) throw new Error('Userinfo handler was not registered');
     const request = {
-      jwtPayload: { sub: 'user-1', scope: 'openid email', ...jwtPayload },
+      jwtPayload: { sub: 'user-1', scope: 'openid email', iss: ISSUER, ...jwtPayload },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
       realm,
@@ -1035,14 +1059,17 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
 
   it("takes the userinfo URL from the request realm's issuer, not JWT_ISSUER (#490)", async () => {
     const realmB = testRealm({ id: 'realm-b', issuer: 'https://b.example.com' });
+    // A token of realm B names B's issuer, which is all userinfo admits there
+    // (#489), so the audience is what the two calls differ in.
+    const issuedByB = { clientId: 'client-1', iss: 'https://b.example.com' };
 
     const accepted = await callWith(
-      { clientId: 'client-1', aud: 'https://b.example.com/oauth/userinfo' },
+      { ...issuedByB, aud: 'https://b.example.com/oauth/userinfo' },
       realmB
     );
     await expect(accepted.run()).resolves.toMatchObject({ sub: 'user-1' });
 
-    const refused = await callWith({ clientId: 'client-1', aud: USERINFO_URL }, realmB);
+    const refused = await callWith({ ...issuedByB, aud: USERINFO_URL }, realmB);
     await expect(refused.run()).rejects.toThrow(JWTInvalidError);
     expectRefusedBeforeAnyLookup(refused.fastify);
   });
@@ -1067,6 +1094,7 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
       async (req: { jwtPayload?: unknown }) => {
         req.jwtPayload = {
           sub: 'user-1',
+          iss: ISSUER,
           scope: 'openid email',
           clientId: 'client-1',
           aud: 'https://mcp.example.com/',
@@ -1081,6 +1109,7 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
       body: { access_token: 'body.token' },
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
 
@@ -1090,6 +1119,103 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     await preHandler(request, reply);
     await expect(postHandler(request, reply)).rejects.toThrow(JWTInvalidError);
     expectRefusedBeforeAnyLookup(fastify);
+  });
+});
+
+/**
+ * The issuer rule (#489): `requireJwt` pins the deployment's issuer, not the
+ * request realm's. A token is valid only at the realm whose issuer it names;
+ * presented at another realm's host it is refused before any user lookup, so a
+ * user id of one realm is never read in another.
+ */
+describe("/userinfo — the token must name the request realm's issuer (#489)", () => {
+  /** A second realm, on its own host and issuer. */
+  const TENANT_REALM = testRealm({ id: 'realm-tenant', issuer: 'https://tenant.example.com' });
+
+  it.each([
+    { name: 'a token of realm-1 presented at the tenant realm', realm: TENANT_REALM, iss: ISSUER },
+    {
+      name: "a token naming the tenant realm's issuer presented at realm-1",
+      realm: REALM,
+      iss: 'https://tenant.example.com',
+    },
+  ])('refuses $name before any user lookup (401 invalid_token)', async ({ realm, iss }) => {
+    const { fastify, ctx } = createFastifyStub();
+    // The subject exists: only the issuer refuses the token.
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      enabled: true,
+      firstName: null,
+      lastName: null,
+    });
+    await userinfoRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Userinfo handler was not registered');
+
+    const request = {
+      jwtPayload: { sub: 'user-1', scope: 'openid email', iss, ...OWN_AUDIENCE },
+      ip: '127.0.0.1',
+      realm,
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = {
+      send: () => {
+        throw new Error('send should not be called for a token of another realm');
+      },
+    } as unknown as FastifyReply;
+
+    await expect(handler(request, reply)).rejects.toBeInstanceOf(JWTInvalidError);
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+      { error: 'invalid_token', reason: 'issuer_mismatch' },
+      expect.objectContaining({ userId: null })
+    );
+  });
+
+  it('answers a token of another realm 401 with a Bearer invalid_token challenge on the wire', async () => {
+    const app = Fastify({ logger: false });
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    await app.register(errorHandler);
+    supplyRequestRealm(app, TENANT_REALM);
+
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Userinfo handler was not registered');
+
+    app.get(
+      '/oauth/userinfo',
+      {
+        config: { errorFormat: ctx.options?.config?.errorFormat },
+        preHandler: async (request) => {
+          (request as unknown as { jwtPayload: unknown }).jwtPayload = {
+            sub: 'user-1',
+            iss: ISSUER,
+            scope: 'openid email',
+            ...OWN_AUDIENCE,
+          };
+        },
+      },
+      handler
+    );
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: { authorization: 'Bearer realm-1.token' },
+      });
+
+      expectInvalidTokenAnswer(response);
+      expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
   });
 });
 
@@ -1108,8 +1234,9 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Userinfo handler was not registered');
     const request = {
-      jwtPayload: { scope: 'reports:read', ...jwtPayload },
+      jwtPayload: { scope: 'reports:read', iss: ISSUER, ...jwtPayload },
       ip: '127.0.0.1',
+      realm: REALM,
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
@@ -1169,6 +1296,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
       async (req: { jwtPayload?: unknown }) => {
         req.jwtPayload = {
           sub: 'reporting-service',
+          iss: ISSUER,
           scope: 'reports:read',
           clientId: 'reporting-service',
           aud: 'reporting-service',
@@ -1183,6 +1311,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
       body: { access_token: 'body.token' },
       query: {},
       ip: '127.0.0.1',
+      realm: REALM,
     } as unknown as FastifyRequest;
     const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
 
@@ -1199,6 +1328,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     await app.register(errorHandler);
+    supplyRequestRealm(app, REALM);
 
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
@@ -1212,6 +1342,7 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
         preHandler: async (request) => {
           (request as unknown as { jwtPayload: unknown }).jwtPayload = {
             sub: 'reporting-service',
+            iss: ISSUER,
             clientId: 'reporting-service',
             aud: 'reporting-service',
           };
@@ -1248,7 +1379,9 @@ describe('/userinfo — the token subject must be a user (#754)', () => {
     });
 
     await expect(run()).resolves.toEqual({ sub: '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f71' });
+    // Looked up in the request's realm (#489).
     expect(fastify.repositories.users.findById).toHaveBeenCalledWith(
+      REALM.id,
       '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f71'
     );
   });

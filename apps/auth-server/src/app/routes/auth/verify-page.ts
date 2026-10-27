@@ -39,6 +39,10 @@ import { verificationTokenSchema } from '../../schemas/auth';
  * (`/ui/login`, `/ui/wallet-login`) use, so it answers on the realm's primary
  * host only.
  *
+ * The link verifies only at a host of its account's realm, whose issuer the
+ * link names (#870): the form's token is looked up in the realm the host
+ * named (#489), so at another realm's host it is an unknown token.
+ *
  * Interim: the email-code step (#638) and the hosted account verification UI
  * (#644) replace link verification.
  */

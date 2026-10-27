@@ -115,7 +115,7 @@ export default async function (fastify: FastifyInstance) {
         // is treated as invalid below.
         const user =
           check.status === 'ok' && !unverified
-            ? await fastify.repositories.users.findById(check.credential.userId)
+            ? await fastify.repositories.users.findById(realm.id, check.credential.userId)
             : undefined;
         if (check.status === 'ok' && !unverified && !user) {
           fastify.log.error(
@@ -221,7 +221,7 @@ export default async function (fastify: FastifyInstance) {
         );
 
         // Update user lastLoginAt timestamp
-        await fastify.repositories.users.updateLastLogin(user.id);
+        await fastify.repositories.users.updateLastLogin(realm.id, user.id);
 
         // Successful login: clear the account's failed-attempt counter and
         // lockout (#115) and emit structured success log + metrics (#123,

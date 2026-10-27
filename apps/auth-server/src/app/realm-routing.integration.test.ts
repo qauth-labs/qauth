@@ -234,7 +234,9 @@ describe('handlers take the realm of the request host (#487)', () => {
       expect(response.statusCode, response.body).toBe(202);
       const credential = await passwordCredential(app, realmB, 'new@example.com');
       expect(credential).toBeDefined();
-      expect(await app.repositories.users.findById(credential?.userId ?? '')).toMatchObject({
+      expect(
+        await app.repositories.users.findById(realmB.id, credential?.userId ?? '')
+      ).toMatchObject({
         realmId: realmB.id,
       });
       expect(await passwordCredential(app, realmA, 'new@example.com')).toBeUndefined();

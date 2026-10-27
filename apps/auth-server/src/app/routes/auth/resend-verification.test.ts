@@ -191,7 +191,8 @@ describe('POST /auth/resend-verification', () => {
     const result = await ctx.handler(request);
 
     expect(result).toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
-    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('user-1');
+    // Looked up in the request's realm (#489).
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, 'user-1');
     expect(
       fastify.repositories.emailVerificationTokens.invalidateCredentialTokens
     ).not.toHaveBeenCalled();
@@ -382,7 +383,7 @@ describe('POST /auth/resend-verification', () => {
 
     expect(set).toHaveBeenCalledTimes(2);
     expect(set).toHaveBeenCalledWith(
-      REDIS_KEYS.LAST_EMAIL_SENT('user@example.com'),
+      REDIS_KEYS.LAST_EMAIL_SENT(REALM.id, 'user@example.com'),
       expect.any(String),
       'EX',
       60,

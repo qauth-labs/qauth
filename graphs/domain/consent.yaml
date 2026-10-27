@@ -31,7 +31,7 @@ entities:
 actions:
   Consent.grant:
     # internal: invoked by core.consent, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/oauth-consents.repository.ts:102
+    source: libs/infra/db/src/lib/repositories/oauth-consents.repository.ts:118
     body:
       type: object
       required: [userId, oauthClientId, realmId, scopes]

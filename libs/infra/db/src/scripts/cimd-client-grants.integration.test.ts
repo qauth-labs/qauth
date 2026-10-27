@@ -129,7 +129,7 @@ describe('applyCimdClientGrant (real Postgres)', () => {
     const r = await realm('cimd-grant-2');
     const clients = createOAuthClientsRepository(db());
     const resolved = await clients.upsertCimdClient(resolvedFromDocument(r.id));
-    await clients.update(resolved.id, { enabled: false });
+    await clients.update(r.id, resolved.id, { enabled: false });
     const before = await row(r.id);
 
     const result = await applyCimdClientGrant(db(), r.id, {

@@ -54,6 +54,11 @@ import userinfoRoute from './userinfo';
 const ISSUER = 'https://auth.test.example.com';
 const CLIENT_ID = 'sig-test-client';
 const USER_ID = '019dbc24-7a2d-724d-bf26-1923f21f2234';
+/**
+ * The realm the requests resolve to. Its issuer is the one the jwt plugin
+ * signs with: introspection and userinfo accept a token only at the realm
+ * whose issuer it names (#489).
+ */
 const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
 
 /** Generate a fresh extractable Ed25519 key pair as PEM strings. */
@@ -311,6 +316,9 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ sub: USER_ID, email: 'user@example.com' });
+      // The subject is looked up in the request's realm (#489).
+      const usersRepo = app.repositories.users as unknown as { findById: ReturnType<typeof vi.fn> };
+      expect(usersRepo.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
     } finally {
       await app.close();
     }

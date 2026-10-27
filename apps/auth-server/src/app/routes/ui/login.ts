@@ -381,7 +381,7 @@ export default async function (fastify: FastifyInstance) {
 
       const user =
         check.status === 'ok' && !unverified
-          ? await fastify.repositories.users.findById(check.credential.userId)
+          ? await fastify.repositories.users.findById(realm.id, check.credential.userId)
           : undefined;
       if (check.status === 'ok' && !unverified && !user) {
         // FK-impossible in normal operation — same operator-alerting log line
@@ -426,7 +426,7 @@ export default async function (fastify: FastifyInstance) {
         identifier: check.credential.externalSub,
       });
 
-      await fastify.repositories.users.updateLastLogin(user.id);
+      await fastify.repositories.users.updateLastLogin(realm.id, user.id);
       await emitUserEvent(
         request,
         'urn:qauth:event:user.signed_in:v1-rc.0',

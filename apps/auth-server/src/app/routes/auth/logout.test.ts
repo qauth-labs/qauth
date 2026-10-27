@@ -595,26 +595,52 @@ describe('POST /auth/logout', () => {
     );
   });
 
-  it('throws (401) and does NOT revoke for the token of a user of another realm (#487)', async () => {
+  it('throws (401) and does NOT revoke for the token of a user of another realm, as for an unknown user (#487, #489)', async () => {
     // The management token reads the same in every realm, so its subject's
     // realm decides: a token from another realm's host ends nothing here.
+    // The subject is looked up in the request's realm only (#489), so another
+    // realm's user is no user here, answered exactly as an unknown subject is.
     const subject = '22222222-2222-4222-8222-222222222222';
+    const ghost = '33333333-3333-4333-8333-333333333333';
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
-      loginClaims({ sub: subject })
+    const findById = fastify.repositories.users.findById as unknown as Mock;
+    // The subject is a user of realm-other: the realm-scoped lookup finds it there only.
+    findById.mockImplementation(async (realmId: string, id: string) =>
+      realmId === 'realm-other' && id === subject
+        ? { ...VALID_USER, id: subject, realmId: 'realm-other' }
+        : undefined
     );
-    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
-      ...VALID_USER,
-      id: subject,
-      realmId: 'realm-other',
-    });
 
     await logoutRoute(fastify);
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await expect(handler(logoutRequest(), createReply())).rejects.toBeInstanceOf(JWTInvalidError);
+    const answer = async (sub: string) => {
+      emitUserEventMock.mockClear();
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+        loginClaims({ sub })
+      );
+      const error = await handler(logoutRequest(), createReply()).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(JWTInvalidError);
+      const { name, message, statusCode, code } = error as JWTInvalidError;
+      // The events past the request each was emitted for.
+      const events = emitUserEventMock.mock.calls.map(([, ...event]) => event);
+      return { error: { name, message, statusCode, code }, events };
+    };
+
+    const otherRealmUser = await answer(subject);
+    expect(findById).toHaveBeenCalledWith(REALM.id, subject);
+    const unknownUser = await answer(ghost);
+
+    expect(otherRealmUser).toEqual(unknownUser);
+    expect(otherRealmUser.events).toEqual([
+      [
+        'urn:qauth:event:user.sign_out_failed:v1-rc.0',
+        { reason: 'subject_not_a_user' },
+        { realmId: undefined, userId: null, actor: 'user' },
+      ],
+    ]);
     expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });

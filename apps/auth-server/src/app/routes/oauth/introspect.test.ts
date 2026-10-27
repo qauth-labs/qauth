@@ -66,8 +66,9 @@ function createFastifyStub() {
         findByClientId: vi.fn(),
       },
       // A user subject is reported active only while its account is enabled.
+      // The lookup is realm-scoped (#489): the realm id comes first.
       users: {
-        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+        findById: vi.fn(async (realmId: string, id: string) => ({ id, realmId, enabled: true })),
       },
     },
     passwordHasher: {
@@ -304,7 +305,12 @@ describe('POST /oauth/introspect route', () => {
     };
     const userUuid = '019dbc24-7a2d-724d-bf26-1923f21f2234';
 
-    async function introspect(fastify: FastifyInstance, ctx: TestContext, sub: string) {
+    async function introspect(
+      fastify: FastifyInstance,
+      ctx: TestContext,
+      sub: string,
+      realm = REALM
+    ) {
       await introspectRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
         client
@@ -324,6 +330,7 @@ describe('POST /oauth/introspect route', () => {
           body: { token: 'valid-token', client_id: client.clientId, client_secret: 'secret' },
           ip: '127.0.0.1',
           headers: { 'user-agent': 'vitest' },
+          realm,
         },
         { send: (body: unknown) => body }
       );
@@ -337,7 +344,8 @@ describe('POST /oauth/introspect route', () => {
       });
 
       await expect(introspect(fastify, ctx, userUuid)).resolves.toEqual({ active: false });
-      expect(fastify.repositories.users.findById).toHaveBeenCalledWith(userUuid);
+      // The user is looked up in the request's realm (#489).
+      expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, userUuid);
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
         'urn:qauth:event:token.introspection_failed:v1-rc.0',
@@ -358,6 +366,58 @@ describe('POST /oauth/introspect route', () => {
         { error: 'invalid_token', reason: 'subject_unknown' },
         expect.objectContaining({ userId: null, clientId: client.clientId })
       );
+    });
+
+    it("reports the token of another realm's user as inactive, like an unknown subject (#489)", async () => {
+      // The user exists, but in realm-1 only: the realm-scoped lookup finds no
+      // row for it in any other realm, as for an id that names no user.
+      const userRealm = REALM.id;
+      const otherRealm = testRealm({ id: 'realm-other' });
+      const users = (fastify: FastifyInstance) =>
+        (fastify.repositories.users.findById as unknown as Mock).mockImplementation(
+          async (realmId: string, id: string) =>
+            realmId === userRealm && id === userUuid ? { id, realmId, enabled: true } : undefined
+        );
+
+      // Control: in its own realm the token is active.
+      const home = createFastifyStub();
+      users(home.fastify);
+      await expect(introspect(home.fastify, home.ctx, userUuid)).resolves.toMatchObject({
+        active: true,
+      });
+
+      // The event of a call, without its request.
+      const lastEvent = () => emitUserEventMock.mock.calls.at(-1)?.slice(1);
+
+      emitUserEventMock.mockClear();
+      const foreign = createFastifyStub();
+      users(foreign.fastify);
+      const foreignAnswer = await introspect(foreign.fastify, foreign.ctx, userUuid, otherRealm);
+      const foreignEvent = lastEvent();
+      expect(foreign.fastify.repositories.users.findById).toHaveBeenCalledWith(
+        otherRealm.id,
+        userUuid
+      );
+
+      emitUserEventMock.mockClear();
+      const unknown = createFastifyStub();
+      users(unknown.fastify);
+      const unknownAnswer = await introspect(
+        unknown.fastify,
+        unknown.ctx,
+        '019dbc24-7a2d-724d-bf26-1923f21f2299',
+        otherRealm
+      );
+
+      // The same answer, and the same event, as for a subject that names no user.
+      expect(foreignAnswer).toEqual({ active: false });
+      expect(foreignAnswer).toEqual(unknownAnswer);
+      expect(foreignEvent).toEqual(lastEvent());
+      expect(foreignEvent).toEqual([
+        'urn:qauth:event:token.introspection_failed:v1-rc.0',
+        { error: 'invalid_token', reason: 'subject_unknown' },
+        expect.objectContaining({ realmId: otherRealm.id, userId: null }),
+      ]);
     });
 
     it('never looks up a client_credentials subject (sub = client_id) as a user', async () => {

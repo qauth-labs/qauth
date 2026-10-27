@@ -370,7 +370,7 @@ export default async function (fastify: FastifyInstance) {
         // The token outlives the login that minted it; a user disabled in
         // between must not get a code from it, as the session path (via
         // `resolveBrowserSession`) and every grant at `/oauth/token` refuse.
-        const user = await fastify.repositories.users.findById(payload.sub);
+        const user = await fastify.repositories.users.findById(realm.id, payload.sub);
         if (!user || !user.enabled) {
           throw inactiveSubjectError();
         }
@@ -519,7 +519,11 @@ export default async function (fastify: FastifyInstance) {
       }
     }
 
-    const existingConsent = await fastify.repositories.oauthConsents.findActive(userId, client.id);
+    const existingConsent = await fastify.repositories.oauthConsents.findActive(
+      realm.id,
+      userId,
+      client.id
+    );
 
     // The consent decision does not depend on HOW the user authenticated.
     // Any client that resolved above can be named on the Bearer path too —
@@ -683,6 +687,7 @@ export default async function (fastify: FastifyInstance) {
     // revocation that made it wait.
     const outcome = await fastify.db.transaction(async (tx) => {
       const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
+        realm.id,
         userId,
         client.id,
         tx

@@ -152,8 +152,10 @@ async function assertSubjectOfRealm(
   if (!subjects.has('user') || !uuidSubjectSchema.safeParse(claims.sub).success) {
     throw inactiveSubjectError();
   }
-  const user = await repositories.users.findById(claims.sub);
-  if (!user || !user.enabled || user.realmId !== realm.id) {
+  // Looked up in the request's realm (#489): a user of another realm is no
+  // user here, refused as an unknown one is.
+  const user = await repositories.users.findById(realm.id, claims.sub);
+  if (!user || !user.enabled) {
     throw inactiveSubjectError();
   }
 }

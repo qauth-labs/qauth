@@ -103,7 +103,7 @@ function makeFastify() {
       authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(0) },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
-      users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
+      users: { findById: vi.fn(async (_realmId: string, id: string) => ({ id, enabled: true })) },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
     sessionService: sessions.service,
@@ -204,6 +204,11 @@ describe('/consents JSON API', () => {
     expect(state.body).toMatchObject({
       consents: [{ id: 'c1', clientId: 'app-123', clientName: 'Cool App', scopes: ['email'] }],
     });
+    // Listed in the session's realm (#489).
+    expect(fastify.repositories.oauthConsents.listActiveForUserWithClient).toHaveBeenCalledWith(
+      REALM.id,
+      'u1'
+    );
     // The response MUST include a CSRF token for the caller to echo back.
     expect((state.body as any).csrfToken).toEqual(expect.any(String));
     expect((state.body as any).csrfToken.length).toBeGreaterThan(0);
@@ -313,7 +318,7 @@ describe('/consents JSON API', () => {
       {
         id: CONSENT_ID,
         oauthClientId: 'cli1',
-        realmId: 'realm-1',
+        realmId: REALM.id,
         clientClientId: 'app-123',
         clientName: 'App',
         scopes: ['email'],
@@ -336,7 +341,16 @@ describe('/consents JSON API', () => {
       reply
     );
     expect(state.statusCode).toBe(204);
-    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(CONSENT_ID, 'tx');
+    // Owned and revoked in the session's realm (#489).
+    expect(fastify.repositories.oauthConsents.listActiveForUserWithClient).toHaveBeenCalledWith(
+      REALM.id,
+      'u1'
+    );
+    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(
+      REALM.id,
+      CONSENT_ID,
+      'tx'
+    );
     expect(fastify.repositories.authorizationCodes.invalidateForUserAndClient).toHaveBeenCalledWith(
       'u1',
       'cli1',

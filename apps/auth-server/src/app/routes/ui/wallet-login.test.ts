@@ -189,7 +189,8 @@ function createResponseCodes() {
   const codes = new Map<string, { stateHash: string; expiresAt: number }>();
   return {
     codes,
-    redeemResponseCode: vi.fn(async (codeHash: string) => {
+    // The realm is the route's to pass (#489); the stub keys codes by digest only.
+    redeemResponseCode: vi.fn(async (_realmId: string, codeHash: string) => {
       const entry = codes.get(codeHash);
       if (entry === undefined || entry.expiresAt <= Date.now()) return undefined;
       codes.delete(codeHash);
@@ -742,7 +743,9 @@ describe('wallet login — completion', () => {
     expect(input.authTime).toBeGreaterThanOrEqual(before);
     expect(input.authTime).toBeLessThanOrEqual(Date.now());
     expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
-    expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
+    // The account is read and stamped in the flow's realm (#489).
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, 'user-1');
+    expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith(REALM.id, 'user-1');
 
     // Without the session id or the return path.
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(...WALLET_SIGNED_IN);
@@ -1075,6 +1078,38 @@ describe('wallet login — refusals do not enumerate or leak (#236)', () => {
     expect(timedOut.state.body).toEqual({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
   });
 
+  it('answers a flow of another realm exactly as an unknown flow, and leaves it to its own realm (#489)', async () => {
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'user@example.com',
+    });
+    const poll = async (realm?: RealmRow) => {
+      const { reply, state } = createReply();
+      await routes.get('GET /wallet-login/:handle/status')!(
+        {
+          params: { handle },
+          headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+          ip: '127.0.0.1',
+          ...(realm ? { realm } : {}),
+        },
+        reply
+      );
+      return state.body;
+    };
+
+    // At a host of another realm, with the browser's own binder: the answer
+    // of an unknown handle, and the presentation is not looked at.
+    const foreign = await poll(testRealm({ id: 'realm-2' }));
+    expect(foreign).toEqual({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+
+    // The flow is untouched: at its own realm's host it still completes.
+    expect((await poll()).status).toBe('complete');
+  });
+
   it('never echoes the asserted identifier into a terminal page', async () => {
     const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
       identifier: 'victim@example.com',
@@ -1392,6 +1427,7 @@ describe('wallet login — the return leg (#405)', () => {
     // repository — and exactly once.
     expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
     expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledWith(
+      REALM.id,
       hashOid4vpResponseCode(code)
     );
     expect(hashOid4vpResponseCode(code)).toMatch(/^[0-9a-f]{64}$/);
@@ -1400,7 +1436,7 @@ describe('wallet login — the return leg (#405)', () => {
     expect(landed.statusCode).toBe(200);
     expect(sessionMints(fastify)).toHaveLength(1);
     expect(sessionCookieSet(landed.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
-    expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
+    expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith(REALM.id, 'user-1');
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(...WALLET_SIGNED_IN);
 
     // The signed-in page, byte for byte, with the ORIGINAL tab's continuation

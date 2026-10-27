@@ -869,9 +869,9 @@ export default async function (fastify: FastifyInstance) {
         );
         if (outcome !== 'session_ended' && body.allow_forever === '1') {
           await fastify.repositories.oauthConsents.upsertGrant(
+            realm.id,
             session.userId,
             client.id,
-            realm.id,
             scopes,
             resources,
             tx

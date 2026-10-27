@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
 import { createRequireManagementJwt } from '../../helpers/management-token';
+import { requestRealm } from '../../helpers/request-realm';
 
 /**
  * Consent management for the developer portal (issue #366).
@@ -86,7 +87,11 @@ export default async function (fastify: FastifyInstance) {
       // Per-user data; keep it out of any shared or proxy cache, matching
       // `/api/clients`.
       reply.header('Cache-Control', 'no-store');
-      const consents = await listConsentsForUser(fastify, requireUserId(request));
+      const consents = await listConsentsForUser(
+        fastify,
+        requestRealm(request).id,
+        requireUserId(request)
+      );
       return reply.send({ consents });
     }
   );
@@ -108,7 +113,13 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      await revokeConsentForUser(fastify, request, requireUserId(request), id);
+      await revokeConsentForUser(
+        fastify,
+        request,
+        requestRealm(request).id,
+        requireUserId(request),
+        id
+      );
       reply.code(204);
       return reply.send(null);
     }

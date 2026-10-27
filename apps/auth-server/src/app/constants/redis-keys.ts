@@ -27,11 +27,20 @@ export const REDIS_KEYS = {
    * Both keys are written for EVERY request of either route, account or not,
    * before any lookup, so the address is {@link digest}ed: a key holding it
    * verbatim was an hour-long Redis entry as long as the caller's address.
-   * Counters written under the old names expire within the hour.
+   *
+   * Keyed per realm (#489): an account is one realm's, so the same address in
+   * two realms is two allowances, and mail asked for in one realm never holds
+   * back another's. Counters written under the old, realm-less names are no
+   * longer read and expire within their window.
    */
-  RESEND_RATE_LIMIT: (email: string) => `rate-limit:resend:${digest(email)}`,
-  /** Last email sent timestamp for minimum interval check (address digested, as above) */
-  LAST_EMAIL_SENT: (email: string) => `last-email-sent:${digest(email)}`,
+  RESEND_RATE_LIMIT: (realmId: string, email: string) =>
+    `rate-limit:resend:${realmId}:${digest(email)}`,
+  /**
+   * Last email sent timestamp for minimum interval check, keyed per realm and
+   * digested address, as above (#489)
+   */
+  LAST_EMAIL_SENT: (realmId: string, email: string) =>
+    `last-email-sent:${realmId}:${digest(email)}`,
   /**
    * Sliding-window failed-login attempt counter, keyed per realm and identifier
    * (#115). An account is one realm's, so the same address in two realms is two

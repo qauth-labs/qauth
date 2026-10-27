@@ -130,8 +130,11 @@ describe('ID token profile claims follow the profile scope (#755, real container
       });
 
       const userId = await registerPasswordAccount(app, EMAIL);
-      await app.repositories.users.update(userId, { firstName: 'Ada', lastName: 'Lovelace' });
-      await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, CLIENT_SCOPES);
+      await app.repositories.users.update(realm.id, userId, {
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      });
+      await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, CLIENT_SCOPES);
 
       const jar = await signInWithPassword(app, EMAIL);
       return await body({ app, jar });

@@ -1140,6 +1140,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     introspection there reports them active and revocation there denylists
     them, when their `client_id` also names a client of the default realm.
 
+- **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
+  The lookups by an id that a request, a token or a code carries now take the
+  realm of the request's host: users, clients, consents, API keys,
+  credentials, refresh tokens, authorization codes, email verification tokens
+  and a wallet's OID4VP state, encryption `kid` and Response Code. Browser
+  sessions, whose id a cookie carries, are not scoped yet ([#493]). The
+  repository methods take the realm id as a required first argument;
+  refresh tokens, codes and verification tokens, which have no realm column,
+  are found through their client's or credential's realm. A value of another
+  realm gets the answer an unknown value gets, leaves the same events and
+  changes nothing in its own realm:
+  - an authorization code or a refresh token issued in another realm answers
+    `invalid_grant`; presenting the refresh token there, or revoking it, revokes
+    no family;
+  - another realm's access token is `active: false` at introspection and 401
+    at userinfo, and revocation and `/auth/logout` ignore or refuse it: these
+    routes and token exchange check the token's `iss` against the request
+    realm's token issuer;
+  - a consent, client or API key id of another realm answers 404 at the
+    management API, and a verification token mailed for another realm's
+    account is an invalid token;
+  - a management token whose user belongs to another realm is now refused as a
+    token for an unknown user is ("Access token subject is not an active
+    user"), no longer with "Access token was not issued in this realm".
+
+  The verification-mail counters of `POST /auth/resend-verification` and
+  `POST /auth/register` (`rate-limit:resend:*`, `last-email-sent:*`) carry the
+  realm id, so an address has an allowance in each realm; they start from zero
+  after the upgrade, and during a rolling upgrade old and new nodes count
+  apart for one window. A deployment with one realm behaves as before. Until
+  tokens are signed per realm ([#491]), every token carries `JWT_ISSUER`: a
+  second realm's host refuses every access token at these routes, its own
+  included, and the default realm tells another realm's token apart only by
+  its user, so a `client_credentials` token of a same-named client in another
+  realm still introspects there.
+
 - **Browser sessions are stored in Postgres** ([#488], ADR-019 Decision 3).
   `POST /ui/login` and the wallet sign-in create the session through the
   session service ([#469]): one `sessions` row with the realm, the user,
@@ -1461,8 +1497,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#486]: https://github.com/qauth-labs/qauth/issues/486
 [#487]: https://github.com/qauth-labs/qauth/issues/487
 [#488]: https://github.com/qauth-labs/qauth/issues/488
+[#489]: https://github.com/qauth-labs/qauth/issues/489
 [#490]: https://github.com/qauth-labs/qauth/issues/490
 [#491]: https://github.com/qauth-labs/qauth/issues/491
+[#493]: https://github.com/qauth-labs/qauth/issues/493
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513
@@ -1496,7 +1534,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the link changes nothing and reads nothing from the database, so a link
   scanner or a prefetch still cannot verify an account. The page sends
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the form has
-  the login pages' CSRF check and the JSON route's rate limit.
+  the login pages' CSRF check and the JSON route's rate limit. The link
+  verifies only at a host of its account's realm, whose issuer it names
+  ([#490]): at another realm's host its token is unknown ([#489]).
   `POST /auth/verify` is unchanged. This page is interim: the email-code step
   ([#638]) and the hosted account verification UI ([#644]) replace link
   verification.

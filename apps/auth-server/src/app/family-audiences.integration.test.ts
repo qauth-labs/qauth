@@ -285,9 +285,9 @@ describe('one audience per API family and a guard for each (#509, real container
           provisionedByOperator: true,
         });
         await app().repositories.oauthConsents.upsertGrant(
+          realm,
           userId,
           client.id,
-          realm,
           ['openid'],
           [account]
         );
@@ -355,9 +355,9 @@ describe('one audience per API family and a guard for each (#509, real container
         provisionedByOperator: true,
       });
       await app().repositories.oauthConsents.upsertGrant(
+        realm,
         userId,
         client.id,
-        realm,
         ['openid'],
         [account]
       );

@@ -146,7 +146,7 @@ export default async function (fastify: FastifyInstance) {
         try {
           // RFC 9700 mix-up defence: pin the issuer so a token minted by a
           // different AS (even one sharing our signing key), or for another
-          // realm's issuer (#490), is reported inactive rather than
+          // realm's issuer (#489, #490), is reported inactive rather than
           // introspected as ours.
           payload = await fastify.jwtUtils.verifyAccessToken(token, {
             issuer: realmTokenIssuer(fastify, realm),
@@ -225,7 +225,9 @@ export default async function (fastify: FastifyInstance) {
         // UUID shape alone does not mark a user subject.
         const hasUserSubject = subIsUuid && payload.sub !== payload.clientId;
         if (hasUserSubject) {
-          const user = await fastify.repositories.users.findById(payload.sub as string);
+          // Looked up in the request's realm (#489): another realm's user is
+          // `subject_unknown` here, as a random id is.
+          const user = await fastify.repositories.users.findById(realm.id, payload.sub as string);
           if (!user || !user.enabled) {
             // Only a subject the lookup confirmed is the event's subject: an
             // unknown one names no user.

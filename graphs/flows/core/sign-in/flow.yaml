@@ -537,7 +537,7 @@ states:
       DONE:
         target: recordingSignIn
         say: 'lastLoginAt is written'
-        source: libs/infra/db/src/lib/repositories/users.repository.ts:152
+        source: libs/infra/db/src/lib/repositories/users.repository.ts:165
       FAIL.server:
         target: server_error.store
         say: 'the database fails'

@@ -85,11 +85,13 @@ export default async function (fastify: FastifyInstance) {
 
         // Try to verify JWT token
         // For logout, we allow expired tokens - user is ending their session anyway
+        const realm = requestRealm(request);
         let claims: JWTPayload;
         try {
           claims = await fastify.jwtUtils.verifyAccessToken(token, {
-            // RFC 9700 mix-up defence: only accept a token this realm issued.
-            issuer: realmTokenIssuer(fastify, requestRealm(request)),
+            // RFC 9700 mix-up defence: only accept a token this realm issued
+            // (#489).
+            issuer: realmTokenIssuer(fastify, realm),
           });
         } catch (error) {
           if (error instanceof JWTExpiredError) {
@@ -108,7 +110,7 @@ export default async function (fastify: FastifyInstance) {
         // issued to another client or audience cannot end the user's sessions.
         // A disabled user may still sign out: logout only ends access. The
         // token must still be one of this host's realm (#487).
-        await assertManagementToken(fastify, requestRealm(request), claims, {
+        await assertManagementToken(fastify, realm, claims, {
           requireActiveUser: false,
         });
         // RFC 9449 §7.2 (#480): this route reads a Bearer token, and a
@@ -122,8 +124,10 @@ export default async function (fastify: FastifyInstance) {
 
         // A subject that names no user, deleted since the token was minted,
         // is refused as userinfo refuses it (#754; RFC 6750 §3.1
-        // `invalid_token`): there is nothing left to sign out.
-        const user = await fastify.repositories.users.findById(tokenSub);
+        // `invalid_token`): there is nothing left to sign out. Looked up in
+        // the request's realm (#489), so a user of another realm is refused
+        // the same way and nothing of theirs is ended here.
+        const user = await fastify.repositories.users.findById(realm.id, tokenSub);
         if (!user) {
           throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
         }

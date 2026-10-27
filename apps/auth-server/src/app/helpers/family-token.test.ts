@@ -62,7 +62,11 @@ const CLIENTS = new Map([
   [`${REALM_A.id}/held`, { clientId: 'held', enabled: true, suspended: true }],
 ]);
 
-const findUserById = vi.fn(async (id: string) => USERS.get(id));
+/** Realm-scoped as the repository is (#489): a user of another realm is no row. */
+const findUserById = vi.fn(async (realmId: string, id: string) => {
+  const user = USERS.get(id);
+  return user?.realmId === realmId ? user : undefined;
+});
 const findClientByClientId = vi.fn(async (realmId: string, clientId: string) =>
   CLIENTS.get(`${realmId}/${clientId}`)
 );
@@ -526,7 +530,7 @@ describe('requireFamilyToken (#509)', () => {
         expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
       }
       // A subject that is no UUID never reaches the users table.
-      expect(findUserById).not.toHaveBeenCalledWith('not-a-uuid');
+      expect(findUserById).not.toHaveBeenCalledWith(expect.anything(), 'not-a-uuid');
     });
 
     it('resolves a client_credentials token as the client of the request realm', async () => {

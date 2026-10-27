@@ -48,7 +48,7 @@ entities:
 actions:
   RefreshToken.revokeAllForUser:
     # internal: invoked by core.logout, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:326
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:359
     body:
       type: object
       required: [userId]
@@ -65,7 +65,7 @@ actions:
 
   RefreshToken.create:
     # internal: invoked by core.sign-in-token, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:64
+    source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:90
     body:
       type: object
       required: [userId, oauthClientId, tokenHash, familyCreatedAt, expiresAt]

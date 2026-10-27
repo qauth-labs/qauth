@@ -1,4 +1,4 @@
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, lt } from 'drizzle-orm';
 
 import type {
   EmailVerificationToken,
@@ -6,6 +6,7 @@ import type {
   NewEmailVerificationToken,
 } from '../../types';
 import { DbClient } from '../db';
+import { userCredentials } from '../schema/identity';
 import { emailVerificationTokens } from '../schema/tokens';
 
 /**
@@ -35,11 +36,18 @@ export function createEmailVerificationTokensRepository(
      * Find a token by its token hash
      * Only returns tokens that are not used and not expired
      *
+     * `email_verification_tokens` has no realm column (#489): the credential
+     * the token verifies pins the realm, so the read joins it and filters on
+     * its realm. A token of another realm is then no row at all, from the same
+     * single query an unknown token gets.
+     *
+     * @param realmId - Realm the request was resolved to
      * @param tokenHash - SHA-256 hash of the token
      * @param tx - Optional transaction client
      * @returns Token if found and valid, undefined otherwise
      */
     async findByTokenHash(
+      realmId: string,
       tokenHash: string,
       tx?: DbClient
     ): Promise<EmailVerificationToken | undefined> {
@@ -48,10 +56,12 @@ export function createEmailVerificationTokensRepository(
       const now = Date.now();
 
       const [result] = await invoker
-        .select()
+        .select(getTableColumns(emailVerificationTokens))
         .from(emailVerificationTokens)
+        .innerJoin(userCredentials, eq(emailVerificationTokens.credentialId, userCredentials.id))
         .where(
           and(
+            eq(userCredentials.realmId, realmId),
             eq(emailVerificationTokens.tokenHash, tokenHash),
             eq(emailVerificationTokens.used, false),
             gt(emailVerificationTokens.expiresAt, now)

@@ -10,6 +10,7 @@ import {
   type EnvironmentRealmLike,
   resolveEnvironmentPolicy,
 } from './environment-policy';
+import type { RealmRow } from './request-realm';
 import { ensureMinimumResponseTime } from './timing';
 
 /**
@@ -136,7 +137,8 @@ export interface AuthenticatedApiKey {
  *
  * Pipeline (every failure returns null — never reveals which check failed):
  *   1. Parse the public prefix; bail if not a QAuth key.
- *   2. Resolve the single candidate row by indexed prefix lookup.
+ *   2. Resolve the single candidate row by indexed prefix lookup, in `realm`
+ *      (the request's): a key of another realm is an unknown key (#489).
  *   3. Constant-time verify the FULL presented key against the argon2id hash.
  *   4. Reject if the key is revoked.
  *   5. Re-resolve the owning client + realm and re-apply the environment gate:
@@ -154,10 +156,11 @@ export interface AuthenticatedApiKey {
  */
 export async function authenticateApiKey(
   fastify: FastifyInstance,
+  realm: Pick<RealmRow, 'id'>,
   presented: string | undefined
 ): Promise<AuthenticatedApiKey | null> {
   const startTime = Date.now();
-  const result = await resolveApiKey(fastify, presented);
+  const result = await resolveApiKey(fastify, realm, presented);
   await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.API_KEY_AUTH);
   return result;
 }
@@ -169,6 +172,7 @@ export async function authenticateApiKey(
  */
 async function resolveApiKey(
   fastify: FastifyInstance,
+  realm: Pick<RealmRow, 'id'>,
   presented: string | undefined
 ): Promise<AuthenticatedApiKey | null> {
   const prefix = parseApiKeyPrefix(presented);
@@ -180,7 +184,8 @@ async function resolveApiKey(
     return null;
   }
 
-  const apiKey = await fastify.repositories.apiKeys.findByPrefix(prefix);
+  // A key of another realm is an unknown key (#489).
+  const apiKey = await fastify.repositories.apiKeys.findByPrefix(realm.id, prefix);
   if (!apiKey) {
     return null;
   }
@@ -199,14 +204,14 @@ async function resolveApiKey(
   // Re-apply the environment gate on every use. The owning client may have been
   // promoted out of `development` (directly, or via its realm ceiling) since the
   // key was minted; a key must not outlive its client's eligibility.
-  const client = await fastify.repositories.oauthClients.findById(apiKey.clientId);
+  const client = await fastify.repositories.oauthClients.findById(realm.id, apiKey.clientId);
   // A disabled or operator-suspended client (ANT-2026-DR5XI3LV) authenticates
   // nothing, through its API keys either.
   if (!client || !isClientUsable(client)) {
     return null;
   }
-  const realm = await fastify.repositories.realms.findById(client.realmId);
-  const policy = resolveEnvironmentPolicy(client, realm ?? null);
+  const clientRealm = await fastify.repositories.realms.findById(client.realmId);
+  const policy = resolveEnvironmentPolicy(client, clientRealm ?? null);
   if (!policy.staticApiKeysAllowed) {
     return null;
   }

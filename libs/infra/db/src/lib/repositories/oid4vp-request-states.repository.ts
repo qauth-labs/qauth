@@ -138,6 +138,8 @@ export function createOid4vpRequestStatesRepository(
      * carries them — and carries `sameDevice`, which is what the caller reads
      * to decide whether the code it minted goes back to the wallet.
      *
+     * @param realmId - realm the request was resolved to: a state of another
+     * realm is not matched, and so not consumed (#489)
      * @param stateHash - SHA-256 digest of the `state` the wallet posted
      * @param responseCode - digest and deadline of the Response Code the
      * caller minted for this redemption; never the code itself
@@ -146,6 +148,7 @@ export function createOid4vpRequestStatesRepository(
      * consumed — three cases the caller must not be able to tell apart.
      */
     async redeem(
+      realmId: string,
       stateHash: string,
       responseCode: NewOid4vpResponseCode,
       tx?: DbClient
@@ -158,6 +161,7 @@ export function createOid4vpRequestStatesRepository(
         .set({ redeemedAt: now, ...CLEAR_RESPONSE_ENCRYPTION, ...issueResponseCode(responseCode) })
         .where(
           and(
+            eq(oid4vpRequestStates.realmId, realmId),
             eq(oid4vpRequestStates.stateHash, stateHash),
             isNull(oid4vpRequestStates.redeemedAt),
             gt(oid4vpRequestStates.expiresAt, now)
@@ -243,6 +247,7 @@ export function createOid4vpRequestStatesRepository(
      * tell apart.
      */
     async redeemByEncryptionKid(
+      realmId: string,
       kid: string,
       responseCode: NewOid4vpResponseCode,
       tx?: DbClient
@@ -258,6 +263,7 @@ export function createOid4vpRequestStatesRepository(
         .where(
           and(
             eq(before.id, oid4vpRequestStates.id),
+            eq(oid4vpRequestStates.realmId, realmId),
             eq(oid4vpRequestStates.responseEncryptionKid, kid),
             isNull(oid4vpRequestStates.redeemedAt),
             gt(oid4vpRequestStates.expiresAt, now)
@@ -320,6 +326,8 @@ export function createOid4vpRequestStatesRepository(
      * A refusal is one `undefined` for unknown, expired, replayed, cross-device
      * and never-answered alike; the caller renders one page for all of them.
      *
+     * @param realmId - realm the request was resolved to: a code of another
+     * realm is not matched, and so not spent (#489)
      * @param codeHash - SHA-256 digest of the Response Code the browser
      * presented, pre-digested by the caller; the code itself never reaches here
      * @param tx - Optional transaction client
@@ -327,6 +335,7 @@ export function createOid4vpRequestStatesRepository(
      * Either way, a code that was live is now spent.
      */
     async redeemResponseCode(
+      realmId: string,
       codeHash: string,
       tx?: DbClient
     ): Promise<{ stateHash: string } | undefined> {
@@ -338,6 +347,7 @@ export function createOid4vpRequestStatesRepository(
         .set({ responseCodeRedeemedAt: now })
         .where(
           and(
+            eq(oid4vpRequestStates.realmId, realmId),
             eq(oid4vpRequestStates.responseCodeHash, codeHash),
             isNull(oid4vpRequestStates.responseCodeRedeemedAt),
             gt(oid4vpRequestStates.responseCodeExpiresAt, now),

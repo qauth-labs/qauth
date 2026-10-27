@@ -255,7 +255,12 @@ here count toward the same failed-login lockout as `POST /auth/login`, and the
 
 ### `GET /auth/verify`
 
-The page the verification email links to: `<EMAIL_BASE_URL>/auth/verify?token=<64-char hex>`.
+The page the verification email links to: `<issuer>/auth/verify?token=<64-char hex>`,
+where `<issuer>` is the issuer of the account's realm. The link verifies only at
+a host of that realm. The GET does not look the token up, so at another realm's
+host it still renders the form (`200`); submitting it there answers `400`, as for
+an unknown token, because `POST /ui/verify` looks the token up in the realm the
+request's host names.
 A mail client opens the link with GET, so this page is what a person sees. It
 holds the token in a hidden field and asks for the account's password; opening
 it verifies nothing and reads nothing from the database, so a mail gateway's

@@ -98,10 +98,10 @@ export default async function (fastify: FastifyInstance) {
       if (token_type_hint === 'access_token') {
         const revoked = await tryRevokeAccessToken(fastify, realm, client.clientId, token);
         if (!revoked) {
-          await tryRevokeRefreshToken(fastify, client.id, token);
+          await tryRevokeRefreshToken(fastify, realm, client.id, token);
         }
       } else {
-        const revoked = await tryRevokeRefreshToken(fastify, client.id, token);
+        const revoked = await tryRevokeRefreshToken(fastify, realm, client.id, token);
         if (!revoked) {
           await tryRevokeAccessToken(fastify, realm, client.clientId, token);
         }
@@ -128,15 +128,20 @@ export default async function (fastify: FastifyInstance) {
  * owned by the authenticated client. Returns true when a matching, owned token
  * was found (regardless of prior revoked state — re-revocation is idempotent),
  * false otherwise. A token owned by a DIFFERENT client is a no-op (returns
- * false) so cross-client revocation is impossible.
+ * false) so cross-client revocation is impossible; so is a token of another
+ * realm, which the realm-scoped lookup does not find (#489).
  */
 async function tryRevokeRefreshToken(
   fastify: FastifyInstance,
+  realm: RealmRow,
   clientRowId: string,
   token: string
 ): Promise<boolean> {
   const hash = fastify.jwtUtils.hashRefreshToken(token);
-  const stored = await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(hash);
+  const stored = await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(
+    realm.id,
+    hash
+  );
   if (!stored) return false;
   // Ownership: only the owning client may revoke. A mismatch is a silent no-op.
   if (stored.oauthClientId !== clientRowId) return false;
@@ -160,7 +165,7 @@ async function tryRevokeAccessToken(
 ): Promise<boolean> {
   let payload;
   try {
-    // RFC 9700 mix-up defence: only a token this realm issued (#490).
+    // RFC 9700 mix-up defence: only a token this realm issued (#489, #490).
     payload = await fastify.jwtUtils.verifyAccessToken(token, {
       issuer: realmTokenIssuer(fastify, realm),
     });

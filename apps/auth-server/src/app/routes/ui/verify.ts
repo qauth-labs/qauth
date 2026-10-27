@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { verifyEmailAddress } from '../../helpers/email-verification';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import {
   csrfTokensEqual,
   generateCsrfToken,
@@ -52,6 +53,10 @@ type VerifyForm = z.infer<typeof verifyFormSchema>;
  *
  * — so the form tells a caller nothing the JSON route does not. A malformed
  * body is refused by the schema with the same `400` problem document as there.
+ *
+ * The token is looked up in the realm the host named (#489), so the link
+ * verifies only at a host of its account's realm, whose issuer it names
+ * (#870); at another realm's host it is an unknown token (`400`).
  *
  * Under `/ui/*` with the other browser forms, not on `POST /auth/verify`: that
  * route is the stable JSON API, answers on endpoint hosts and reads no cookie,
@@ -119,6 +124,8 @@ export default async function (fastify: FastifyInstance) {
 
       try {
         const { email } = await verifyEmailAddress(fastify, request, reply, {
+          // The token is looked up in the realm the host named only (#489).
+          realmId: requestRealm(request).id,
           token: body.token,
           password: body.password,
         });

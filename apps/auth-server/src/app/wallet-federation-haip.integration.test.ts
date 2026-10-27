@@ -939,7 +939,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       // pre-granted so this drives the code-mint path rather than the consent
       // screen.
       expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
-      await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
       expect(await canMintAuthorizationCode(app, flow.jar)).toBe(true);
     });
   }, 180_000);
@@ -1040,7 +1040,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       // An account this presentation WOULD sign in to, with consent granted,
       // so "neither browser can mint" below is about the return leg alone.
       const userId = await linkedAccount(app, wallet, asserted);
-      await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+      await app.repositories.oauthConsents.upsertGrant(ids.realmId, userId, ids.clientId, SCOPES);
       const { flow, answer } = await walletAnswers(app, wallet, asserted, { device: 'this' });
       const ack = await acknowledged(app, answer.formBody);
       if (ack.redirectUri === undefined) throw new Error('no redirect_uri in the ack');
