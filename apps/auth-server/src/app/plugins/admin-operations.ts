@@ -132,6 +132,11 @@ export function requestClassification(request: FastifyRequest): OperationClassif
  *   `operationId`, `x-qauth-class`, `x-qauth-permission`, `x-qauth-effects`
  *   or `x-qauth-two-admin` differs from the registry's
  *   (`operationSchemaExtensions`), so the boot fails.
+ * - BEFORE VALIDATION, a `preValidation` hook answers 428 to a request
+ *   without `If-Match` on a route whose operation reads state
+ *   (`loadState`): the route declares the header required in its schema,
+ *   and without this hook validation would answer 400 first. It reveals
+ *   nothing the OpenAPI document does not.
  * - ON EVERY REQUEST, a `preHandler` hook, after validation and before the
  *   handler, checks the route again as it was finally built (once per route;
  *   a later `onRoute` hook may have changed it), reads the operation's
@@ -186,8 +191,13 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
     /** Each route's problem as it was finally built, by its config object, checked once. */
     const checkedRoutes = new WeakMap<object, string | undefined>();
 
-    fastify.addHook('preHandler', async (request: FastifyRequest) => {
-      if (request.is404) return;
+    /**
+     * The registered operation of `request`'s route as it was finally built,
+     * checked once per route.
+     *
+     * @throws {Error} when the route fails the check: the request runs nothing
+     */
+    const operationOf = (request: FastifyRequest): AdminOperation => {
       const route = request.routeOptions;
       const key = route.config as object;
       if (!checkedRoutes.has(key)) {
@@ -210,12 +220,27 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
       if (operation === undefined) {
         throw new Error(problem ?? `${request.method} ${route.url ?? ''} has no admin operation`);
       }
+      return operation;
+    };
+
+    fastify.addHook('preValidation', async (request: FastifyRequest) => {
+      if (request.is404) return;
+      const operation = operationOf(request);
+      if (operation.loadState !== undefined && request.headers['if-match'] === undefined) {
+        throw new PreconditionRequiredError({ operation: operation.id });
+      }
+    });
+
+    fastify.addHook('preHandler', async (request: FastifyRequest) => {
+      if (request.is404) return;
+      const operation = operationOf(request);
 
       let currentState: unknown;
       let stateVersion: string | null = null;
       if (operation.loadState !== undefined) {
         // What the request needs depends on the state it meets: it names the
-        // version it was written against, or it does not run.
+        // version it was written against, or it does not run. The
+        // preValidation hook answers this first; this is the backstop.
         if (request.headers['if-match'] === undefined) {
           throw new PreconditionRequiredError({ operation: operation.id });
         }

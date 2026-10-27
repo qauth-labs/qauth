@@ -698,6 +698,32 @@ describe('the state version, If-Match and the authorization stage (#508)', () =>
     // An operation that reads no state needs none: the GET tests above send none.
   });
 
+  // The route keeps If-Match required in its schema (and so in OpenAPI);
+  // the stage answers 428 before validation would answer 400.
+  it('answers 428, not 400, when the route requires If-Match in its header schema', async () => {
+    const handler = vi.fn(async () => ({ ok: true }));
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
+    app.patch(
+      '/admin/v1-rc.0/widgets/policies',
+      {
+        config: { operation: PATCH_OPERATION.id },
+        schema: {
+          ...schemaOf(PATCH_OPERATION),
+          headers: {
+            type: 'object',
+            required: ['if-match'],
+            properties: { 'if-match': { type: 'string' } },
+          },
+        },
+      },
+      handler
+    );
+    expect((await patch(app, {})).statusCode).toBe(428);
+    expect((await patch(app)).statusCode).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('answers 412 before the handler when If-Match names another version', async () => {
     const seen: OperationClassification[] = [];
     const authorize = vi.fn();

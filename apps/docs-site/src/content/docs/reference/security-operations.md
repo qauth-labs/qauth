@@ -13,8 +13,9 @@ the screen it sits on ([ADR-019](/reference/records/adr/019-deployment-topology-
 Decision 7). Each admin operation is defined once, in the registry in `apps/auth-server/src/app/helpers/admin-operations.ts`, with
 its class, the effects that make it a security operation and the
 [permissions](/reference/admin-permissions/) it needs. This page is generated from that registry.
-No admin API route exists yet, so the rules below protect nothing today: they are in place for the
-admin listener and its operations.
+
+No admin operation is registered yet, so no admin route can pass the boot check below: the
+rules are in place for the operations to come.
 
 ## Effects
 
@@ -49,9 +50,12 @@ operation of the OpenAPI document as `x-qauth-effects`
   may need) and a `classify` function. `classify` is pure: it reads copies of the request's
   method, path parameters, query and body, and the operation's current state, and returns the
   class, the effects and the permissions that request needs, within the declaration. A merge
-  patch's changed fields come from `mergePatchLeafPaths(body)`, which walks the body's own keys
-  (an array is one field, a `null` member is a change), so a field `classify` has no rule for
-  fails closed.
+  patch's field that `classify` has no rule for fails closed only when `classify` takes the
+  changed fields from the body, with `mergePatchLeafPaths(body)` (which walks the body's own
+  keys: an array is one field, a `null` member is a change), and classifies them with
+  `classifyByField`, which throws on a field its table does not hold. A request-dependent merge
+  patch operation uses that pattern; a `classify` that reads only the fields it expects never
+  sees the others.
 - By effect, a policy change that lengthens an access-token, refresh-token or session lifetime or
   the key rotation interval, or shortens or switches off audit-event retention, is
   `posture-loosening`, a security change. Shortening a lifetime or lengthening retention is a

@@ -20,11 +20,12 @@ import type { SecurityEffect } from '@qauth-labs/shared-validation';
  * the state it meets, with the effects the request needs at least. The
  * registry runs the operation's `classify` on each at boot and refuses it
  * when it gives a case less, or fails closed on it, so the entry cannot be
- * taken by a `classify` that answers `write`. A merge-patch operation derives
- * the fields a request changes with `mergePatchLeafPaths(body)`, which walks
- * the body's own keys (an array is one field, a `null` member is a change),
- * and classifies them with `classifyByField`, which fails an unknown field
- * closed. By effect (ADR-019 Decision 7), lengthening an access-token,
+ * taken by a `classify` that answers `write`. A merge-patch operation MUST
+ * derive the fields a request changes with `mergePatchLeafPaths(body)`, which
+ * walks the body's own keys (an array is one field, a `null` member is a
+ * change), and classify them with `classifyByField`, which throws on a field
+ * its table does not hold: only then does an unknown field fail closed. A
+ * `classify` that reads only the fields it expects never sees the others. By effect (ADR-019 Decision 7), lengthening an access-token,
  * refresh-token or session lifetime or the key rotation interval, and
  * shortening or switching off audit-event retention, are `posture-loosening`;
  * shortening a lifetime or lengthening retention is a write.

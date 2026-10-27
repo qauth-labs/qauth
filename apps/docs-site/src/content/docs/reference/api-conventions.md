@@ -306,13 +306,18 @@ boot a route that names no registered operation or whose members differ.
 A request-dependent operation classifies each request (`classify`). By effect, a policy change
 that lengthens an access-token, refresh-token or session lifetime or the key rotation interval, or
 shortens or switches off audit-event retention, is `posture-loosening` and needs the security
-class; shortening a lifetime or lengthening retention is a write. A merge patch's changed fields
-come from `mergePatchLeafPaths(body)`, so a field `classify` has no rule for fails closed.
+class; shortening a lifetime or lengthening retention is a write. A field `classify` has no rule
+for fails closed only when `classify` takes a merge patch's changed fields from the body with
+`mergePatchLeafPaths(body)` and classifies them with `classifyByField`, which throws on a field its
+table does not hold; a request-dependent merge-patch operation uses that pattern, since a
+`classify` that reads only the fields it expects never sees the others.
 
 An operation that reads the current state to classify (`loadState`) names the version of what it
 read (`stateVersion`), which the route sends quoted as its `ETag`. The listener puts the version on
-the classification and, before the handler, answers `428` when the request has no `If-Match` and
-`412` when it names another version. The handler's write must be conditional on `classification.stateVersion` (an update that
+the classification and answers `428` when the request has no `If-Match` and `412` when it names
+another version. The route still declares `If-Match` required in its header schema, so the
+OpenAPI document says so; the listener checks for it before validation, so a request without it
+gets `428`, not the `400` of a failed schema. The handler's write must be conditional on `classification.stateVersion` (an update that
 matches the stored version, `412` when none does), or load, classify and write in one transaction
 under `SELECT … FOR UPDATE`: otherwise a change made between the classification and the write runs
 under a classification of other state.
@@ -351,6 +356,8 @@ fastify.patch(
       'x-qauth-stability': 'stable',
       consumes: ['application/merge-patch+json'],
       params: z.object({ realmId: z.uuid() }),
+      // Required, so the OpenAPI document says so. A request without it gets
+      // 428 from the listener, which checks before validation, not 400.
       headers: z.looseObject({ 'if-match': z.string() }),
       body: realmPoliciesPatchSchema,
       response: { 200: realmSchema, ...problemResponses(400, 401, 403, 404, 412, 422, 428) },

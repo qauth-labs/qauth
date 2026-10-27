@@ -136,11 +136,15 @@ describe('the security operations page (#508)', () => {
     }
   });
 
-  // No admin route exists yet (#511 adds the listener): the page states the
-  // rules for the routes that come, never that they protect today.
-  it('says that no admin API route exists yet', () => {
-    expect(page.replace(/\s+/g, ' ')).toContain(
-      'No admin API route exists yet, so the rules below protect nothing today'
+  // The page says only what the registry knows: that no operation is
+  // registered, while none is.
+  it('says no operation is registered exactly when the registry holds none', () => {
+    const flat = (text: string) => text.replace(/\s+/g, ' ');
+    const notice =
+      'No admin operation is registered yet, so no admin route can pass the boot check';
+    expect(flat(page).includes(notice)).toBe(OPERATION_REGISTRY.all.length === 0);
+    expect(flat(renderSecurityOperationsPage(createOperationRegistry([]))).includes(notice)).toBe(
+      true
     );
   });
 
@@ -198,6 +202,10 @@ describe('renderSecurityOperationsPage', () => {
   ] as AdminOperation[];
   const registry = createOperationRegistry(operations, { reserved });
   const rendered = renderSecurityOperationsPage(registry);
+
+  it('drops the no-operation notice once an operation is registered', () => {
+    expect(rendered).not.toContain('No admin operation is registered yet');
+  });
 
   it('renders operations another issue registers, every class and effect', () => {
     expect(operationRows(rendered)).toEqual(expectedOperationRows(registry));
