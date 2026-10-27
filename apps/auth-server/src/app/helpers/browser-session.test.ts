@@ -165,7 +165,8 @@ describe('resolveBrowserSession', () => {
       session
     );
     expect(sessions.service.get).toHaveBeenCalledWith({ realmId: REALM.id, sid: session.sid });
-    expect(users.findById).toHaveBeenCalledWith(USER_ID);
+    // The session's user, looked up in the session's realm, the request's (#489).
+    expect(users.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
     expect(headers['Set-Cookie']).toBeUndefined();
   });
 

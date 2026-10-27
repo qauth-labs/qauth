@@ -21,9 +21,10 @@ import { env } from '../../config/env';
  */
 export async function assertDeveloperClientLimit(
   fastify: FastifyInstance,
+  realmId: string,
   developerId: string
 ): Promise<void> {
-  const owned = await fastify.repositories.oauthClients.countByDeveloper(developerId);
+  const owned = await fastify.repositories.oauthClients.countByDeveloper(realmId, developerId);
   if (owned >= env.MAX_CLIENTS_PER_DEVELOPER) {
     throw new ForbiddenError(
       `Client limit reached: a developer may own at most ${env.MAX_CLIENTS_PER_DEVELOPER} clients`

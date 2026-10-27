@@ -45,8 +45,10 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'GET /api/clients/:id',
   'GET /api/consents',
   'GET /auth/link/wallet/:handle',
+  'GET /auth/verify',
   'GET /consents',
   'GET /health',
+  'GET /interaction/v1-rc.0/openapi.json',
   'GET /metrics',
   'GET /oauth/authorize',
   'GET /oauth/userinfo',
@@ -89,6 +91,7 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'POST /ssf/verify',
   'POST /ui/consent',
   'POST /ui/login',
+  'POST /ui/verify',
   'POST /ui/wallet-link',
   'POST /ui/wallet-login',
   'PUT /ssf/stream',
@@ -224,7 +227,7 @@ function listRouteRoles(routes: readonly RouteOptions[]): {
   const listing: string[] = [];
   const problems: string[] = [];
   for (const route of routes) {
-    const problem = routeRolesProblem(route);
+    const problem = routeRolesProblem(route, SERVICE_ROLE_NAMES);
     if (problem !== undefined) problems.push(problem);
     for (const method of [route.method].flat()) {
       listing.push(`${method} ${route.url} → ${(route.config?.serviceRoles ?? []).join(',')}`);
@@ -300,7 +303,7 @@ describe.each(SERVICE_ROLE_NAMES.map((role) => [role] as const))(
 
     it('tags every route with its own role', () => {
       for (const route of bootOf(role).routes) {
-        expect(routeRolesProblem(route)).toBeUndefined();
+        expect(routeRolesProblem(route, [role])).toBeUndefined();
         expect(route.config?.serviceRoles).toContain(role);
       }
     });

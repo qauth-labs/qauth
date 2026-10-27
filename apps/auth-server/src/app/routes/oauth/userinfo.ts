@@ -3,11 +3,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
+import { systemClientId } from '../../helpers/oauth-client';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
+import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { inactiveSubjectError } from '../../helpers/token-subject';
 import { emitUserEvent, failureData, withEventReason } from '../../helpers/user-events';
@@ -23,10 +27,10 @@ import { userinfoResponseSchema } from '../../schemas/oauth';
  *    grant named no RFC 8707 `resource` and the operator configured no
  *    `audience` for the client. That is the token an OIDC client gets from its
  *    own code flow (OIDC Core §5.3), and the `/auth/login` token the developer
- *    portal sends here (`client_id` and `aud` are both the system client). A
- *    delegated token keeps the subject token's audience, which GATE 3c makes
- *    contain the agent's `client_id`, so it qualifies unless it was narrowed to
- *    another server.
+ *    portal sent here before #509 (`client_id` and `aud` both the system
+ *    client). A delegated token keeps the subject token's audience, which
+ *    GATE 3c makes contain the agent's `client_id`, so it qualifies unless it
+ *    was narrowed to another server.
  *  - the `resource` values the grant named, or the client's configured
  *    `audience`: a token for those resource servers.
  *
@@ -35,6 +39,12 @@ import { userinfoResponseSchema } from '../../schemas/oauth';
  * grant to resource servers can request beside them. A token whose `aud` names
  * only other resource servers is refused: a resource server that received one
  * must not be able to read the user's claims with it.
+ *
+ * One token of the second kind is accepted too: the developer portal's
+ * `/auth/login` token, whose `client_id` is the system client and whose `aud`
+ * is the developer API's since #509. The portal reads its user here, and the
+ * developer API is this server, not a resource server the token was handed
+ * to. A developer-API token issued to any other client is refused.
  */
 function isAddressedToUserinfo(
   payload: { aud?: string | string[]; clientId?: string },
@@ -44,10 +54,15 @@ function isAddressedToUserinfo(
   if (audiences.includes(userinfoEndpoint)) {
     return true;
   }
-  return (
+  if (
     typeof payload.clientId === 'string' &&
     payload.clientId.length > 0 &&
     audiences.includes(payload.clientId)
+  ) {
+    return true;
+  }
+  return (
+    payload.clientId === systemClientId() && audiences.includes(API_FAMILY_AUDIENCES.developer)
   );
 }
 
@@ -67,6 +82,12 @@ function isAddressedToUserinfo(
 function hasUserSubject(payload: { sub: string; clientId?: string }): boolean {
   return payload.sub !== payload.clientId;
 }
+
+/**
+ * What a caller is told about a token whose `iss` is not the request realm's:
+ * the message the JWT verifier gives a token of an unexpected issuer.
+ */
+const FOREIGN_ISSUER_DESCRIPTION = 'Invalid JWT token: unexpected "iss" claim value';
 
 /**
  * Shared userinfo handler for GET and POST (OIDC Core §5.3.1: the userinfo
@@ -90,10 +111,26 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       throw withEventReason(new JWTInvalidError('Missing JWT payload'), 'missing_token');
     }
 
+    const realm = requestRealm(request);
+
+    // The issuer first: `requireJwt` pins the deployment's issuer, and a
+    // token is valid only at the realm whose issuer it names (#489). A token
+    // of another realm is refused before any user lookup, in the words the
+    // verifier uses for any other issuer, so introspection, revocation, logout
+    // and this endpoint answer it alike (401, RFC 6750 §3.1 `invalid_token`).
+    // The `iss` is readable in the token itself, so naming the mismatch tells
+    // its holder nothing new.
+    if (payload.iss !== realmTokenIssuer(fastify, realm)) {
+      throw withEventReason(new JWTInvalidError(FOREIGN_ISSUER_DESCRIPTION), 'issuer_mismatch');
+    }
+
     // Audience before anything else: a token for another resource server is
     // refused (401, RFC 6750 §3.1 `invalid_token`) without a user lookup, so
     // its holder learns nothing about the subject.
-    if (!isAddressedToUserinfo(payload, resolveUserinfoEndpoint(fastify.jwtUtils.getIssuer()))) {
+    // The endpoint URL is the request realm's, as its discovery publishes it
+    // (ADR-019 Decision 1, #490).
+    const userinfoEndpoint = resolveUserinfoEndpoint(realmIssuer(realm));
+    if (!isAddressedToUserinfo(payload, userinfoEndpoint)) {
       throw withEventReason(
         new JWTInvalidError('Access token audience does not include the userinfo endpoint'),
         'audience_mismatch'
@@ -107,11 +144,12 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
     }
 
-    const user = await fastify.repositories.users.findById(payload.sub);
+    const user = await fastify.repositories.users.findById(realm.id, payload.sub);
 
-    // A subject that names no user — deleted since the token was minted — is
-    // the same refusal: the token is not valid for this endpoint any more.
-    // RFC 6750 §3.1 defines no "not found" for a protected resource.
+    // A subject that names no user — deleted since the token was minted, or a
+    // user of another realm than the request's (#489) — is the same refusal:
+    // the token is not valid for this endpoint. RFC 6750 §3.1 defines no "not
+    // found" for a protected resource.
     if (!user) {
       throw withEventReason(inactiveSubjectError(), 'subject_not_a_user');
     }
@@ -148,7 +186,7 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // §5.3.2 permits omission of unavailable claims. The resolver query
     // is skipped entirely when the scope was not granted; the same helper
     // applies the same rule at every token mint site.
-    Object.assign(responseBody, await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes));
+    Object.assign(responseBody, await resolveEmailClaimsForScopes(fastify, user, grantedScopes));
 
     // OIDC Core §5.1 `name` — the end-user display name, derived from the
     // stored first/last name parts. Released only under the `profile` scope;
@@ -284,8 +322,7 @@ export default async function (fastify: FastifyInstance) {
     {
       preHandler: fastify.requireJwt,
       schema: {
-        description:
-          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.",
+        description: `OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose \`aud\` contains its own \`client_id\` or this endpoint's URL, or the developer portal's token: \`client_id\` the system client and \`aud\` the developer API's audience, \`${API_FAMILY_AUDIENCES.developer}\`. A token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the \`DPoP\` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token.`,
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400, 401],
@@ -315,8 +352,7 @@ export default async function (fastify: FastifyInstance) {
       preHandler: (request: FastifyRequest, reply: FastifyReply) =>
         resolveUserinfoTokenPreHandler(fastify, request, reply),
       schema: {
-        description:
-          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the `DPoP` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.",
+        description: `OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's \`aud\` must contain its own \`client_id\` or this endpoint's URL, unless it is the developer portal's token: \`client_id\` the system client and \`aud\` the developer API's audience, \`${API_FAMILY_AUDIENCES.developer}\`. A token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token). With DPoP on, a DPoP-bound token is accepted only under the \`DPoP\` scheme with a valid proof (RFC 9449 §7), and refused as a Bearer token or a body parameter.`,
         tags: ['OAuth', 'Userinfo'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400, 401],

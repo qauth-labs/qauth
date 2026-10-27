@@ -202,7 +202,7 @@ function setEphemeralEnv(surface: FlagSurface): void {
 
     EMAIL_PROVIDER: 'mock',
     EMAIL_FROM_ADDRESS: 'noreply@qauth.dev',
-    EMAIL_BASE_URL: 'https://qauth.dev',
+    EMAIL_BASE_URL: 'https://auth.qauth.dev',
 
     RATE_LIMIT_ENABLED: 'false',
 

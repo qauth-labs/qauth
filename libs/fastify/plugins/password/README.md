@@ -51,7 +51,9 @@ await fastify.listen({ port: 3000 });
 ```typescript
 import Fastify from 'fastify';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
-import { env } from '@qauth-labs/server-config';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
 
@@ -61,6 +63,7 @@ await fastify.register(passwordPlugin, {
     memoryCost: env.PASSWORD_MEMORY_COST,
     timeCost: env.PASSWORD_TIME_COST,
     parallelism: env.PASSWORD_PARALLELISM,
+    queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
   validationConfig: {
     minScore: env.PASSWORD_MIN_SCORE,
@@ -80,6 +83,30 @@ Once registered, both password hasher and validator are available on the Fastify
 > user row — see the [full integration example](#example-complete-integration) at the end.
 
 ```typescript
+import { randomBytes } from 'node:crypto';
+
+// A decoy Argon2id hash of a random secret nobody holds, made by the
+// configured hasher so it costs what a stored hash costs (as QAuth's
+// apps/auth-server/src/app/helpers/decoy-hash.ts does). Made before the server
+// takes requests, so the first miss only verifies, as every hit does.
+let decoyHash: Promise<string> | undefined;
+const makeDecoyHash = () => fastify.passwordHasher.hashPassword(randomBytes(32).toString('hex'));
+fastify.addHook('onReady', async () => {
+  decoyHash = makeDecoyHash();
+  await decoyHash;
+});
+
+/** Spend one Argon2id verification on a login that found no hash to check. Never throws. */
+async function verifyAgainstDecoyHash(password: string): Promise<void> {
+  try {
+    decoyHash ??= makeDecoyHash(); // only after a failed decoy
+    await fastify.passwordHasher.verifyPassword(await decoyHash, password);
+  } catch (err) {
+    decoyHash = undefined; // a failed decoy must not turn a miss into a 500
+    fastify.log.error({ err }, 'decoy password verification failed');
+  }
+}
+
 fastify.post('/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
@@ -108,6 +135,9 @@ fastify.post('/login', async (request, reply) => {
 
   const user = await findUserByEmail(email);
   if (!user) {
+    // Same Argon2id work and same 401 as a wrong password, so neither the answer
+    // nor its timing tells a caller which accounts exist.
+    await verifyAgainstDecoyHash(password);
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
@@ -144,6 +174,7 @@ interface PasswordPluginOptions {
     memoryCost?: number; // Memory cost in KB (default: 65536 = 64MB)
     timeCost?: number; // Time cost / iterations (default: 3)
     parallelism?: number; // Parallelism / threads (default: 4)
+    queueLimit?: number; // Waiting Argon2 jobs before a shed verification is refused (default: 32)
   };
   /**
    * Configuration for password strength validation
@@ -222,13 +253,15 @@ async function myRoute(fastify: FastifyInstance) {
 The plugin accepts configuration through options. For environment-based configuration, use `@qauth-labs/server-config`:
 
 ```typescript
-import { env } from '@qauth-labs/server-config';
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 await fastify.register(passwordPlugin, {
   hashConfig: {
     memoryCost: env.PASSWORD_MEMORY_COST,
     timeCost: env.PASSWORD_TIME_COST,
     parallelism: env.PASSWORD_PARALLELISM,
+    queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
   validationConfig: {
     minScore: env.PASSWORD_MIN_SCORE,
@@ -243,6 +276,7 @@ Environment variables (validated by `@qauth-labs/server-config`):
 PASSWORD_MEMORY_COST=65536  # Memory cost in KB (default: 65536 = 64MB)
 PASSWORD_TIME_COST=3        # Time cost / iterations (default: 3)
 PASSWORD_PARALLELISM=4      # Parallelism / threads (default: 4)
+PASSWORD_HASH_QUEUE_LIMIT=32 # Waiting Argon2id jobs before a client-secret check is refused with 503 (default: 32; 0 = whenever every thread is busy)
 
 # Password validation configuration
 PASSWORD_MIN_SCORE=2        # Minimum strength score 0-4 (default: 2 = Fair)
@@ -287,7 +321,9 @@ Register the password plugin after database and cache plugins:
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
-import { env } from '@qauth-labs/server-config';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 await fastify.register(databasePlugin, {
   config: {
@@ -318,6 +354,7 @@ await fastify.register(passwordPlugin, {
     memoryCost: env.PASSWORD_MEMORY_COST,
     timeCost: env.PASSWORD_TIME_COST,
     parallelism: env.PASSWORD_PARALLELISM,
+    queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
   validationConfig: {
     minScore: env.PASSWORD_MIN_SCORE,
@@ -360,14 +397,26 @@ fastify.post('/register', async (request, reply) => {
 ## Example: Complete Integration
 
 ```typescript
+import { randomBytes } from 'node:crypto';
+
 import Fastify from 'fastify';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
-import { env } from '@qauth-labs/server-config';
-import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
+import {
+  buildPasswordCredentialData,
+  passwordCredentialDataSchema,
+} from '@qauth-labs/server-federation';
+import { normalizeEmail } from '@qauth-labs/shared-validation';
+
+// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
+import { env } from './config/env';
 
 const fastify = Fastify();
+
+// The realm the accounts belong to (a `realms.id`). QAuth's auth server takes
+// it from the host each request names.
+const realmId = '<your realm id>';
 
 // Register plugins
 await fastify.register(databasePlugin, {
@@ -399,6 +448,7 @@ await fastify.register(passwordPlugin, {
     memoryCost: env.PASSWORD_MEMORY_COST,
     timeCost: env.PASSWORD_TIME_COST,
     parallelism: env.PASSWORD_PARALLELISM,
+    queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
   validationConfig: {
     minScore: env.PASSWORD_MIN_SCORE,
@@ -411,6 +461,28 @@ await fastify.register(passwordPlugin, {
 // explicit seam in case you attach derived fields later.
 function sanitizeUser<T extends Record<string, unknown>>(user: T): T {
   return user;
+}
+
+// A decoy Argon2id hash of a random secret nobody holds, made by the
+// configured hasher so it costs what a stored hash costs (as QAuth's
+// apps/auth-server/src/app/helpers/decoy-hash.ts does). Made before the server
+// takes requests, so the first miss only verifies, as every hit does.
+let decoyHash: Promise<string> | undefined;
+const makeDecoyHash = () => fastify.passwordHasher.hashPassword(randomBytes(32).toString('hex'));
+fastify.addHook('onReady', async () => {
+  decoyHash = makeDecoyHash();
+  await decoyHash;
+});
+
+/** Spend one Argon2id verification on a login that found no hash to check. Never throws. */
+async function verifyAgainstDecoyHash(password: string): Promise<void> {
+  try {
+    decoyHash ??= makeDecoyHash(); // only after a failed decoy
+    await fastify.passwordHasher.verifyPassword(await decoyHash, password);
+  } catch (err) {
+    decoyHash = undefined; // a failed decoy must not turn a miss into a 500
+    fastify.log.error({ err }, 'decoy password verification failed');
+  }
 }
 
 // Registration route
@@ -438,7 +510,7 @@ fastify.post('/auth/register', async (request, reply) => {
     userId: user.id,
     realmId,
     providerType: 'password',
-    externalSub: email, // the normalized email
+    externalSub: normalizeEmail(email),
     credentialData: buildPasswordCredentialData(passwordHash, false),
   });
 
@@ -455,17 +527,22 @@ fastify.post('/auth/login', async (request, reply) => {
   const credential = await fastify.repositories.userCredentials.findByRealmProviderSub(
     realmId,
     'password',
-    email
+    normalizeEmail(email)
   );
-  if (!credential) {
+
+  // The hash lives in the credential's snake_case JSONB blob, not on the user;
+  // `credentialData` is typed `Record<string, unknown>`, so parse it.
+  const parsed = credential
+    ? passwordCredentialDataSchema.safeParse(credential.credentialData)
+    : undefined;
+  if (!credential || !parsed?.success) {
+    // Same Argon2id work and same 401 as a wrong password, so neither the answer
+    // nor its timing tells a caller which accounts exist.
+    await verifyAgainstDecoyHash(password);
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  // The hash lives in the credential's snake_case JSONB blob, not on the user.
-  const isValid = await fastify.passwordHasher.verifyPassword(
-    credential.credentialData.password_hash,
-    password
-  );
+  const isValid = await fastify.passwordHasher.verifyPassword(parsed.data.password_hash, password);
 
   if (!isValid) {
     return reply.code(401).send({ error: 'Invalid credentials' });

@@ -129,6 +129,7 @@ describe('createSsfDeliveryRoute', () => {
         headers: { 'content-type': 'application/secevent+jwt', accept: 'application/json' },
         body: 'h.p.s',
         purpose: 'ssf_push',
+        source: 'client',
         limits: { maxRedirects: 0, maxResponseBytes: 65536 },
       },
     ]);

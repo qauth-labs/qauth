@@ -9,6 +9,7 @@ import {
   type DeliveryRole,
   type DeliveryRoleOptions,
   resolveDeliverySettings,
+  SIGNER_HOLD_WARN_INTERVAL_MS,
   startDeliveryRole,
 } from './delivery-role';
 import type {
@@ -331,6 +332,56 @@ describe('startDeliveryRole', () => {
     await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
     await vi.waitFor(() => expect(store.rows[0].status).toBe('delivered'));
     expect(attempts.map((attempt) => attempt.result)).toEqual(['delivered']);
+  });
+
+  it('warns at the first signer hold and again at an interval, and counts the holds (#495)', async () => {
+    let signerUp = false;
+    let signing!: ReturnType<typeof route>;
+    const { clock, store, log, role } = await setup((clock) => {
+      signing = route(clock, [{ id: 'a', realmId: REALM }], () =>
+        signerUp
+          ? Promise.resolve({ ok: true, statusCode: 202 } as DeliveryOutcome)
+          : Promise.reject(
+              Object.assign(new Error('temporarily_unavailable'), {
+                statusCode: 503,
+                code: 'TEMPORARILY_UNAVAILABLE',
+              })
+            )
+      );
+      return [signing];
+    });
+    const held = 'the signer is unavailable; the delivery is held and spends no attempt';
+    const stillHeld = 'the signer is still unavailable; the delivery is still held';
+    const warnings = (message: string) =>
+      log.warn.mock.calls.filter(([, text]) => text === message).length;
+
+    expect(role.signerHeld()).toEqual({ count: 0, oldestSeconds: 0 });
+    store.append(envelope());
+    await clock.advanceBy(POLL);
+    await vi.waitFor(() => expect(signing.calls).toHaveLength(1));
+    await vi.waitFor(() => expect(warnings(held)).toBe(1));
+    expect(role.signerHeld().count).toBe(1);
+
+    // Held again and again: quiet until the interval has passed.
+    const holdsPerInterval = SIGNER_HOLD_WARN_INTERVAL_MS / DELIVERY_HOLD_INTERVAL_MS;
+    for (let calls = 2; calls <= holdsPerInterval; calls += 1) {
+      await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+      await vi.waitFor(() => expect(signing.calls).toHaveLength(calls));
+    }
+    expect(warnings(held)).toBe(1);
+    expect(warnings(stillHeld)).toBe(0);
+    await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+    await vi.waitFor(() => expect(warnings(stillHeld)).toBe(1));
+    expect(role.signerHeld()).toEqual({
+      count: 1,
+      oldestSeconds: SIGNER_HOLD_WARN_INTERVAL_MS / 1000,
+    });
+    expect(log.info).not.toHaveBeenCalledWith(expect.anything(), held);
+
+    signerUp = true;
+    await clock.advanceBy(DELIVERY_HOLD_INTERVAL_MS);
+    await vi.waitFor(() => expect(store.rows[0].status).toBe('delivered'));
+    expect(role.signerHeld()).toEqual({ count: 0, oldestSeconds: 0 });
   });
 
   it.each([

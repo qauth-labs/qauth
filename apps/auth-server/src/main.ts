@@ -16,6 +16,7 @@ import {
 } from './app/helpers/request-bounds';
 import { openapiOptions } from './app/openapi-options';
 import errorHandler from './app/plugins/error-handler';
+import { servesApiDocs } from './app/service-roles';
 import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
@@ -50,8 +51,9 @@ const server = Fastify({
   // decides `request.host`, which picks the request's realm
   // (app/plugins/realm-resolver.ts, #486): `X-Forwarded-Host` counts only from
   // a listed hop. The host only selects a realm; no URL is built from it, and
-  // nothing reads `request.protocol`. The public origin still comes from
-  // JWT_ISSUER (ADR-013).
+  // nothing reads `request.protocol`. Every public URL starts at the issuer of
+  // the resolved realm (app/helpers/realm-url.ts, #490), and the lint
+  // configuration refuses the request's authority outside the resolver.
   trustProxy: env.TRUST_PROXY,
   routerOptions: {
     ignoreTrailingSlash: true,
@@ -166,10 +168,11 @@ async function start() {
     // so the API surface is not advertised to unauthenticated callers in a
     // hardened deployment. The spec is still registered (so routes are
     // discoverable for the Zod type provider) even when the UI is off — the
-    // gate only suppresses the `/docs` route.
+    // gate only suppresses the `/docs` route. Only a process holding `api`
+    // serves `/docs` (#495): the UI registers outside the route manifest.
     await server.register(errorHandler);
     await server.register(swagger, openapiOptions);
-    if (env.ENABLE_SWAGGER) {
+    if (servesApiDocs(env.SERVICE_ROLES, env.ENABLE_SWAGGER)) {
       await server.register(swaggerUi, {
         routePrefix: '/docs',
         uiConfig: { docExpansion: 'list', filter: true },

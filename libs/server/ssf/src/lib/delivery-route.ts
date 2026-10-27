@@ -222,6 +222,9 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
           headers,
           body: token,
           purpose: SSF_EGRESS_PURPOSE,
+          // A receiver registers its own push endpoint: never an allowlist
+          // destination (ADR-019 Decision 8).
+          source: 'client',
           limits,
         });
         status = response.status;

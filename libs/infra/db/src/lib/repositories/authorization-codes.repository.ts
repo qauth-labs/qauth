@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, lt } from 'drizzle-orm';
 
 import type {
   AuthorizationCode,
@@ -7,6 +7,7 @@ import type {
   NewAuthorizationCode,
 } from '../../types';
 import { DbClient } from '../db';
+import { oauthClients } from '../schema/core';
 import { authorizationCodes } from '../schema/tokens';
 
 /**
@@ -36,19 +37,31 @@ export function createAuthorizationCodesRepository(
      * Find an authorization code by its code value
      * Only returns codes that are not used and not expired
      *
+     * `authorization_codes` has no realm column (#489): the client the code
+     * was issued to pins the realm, so the read joins it and filters on its
+     * realm. A code of another realm is then no row at all, from the same
+     * single query an unknown code gets.
+     *
+     * @param realmId - Realm the request was resolved to
      * @param code - Authorization code value
      * @param tx - Optional transaction client
      * @returns Authorization code if found and valid, undefined otherwise
      */
-    async findByCode(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined> {
+    async findByCode(
+      realmId: string,
+      code: string,
+      tx?: DbClient
+    ): Promise<AuthorizationCode | undefined> {
       const invoker = tx ?? defaultDb;
       const now = Date.now();
 
       const [result] = await invoker
-        .select()
+        .select(getTableColumns(authorizationCodes))
         .from(authorizationCodes)
+        .innerJoin(oauthClients, eq(authorizationCodes.oauthClientId, oauthClients.id))
         .where(
           and(
+            eq(oauthClients.realmId, realmId),
             eq(authorizationCodes.code, code),
             eq(authorizationCodes.used, false),
             gt(authorizationCodes.expiresAt, now)
@@ -67,20 +80,28 @@ export function createAuthorizationCodesRepository(
      * Decision 10) rather than looking like an unknown code. Callers MUST
      * check `used` and `expiresAt` themselves before trusting the row.
      *
+     * Scoped to the realm as {@link findByCode} is (#489): the read joins the
+     * client the code was issued to and filters on its realm, so a code of
+     * another realm, spent or not, is no row at all and its replay revokes
+     * nothing there.
+     *
+     * @param realmId - Realm the request was resolved to
      * @param code - Authorization code value
      * @param tx - Optional transaction client
-     * @returns Authorization code if a row with this value exists, undefined otherwise
+     * @returns Authorization code if a row with this value exists in the realm, undefined otherwise
      */
     async findByCodeIncludingUsed(
+      realmId: string,
       code: string,
       tx?: DbClient
     ): Promise<AuthorizationCode | undefined> {
       const invoker = tx ?? defaultDb;
 
       const [result] = await invoker
-        .select()
+        .select(getTableColumns(authorizationCodes))
         .from(authorizationCodes)
-        .where(eq(authorizationCodes.code, code))
+        .innerJoin(oauthClients, eq(authorizationCodes.oauthClientId, oauthClients.id))
+        .where(and(eq(oauthClients.realmId, realmId), eq(authorizationCodes.code, code)))
         .limit(1);
 
       return result;

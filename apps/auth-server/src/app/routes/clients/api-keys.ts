@@ -1,5 +1,5 @@
 import { JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
@@ -7,6 +7,7 @@ import { env } from '../../../config/env';
 import { assertStaticApiKeysAllowed, generateApiKey } from '../../helpers/api-key';
 import { createRequireManagementJwt } from '../../helpers/management-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import {
   apiKeySchema,
@@ -83,14 +84,23 @@ function requireDeveloperId(request: { jwtPayload?: { sub?: string } }): string 
 
 /**
  * Resolve a client the caller owns, or throw 404. Mirrors
- * `resolveOwnedClient` in `index.ts`: a non-UUID subject and a client owned by
- * another developer are both reported as 404 (no existence enumeration).
+ * `resolveOwnedClient` in `index.ts`: a non-UUID subject, a client owned by
+ * another developer and a client of another realm (#489) are all reported as
+ * 404 (no existence enumeration).
  */
-async function resolveOwnedClient(fastify: FastifyInstance, developerId: string, clientId: string) {
+async function resolveOwnedClient(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  developerId: string,
+  clientId: string
+) {
   if (!uuidSubjectSchema.safeParse(developerId).success) {
     throw new NotFoundError('OAuthClient', clientId);
   }
-  const client = await fastify.repositories.oauthClients.findById(clientId);
+  const client = await fastify.repositories.oauthClients.findById(
+    requestRealm(request).id,
+    clientId
+  );
   if (!client || client.developerId !== developerId) {
     throw new NotFoundError('OAuthClient', clientId);
   }
@@ -137,7 +147,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
       const { clientId } = request.params as { clientId: string };
       const body = request.body as CreateApiKeyRequest;
 
-      const client = await resolveOwnedClient(fastify, developerId, clientId);
+      const client = await resolveOwnedClient(fastify, request, developerId, clientId);
 
       // ENVIRONMENT GATE (ADR-008 §6): resolve the client's effective policy and
       // refuse minting (403) unless static API keys are allowed. Done BEFORE
@@ -207,9 +217,9 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
       const developerId = requireDeveloperId(request);
       const { clientId } = request.params as { clientId: string };
 
-      const client = await resolveOwnedClient(fastify, developerId, clientId);
+      const client = await resolveOwnedClient(fastify, request, developerId, clientId);
 
-      const rows = await fastify.repositories.apiKeys.listByClient(client.id);
+      const rows = await fastify.repositories.apiKeys.listByClient(client.realmId, client.id);
       return reply.send({ apiKeys: rows.map(toApiKeyResponse) });
     }
   );
@@ -235,16 +245,16 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
       const developerId = requireDeveloperId(request);
       const { clientId, keyId } = request.params as { clientId: string; keyId: string };
 
-      const client = await resolveOwnedClient(fastify, developerId, clientId);
+      const client = await resolveOwnedClient(fastify, request, developerId, clientId);
 
       // The key must belong to the resolved (owned) client; otherwise 404 so a
       // key id is never confirmed across ownership boundaries.
-      const existing = await fastify.repositories.apiKeys.findById(keyId);
+      const existing = await fastify.repositories.apiKeys.findById(client.realmId, keyId);
       if (!existing || existing.clientId !== client.id) {
         throw new NotFoundError('ApiKey', keyId);
       }
 
-      const revoked = await fastify.repositories.apiKeys.revoke(keyId);
+      const revoked = await fastify.repositories.apiKeys.revoke(client.realmId, keyId);
       if (!revoked) {
         // Concurrent hard-delete or vanished row — treat as not found.
         throw new NotFoundError('ApiKey', keyId);

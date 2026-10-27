@@ -3,16 +3,33 @@ import { randomBytes } from 'node:crypto';
 import { isUniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
-import { AUTHORIZATION_CODE_TTL_MS } from '../constants';
-
-/** The repository every code is written through. */
-type CodeRepository = FastifyInstance['repositories']['authorizationCodes'];
+import { AUTHORIZATION_CODE_TTL_MS, MINT_TRANSACTION } from '../constants';
 
 /**
  * A transaction the code is written in: the caller's, when the mint is one
- * step of a larger unit (the consent re-check at `/oauth/authorize`).
+ * step of a larger unit (the consent re-check at `/oauth/authorize`, the
+ * remembered consent on the consent screen). A transaction, never the root
+ * client: the session's share lock must last until the code commits.
  */
-export type AuthorizationCodeTransaction = NonNullable<Parameters<CodeRepository['create']>[1]>;
+export type AuthorizationCodeTransaction = Parameters<
+  FastifyInstance['repositories']['sessions']['recordClient']
+>[3];
+
+/**
+ * The browser session a code is issued under (#549): the session's realm and
+ * its `sid` (the `sessions` row id).
+ */
+export interface AuthorizationCodeSession {
+  readonly realmId: string;
+  readonly sid: string;
+}
+
+/**
+ * What a mint did: the code to send to the client, or `session_ended` when the
+ * browser session was revoked or expired under the request and no code was
+ * written (#549).
+ */
+export type AuthorizationCodeMint = { readonly code: string } | 'session_ended';
 
 /**
  * What an authorization code binds, as the mint site knows it.
@@ -46,6 +63,14 @@ export interface AuthorizationCodeGrant {
   readonly sessionExpiresAt: number | null;
   /** RFC 9449 §10 `dpop_jkt`: the key the token request must prove. */
   readonly dpopJkt: string | null;
+  /**
+   * ADR-019 Decisions 3 and 4 (#549): the browser session the code is issued
+   * under. Its `sid` is stored on the code, and the code exchange puts it in
+   * the ID token; the client is recorded against the session
+   * (`session_clients`, what back-channel logout reads). Null on the legacy
+   * Bearer path (no interactive session): no `sid`, no client recorded.
+   */
+  readonly session: AuthorizationCodeSession | null;
 }
 
 /**
@@ -92,21 +117,56 @@ export function isMintableCodeChallenge(challenge: unknown, method: unknown): bo
  * which leaves PKCE optional). The code is 32 random bytes in base64url and
  * lives `AUTHORIZATION_CODE_TTL_MS`.
  *
- * With `tx` the code is written in the caller's transaction, under a
- * savepoint, so the retry after a code collision leaves that transaction
- * usable; without it, each attempt is its own statement.
+ * A code issued under a browser session (#549) is written in the same
+ * transaction that records the client against that session
+ * (`session_clients`), with the session's row locked `FOR SHARE` meanwhile. A
+ * sign-out that committed first leaves no live session, and no code is
+ * written (`session_ended`): its ID token would name a session no
+ * back-channel logout reaches. One that comes later waits for the commit,
+ * then deletes the registry row written here.
  *
- * @returns the code to send to the client
+ * With `tx` the code is written in the caller's transaction, which must be
+ * READ COMMITTED (`MINT_TRANSACTION`); without it, the mint opens its own at
+ * that level. Each insert runs under a savepoint, so the retry after a code
+ * collision leaves the transaction usable.
+ *
+ * @returns the code to send to the client, or `session_ended`
  * @throws PkceChallengeRequiredError when the grant has no mintable challenge
  */
 export async function mintAuthorizationCode(
-  fastify: Pick<FastifyInstance, 'repositories'>,
+  fastify: Pick<FastifyInstance, 'repositories' | 'db'>,
   grant: AuthorizationCodeGrant,
   tx?: AuthorizationCodeTransaction
-): Promise<string> {
+): Promise<AuthorizationCodeMint> {
   if (!isMintableCodeChallenge(grant.codeChallenge, grant.codeChallengeMethod)) {
     throw new PkceChallengeRequiredError();
   }
+  if (tx === undefined) {
+    return fastify.db.transaction((own) => mintIn(fastify, grant, own), MINT_TRANSACTION);
+  }
+  return mintIn(fastify, grant, tx);
+}
+
+/** {@link mintAuthorizationCode}'s writes, in `tx`. */
+async function mintIn(
+  fastify: Pick<FastifyInstance, 'repositories'>,
+  grant: AuthorizationCodeGrant,
+  tx: AuthorizationCodeTransaction
+): Promise<AuthorizationCodeMint> {
+  // Recorded first, under the session's share lock: a session that ended
+  // gets no code at all.
+  if (
+    grant.session !== null &&
+    !(await fastify.repositories.sessions.recordClient(
+      grant.session.realmId,
+      grant.session.sid,
+      grant.oauthClientId,
+      tx
+    ))
+  ) {
+    return 'session_ended';
+  }
+
   const codes = fastify.repositories.authorizationCodes;
   const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
 
@@ -123,6 +183,7 @@ export async function mintAuthorizationCode(
       authTime: grant.authTime,
       assuranceLevel: grant.assuranceLevel,
       sessionExpiresAt: grant.sessionExpiresAt,
+      sessionId: grant.session?.sid ?? null,
       scopes: grant.scopes,
       resource: grant.resource,
       state: grant.state,
@@ -130,12 +191,8 @@ export async function mintAuthorizationCode(
       expiresAt,
     };
     try {
-      if (tx === undefined) {
-        await codes.create(row);
-      } else {
-        await tx.transaction((savepoint) => codes.create(row, savepoint));
-      }
-      return code;
+      await tx.transaction((savepoint) => codes.create(row, savepoint));
+      return { code };
     } catch (err) {
       if (!isUniqueConstraintError(err) || attempt === MAX_MINT_ATTEMPTS) throw err;
     }

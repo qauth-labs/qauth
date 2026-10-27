@@ -156,9 +156,12 @@ function requireDeveloperId(request: { jwtPayload?: { sub?: string } }): string 
  * - A row owned by a different developer is reported as **404, not 403**, so
  *   the API never confirms the existence of clients the caller does not own
  *   (avoids enumeration; OWASP API1/A01 BOLA).
+ * - A client of another realm than the request's is not found at all (#489),
+ *   the same 404.
  */
 async function resolveOwnedClient(
   fastify: FastifyInstance,
+  request: FastifyRequest,
   developerId: string,
   id: string
 ): Promise<OAuthClientRow> {
@@ -166,7 +169,7 @@ async function resolveOwnedClient(
     throw new NotFoundError('OAuthClient', id);
   }
 
-  const client = await fastify.repositories.oauthClients.findById(id);
+  const client = await fastify.repositories.oauthClients.findById(requestRealm(request).id, id);
   if (!client || client.developerId !== developerId) {
     throw new NotFoundError('OAuthClient', id);
   }
@@ -410,7 +413,10 @@ export default async function (fastify: FastifyInstance) {
       //
       // Full reasoning, including why a CIMD client is not merely unowned but
       // NOT OWNABLE: `docs/adr/012-dynamic-client-ownership.md`.
-      const rows = await fastify.repositories.oauthClients.listByDeveloper(developerId);
+      const rows = await fastify.repositories.oauthClients.listByDeveloper(
+        requestRealm(request).id,
+        developerId
+      );
 
       // Resolve each client's effective policy against its realm ceiling. Realms
       // are cached per id within the request so a developer's clients (which all
@@ -502,7 +508,7 @@ export default async function (fastify: FastifyInstance) {
 
       // The per-developer ceiling, also before hashing. `GET /api/clients`
       // returns every owned client at once; this is what bounds it.
-      await assertDeveloperClientLimit(fastify, developerId);
+      await assertDeveloperClientLimit(fastify, realm.id, developerId);
 
       const clientId = randomUUID();
 
@@ -603,7 +609,7 @@ export default async function (fastify: FastifyInstance) {
       const developerId = requireDeveloperId(request);
       const { id } = request.params as { id: string };
 
-      const client = await resolveOwnedClient(fastify, developerId, id);
+      const client = await resolveOwnedClient(fastify, request, developerId, id);
       const policy = await resolveClientPolicy(fastify, client);
 
       return reply.send(toClientResponse(client, policy));
@@ -635,7 +641,7 @@ export default async function (fastify: FastifyInstance) {
       // De-duplicated before the allowlist check and the write, as on create.
       const scopes = body.scopes === undefined ? undefined : [...new Set(body.scopes)];
 
-      const existing = await resolveOwnedClient(fastify, developerId, id);
+      const existing = await resolveOwnedClient(fastify, request, developerId, id);
 
       // Validate the *effective* configuration: take each field from the
       // request when present, else fall back to the persisted value. This
@@ -697,7 +703,7 @@ export default async function (fastify: FastifyInstance) {
         // writes and this one never reads from the body (ANT-2026-DR5XI3LV).
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
       };
-      const updated = await fastify.repositories.oauthClients.update(id, changes);
+      const updated = await fastify.repositories.oauthClients.update(existing.realmId, id, changes);
 
       // The names of the settings written, never their values.
       await emitClientEventBestEffort(
@@ -735,9 +741,9 @@ export default async function (fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
 
       // Ownership-check before deleting: delete-by-id alone cannot enforce it.
-      const existing = await resolveOwnedClient(fastify, developerId, id);
+      const existing = await resolveOwnedClient(fastify, request, developerId, id);
 
-      await fastify.repositories.oauthClients.delete(id);
+      await fastify.repositories.oauthClients.delete(existing.realmId, id);
 
       await emitClientEventBestEffort(
         fastify,
@@ -782,7 +788,7 @@ export default async function (fastify: FastifyInstance) {
       const developerId = requireDeveloperId(request);
       const { id } = request.params as { id: string };
 
-      const existing = await resolveOwnedClient(fastify, developerId, id);
+      const existing = await resolveOwnedClient(fastify, request, developerId, id);
 
       // A public client (auth method `none`) holds no usable secret, so
       // regeneration is meaningless and would mint a credential the client
@@ -795,7 +801,7 @@ export default async function (fastify: FastifyInstance) {
 
       const { plaintext, hash } = await generateClientSecret(fastify);
 
-      const updated = await fastify.repositories.oauthClients.update(id, {
+      const updated = await fastify.repositories.oauthClients.update(existing.realmId, id, {
         clientSecretHash: hash,
       });
 

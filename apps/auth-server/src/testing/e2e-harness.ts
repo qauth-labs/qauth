@@ -13,6 +13,7 @@ import Fastify, { type FastifyInstance, type InjectOptions, type RouteOptions } 
 import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
+import type { AppOptions } from '../app/app';
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
 import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
 import { encodeQrCode, renderQrCodeSvg } from '../app/helpers/qr-code';
@@ -191,9 +192,11 @@ export interface BootAuthServerOptions {
   /**
    * Routes to add beside the app's, for a suite that reads request state no
    * route shows, such as the realm the resolver put on the request (#486).
-   * Each one needs a `config.surface`, as every route of the app does.
+   * Each one needs a `config.surface`, as every route of the app does. It may
+   * be async, to import an app module after the boot reset the registry, so
+   * the module is the instance the app loaded.
    */
-  readonly routes?: (app: FastifyInstance) => void;
+  readonly routes?: (app: FastifyInstance) => void | Promise<void>;
   /**
    * The event telemetry queue's sizes and times (#541), for a suite that
    * fills the queue or waits for a batch.
@@ -206,6 +209,13 @@ export interface BootAuthServerOptions {
    * the routes a set of service roles registers (#495).
    */
   readonly onRoute?: (route: RouteOptions) => void;
+  /**
+   * Build the egress client with this factory (#481): `createTestEgressClient`
+   * from `@qauth-labs/fastify-plugin-egress`, for a suite that serves a CIMD
+   * document, a JWKS or an issuer from a local fixture server. Unset, the
+   * server uses the production client, which refuses localhost.
+   */
+  readonly egressClientFactory?: AppOptions['egressClientFactory'];
 }
 
 /**
@@ -251,6 +261,7 @@ export async function bootAuthServer(
       key.startsWith('EVENT_RETENTION_') ||
       key.startsWith('DPOP_') ||
       key.startsWith('SSF_') ||
+      key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
       key === 'TRUST_PROXY' ||
       // The role switch (#495): a process without the signer refuses a key
@@ -315,6 +326,9 @@ export async function bootAuthServer(
     ...(options.eventDeliveryRoutes === undefined
       ? {}
       : { eventDeliveryRoutes: options.eventDeliveryRoutes }),
+    ...(options.egressClientFactory === undefined
+      ? {}
+      : { egressClientFactory: options.egressClientFactory }),
   });
   const { routes } = options;
   if (routes !== undefined) {
@@ -672,9 +686,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, options) => {
+  emailService.sendVerificationEmail = async (to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, options);
+    return original.call(emailService, to, token, link, options);
   };
   try {
     const response = await app.inject({

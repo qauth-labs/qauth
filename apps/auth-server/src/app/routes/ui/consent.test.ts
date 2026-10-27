@@ -118,6 +118,18 @@ function createReply() {
   return { reply, state };
 }
 
+/** A stub transaction handle whose `transaction()` (a savepoint) runs in itself. */
+function transaction(): {
+  tx: true;
+  transaction: (cb: (inner: unknown) => Promise<unknown>) => unknown;
+} {
+  const tx = {
+    tx: true as const,
+    transaction: (cb: (inner: unknown) => Promise<unknown>) => cb(tx),
+  };
+  return tx;
+}
+
 /**
  * The realm resolver's decoration (#486): a request reaches its handler with
  * the realm of its host. A request that names its own realm keeps it.
@@ -155,11 +167,20 @@ function makeFastify() {
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
       },
+      // The client registry (#549): the session is live under the code's
+      // transaction unless a test says otherwise.
+      sessions: {
+        recordClient: vi.fn().mockResolvedValue(true),
+      },
       // `resolveBrowserSession` only accepts a session whose user is still enabled.
       users: {
         findById: vi.fn(async (id: string) => ({ id, enabled: true })),
       },
     },
+    // The code and its registry row commit in one transaction (#549). A
+    // nested `transaction()` is a savepoint of the same transaction, as in
+    // drizzle, so the stub hands the code insert the same handle.
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(transaction())) },
     jwtUtils: {
       // #282: consent redirects are authorization responses and echo the
       // RFC 9207 issuer sourced from here, the same as /oauth/authorize.
@@ -410,6 +431,53 @@ describe('UI /ui/consent GET — rendering', () => {
     });
   });
 
+  it('refuses a QAuth API audience the client does not list, and binds nothing (#509)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-509' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['urn:qauth:aud:admin:v1-rc.0'] },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('error=invalid_target');
+    expect(state.body).toBeUndefined();
+    expect((await sessions.sideRecord(session)).consentResources).toEqual({});
+  });
+
+  it('shows a QAuth API audience the client lists (#509)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-509-listed' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      audience: ['urn:qauth:aud:account:v1-rc.0'],
+    });
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['urn:qauth:aud:account:v1-rc.0'] },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.body as string).toContain(
+      'Tokens will be valid for:</strong> urn:qauth:aud:account:v1-rc.0'
+    );
+  });
+
   it('keeps naming the client default audience when the request has no resource', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
@@ -584,11 +652,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
     );
 
     expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'realm-1',
       'user-1',
       'client-uuid-1',
-      'realm-1',
       ['email'],
-      []
+      [],
+      expect.objectContaining({ tx: true })
     );
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     expect(state.redirected).toContain('https://example.com/cb');
@@ -599,6 +668,150 @@ describe('UI /ui/consent POST — allow/deny', () => {
     // The token is burned so the form cannot be replayed; the next render
     // mints a fresh one.
     expect((await sessions.sideRecord(session)).csrfToken).toBeUndefined();
+  });
+
+  /** Submit Allow for `email` from the signed-in browser `cookie`. */
+  async function allow(
+    ctx: TestContext,
+    cookie: string,
+    csrf: string,
+    extra: Record<string, string> = {}
+  ) {
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          ...extra,
+          decision: 'allow',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          scope: 'email',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return state;
+  }
+
+  it('stores the session’s sid on the code and records the client in the same transaction (#549)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-token-sid';
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-consent',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const state = await allow(ctx, cookie, csrf);
+
+    expect(state.redirected).toContain('code=');
+    const recordClient = fastify.repositories.sessions.recordClient as unknown as Mock;
+    const create = fastify.repositories.authorizationCodes.create as unknown as Mock;
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionId: 'sid-consent' }),
+      expect.objectContaining({ tx: true })
+    );
+    expect(recordClient).toHaveBeenCalledExactlyOnceWith(
+      'realm-1',
+      'sid-consent',
+      'client-uuid-1',
+      create.mock.calls[0][1]
+    );
+    // READ COMMITTED, so the share lock sees a sign-out that made it wait.
+    expect(fastify.db.transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'read committed',
+    });
+    // Recorded first: a session that ended gets no code at all.
+    expect(recordClient.mock.invocationCallOrder[0]).toBeLessThan(
+      (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+        .invocationCallOrder[0]
+    );
+  });
+
+  it('issues no code when the session ended under the request, and goes back through login (#549)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-token-ended';
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-ended',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    // A sign-out committed between the cookie's check and the code's
+    // transaction: the share lock finds no live session.
+    (fastify.repositories.sessions.recordClient as unknown as Mock).mockResolvedValue(false);
+
+    const state = await allow(ctx, cookie, csrf);
+
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(state.redirected).not.toContain('code=');
+    const stashed = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
+      .map((c) => c[1] as { authorizeUrl?: string })
+      .find((d) => typeof d?.authorizeUrl === 'string');
+    expect(stashed?.authorizeUrl).toContain('/oauth/authorize?');
+    expect(stashed?.authorizeUrl).toContain('client_id=app-123');
+    expect(emitUserEventMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:consent.granted:v1-rc.0',
+      expect.anything(),
+      expect.anything()
+    );
+    // Recorded as /oauth/authorize records it.
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'login_required', reason: 'session_ended_during_authorization' },
+      { realmId: 'realm-1', userId: 'user-1', clientId: 'app-123', actor: 'user' }
+    );
+  });
+
+  it('remembers the grant in the code’s transaction, once the session is recorded live (#549)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-token-remember';
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-remember',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const state = await allow(ctx, cookie, csrf, { allow_forever: '1' });
+
+    expect(state.redirected).toContain('code=');
+    const recordClient = fastify.repositories.sessions.recordClient as unknown as Mock;
+    const upsertGrant = fastify.repositories.oauthConsents.upsertGrant as unknown as Mock;
+    expect(upsertGrant).toHaveBeenCalledOnce();
+    expect(upsertGrant.mock.calls[0][5]).toBe(recordClient.mock.calls[0][3]);
+    expect(recordClient.mock.invocationCallOrder[0]).toBeLessThan(
+      upsertGrant.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('remembers no grant when the session ended under the request (#549)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-token-ended-remember';
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-ended-remember',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.sessions.recordClient as unknown as Mock).mockResolvedValue(false);
+
+    const state = await allow(ctx, cookie, csrf, { allow_forever: '1' });
+
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
   });
 
   it("resolves the client and records the grant in the request's realm (#487)", async () => {
@@ -631,11 +844,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
       'app-123'
     );
     expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'realm-2',
       'user-1',
       'client-uuid-1',
-      'realm-2',
       ['email'],
-      []
+      [],
+      expect.objectContaining({ tx: true })
     );
   });
 
@@ -683,11 +897,12 @@ describe('UI /ui/consent POST — allow/deny', () => {
     // The remembered grant records the audience the user approved, so
     // /oauth/authorize can tell it from one they never saw.
     expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'realm-1',
       'user-1',
       'client-uuid-1',
-      'realm-1',
       ['email'],
-      ['https://api.example.com/v1']
+      ['https://api.example.com/v1'],
+      expect.objectContaining({ tx: true })
     );
   });
 
@@ -1338,7 +1553,8 @@ describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414
       await post(requested);
 
       expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledWith(
-        expect.objectContaining({ redirectUri: requested })
+        expect.objectContaining({ redirectUri: requested }),
+        expect.objectContaining({ tx: true })
       );
       expect(state.redirected!.startsWith(`${requested}?`)).toBe(true);
       expect(new URL(state.redirected!).searchParams.get('code')).toBeTruthy();

@@ -6,8 +6,6 @@ import type { EmailOptions, EmailResult } from './core';
 export interface EmailServiceConfig {
   /** Default sender email address */
   defaultFrom?: string;
-  /** Base URL for verification links (optional) */
-  baseUrl?: string;
   /**
    * Lifetime of an email verification token, in seconds.
    *
@@ -21,6 +19,21 @@ export interface EmailServiceConfig {
 }
 
 /**
+ * Where the link in a verification email points.
+ *
+ * Given per mail rather than once per service: a server with several realms
+ * mails each account a link on its own realm's issuer (ADR-019 Decision 1).
+ */
+export interface VerificationLink {
+  /**
+   * The absolute URL the link starts at, with no trailing slash: the link is
+   * `${baseUrl}/auth/verify?token=<token>`. The auth server passes the issuer of
+   * the realm the account belongs to, never a URL from the request.
+   */
+  readonly baseUrl: string;
+}
+
+/**
  * Email service interface
  *
  * Provides domain-specific email methods built on top of the generic EmailProvider
@@ -30,12 +43,14 @@ export interface EmailService {
    * Send a verification email
    * @param to - Recipient email address
    * @param token - Verification token to include in the email
+   * @param link - Where the verification link points
    * @param options - Optional additional email options
    * @returns Promise resolving to email result
    */
   sendVerificationEmail(
     to: string,
     token: string,
+    link: VerificationLink,
     options?: Partial<EmailOptions>
   ): Promise<EmailResult>;
 

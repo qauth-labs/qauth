@@ -105,12 +105,19 @@ Wallet sign-in builds its signed request on the node that serves
 `/ui/wallet-login`, a `web` node, which may not hold the verifier key: a
 profile that signs its requests cannot offer wallet sign-in on a split
 deployment until the signer service ships. Route browser paths
-(`/oauth/authorize`, `/ui/*`, `/consents`, `/auth/link/wallet`) to the `web`
-nodes and every other path to the others at the reverse proxy.
+(`/oauth/authorize`, `/ui/*`, `/consents`, `/auth/link/wallet`, and
+`GET /auth/verify`, the email verification page) to the `web` nodes and every
+other path to the others at the reverse proxy. `POST /auth/verify` is the
+API's and stays on `api`: route `/auth/verify` by method.
 
-`SESSION_COOKIE_SECRET` is still read from the environment by every process,
-and `NODE_ENV=production` still requires it on each. It moves to the signer
-with the cookie key, after which only the `web` role receives it.
+`SESSION_COOKIE_SECRET` is still read from the environment. The `web` and
+`api` roles read the session cookie (`api` for `/auth/logout`), so
+`NODE_ENV=production` requires it on a process holding either; an `admin`,
+`signer` or `delivery` process starts without it. It moves to the signer with
+the cookie key, after which only the `web` role receives it.
+
+With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
+and its spec under `/docs`.
 
 ## See also
 

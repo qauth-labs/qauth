@@ -350,13 +350,15 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
  * through `new URL(...)`, which would case-fold the authority, elide default
  * ports and rewrite percent-encoding.
  *
- * This is the shared choke point for #282: `/oauth/authorize` derives the
- * RFC 9207 `iss` response parameter from the SAME function over the SAME
- * source (`fastify.jwtUtils.getIssuer()`), so the redirect value is
- * byte-identical to the advertised `issuer`. Clients compare the two by simple
- * string comparison (RFC 9207 §2.4, RFC 3986 §6.2.1) and MUST NOT normalise
- * before comparing — a one-character divergence is a failed authorization, so
- * this must stay the only place the issuer string is shaped.
+ * This is the shared choke point for #282. A realm's issuer is stored in this
+ * form (the default realm's boot step shapes `JWT_ISSUER` with it, and a CHECK
+ * refuses a trailing slash), and `/oauth/authorize` echoes that stored value
+ * as the RFC 9207 `iss` response parameter (`realmIssuer`,
+ * `helpers/realm-url.ts`, #490), so the redirect value is byte-identical to
+ * the advertised `issuer`. Clients compare the two by simple string comparison
+ * (RFC 9207 §2.4, RFC 3986 §6.2.1) and MUST NOT normalise before comparing — a
+ * one-character divergence is a failed authorization, so this must stay the
+ * only place the issuer string is shaped.
  */
 export function resolveIssuerIdentifier(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;

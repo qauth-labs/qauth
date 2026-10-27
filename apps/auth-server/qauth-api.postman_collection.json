@@ -223,21 +223,23 @@
         {
           "name": "Verify Email",
           "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/auth/verify?token={{verificationToken}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "verify"],
-              "query": [
-                {
-                  "key": "token",
-                  "value": "{{verificationToken}}",
-                  "description": "64-character hex verification token"
-                }
-              ]
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verificationToken}}\",\n  \"password\": \"SecurePassword123!\"\n}"
             },
-            "description": "Verify user email address using token from verification email.\n\nToken must be:\n- 64 characters\n- Valid hex string\n- Not expired\n- Not already used"
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "verify"]
+            },
+            "description": "Verify user email address using the token from the verification email and the account's password.\n\nToken must be:\n- 64 characters\n- Valid hex string\n- Not expired\n- Not already used\n\nThe password is the one chosen at registration; a wrong one consumes nothing. GET /auth/verify?token=... is the page the emailed link opens in a browser: it verifies nothing by itself."
           }
         },
         {

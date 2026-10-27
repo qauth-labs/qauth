@@ -1,0 +1,14 @@
+{
+  "name": "@qauth-labs/shared-interaction-contract",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "ajv": "catalog:",
+    "ajv-formats": "catalog:",
+    "tsx": "catalog:"
+  }
+}

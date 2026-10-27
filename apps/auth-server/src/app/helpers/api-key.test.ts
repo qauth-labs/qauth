@@ -169,7 +169,7 @@ describe('authenticateApiKey', () => {
     );
     (fastify.repositories.realms.findById as ReturnType<typeof vi.fn>).mockResolvedValue(devRealm);
 
-    const result = await authenticateApiKey(fastify, `Bearer ${generated.key}`);
+    const result = await authenticateApiKey(fastify, devRealm, `Bearer ${generated.key}`);
 
     expect(result).toEqual({
       clientId: 'client-uuid-1',
@@ -187,7 +187,7 @@ describe('authenticateApiKey', () => {
 
     (fastify.repositories.apiKeys.findByPrefix as ReturnType<typeof vi.fn>).mockResolvedValue(row);
 
-    const result = await authenticateApiKey(fastify, generated.key);
+    const result = await authenticateApiKey(fastify, devRealm, generated.key);
 
     expect(result).toBeNull();
     expect(fastify.repositories.oauthClients.findById).not.toHaveBeenCalled();
@@ -203,7 +203,7 @@ describe('authenticateApiKey', () => {
 
     (fastify.repositories.apiKeys.findByPrefix as ReturnType<typeof vi.fn>).mockResolvedValue(row);
 
-    const result = await authenticateApiKey(fastify, generated.key);
+    const result = await authenticateApiKey(fastify, devRealm, generated.key);
     expect(result).toBeNull();
   });
 
@@ -212,7 +212,11 @@ describe('authenticateApiKey', () => {
     (fastify.repositories.apiKeys.findByPrefix as ReturnType<typeof vi.fn>).mockResolvedValue(
       undefined
     );
-    const result = await authenticateApiKey(fastify, 'qauth_0123456789abcdef_deadbeefcafe');
+    const result = await authenticateApiKey(
+      fastify,
+      devRealm,
+      'qauth_0123456789abcdef_deadbeefcafe'
+    );
     expect(result).toBeNull();
   });
 
@@ -228,7 +232,7 @@ describe('authenticateApiKey', () => {
     });
     (fastify.repositories.realms.findById as ReturnType<typeof vi.fn>).mockResolvedValue(devRealm);
 
-    const result = await authenticateApiKey(fastify, generated.key);
+    const result = await authenticateApiKey(fastify, devRealm, generated.key);
     expect(result).toBeNull();
     expect(fastify.repositories.apiKeys.touchLastUsed).not.toHaveBeenCalled();
   });
@@ -247,7 +251,7 @@ describe('authenticateApiKey', () => {
       maxEnvironmentLaxity: 'production',
     });
 
-    const result = await authenticateApiKey(fastify, generated.key);
+    const result = await authenticateApiKey(fastify, devRealm, generated.key);
     expect(result).toBeNull();
   });
 
@@ -262,11 +266,15 @@ describe('authenticateApiKey', () => {
 
     // Control: the same key authenticates while the client is not suspended.
     findClient.mockResolvedValue({ ...devClient, suspended: false });
-    await expect(authenticateApiKey(fastify, `Bearer ${generated.key}`)).resolves.not.toBeNull();
+    await expect(
+      authenticateApiKey(fastify, devRealm, `Bearer ${generated.key}`)
+    ).resolves.not.toBeNull();
 
     // Suspended by the operator, though its owner keeps it enabled.
     findClient.mockResolvedValue({ ...devClient, enabled: true, suspended: true });
-    await expect(authenticateApiKey(fastify, `Bearer ${generated.key}`)).resolves.toBeNull();
+    await expect(
+      authenticateApiKey(fastify, devRealm, `Bearer ${generated.key}`)
+    ).resolves.toBeNull();
   });
 
   it('rejects when the owning client is disabled', async () => {
@@ -280,13 +288,13 @@ describe('authenticateApiKey', () => {
       enabled: false,
     });
 
-    const result = await authenticateApiKey(fastify, generated.key);
+    const result = await authenticateApiKey(fastify, devRealm, generated.key);
     expect(result).toBeNull();
   });
 
   it('returns null for a non-qauth credential without any DB hit', async () => {
     const { fastify } = makeFastify();
-    const result = await authenticateApiKey(fastify, 'Bearer not-an-api-key');
+    const result = await authenticateApiKey(fastify, devRealm, 'Bearer not-an-api-key');
     expect(result).toBeNull();
     expect(fastify.repositories.apiKeys.findByPrefix).not.toHaveBeenCalled();
   });

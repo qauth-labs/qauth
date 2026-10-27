@@ -115,6 +115,12 @@ The email verification token in the request is not valid, or has expired.
 
 A cookie-authenticated request that changes state carries no CSRF token, or not the browser session's.
 
+## `invalid-answer`
+
+**Code** `invalid_answer` · **Status** 400 · **Title** Invalid answer
+
+An Interaction API answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field.
+
 ## `unauthorized`
 
 **Code** `unauthorized` · **Status** 401 · **Title** Unauthorized
@@ -204,6 +210,12 @@ The email verification token has already been used.
 **Code** `verification_token_expired` · **Status** 410 · **Title** Verification token expired
 
 The email verification token has expired.
+
+## `interaction-expired`
+
+**Code** `interaction_expired` · **Status** 410 · **Title** Interaction expired
+
+The interaction is unknown, expired or finished, or the flow cookie does not belong to it. The answer does not say which.
 
 ## `request-timeout`
 

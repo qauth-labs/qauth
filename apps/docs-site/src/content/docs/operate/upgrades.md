@@ -127,6 +127,26 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
+### The developer portal's token: the new audience is accepted first
+
+The developer portal's token moves to the developer API's audience,
+`urn:qauth:aud:developer:v1-rc.0`, in two releases, expand then contract
+(ADR-018 §5; [#509](https://github.com/qauth-labs/qauth/issues/509),
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)):
+
+- **v0.2 accepts it.** `/api/clients`, `/api/consents`, `/auth/logout`, the
+  Bearer path of `/oauth/authorize` and userinfo accept a system-client token
+  whose `aud` is the developer audience, beside today's token, whose `aud` is
+  the system client's id. Nothing mints the new token yet: `POST /auth/login`
+  still mints today's, and the system client's row is not changed.
+- **A later release mints it** ([#524](https://github.com/qauth-labs/qauth/issues/524)).
+  Every v0.2 node accepts the tokens such a node mints.
+
+The upgrade to v0.2 is safe to roll: a node of the previous release accepts
+every portal token a v0.2 node mints, because it is the same token. There is no
+migration and nothing to run. Upgrade every node to v0.2 before the release
+that mints the new token, so no node that refuses it is left.
+
 ### Refresh tokens pause while migration 0038 runs
 
 Migration 0038 ([#552](https://github.com/qauth-labs/qauth/issues/552)) records
@@ -191,6 +211,18 @@ family in Redis, so that a replay can deny-list them. It sets those records'
 lifetimes with `EXPIRE` and its `NX` and `GT` options, which need **Redis 7.0
 or later**. The bundled Compose file runs Redis 7; check the version of a Redis
 you run yourself.
+
+### Migration 0042 holds sign-ins while it reads `authorization_codes`
+
+Migration 0042 ([#549](https://github.com/qauth-labs/qauth/issues/549)) records
+the browser session behind each authorization code. It adds a column that
+starts empty, so it rewrites no row, but its foreign key and index each read
+the whole of `authorization_codes`. It first locks `sessions` against writes,
+then `authorization_codes`, in the order a code's mint and a session's
+revocation take them, so it cannot deadlock with either. So a sign-in, a
+sign-out, minting a code and redeeming one wait until the runner commits, on
+nodes of either version. Codes live five minutes and the purge job deletes
+expired ones, so the table is usually small and the pause short.
 
 ## Upgrading within 1.x
 

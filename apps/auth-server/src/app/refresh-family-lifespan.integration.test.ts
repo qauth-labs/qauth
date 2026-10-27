@@ -131,7 +131,7 @@ describe('refresh-token families under the realm’s sso_max_lifespan (#552, rea
       enabled: true,
       requirePkce: true,
     });
-    await app.repositories.oauthConsents.upsertGrant(userId, client.id, realm.id, SCOPES);
+    await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, SCOPES);
     const jar = await signInWithPassword(app, email);
     const cookie = jar.header() as string;
     const { refreshToken, familyId, familyCreatedAt, sessionEnd } = await codeFamily(app, cookie);

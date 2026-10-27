@@ -151,6 +151,12 @@ catalogs:
     '@vitest/ui':
       specifier: ^5.0.5
       version: 5.0.5
+    ajv:
+      specifier: ^8.20.0
+      version: 8.20.0
+    ajv-formats:
+      specifier: ^3.0.1
+      version: 3.0.1
     astro:
       specifier: 7.4.0
       version: 7.4.0
@@ -470,6 +476,9 @@ importers:
       '@qauth-labs/fastify-plugin-dpop':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/dpop
+      '@qauth-labs/fastify-plugin-egress':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/egress
       '@qauth-labs/fastify-plugin-email':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/email
@@ -506,6 +515,9 @@ importers:
       '@qauth-labs/shared-events':
         specifier: workspace:*
         version: link:../../libs/shared/events
+      '@qauth-labs/shared-interaction-contract':
+        specifier: workspace:*
+        version: link:../../libs/shared/interaction-contract
       '@qauth-labs/shared-stability':
         specifier: workspace:*
         version: link:../../libs/shared/stability
@@ -773,6 +785,28 @@ importers:
       jose:
         specifier: 'catalog:'
         version: 6.2.12
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+
+  libs/fastify/plugins/egress:
+    dependencies:
+      '@qauth-labs/server-egress':
+        specifier: workspace:*
+        version: link:../../../server/egress
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.7
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 6.0.1
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
       vitest:
         specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
@@ -1090,6 +1124,34 @@ importers:
       '@vitest/ui':
         specifier: 'catalog:'
         version: 5.0.5(vitest@5.0.5)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+
+  libs/keys/vault:
+    dependencies:
+      '@qauth-labs/server-keys':
+        specifier: workspace:*
+        version: link:../../server/keys
+      '@qauth-labs/shared-errors':
+        specifier: workspace:*
+        version: link:../../shared/errors
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+    devDependencies:
+      '@qauth-labs/shared-testing':
+        specifier: workspace:*
+        version: link:../../shared/testing
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      testcontainers:
+        specifier: 'catalog:'
+        version: 12.2.1(supports-color@8.1.1)
       vitest:
         specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
@@ -1446,6 +1508,32 @@ importers:
         specifier: 'catalog:'
         version: 4.6.7
     devDependencies:
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+
+  libs/shared/interaction-client:
+    dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+    devDependencies:
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+
+  libs/shared/interaction-contract:
+    dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+    devDependencies:
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
+      ajv-formats:
+        specifier: 'catalog:'
+        version: 3.0.1(ajv@8.20.0)
       tsx:
         specifier: 'catalog:'
         version: 4.23.15
@@ -5820,6 +5908,11 @@ packages:
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
+    peerDependencies:
+      ajv: ^8.0.0
+    peerDependenciesMeta:
+      ajv:
+        optional: true
 
   ajv-i18n@4.2.0:
     resolution: {integrity: sha512-v/ei2UkCEeuKNXh8RToiFsUclmU+G57LO1Oo22OagNMENIw+Yb8eMwvHu7Vn9fmkjJyv6XclhJ8TbuigSglPkg==}
@@ -11570,7 +11663,7 @@ snapshots:
   '@fastify/ajv-compiler@4.0.5':
     dependencies:
       ajv: 8.20.0
-      ajv-formats: 3.0.1
+      ajv-formats: 3.0.1(ajv@8.20.0)
       fast-uri: 3.1.9
 
   '@fastify/cors@11.3.1':
@@ -14411,8 +14504,8 @@ snapshots:
     optionalDependencies:
       ajv: 8.20.0
 
-  ajv-formats@3.0.1:
-    dependencies:
+  ajv-formats@3.0.1(ajv@8.20.0):
+    optionalDependencies:
       ajv: 8.20.0
 
   ajv-i18n@4.2.0(ajv@8.20.0):
@@ -15555,7 +15648,7 @@ snapshots:
     dependencies:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
-      ajv-formats: 3.0.1
+      ajv-formats: 3.0.1(ajv@8.20.0)
       fast-uri: 3.1.9
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1
@@ -15564,7 +15657,7 @@ snapshots:
     dependencies:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
-      ajv-formats: 3.0.1
+      ajv-formats: 3.0.1(ajv@8.20.0)
       fast-uri: 3.1.9
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1

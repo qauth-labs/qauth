@@ -1,0 +1,56 @@
+{
+  "name": "shared-interaction-client",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/shared/interaction-client/src",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:sdk"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "oxfmt"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/apps/docs-site/public/interaction/**/*",
+        "{workspaceRoot}/.oxfmtrc.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. The drift test regenerates the client from the published Interaction API document under apps/docs-site/public/interaction and formats it with the repo's Oxfmt config (hence `oxfmt` and `.oxfmtrc.json`), then compares it with the committed client. Without these entries a change to the document would replay a cached pass."
+      }
+    },
+    "typecheck": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "externalDependencies": ["@typescript/native-preview"]
+        },
+        "{workspaceRoot}/apps/docs-site/public/interaction/**/*"
+      ],
+      "metadata": {
+        "description": "The inferred typecheck, with the published Interaction API document added to its inputs: the generated client is compiled here, so CI builds the client whenever the document changes."
+      }
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/generate-client.ts",
+        "cwd": "libs/shared/interaction-client"
+      },
+      "description": "Generate src/generated/interaction-api.ts from the published Interaction API document (apps/docs-site/public/interaction/v1-rc.0/openapi.json). The tests fail while the committed client differs from what this writes."
+    }
+  },
+  "// targets": "to see all targets run: nx show project shared-interaction-client --web"
+}

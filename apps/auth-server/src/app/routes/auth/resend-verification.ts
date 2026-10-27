@@ -15,6 +15,7 @@ import {
   SUCCESS_MESSAGES,
 } from '../../constants';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmMailLink } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import {
   type ResendVerificationRequest,
@@ -81,10 +82,15 @@ export default async function (fastify: FastifyInstance) {
       // Email is already validated by Zod schema, just normalize it
       const normalizedEmail = normalizeEmail(email);
 
+      // The realm of the host the request named (#487): the account the
+      // address names, and the allowance it is counted against, are this
+      // realm's (#489).
+      const realm = requestRealm(request);
+
       // Per-email rate limiting using atomic INCR
       // This counter is incremented for ALL requests (even if user doesn't exist)
       // to prevent email enumeration via rate limit behavior differences
-      const emailRateLimitKey = REDIS_KEYS.RESEND_RATE_LIMIT(normalizedEmail);
+      const emailRateLimitKey = REDIS_KEYS.RESEND_RATE_LIMIT(realm.id, normalizedEmail);
 
       // INCR is atomic - returns unique incrementing value per request
       // TTL is set only on first request (count=1) to ensure window doesn't reset
@@ -109,7 +115,7 @@ export default async function (fastify: FastifyInstance) {
       // quick second request read account existence from 200 vs 429.) The
       // key's TTL is the interval.
       const intervalClaimed = await fastify.redis.set(
-        REDIS_KEYS.LAST_EMAIL_SENT(normalizedEmail),
+        REDIS_KEYS.LAST_EMAIL_SENT(realm.id, normalizedEmail),
         Date.now().toString(),
         'EX',
         env.RESEND_VERIFICATION_MIN_INTERVAL,
@@ -118,9 +124,6 @@ export default async function (fastify: FastifyInstance) {
       if (intervalClaimed !== 'OK') {
         throw new TooManyRequestsError(ERROR_MESSAGES.RATE_LIMIT_EXCEEDED);
       }
-
-      // The realm of the host the request named (#487), for the credential lookup
-      const realm = requestRealm(request);
 
       // Find the password credential (don't expose if not found — prevent
       // enumeration). Since #228 this is the credential read path; malformed
@@ -144,7 +147,7 @@ export default async function (fastify: FastifyInstance) {
       // credential since #230). A disabled account behaves like an unknown
       // address: generic 200, no token, no mail.
       const user = credential
-        ? await fastify.repositories.users.findById(credential.userId)
+        ? await fastify.repositories.users.findById(realm.id, credential.userId)
         : undefined;
       if (credential && !user) {
         fastify.log.error(
@@ -185,7 +188,9 @@ export default async function (fastify: FastifyInstance) {
         // logged and does not fail the request: the user can try again later.
         const recipient = credential.externalSub;
         const send: Promise<void> = Promise.resolve()
-          .then(() => fastify.emailService.sendVerificationEmail(recipient, token))
+          .then(() =>
+            fastify.emailService.sendVerificationEmail(recipient, token, realmMailLink(realm))
+          )
           .then(
             () => undefined,
             (error: unknown) => {

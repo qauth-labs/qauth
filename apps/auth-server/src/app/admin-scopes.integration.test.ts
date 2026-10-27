@@ -35,18 +35,15 @@ import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
  *   repository or by hand, and the boot refuses a seed list that names one.
  *   Other servers' `admin:` scopes are ordinary scopes there.
  *
- * Only the network fetch of the metadata document is replaced (`ssrfSafeGet`);
+ * Only the network fetch of the metadata document is replaced (`egressGet`);
  * the resolver, the materialisation and the routes are the real ones.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
 
-const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
-vi.mock('./helpers/ssrf-safe-fetch', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, ssrfSafeGet };
-});
+const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
+vi.mock('./helpers/egress-get', () => ({ egressGet }));
 
 const CIMD_CLIENT_ID = 'https://agent.example.com/oauth/client.json';
 const CIMD_REDIRECT_URI = 'https://agent.example.com/callback';
@@ -88,7 +85,7 @@ describe('the reserved qauth: scope namespace (real containers)', () => {
       ctx.skip();
       return;
     }
-    ssrfSafeGet.mockReset();
+    egressGet.mockReset();
     await resetE2eState(booted.app);
   });
 
@@ -240,7 +237,7 @@ describe('the reserved qauth: scope namespace (real containers)', () => {
     }
 
     function serveDocument(scope: string) {
-      ssrfSafeGet.mockImplementation(async (url: string) => {
+      egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
         expect(url).toBe(CIMD_CLIENT_ID);
         return {
           status: 200,
@@ -272,7 +269,7 @@ describe('the reserved qauth: scope namespace (real containers)', () => {
       const response = await authorize();
       // Resolved: the request goes on to sign-in, it is not refused in place.
       expect(response.statusCode).toBe(302);
-      expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+      expect(egressGet).toHaveBeenCalledTimes(1);
       expect(await cimdClientScopes()).toEqual([[]]);
     });
   });

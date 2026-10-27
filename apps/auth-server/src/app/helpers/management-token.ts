@@ -2,6 +2,7 @@ import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import { resolveAudience } from './client-auth';
 import { getOrCreateSystemClient } from './oauth-client';
 import { type RealmRow, requestRealm } from './request-realm';
@@ -33,8 +34,13 @@ const uuidSubjectSchema = z.uuid();
  * portal's own token, so this pins all three claims that identify it:
  *
  * - `client_id` is the system client's id.
- * - `aud` carries every audience the system client resolves to — the same
- *   binding the `/oauth/authorize` Bearer path already enforces.
+ * - `aud` carries every audience the system client resolves to (its
+ *   `client_id` while it lists none), or the developer API's audience (#509).
+ *   This release accepts the developer audience and does not mint it; #524
+ *   mints it. Expand, then contract (ADR-018 §5): a node of the previous
+ *   release accepts every portal token this one mints, and a node of this one
+ *   accepts every portal token the next one mints. The `/oauth/authorize`
+ *   Bearer path and `/auth/logout` rely on the same rule.
  * - No `act` claim: a delegated token acts for an agent, never the developer.
  * - `sub` names a user that still exists and is enabled. The token outlives
  *   the login that minted it by up to its lifetime, and an account disabled
@@ -44,11 +50,14 @@ const uuidSubjectSchema = z.uuid();
  *   `client_id`, audience and issuer read the same in every realm (the system
  *   client is named by `SYSTEM_CLIENT_ID` in each), so the realm is its
  *   subject's: `sub` must name a user of this realm. A management token from
- *   realm A is refused at realm B.
+ *   realm A is refused at realm B, as a token naming no user is (#489).
  *
- * `requireActiveUser: false` skips the enabled check, for a caller that only
- * ends access (`/auth/logout`): a disabled user may still sign out, in their
- * own realm only. A subject that names no user is then left to the caller.
+ * `requireActiveUser: false` skips the user lookup, for a caller that only
+ * ends access (`/auth/logout`): a disabled user may still sign out. In that
+ * mode this function checks no realm at all, so the caller MUST look the
+ * subject up itself with a realm-scoped read (`users.findById(realm.id, sub)`,
+ * as `/auth/logout` does) and refuse a subject that names no user of that
+ * realm, an unknown one or another realm's, before acting on it.
  *
  * Throws `JWTInvalidError` (401) on any mismatch, as RFC 6750 §3.1 prescribes
  * for a token that is not valid for the resource.
@@ -73,33 +82,31 @@ export async function assertManagementToken(
     throw new JWTInvalidError('A delegated access token cannot use the management API');
   }
 
-  const expected = [resolveAudience(systemClient)].flat();
   const presented = claims.aud === undefined ? [] : [claims.aud].flat();
-  if (!expected.every((audience) => presented.includes(audience))) {
+  const carriesAll = (expected: string[]) =>
+    expected.every((audience) => presented.includes(audience));
+  // The system client's audience, or the developer API's (#509): accepted
+  // here before any node mints it (#524), so the upgrade that starts minting
+  // it can roll. The developer family's guard accepts only the second.
+  if (
+    !carriesAll([resolveAudience(systemClient)].flat()) &&
+    !carriesAll([API_FAMILY_AUDIENCES.developer])
+  ) {
     throw new JWTInvalidError('Access token audience does not match the management API');
   }
 
   if (options.requireActiveUser === false) {
-    if (claims.sub && uuidSubjectSchema.safeParse(claims.sub).success) {
-      const user = await fastify.repositories.users.findById(claims.sub);
-      if (user) assertUserOfRealm(user, realm);
-    }
     return;
   }
   if (!claims.sub || !uuidSubjectSchema.safeParse(claims.sub).success) {
     throw inactiveSubjectError();
   }
-  const user = await fastify.repositories.users.findById(claims.sub);
+  // Looked up in the request's realm (#489): a user of another realm is no
+  // user here, refused exactly as an unknown or disabled subject is, so the
+  // answer does not tell that the subject exists in another realm.
+  const user = await fastify.repositories.users.findById(realm.id, claims.sub);
   if (!user || !user.enabled) {
     throw inactiveSubjectError();
-  }
-  assertUserOfRealm(user, realm);
-}
-
-/** Refuse a token whose subject is a user of another realm than the request's. */
-function assertUserOfRealm(user: { realmId: string }, realm: Pick<RealmRow, 'id'>): void {
-  if (user.realmId !== realm.id) {
-    throw new JWTInvalidError('Access token was not issued in this realm');
   }
 }
 

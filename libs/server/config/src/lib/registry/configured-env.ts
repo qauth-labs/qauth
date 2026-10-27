@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { applyKeyAliases, type RawEnv } from './aliases';
 import { experimentalSettingWarnings } from './experimental';
+import { refuseRemovedKeys } from './removed';
 import type { ConfigKey, ConfigWarning, EnvDeprecationWarning } from './types';
 
 /** The environment as the registry reads it. See {@link readConfiguredEnv}. */
@@ -27,14 +28,16 @@ export interface ConfiguredEnv {
 /**
  * Read the process environment through the configuration key registry.
  *
- * Loads `.env` (variables already set win), moves every renamed key onto its
- * current name with {@link applyKeyAliases}, and collects the boot warnings
- * for deprecated names and experimental settings. The caller logs the
- * warnings once its logger exists.
+ * Loads `.env` (variables already set win), refuses a removed key that is
+ * still set (`refuseRemovedKeys`), moves every renamed key onto its current
+ * name with {@link applyKeyAliases}, and collects the boot warnings for
+ * deprecated names and experimental settings. The caller logs the warnings
+ * once its logger exists.
  *
  * @param registry - the registry entries to apply, normally `CONFIG_KEY_REGISTRY`
  * @param source - the environment to read; `process.env`, after `.env` is
  *   loaded, when omitted
+ * @throws RemovedConfigKeyError when a removed key is set
  * @throws KeyAliasConflictError when an old and a current name disagree
  *
  * @example
@@ -50,6 +53,7 @@ export function readConfiguredEnv(registry: readonly ConfigKey[], source?: RawEn
     // DOTENV_OVERRIDE variable, and variables already set must win.
     dotenv.config({ override: false });
   }
+  refuseRemovedKeys(source ?? process.env);
   const aliased = applyKeyAliases(source ?? process.env, registry);
 
   return {

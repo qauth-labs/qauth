@@ -6,6 +6,7 @@ import type {
   EmailResult,
   EmailService,
   EmailServiceConfig,
+  VerificationLink,
 } from '../types';
 import { formatDuration } from './format-duration';
 import { AccountExistsEmail } from './templates/account-exists-email';
@@ -38,10 +39,11 @@ export const DEFAULT_VERIFICATION_TOKEN_EXPIRY_SECONDS = 86400;
  * const mockProvider = new MockEmailProvider();
  * const emailService = createEmailService(mockProvider, {
  *   defaultFrom: 'noreply@example.com',
- *   baseUrl: 'https://example.com',
  * });
  *
- * await emailService.sendVerificationEmail('user@example.com', 'token123');
+ * await emailService.sendVerificationEmail('user@example.com', 'token123', {
+ *   baseUrl: 'https://auth.example.com',
+ * });
  * ```
  */
 export function createEmailService(
@@ -49,7 +51,6 @@ export function createEmailService(
   config?: EmailServiceConfig
 ): EmailService {
   const defaultFrom = config?.defaultFrom;
-  const baseUrl = config?.baseUrl;
   // Rendered once: the configured lifetime cannot change while the service lives.
   const expiresIn = formatDuration(
     config?.verificationTokenExpiry ?? DEFAULT_VERIFICATION_TOKEN_EXPIRY_SECONDS
@@ -59,9 +60,10 @@ export function createEmailService(
     async sendVerificationEmail(
       to: string,
       token: string,
+      link: VerificationLink,
       options?: Partial<EmailOptions>
     ): Promise<EmailResult> {
-      const verificationUrl = baseUrl ? `${baseUrl}/auth/verify?token=${token}` : `#token=${token}`;
+      const verificationUrl = `${link.baseUrl}/auth/verify?token=${token}`;
 
       const subject = options?.subject || 'Verify your email address';
 

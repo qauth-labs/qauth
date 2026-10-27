@@ -66,8 +66,9 @@ function createFastifyStub() {
         findByClientId: vi.fn(),
       },
       // A user subject is reported active only while its account is enabled.
+      // The lookup is realm-scoped (#489): the realm id comes first.
       users: {
-        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+        findById: vi.fn(async (realmId: string, id: string) => ({ id, realmId, enabled: true })),
       },
     },
     passwordHasher: {
@@ -223,6 +224,43 @@ describe('POST /oauth/introspect route', () => {
     );
   });
 
+  it("pins the token issuer to the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: client.clientId,
+      clientId: client.clientId,
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://b.example.com',
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Introspect handler was not registered');
+    await handler(
+      {
+        body: { token: 'valid-token', client_id: client.clientId, client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        realm: testRealm({ id: 'realm-b', issuer: 'https://b.example.com' }),
+      },
+      { send: (body: unknown) => body }
+    );
+
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('valid-token', {
+      issuer: 'https://b.example.com',
+    });
+  });
+
   it('reports a DPoP-bound token as DPoP with its cnf.jkt (RFC 9449 §6.2, #480)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);
@@ -267,7 +305,12 @@ describe('POST /oauth/introspect route', () => {
     };
     const userUuid = '019dbc24-7a2d-724d-bf26-1923f21f2234';
 
-    async function introspect(fastify: FastifyInstance, ctx: TestContext, sub: string) {
+    async function introspect(
+      fastify: FastifyInstance,
+      ctx: TestContext,
+      sub: string,
+      realm = REALM
+    ) {
       await introspectRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
         client
@@ -287,6 +330,7 @@ describe('POST /oauth/introspect route', () => {
           body: { token: 'valid-token', client_id: client.clientId, client_secret: 'secret' },
           ip: '127.0.0.1',
           headers: { 'user-agent': 'vitest' },
+          realm,
         },
         { send: (body: unknown) => body }
       );
@@ -300,7 +344,8 @@ describe('POST /oauth/introspect route', () => {
       });
 
       await expect(introspect(fastify, ctx, userUuid)).resolves.toEqual({ active: false });
-      expect(fastify.repositories.users.findById).toHaveBeenCalledWith(userUuid);
+      // The user is looked up in the request's realm (#489).
+      expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, userUuid);
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
         'urn:qauth:event:token.introspection_failed:v1-rc.0',
@@ -321,6 +366,58 @@ describe('POST /oauth/introspect route', () => {
         { error: 'invalid_token', reason: 'subject_unknown' },
         expect.objectContaining({ userId: null, clientId: client.clientId })
       );
+    });
+
+    it("reports the token of another realm's user as inactive, like an unknown subject (#489)", async () => {
+      // The user exists, but in realm-1 only: the realm-scoped lookup finds no
+      // row for it in any other realm, as for an id that names no user.
+      const userRealm = REALM.id;
+      const otherRealm = testRealm({ id: 'realm-other' });
+      const users = (fastify: FastifyInstance) =>
+        (fastify.repositories.users.findById as unknown as Mock).mockImplementation(
+          async (realmId: string, id: string) =>
+            realmId === userRealm && id === userUuid ? { id, realmId, enabled: true } : undefined
+        );
+
+      // Control: in its own realm the token is active.
+      const home = createFastifyStub();
+      users(home.fastify);
+      await expect(introspect(home.fastify, home.ctx, userUuid)).resolves.toMatchObject({
+        active: true,
+      });
+
+      // The event of a call, without its request.
+      const lastEvent = () => emitUserEventMock.mock.calls.at(-1)?.slice(1);
+
+      emitUserEventMock.mockClear();
+      const foreign = createFastifyStub();
+      users(foreign.fastify);
+      const foreignAnswer = await introspect(foreign.fastify, foreign.ctx, userUuid, otherRealm);
+      const foreignEvent = lastEvent();
+      expect(foreign.fastify.repositories.users.findById).toHaveBeenCalledWith(
+        otherRealm.id,
+        userUuid
+      );
+
+      emitUserEventMock.mockClear();
+      const unknown = createFastifyStub();
+      users(unknown.fastify);
+      const unknownAnswer = await introspect(
+        unknown.fastify,
+        unknown.ctx,
+        '019dbc24-7a2d-724d-bf26-1923f21f2299',
+        otherRealm
+      );
+
+      // The same answer, and the same event, as for a subject that names no user.
+      expect(foreignAnswer).toEqual({ active: false });
+      expect(foreignAnswer).toEqual(unknownAnswer);
+      expect(foreignEvent).toEqual(lastEvent());
+      expect(foreignEvent).toEqual([
+        'urn:qauth:event:token.introspection_failed:v1-rc.0',
+        { error: 'invalid_token', reason: 'subject_unknown' },
+        expect.objectContaining({ realmId: otherRealm.id, userId: null }),
+      ]);
     });
 
     it('never looks up a client_credentials subject (sub = client_id) as a user', async () => {
@@ -766,6 +863,81 @@ describe('POST /oauth/introspect route', () => {
 
     const result = await handler(request, reply);
     expect(result).toEqual({ active: false });
+  });
+
+  // #509: QAuth itself is the only resource server for its API families, so a
+  // family audience in a client's list never lets it read another client's
+  // family token.
+  it.each([
+    ['the family audience alone', ['urn:qauth:aud:account:v1-rc.0']],
+    ['the family audience beside its own', ['urn:qauth:aud:account:v1-rc.0', 'api.example.com']],
+  ])(
+    'returns active: false for another client’s family token when the client lists %s',
+    async (_label, audience) => {
+      const { fastify, ctx } = createFastifyStub();
+      await introspectRoute(fastify);
+      if (!ctx.handler) throw new Error('Introspect handler was not registered');
+
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'client-family',
+        clientId: 'account-console',
+        clientSecretHash: 'hashed-secret',
+        enabled: true,
+        audience,
+      });
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+        sub: 'user-1',
+        clientId: 'caller-app',
+        aud: 'urn:qauth:aud:account:v1-rc.0',
+        exp: 1234567890,
+        iat: 1234567800,
+        iss: 'https://auth.example.com',
+      });
+
+      const result = await ctx.handler(
+        {
+          body: { token: 'family-token', client_id: 'account-console', client_secret: 'secret' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        { send: (body: unknown) => body }
+      );
+      expect(result).toEqual({ active: false });
+    }
+  );
+
+  it('still lets a client introspect its own family token', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+    if (!ctx.handler) throw new Error('Introspect handler was not registered');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'client-family',
+      clientId: 'account-console',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: ['urn:qauth:aud:account:v1-rc.0'],
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      clientId: 'account-console',
+      aud: 'urn:qauth:aud:account:v1-rc.0',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const result = (await ctx.handler(
+      {
+        body: { token: 'own-token', client_id: 'account-console', client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      { send: (body: unknown) => body }
+    )) as { active: boolean };
+    expect(result.active).toBe(true);
   });
 
   it('returns active: false for cross-client introspection when the client has no audience configured', async () => {

@@ -20,6 +20,7 @@ import {
   pluginsFor,
   repositoriesFor,
   routeRolesProblem,
+  servesApiDocs,
   SERVICE_ROLE_NAMES,
   ServiceRoleBootError,
   type ServiceRoleSettings,
@@ -40,29 +41,43 @@ function splitSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRole
 describe('the route-to-role check', () => {
   const route = { method: 'GET', url: '/oauth/example' };
 
-  it('passes a route that names its roles', () => {
-    expect(routeRolesProblem({ ...route, config: { serviceRoles: ['api'] } })).toBeUndefined();
-    expect(routeRolesProblem({ ...route, config: { serviceRoles: SERVICE_ROLE_NAMES } })).toBe(
-      undefined
-    );
+  it('passes a route that names a role of the process', () => {
+    expect(
+      routeRolesProblem({ ...route, config: { serviceRoles: ['api'] } }, SERVICE_ROLE_NAMES)
+    ).toBeUndefined();
+    expect(
+      routeRolesProblem({ ...route, config: { serviceRoles: ['web', 'api'] } }, ['api'])
+    ).toBeUndefined();
+    expect(
+      routeRolesProblem({ ...route, config: { serviceRoles: SERVICE_ROLE_NAMES } }, ['signer'])
+    ).toBe(undefined);
+  });
+
+  it('fails a route whose roles the process does not hold, naming them', () => {
+    const problem = routeRolesProblem({ ...route, config: { serviceRoles: ['admin'] } }, ['web']);
+    expect(problem).toContain('GET /oauth/example');
+    expect(problem).toContain('belongs to admin');
+    expect(problem).toContain('SERVICE_ROLES=web');
   });
 
   it('fails a route with no role, and names the route and the manifest', () => {
     for (const config of [undefined, {}, { serviceRoles: undefined }]) {
-      const problem = routeRolesProblem({ ...route, config });
+      const problem = routeRolesProblem({ ...route, config }, SERVICE_ROLE_NAMES);
       expect(problem).toContain('GET /oauth/example');
       expect(problem).toContain('route-manifest.ts');
     }
   });
 
   it('fails an empty or unknown role list', () => {
-    expect(routeRolesProblem({ ...route, config: { serviceRoles: [] } })).toContain(
-      'GET /oauth/example'
-    );
-    expect(routeRolesProblem({ ...route, config: { serviceRoles: ['frontend'] } })).toContain(
-      'no known service role'
-    );
-    expect(routeRolesProblem({ ...route, config: { serviceRoles: 'api' } })).toBeDefined();
+    expect(
+      routeRolesProblem({ ...route, config: { serviceRoles: [] } }, SERVICE_ROLE_NAMES)
+    ).toContain('GET /oauth/example');
+    expect(
+      routeRolesProblem({ ...route, config: { serviceRoles: ['frontend'] } }, SERVICE_ROLE_NAMES)
+    ).toContain('no known service role');
+    expect(
+      routeRolesProblem({ ...route, config: { serviceRoles: 'api' } }, SERVICE_ROLE_NAMES)
+    ).toBeDefined();
   });
 });
 
@@ -96,17 +111,21 @@ describe('what each role loads (the boot-time list)', () => {
 
   it('keeps the API-only stores out of web', () => {
     const web = repositoriesFor(['web']);
-    for (const name of [
-      'apiKeys',
-      'emailVerificationTokens',
-      'eventDeliveries',
-      'eventRetention',
-      'ssfStreams',
-    ] as const) {
+    // `emailVerificationTokens` is web's too: the verification page posts to
+    // `/ui/verify` (#885).
+    for (const name of ['apiKeys', 'eventDeliveries', 'eventRetention', 'ssfStreams'] as const) {
       expect(web).not.toContain(name);
     }
     expect(web).toContain('sessions');
-    expect([...pluginsFor(['web'])]).toEqual(['dpop', 'jwt', 'password', 'federation', 'sessions']);
+    expect([...pluginsFor(['web'])]).toEqual([
+      'dpop',
+      'jwt',
+      'password',
+      'federation',
+      'email',
+      'sessions',
+      'egress',
+    ]);
   });
 
   it('keeps the delivery state out of api, which purges the expired rows', () => {
@@ -167,6 +186,17 @@ describe('the jobs of each role', () => {
   });
 });
 
+describe('servesApiDocs', () => {
+  it('serves /docs only on a process holding api, and only with ENABLE_SWAGGER', () => {
+    expect(servesApiDocs(SERVICE_ROLE_NAMES, true)).toBe(true);
+    expect(servesApiDocs(['web', 'api'], true)).toBe(true);
+    for (const role of ['web', 'admin', 'signer', 'delivery'] as const) {
+      expect(servesApiDocs([role], true), role).toBe(false);
+    }
+    expect(servesApiDocs(SERVICE_ROLE_NAMES, false)).toBe(false);
+  });
+});
+
 describe('isKeyMaterialVariable', () => {
   it.each([
     ['KEK', 'a2V5'],
@@ -175,6 +205,13 @@ describe('isKeyMaterialVariable', () => {
     ['KEK_PREVIOUS_PATH', '/run/secrets/kek-previous'],
     ['KEK_PROVIDER', 'cloud-kms'],
     ['KEK_CLOUD_KMS_KEY_ID', 'key-1'],
+    // The Vault adapter's settings (#876): its address names where the KEK
+    // lives, its credentials unwrap it.
+    ['KEK_PROVIDER', 'vault'],
+    ['KEK_VAULT_ADDR', 'https://vault.internal:8200'],
+    ['KEK_VAULT_TOKEN_FILE', '/run/secrets/vault-token'],
+    ['KEK_VAULT_ROLE_ID', 'role-1'],
+    ['KEK_VAULT_SECRET_ID_FILE', '/run/secrets/vault-secret-id'],
     ['JWT_PRIVATE_KEY', 'pem'],
     ['JWT_PRIVATE_KEY_PATH', '/run/secrets/ed25519.pem'],
     ['JWT_RS256_PRIVATE_KEY', 'pem'],
@@ -198,6 +235,7 @@ describe('isKeyMaterialVariable', () => {
     ['OID4VP_VERIFIER_CERTIFICATE_CHAIN', 'pem'],
     ['SESSION_COOKIE_SECRET', 'secret'],
     ['KEKS', 'x'],
+    ['EGRESS_ALLOWLIST_PATH', '/etc/qauth/egress.json'],
   ])('does not count %s=%j', (name, value) => {
     expect(isKeyMaterialVariable(name, value)).toBe(false);
   });

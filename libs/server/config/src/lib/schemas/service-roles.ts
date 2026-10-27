@@ -122,6 +122,21 @@ export function describeServiceRoles(roles: readonly ServiceRole[]): string {
 }
 
 /**
+ * The roles whose routes read or set the browser session cookie: `web`, which
+ * serves the sign-in and consent pages, and `api`, whose `/auth/logout` ends
+ * the session. Only a process holding one of them needs
+ * `SESSION_COOKIE_SECRET`, so only there does `NODE_ENV=production` refuse the
+ * development default. The auth server's route manifest test holds this list
+ * to the routes and plugins of each role.
+ */
+export const SESSION_COOKIE_ROLES: readonly ServiceRole[] = ['web', 'api'];
+
+/** Whether a process with `roles` reads the session cookie ({@link SESSION_COOKIE_ROLES}). */
+export function readsSessionCookie(roles: readonly ServiceRole[]): boolean {
+  return roles.some((role) => SESSION_COOKIE_ROLES.includes(role));
+}
+
+/**
  * Whether the variable `name`, set to `value`, puts key material in a process:
  * the KEK and its adapters' settings (`KEK`, `KEK_PATH`, `KEK_PREVIOUS*`,
  * `KEK_<ADAPTER>_*`, and `KEK_PROVIDER` naming an adapter rather than the

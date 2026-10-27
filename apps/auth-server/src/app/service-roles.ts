@@ -57,19 +57,27 @@ export interface RouteRolesSubject {
 }
 
 /**
- * Why a route has no place among the roles: it names none, or names something
- * that is not a role. `undefined` when it names at least one role.
+ * Why a route has no place on a process holding `processRoles`: it names no
+ * role, names something that is not a role, or names only roles the process
+ * does not hold, so a route an app-scope plugin tags `admin` is never served
+ * on a `web` process. `undefined` when it names at least one role the process
+ * holds.
  */
-export function routeRolesProblem(route: RouteRolesSubject): string | undefined {
+export function routeRolesProblem(
+  route: RouteRolesSubject,
+  processRoles: readonly ServiceRole[]
+): string | undefined {
   const roles = route.config?.serviceRoles;
+  const method = Array.isArray(route.method) ? route.method.join(',') : String(route.method);
   if (
     Array.isArray(roles) &&
     roles.length > 0 &&
     roles.every((role) => typeof role === 'string' && isServiceRole(role))
   ) {
-    return undefined;
+    return roles.some((role) => processRoles.includes(role))
+      ? undefined
+      : `Route ${method} ${route.url} belongs to ${roles.join(',')}, a role this process does not hold (SERVICE_ROLES=${describeServiceRoles(processRoles)}); register it only where its roles run`;
   }
-  const method = Array.isArray(route.method) ? route.method.join(',') : String(route.method);
   return roles === undefined
     ? `Route ${method} ${route.url} has no service role; register its module through the route manifest (route-manifest.ts) with the roles that serve it`
     : `Route ${method} ${route.url} names no known service role; use ${SERVICE_ROLE_NAMES.join(', ')}`;
@@ -142,6 +150,20 @@ export const PLUGIN_REPOSITORIES: Readonly<Partial<Record<RolePlugin, readonly R
 /** Whether a process with `roles` holds the signer, and so the keys. */
 export function holdsSigner(roles: readonly ServiceRole[]): boolean {
   return roles.includes('signer');
+}
+
+/**
+ * Whether a process with `roles` serves the Swagger UI and its spec routes
+ * under `/docs` when ENABLE_SWAGGER is on: only one holding `api`, the role of
+ * the API routes the document describes. The UI registers outside the app and
+ * the route manifest, so this keeps it off `web`, `admin`, `signer` and
+ * `delivery` processes.
+ */
+export function servesApiDocs(
+  roles: readonly ServiceRole[],
+  enableSwagger: boolean | undefined
+): boolean {
+  return enableSwagger === true && roles.includes('api');
 }
 
 /**

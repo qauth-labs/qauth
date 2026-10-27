@@ -26,8 +26,8 @@ import type { FastifyInstance } from 'fastify';
 import type { JWK } from 'jose';
 
 import { env } from '../../config/env';
-import { resolveIssuerIdentifier } from './discovery';
 import { oid4vpResponseKeySecret, protectOid4vpResponseKey } from './oid4vp-response-key';
+import { buildRealmUrl, type RealmUrlSource } from './realm-url';
 import { provisionedVerifierMaterial, verifierSigningMaterial } from './verifier-identity';
 import { storeWalletRequestObject } from './wallet-login-flow';
 
@@ -82,10 +82,18 @@ import { storeWalletRequestObject } from './wallet-login-flow';
  * The third wallet-facing URL lives here too: the absolute `redirect_uri` the
  * Response Endpoint hands a wallet on a same-device flow (OID4VP 1.0 §8.2,
  * HAIP 1.0 §5.1), built by {@link buildWalletLoginReturnUri} from the SAME
- * issuer base as `responseUri` and `requestObjectBaseUri`. It is the one URL
+ * issuer base as the `response_uri` and the `request_uri`. It is the one URL
  * of the three that a browser, not a wallet, ends up fetching — so its shape
  * (a query parameter, never a fragment) is decided here once, where the
  * noscript twins of the wallet pages can rely on it.
+ *
+ * ## Whose issuer (#490)
+ *
+ * All three start at the issuer of the realm the request was resolved to
+ * (`buildRealmUrl`, ADR-019 Decision 1), passed in by the caller. Never
+ * `JWT_ISSUER`, the `Host` header or `X-Forwarded-*`. The capability itself
+ * holds no URL: it is the deployment's wallet posture, the same for every
+ * realm, and the wallet verification path resolves it with no request realm.
  */
 
 /** Path of the `direct_post` Response Endpoint (`routes/oid4vp/response.ts`). */
@@ -129,10 +137,6 @@ export const WALLET_LOGIN_CREDENTIAL_QUERY_ID = 'qauth_wallet_login';
 export interface WalletLoginCapability {
   /** The resolved active profile (#299). */
   readonly profile: VerifierProfile;
-  /** Absolute `response_uri` the wallet posts to (OID4VP 1.0 §8.2, REQUIRED). */
-  readonly responseUri: string;
-  /** Absolute base the `request_uri` reference is built on (#377). */
-  readonly requestObjectBaseUri: string;
   /** Wallet Authorization Endpoint the QR/deep link targets (§5). */
   readonly walletInvocationEndpoint: string;
   /** What the Verifier asks for — derived from `OID4VP_REQUESTED_VCT`. */
@@ -295,12 +299,8 @@ export function resolveWalletLoginCapability(
     return undefined;
   }
 
-  const issuer = resolveIssuerIdentifier(env.JWT_ISSUER);
-
   return {
     profile,
-    responseUri: `${issuer}${OID4VP_RESPONSE_PATH}`,
-    requestObjectBaseUri: `${issuer}${OID4VP_REQUEST_OBJECT_PATH_PREFIX}`,
     walletInvocationEndpoint: env.OID4VP_WALLET_INVOCATION_ENDPOINT,
     credentials: [
       {
@@ -314,16 +314,26 @@ export function resolveWalletLoginCapability(
 }
 
 /**
+ * The absolute `response_uri` the wallet posts to (OID4VP 1.0 §8.2, REQUIRED),
+ * on the realm's issuer. Under `oid4vp-1.0-base` it is also the Verifier's
+ * `client_id` (`redirect_uri:<response_uri>`).
+ */
+export function walletLoginResponseUri(realm: RealmUrlSource): string {
+  return buildRealmUrl(realm, OID4VP_RESPONSE_PATH);
+}
+
+/**
  * Build the absolute `redirect_uri` the Response Endpoint returns to a wallet
  * on a same-device flow (OID4VP 1.0 §8.2, HAIP 1.0 §5.1, #405).
  *
- * The origin is `resolveIssuerIdentifier(env.JWT_ISSUER)` — the base
- * `responseUri` and `requestObjectBaseUri` are built on a few lines up, and the
- * ONLY sanctioned source of this deployment's public origin. Never the `Host`
- * header or `X-Forwarded-*`: `TRUST_PROXY` only lets named proxies report the
- * client address, nothing in the app reads the host or protocol headers, and a
- * redirect target shaped by a request header would hand an attacker the host in
- * the URL a wallet is told to open.
+ * The origin is the issuer of the realm the wallet's response was sent to
+ * (#490) — the base {@link walletLoginResponseUri} and the `request_uri` are
+ * built on too, and the ONLY sanctioned source of a public origin. Never the
+ * `Host` header or `X-Forwarded-*`: `TRUST_PROXY` only lets named proxies
+ * report the client address and name the realm host to the realm resolver,
+ * nothing else in the app reads the host or protocol headers, and a redirect
+ * target shaped by a request header would hand an attacker the host in the URL
+ * a wallet is told to open.
  *
  * The code rides as a query parameter, not a fragment, though §8.2 permits
  * either (its fragment example is non-normative): a fragment never reaches the
@@ -339,16 +349,18 @@ export function resolveWalletLoginCapability(
  * because a function that builds a URL must not lean on its caller's alphabet.
  *
  * Standalone rather than a field of {@link WalletLoginCapability}: the caller
- * is `routes/oid4vp/response.ts`, which serves the wallet, resolves no
+ * is `routes/oid4vp/response.ts`, which serves the wallet and resolves no
  * capability (that object is the browser-side gate for rendering a login
- * button) and reads `env` directly, exactly as this does.
+ * button).
  *
+ * @param realm - the realm the Response Endpoint request was resolved to.
  * @param code - a Response Code minted by `generateOid4vpResponseCode`.
  */
-export function buildWalletLoginReturnUri(code: string): string {
-  const issuer = resolveIssuerIdentifier(env.JWT_ISSUER);
-
-  return `${issuer}${WALLET_LOGIN_RETURN_PATH}?response_code=${encodeURIComponent(code)}`;
+export function buildWalletLoginReturnUri(realm: RealmUrlSource, code: string): string {
+  return buildRealmUrl(
+    realm,
+    `${WALLET_LOGIN_RETURN_PATH}?response_code=${encodeURIComponent(code)}`
+  );
 }
 
 /**
@@ -391,6 +403,8 @@ function resolveSigningMaterial(fastify: FastifyInstance): VerifierSigningMateri
  * @param fastify - server instance; the signed path parks the request object on
  * the session store this owns.
  * @param capability - the resolved capability, carrying the signing material.
+ * @param realm - the realm the browser's request was resolved to; the
+ * `response_uri` and the `request_uri` are built on its issuer (#490).
  * @param clientName - optional human-readable Verifier name.
  * @throws Error when the active profile forbids something the request needs, or
  * when the request object cannot be parked. The caller renders the uniform
@@ -399,6 +413,7 @@ function resolveSigningMaterial(fastify: FastifyInstance): VerifierSigningMateri
 export async function buildWalletLoginInvocation(
   fastify: FastifyInstance,
   capability: WalletLoginCapability,
+  realm: RealmUrlSource,
   clientName?: string
 ): Promise<WalletLoginInvocation> {
   const secrets = generateOid4vpRequestSecrets();
@@ -406,7 +421,7 @@ export async function buildWalletLoginInvocation(
 
   const request = buildOid4vpAuthorizationRequest({
     profile: capability.profile,
-    responseUri: capability.responseUri,
+    responseUri: walletLoginResponseUri(realm),
     credentials: capability.credentials,
     state: secrets.state,
     nonce: secrets.nonce,
@@ -418,7 +433,7 @@ export async function buildWalletLoginInvocation(
     ...(encryption === undefined ? {} : { responseEncryptionKey: encryption.publicJwk }),
   });
 
-  const delivery = await deliverRequest(fastify, capability, request);
+  const delivery = await deliverRequest(fastify, capability, realm, request);
 
   return {
     invocationUri: delivery.invocationUri,
@@ -517,6 +532,7 @@ interface RequestDelivery {
 async function deliverRequest(
   fastify: FastifyInstance,
   capability: WalletLoginCapability,
+  realm: RealmUrlSource,
   request: Oid4vpAuthorizationRequest
 ): Promise<RequestDelivery> {
   if (!isSignedOid4vpRequest(request)) {
@@ -546,7 +562,7 @@ async function deliverRequest(
   return {
     invocationUri: encodeOid4vpRequestUri(capability.walletInvocationEndpoint, request, {
       mode: 'request-uri',
-      requestUri: `${capability.requestObjectBaseUri}${handle}`,
+      requestUri: buildRealmUrl(realm, `${OID4VP_REQUEST_OBJECT_PATH_PREFIX}${handle}`),
     }),
     requestObjectHandle: handle,
   };

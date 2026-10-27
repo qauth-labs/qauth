@@ -23,6 +23,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import { REPOSITORY_NAMES, type RepositoryName } from '@qauth-labs/fastify-plugin-db';
+import { SESSION_COOKIE_ROLES } from '@qauth-labs/server-config';
 import * as ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -31,6 +32,7 @@ import { type RolePlugin, ROUTE_MANIFEST } from './route-manifest';
 import {
   CORE_REPOSITORIES,
   PLUGIN_REPOSITORIES,
+  pluginsFor,
   SERVICE_ROLE_DEFINITIONS,
   SERVICE_ROLE_NAMES,
 } from './service-roles';
@@ -44,6 +46,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   dpop: 'dpop',
   jwtUtils: 'jwt',
   requireJwt: 'jwt',
+  verifyRequestAccessToken: 'jwt',
   passwordHasher: 'password',
   passwordValidator: 'password',
   pkceUtils: 'pkce',
@@ -52,6 +55,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   emailVerificationTokenUtils: 'email',
   sessionService: 'sessions',
   ssf: 'ssf',
+  egress: 'egress',
 };
 
 /** What the files reached from one module read. */
@@ -324,6 +328,7 @@ describe('what the check can see (#495)', () => {
     ['email', 'email'],
     ['sessions', 'sessions'],
     ['ssf', 'ssf'],
+    ['egress', 'egress'],
   ] as const)('maps every decorator of the %s plugin library to its plugin', (lib, plugin) => {
     const decorated = new Set<string>();
     for (const file of sourceFiles(join(REPO_ROOT, 'libs/fastify/plugins', lib, 'src'))) {
@@ -389,6 +394,22 @@ describe('what the roles load beside their routes (#495)', () => {
       expect(sorted(PLUGIN_REPOSITORIES[plugin] ?? [])).toEqual(sorted(read));
     }
   );
+
+  it('asks for SESSION_COOKIE_SECRET on exactly the roles that read the session cookie', () => {
+    // A role reads the cookie when one of its modules reaches the cookie
+    // helper or it registers the session service; the production check
+    // (`config/env-schema.ts`) refuses the development secret only there.
+    const cookieHelper = join(APP_DIR, 'helpers', 'session-cookie.ts');
+    const readers = SERVICE_ROLE_NAMES.filter(
+      (role) =>
+        pluginsFor([role]).has('sessions') ||
+        ROUTE_MANIFEST.some(
+          (entry) =>
+            entry.roles.includes(role) && reach(moduleFile(entry.module)).files.has(cookieHelper)
+        )
+    );
+    expect(sorted(readers)).toEqual(sorted(SESSION_COOKIE_ROLES));
+  });
 
   it('leaves no other plugin library reading fastify.repositories', () => {
     const readers = readdirSync(join(REPO_ROOT, 'libs/fastify/plugins')).filter((plugin) => {

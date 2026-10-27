@@ -467,7 +467,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | ------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------- |
 | `identifier`                         | F1    | `{}`                                                                                                         | `login_hint`                                  | —             |
 | `password`                           | F1    | `{}`                                                                                                         | `password` (+ `login_hint` if none was given) | `pwd`         |
-| `email_code`                         | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
+| `email_code`                         | F1    | `purpose` (`verify_account`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
 | `new_password`                       | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
 | `password_reset`                     | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
 | `captcha`                            | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
@@ -524,7 +524,7 @@ is not yet verified (a password account whose address is unproved), followed by 
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example", "auth_session": "p0Lr…",
         "interaction_type_required": "urn:qauth:ia:email_code:v1-rc.0", "qauth_interaction_types_offered": ["urn:qauth:ia:email_code:v1-rc.0"],
         "qauth_interaction_params": { "urn:qauth:ia:email_code:v1-rc.0":
-            { "purpose": "verify_address", "length": 6, "expires_in": 600, "resend_after": 60 } } }
+            { "purpose": "verify_account", "length": 6, "expires_in": 600, "resend_after": 60 } } }
 → auth_session=p0Lr…&qauth_interaction_type=urn%3Aqauth%3Aia%3Aemail_code%3Av1&otp=482913&CA
 ← 200 { "authorization_code": "…", "iss": "https://auth.acme.example" }
 ```
@@ -1004,7 +1004,7 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
 - With `prompt=create`, `openid` is required: the flow "MUST NOT be considered successful without
   the return of a valid id_token" (§4.1 "Authorization Request").
 
-- The first answer is always 403 `email_code` (`verify_address`, 8 digits), identical for new and
+- The first answer is always 403 `email_code` (`verify_account`, 8 digits), identical for new and
   existing addresses; an existing address receives a code with an "account exists" notice. After the
   code, a new address gets `new_password` (and, from F2b, an offered `webauthn_create`). An existing
   verified account is helped to sign in (`password`, `webauthn_get` from F2b, or `redirect_to_web`

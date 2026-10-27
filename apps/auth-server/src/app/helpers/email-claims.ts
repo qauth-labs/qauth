@@ -56,30 +56,40 @@ export const EMAIL_SCOPE = 'email';
  */
 export async function resolveEmailClaimsForScopes(
   fastify: FastifyInstance,
-  userId: string,
+  user: EmailClaimsSubject,
   grantedScopes: Iterable<string>
 ): Promise<EmailClaims> {
   for (const scope of grantedScopes) {
     if (scope === EMAIL_SCOPE) {
-      return resolveEmailClaims(fastify, userId);
+      return resolveEmailClaims(fastify, user);
     }
   }
   return {};
 }
 
+/**
+ * The account whose email claims are resolved: the row the caller already
+ * read in the request's realm (#489). Its realm decides which wallet issuers
+ * are still trusted, so no second lookup by the bare id is made.
+ */
+export interface EmailClaimsSubject {
+  readonly id: string;
+  readonly realmId: string;
+}
+
 export async function resolveEmailClaims(
   fastify: FastifyInstance,
-  userId: string
+  user: EmailClaimsSubject
 ): Promise<EmailClaims> {
   const rows = await fastify.repositories.userAttributes.findVerifiedByUserIdAndKey(
-    userId,
+    user.id,
     EMAIL_ATTR_KEY
   );
   const now = Date.now();
   let winner = selectTrustedAttribute(rows, now);
   if (
     winner?.source === WALLET_SOURCE &&
-    !(await isWalletAttributeIssuerStillTrusted(fastify, userId, winner.provenance))
+    !(await isWalletAttributeIssuerStillTrusted(fastify, user, winner.provenance))
   ) {
     winner = selectTrustedAttribute(
       rows.filter((row) => row.source !== WALLET_SOURCE),

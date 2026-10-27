@@ -255,15 +255,24 @@ Notes:
 ### ID token claims (OIDC)
 
 Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
-(all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:170-204`):
+(all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:176-226`):
 
 | Claim            | Present when                                                                                   |
 | ---------------- | ---------------------------------------------------------------------------------------------- |
 | `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.                  |
 | `auth_time`      | Always for the code flow (the session's real authentication time, epoch seconds).              |
+| `sid`            | A browser session backs the code: its session id, the value the session cookie names.          |
 | `name`           | The granted scope includes `profile` **and** the user has a `firstName` and/or `lastName` set. |
 | `email`          | The granted scope includes `email` **and** a verified email attribute exists.                  |
 | `email_verified` | Same condition as `email`; always `true` when present.                                         |
+
+`sid` names the browser session the user signed in with on the auth server,
+and is what back-channel logout will name when that session ends (ADR-019
+Decisions 3 and 4). A code from the headless Bearer hand-off of
+`/oauth/authorize` has no browser session, so its ID token has no `sid`. A
+sign-out spends the codes minted under the session that are not yet redeemed.
+The access token, the introspection response and the refresh token never
+carry `sid`, and discovery does not advertise it yet.
 
 `email`/`email_verified` share the same trust-ordered resolution the access
 token and [UserInfo](#userinfo-oidc) use, so all three never disagree within
@@ -352,6 +361,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
   machine token is rejected per RFC 9700).
 - `resource` must fall within the client's configured `audience` (or defaults to
   the `client_id`); it sets the token `aud`.
+- An audience in the reserved `urn:qauth:aud:` namespace, such as the developer
+  API's `urn:qauth:aud:developer:v1-rc.0`, is issued only to a client whose
+  `audience` lists it, on every grant; any other client gets `invalid_target`.
+  See [API conventions](/reference/api-conventions/#issuing-a-family-audience).
 - Provision such clients with the seed script (it lets you set `scopes` and
   `audience` explicitly) — see the
   [MCP Quickstart, Option B](/integrate/mcp-quickstart/#option-b--verify-the-handshake-with-curl-no-browser).
@@ -774,6 +787,14 @@ administrative, such as `admin:org`, are ordinary scopes. The three admin
 scopes and what they allow are on the
 [admin permissions](/reference/admin-permissions/) page.
 
+QAuth's API audiences, the `urn:qauth:aud:` namespace in any case, follow the
+same rule: self-registration never obtains one. Registration ignores one in an
+`audience` or `resource` member and registers the client with the rest, as it
+ignores every other value there, and a CIMD document that names one resolves
+with that value ignored. Only a client an operator set up receives such an
+audience (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
+
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).
 
@@ -822,7 +843,7 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 | `invalid_grant`           | Bad, expired or already-redeemed code, wrong or missing `redirect_uri`, bad PKCE verifier, or invalid/replayed refresh token.                                                                                            |
 | `unauthorized_client`     | Client not allowed to use this grant.                                                                                                                                                                                    |
 | `invalid_scope`           | Requested scope outside the allowlist (or empty for `client_credentials`).                                                                                                                                               |
-| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience.                                                                                                                                                                  |
+| `invalid_target`          | RFC 8707 `resource` outside the grant's bound audience, or a QAuth API audience (`urn:qauth:aud:`) the client's `audience` does not list.                                                                                |
 | `unsupported_grant_type`  | A `grant_type` the token endpoint does not serve; a missing one is `invalid_request`.                                                                                                                                    |
 | `invalid_client_metadata` | Dynamic registration: a metadata value is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                    |
 | `invalid_redirect_uri`    | Dynamic registration: a redirect URI is not valid or not allowed (RFC 7591 §3.2.2).                                                                                                                                      |
