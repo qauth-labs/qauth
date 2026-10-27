@@ -8,8 +8,10 @@ import {
 } from '@qauth-labs/core-crypto';
 
 import type { SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
+import { decodeProtectedHeaderUnsafe } from './jose-utils';
 import {
   ACCESS_TOKEN_TYP,
+  assertAccessTokenTyp,
   buildAccessTokenClaims,
   buildIdTokenClaims,
   ID_TOKEN_TYP,
@@ -88,13 +90,23 @@ export async function verifyHybridAccessToken(
     audience?: string | string[];
     issuer?: string;
     requirePqc: boolean;
+    /** Refuse a token with no `typ` too (#283); a wrong `typ` is always refused. */
+    requireTyp?: boolean;
   }
 ): Promise<Record<string, unknown>> {
-  return verifyHybrid(hybrid, keys, {
+  const claims = await verifyHybrid(hybrid, keys, {
     algorithms: ['EdDSA'],
     requirePqc: options.requirePqc,
     enabledSignatureAlgorithms: options.enabledSignatureAlgorithms,
     ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
     ...(options.audience !== undefined ? { audience: options.audience } : {}),
   });
+  // RFC 9068 §2.1: only an access token, never a hybrid ID token signed by
+  // the same key. The Ed25519 signature verified above covers the header, so
+  // its `typ` is authenticated.
+  assertAccessTokenTyp(
+    decodeProtectedHeaderUnsafe(hybrid.token)['typ'],
+    options.requireTyp === true
+  );
+  return claims;
 }

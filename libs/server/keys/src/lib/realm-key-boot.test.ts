@@ -515,6 +515,32 @@ describe('bootRealmKeys — a fresh deployment', () => {
 });
 
 describe('bootRealmKeys — the KEK', () => {
+  it('refuses to import a key another realm already stores, naming the variable, and stores nothing (#491)', async () => {
+    const store = createMemoryKeyStore();
+    const otherRealm = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e02';
+    await boot(store, {
+      realmId: otherRealm,
+      environmentKeys: { ed25519: { privateKey: source(ED25519_PEM, 'JWT_PRIVATE_KEY') } },
+    });
+    const before = store.rows.length;
+
+    const error = await refusal(
+      boot(store, {
+        environmentKeys: { ed25519: { privateKey: source(ED25519_PEM, 'JWT_PRIVATE_KEY') } },
+      })
+    );
+    expect(error.message).toContain('another realm of this deployment already stores');
+    expect(error.details).toEqual({ variables: ['JWT_PRIVATE_KEY'] });
+    expect(store.rows.length).toBe(before);
+
+    // A key of its own imports as before.
+    await expect(
+      boot(store, {
+        environmentKeys: { ed25519: { privateKey: source(pem('ed25519'), 'JWT_PRIVATE_KEY') } },
+      })
+    ).resolves.toMatchObject({ imported: [expect.objectContaining({ algorithm: 'EdDSA' })] });
+  });
+
   it('refuses to import under the development KEK, naming the variables', async () => {
     const store = createMemoryKeyStore();
     const warnings: unknown[] = [];

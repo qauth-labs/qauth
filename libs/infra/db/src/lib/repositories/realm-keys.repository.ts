@@ -146,6 +146,25 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
         );
     },
 
+    async anotherRealmPublishes(
+      realmId: string,
+      identity: Readonly<Record<string, string>>,
+      tx?: DbClient
+    ): Promise<boolean> {
+      const invoker = tx ?? defaultDb;
+      const [found] = await invoker
+        .select({ kid: realmPublicKeys.kid })
+        .from(realmPublicKeys)
+        .where(
+          and(
+            sql`${realmPublicKeys.realmId} <> ${realmId}`,
+            sql`${realmPublicKeys.publicJwk} @> ${JSON.stringify(identity)}::jsonb`
+          )
+        )
+        .limit(1);
+      return found !== undefined;
+    },
+
     async lockRealm(realmId: string, tx: DbClient): Promise<void> {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${REALM_KEYS_LOCK_PREFIX + realmId.toLowerCase()}, 0))`

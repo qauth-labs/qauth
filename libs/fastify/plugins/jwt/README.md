@@ -55,6 +55,7 @@ The auth-server's source for each option is named in parentheses.
 | `accessTokenLifespan`        | `number`                        | yes      | Access and ID token TTL in seconds (`ACCESS_TOKEN_LIFESPAN`)                                      |
 | `refreshTokenLifespan`       | `number`                        | yes      | Refresh token TTL in seconds (`REFRESH_TOKEN_LIFESPAN`)                                           |
 | `requireAccessTokenTyp`      | `boolean`                       | no       | Also refuse access tokens without `typ: at+jwt` (default `false`; not set by the auth-server)     |
+| `kidlessKeyIds`              | `readonly string[]`             | no       | `kid`s a token without a `kid` may verify with (the key variable's thumbprint); transitional      |
 | `hybridSigningEnabled`       | `boolean`                       | no       | Issue hybrid access tokens with the realm's pair (`HYBRID_SIGNING_ENABLED`, default `false`)      |
 | `enabledSignatureAlgorithms` | `readonly SignatureAlgorithm[]` | no       | Enabled signature algorithms (`SIGNING_ALGORITHM_MODE`); ML-DSA-65 in it for hybrid signing       |
 | `isTokenRevoked`             | function                        | no       | `(jti) => boolean`, sync or async; `requireJwt` refuses a revoked token (the revocation denylist) |
@@ -72,8 +73,9 @@ The auth-server's source for each option is named in parentheses.
   the realm's hybrid pair, naming the ML-DSA-65 key in `pqc_kid`. Registration fails unless
   `enabledSignatureAlgorithms` has `ML-DSA-65` in it.
 - Verification picks the realm's key by the token's `kid` among its `active` and still-published
-  `retired` keys. A token with no `kid`, from before tokens named their key, is tried against each
-  of the realm's Ed25519 keys.
+  `retired` keys. A token with no `kid`, from before tokens named their key, is tried only against
+  the realm's Ed25519 keys that `kidlessKeyIds` names: the auth-server names the key its key
+  variable holds, never a key the store generated. This path is removed in the next release.
 - `getJwks(realm)` is the realm's JWKS as the signer serves it.
 - On a process without the `signer` role (#495), the auth-server's `signer` refuses every signature with 503 `temporarily_unavailable`, and reads each realm's verification keys and JWKS from its published public keys, without a KEK. The plugin passes the 503 on, and still verifies the realm's tokens.
 

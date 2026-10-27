@@ -1,8 +1,11 @@
+import { createPublicKey } from 'node:crypto';
+
 import type {
   EnvironmentKeySettings,
   EnvironmentKeySource,
 } from '@qauth-labs/fastify-plugin-signer';
 import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
+import { calculateJwkThumbprint, type JWK } from 'jose';
 
 /**
  * The key variables of a deployment from before the key store, handed to the
@@ -99,4 +102,37 @@ export function keyVariableSettings(
     // fills an unset one with the development default.
     ...(cookieSecret === undefined || cookieSecret.variables.length === 0 ? {} : { cookieSecret }),
   };
+}
+
+/**
+ * The `kid`s a token without a `kid` may be verified with (#491): the Ed25519
+ * key of `JWT_PRIVATE_KEY`, or of `JWT_PUBLIC_KEY` on a process that holds no
+ * private key. That key signed every access token before tokens named their
+ * key, and the key boot step stores it under its RFC 7638 thumbprint, the
+ * `kid` computed here. The key store does not record where a key came from,
+ * so the variable is what names it; a key the store generated is never
+ * listed.
+ *
+ * Transitional: removed one release after #491, once the tokens issued
+ * before the upgrade have expired. Keep the variable set until then.
+ *
+ * @returns the thumbprints, none when neither variable holds an Ed25519 key
+ */
+export async function kidlessTokenKeyIds(
+  config: Pick<KeyVariableConfig, 'JWT_PRIVATE_KEY' | 'JWT_PUBLIC_KEY'>
+): Promise<string[]> {
+  const kids = new Set<string>();
+  for (const pem of [config.JWT_PRIVATE_KEY, config.JWT_PUBLIC_KEY]) {
+    if (pem === undefined || pem.trim().length === 0) continue;
+    let jwk: JWK;
+    try {
+      jwk = createPublicKey(pem).export({ format: 'jwk' }) as JWK;
+    } catch {
+      // The key boot step refuses a key that does not parse, with its own message.
+      continue;
+    }
+    if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519') continue;
+    kids.add(await calculateJwkThumbprint(jwk, 'sha256'));
+  }
+  return [...kids];
 }

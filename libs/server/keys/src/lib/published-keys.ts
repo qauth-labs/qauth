@@ -119,6 +119,31 @@ export function describePurpose(purpose: unknown): string {
     : 'An unknown key purpose';
 }
 
+/**
+ * The members that identify a public key, whatever else its JWK carries
+ * (`kid`, `use`, `alg` on a classical key): the key type and its public value,
+ * RFC 7638's required members. `undefined` for a JWK of no key type here.
+ */
+export function publicKeyIdentity(
+  jwk: Readonly<Record<string, unknown>>
+): Readonly<Record<string, string>> | undefined {
+  const members: Readonly<Record<string, readonly string[]>> = {
+    OKP: ['kty', 'crv', 'x'],
+    EC: ['kty', 'crv', 'x', 'y'],
+    RSA: ['kty', 'n', 'e'],
+    AKP: ['kty', 'alg', 'pub'],
+  };
+  const names = typeof jwk['kty'] === 'string' ? members[jwk['kty']] : undefined;
+  if (names === undefined) return undefined;
+  const identity: Record<string, string> = {};
+  for (const name of names) {
+    const value = jwk[name];
+    if (typeof value !== 'string' || value.length === 0) return undefined;
+    identity[name] = value;
+  }
+  return Object.freeze(identity);
+}
+
 /** The realm id a caller named, lower-cased, or a refusal. */
 export function resolveRealmId(realmId: unknown): string {
   if (!isRealmId(realmId)) {

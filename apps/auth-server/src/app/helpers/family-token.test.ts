@@ -115,6 +115,8 @@ async function registerJwt(
     requestRealm: (request) => tokenRealm(requestRealm(request)),
     accessTokenLifespan: 900,
     refreshTokenLifespan: 86400,
+    // Realm A imported `JWT_PRIVATE_KEY`, as app.ts names it (#491).
+    kidlessKeyIds: [await realmKid(REALM_A)],
     ...options,
   });
 }

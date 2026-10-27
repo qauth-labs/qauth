@@ -21,6 +21,7 @@ import { type CreatedKey, createKeyFactory, type KeyFactoryOptions } from './key
 import { jwkThumbprintKid } from './key-generation';
 import { KEY_PURPOSES } from './key-purposes';
 import type { RealmKeyStore, StoredKeyStatus, StoredKeySummary } from './key-store';
+import { publicKeyIdentity } from './published-keys';
 import { isRealmId } from './realm-id';
 
 /**
@@ -83,6 +84,16 @@ export interface RealmKeyBootStore<Tx> extends RealmKeyStore<Tx> {
   lockRealm(realmId: string, tx: Tx): Promise<void>;
   /** Every `realm_public_keys` row of the realm, whatever its status or window. */
   listPublicKeys(realmId: string, tx: Tx): Promise<readonly StoredPublicKey[]>;
+  /**
+   * Whether a realm other than `realmId` publishes a key whose public JWK has
+   * every member of `identity` ({@link publicKeyIdentity}), whatever its
+   * status or window.
+   */
+  anotherRealmPublishes(
+    realmId: string,
+    identity: Readonly<Record<string, string>>,
+    tx: Tx
+  ): Promise<boolean>;
 }
 
 /** Options of {@link bootRealmKeys}: the key factory's, the realm and the configured keys. */
@@ -209,6 +220,7 @@ export async function bootRealmKeys<Tx>(
       );
       const toImport = pending.map(({ key }) => key);
       checkHybridPair(realmId, keys, toImport);
+      await refuseKeysOfAnotherRealm(store, realmId, toImport, tx);
       if (toImport.length > 0 && (await usesDevelopmentKek(kekProvider))) {
         throw new InvalidConfigurationError(
           'Keys from the key variables must be imported into the key store, but no KEK is set: with KEK_PROVIDER=local, KEK or KEK_PATH wraps every stored key, and without one the keys would be wrapped with the published development KEK. Set KEK or KEK_PATH, for example to the output of `openssl rand -base64 32`, and boot again. See this error\'s "details" for the variables.',
@@ -237,6 +249,31 @@ export async function bootRealmKeys<Tx>(
     });
   } finally {
     for (const key of keys) key.material.fill(0);
+  }
+}
+
+/**
+ * Refuse to import a configured key that another realm already publishes
+ * (#491). A realm's tokens verify only with its own keys, and an issuer rule
+ * that accepts another realm's issuer (the admin family's, #509) relies on no
+ * two realms holding the same key: a shared key would let one realm's tokens
+ * verify as the other's.
+ */
+async function refuseKeysOfAnotherRealm<Tx>(
+  store: RealmKeyBootStore<Tx>,
+  realmId: string,
+  keys: readonly EnvironmentKey[],
+  tx: Tx
+): Promise<void> {
+  for (const key of keys) {
+    const identity = key.publicJwk === undefined ? undefined : publicKeyIdentity(key.publicJwk);
+    if (identity === undefined) continue;
+    if (await store.anotherRealmPublishes(realmId, identity, tx)) {
+      throw new InvalidConfigurationError(
+        `${key.variables.join(' and ')} holds a ${key.algorithm} key that another realm of this deployment already stores. Two realms never share a key: each realm's tokens must verify with its own keys only. Set a key of this realm's own, or unset the variable and let the realm keep or generate its own, and boot again.`,
+        { variables: key.variables }
+      );
+    }
   }
 }
 

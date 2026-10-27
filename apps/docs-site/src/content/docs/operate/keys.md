@@ -93,8 +93,16 @@ names the key that signed it in `kid` (a hybrid token also names its ML-DSA-65
 key in `pqc_kid`). Each realm publishes its own keys at its own
 `/.well-known/jwks.json`, and the server verifies a token only with the keys of
 the realm the request is for, so a token one realm issued is refused by
-another. A token issued before the upgrade carries no `kid`; it still verifies
-against the realm's Ed25519 keys.
+another. A token issued before the upgrade carries no `kid`; it still verifies,
+but only against the Ed25519 key that `JWT_PRIVATE_KEY` holds (or
+`JWT_PUBLIC_KEY`, on a process without the signer role), the key that signed it,
+never against a key the store generated. Keep that variable set until the
+tokens issued before the upgrade have expired (`ACCESS_TOKEN_LIFESPAN`): the
+next release removes this path, and refuses every token without a `kid`.
+
+A key variable never holds a key another realm stores: the key boot step refuses
+to import one, naming the variable, so a token signed by one realm's key never
+verifies as another realm's.
 
 If `JWT_ISSUER` ends with a slash, the tokens now name the issuer without it,
 as discovery does, while the previous release names it with the slash. Upgrade

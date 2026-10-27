@@ -1,5 +1,9 @@
 import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
-import { JWTInvalidError, UnauthorizedClientError } from '@qauth-labs/shared-errors';
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  UnauthorizedClientError,
+} from '@qauth-labs/shared-errors';
 import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -377,7 +381,13 @@ export default async function (fastify: FastifyInstance) {
           throw inactiveSubjectError();
         }
         userId = payload.sub;
-      } catch {
+      } catch (error) {
+        // Only a refused token is the client's `access_denied`. Anything else
+        // (the key store or the denylist unreachable) is the server's: it
+        // propagates and the request fails closed, as at revocation,
+        // introspection and token exchange (#491), rather than reading as a
+        // bad token.
+        if (!(error instanceof JWTInvalidError || error instanceof JWTExpiredError)) throw error;
         await emitUserEvent(
           request,
           'urn:qauth:event:authorization.failed:v1-rc.0',

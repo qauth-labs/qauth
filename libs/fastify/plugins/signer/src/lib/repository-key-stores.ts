@@ -76,6 +76,11 @@ export function createRepositoryKeyStore(db: DbClient): RealmKeyBootStore<DbClie
     updateStatus: keys.updateStatus,
     deleteByScope: keys.deleteByScope,
     lockRealm: keys.lockRealm,
+    anotherRealmPublishes: (
+      realmId: string,
+      identity: Readonly<Record<string, string>>,
+      tx: DbClient
+    ) => keys.anotherRealmPublishes(realmId, identity, tx),
     async listPublicKeys(realmId: string, tx: DbClient): Promise<readonly StoredPublicKey[]> {
       const rows = await keys.listPublicByRealm(realmId, tx);
       return rows.map(({ kid, purpose, status, publicJwk }) => ({

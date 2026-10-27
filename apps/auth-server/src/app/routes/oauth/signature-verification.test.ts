@@ -229,15 +229,17 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
         email_verified: true,
         scope: 'openid',
       });
-      // And one with no `kid`, which the realm's EdDSA key must refuse on its
-      // signature.
+      // And one with no `kid`, which is tried only against the key a key
+      // variable imported (#491): this server names none, so no key is tried.
       const forged = forgeKidlessToken({ sub: USER_ID, scope: 'openid' });
       // Each is refused on the key: the first names one the realm does not
-      // publish, the second fails the signature check of the realm's key.
+      // publish, the second names none and no imported key is listed.
       await expect(app.jwtUtils.verifyAccessToken(realm, foreignToken)).rejects.toThrow(
         /no key of this realm verifies it/
       );
-      await expect(app.jwtUtils.verifyAccessToken(realm, forged)).rejects.toThrow(/signature/i);
+      await expect(app.jwtUtils.verifyAccessToken(realm, forged)).rejects.toThrow(
+        /no key of this realm verifies it/
+      );
 
       for (const token of [foreignToken, forged]) {
         const res = await introspect(app, token);

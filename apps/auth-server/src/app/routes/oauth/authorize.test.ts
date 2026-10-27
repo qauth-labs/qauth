@@ -1,5 +1,5 @@
 import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
-import { InvalidRequestError } from '@qauth-labs/shared-errors';
+import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -1761,6 +1761,8 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       consent?: Record<string, unknown> | null;
       /** RFC 8707 resource indicators on the request. */
       resource?: string[];
+      /** Why verification fails, when it does. */
+      verifyError?: Error;
     } = {}
   ) {
     const { fastify, ctx } = makeFastify();
@@ -1777,12 +1779,16 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     );
     // No browser session; a valid Bearer token resolves the user.
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      clientId: DANGEROUS_CLIENT.clientId,
-      aud: DANGEROUS_CLIENT.clientId,
-      ...payload,
-    });
+    if (opts.verifyError === undefined) {
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+        sub: BEARER_USER,
+        clientId: DANGEROUS_CLIENT.clientId,
+        aud: DANGEROUS_CLIENT.clientId,
+        ...payload,
+      });
+    } else {
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(opts.verifyError);
+    }
     const { reply, state } = createReply();
     await ctx.handler!(
       {
@@ -1795,6 +1801,16 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     );
     return { fastify, state };
   }
+
+  it('answers a refused token with access_denied, and lets a key store failure fail closed (#491)', async () => {
+    for (const refused of [new JWTInvalidError('bad'), new JWTExpiredError('old')]) {
+      const { fastify, state } = await runBearer('email', {}, { verifyError: refused });
+      expect(state.redirected).toContain('error=access_denied');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    }
+    const outage = new Error('the key store is unreachable');
+    await expect(runBearer('email', {}, { verifyError: outage })).rejects.toBe(outage);
+  });
 
   it('refuses a dangerous scope on the Bearer path with access_denied (no interactive step-up)', async () => {
     const { fastify, state } = await runBearer('write:foo');
@@ -2035,9 +2051,10 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the denylist cannot be read', async () => {
+  it('fails closed when the denylist cannot be read: the failure propagates, no code (#491)', async () => {
     const { fastify, ctx } = makeFastify();
-    (fastify.redis.exists as unknown as Mock).mockRejectedValue(new Error('redis down'));
+    const redisDown = new Error('redis down');
+    (fastify.redis.exists as unknown as Mock).mockRejectedValue(redisDown);
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
@@ -2050,16 +2067,18 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       aud: DANGEROUS_CLIENT.clientId,
     });
     const { reply, state } = createReply();
-    await ctx.handler!(
-      {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
-        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
-        headers: { authorization: 'Bearer bearer.token' },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-    expect(state.redirected).toContain('error=access_denied');
+    await expect(
+      ctx.handler!(
+        {
+          query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+          url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+          headers: { authorization: 'Bearer bearer.token' },
+          ip: '127.0.0.1',
+        },
+        reply
+      )
+    ).rejects.toBe(redisDown);
+    expect(state.redirected).toBeUndefined();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
@@ -2379,7 +2398,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
         });
       } else {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
-          new Error('expired')
+          new JWTExpiredError('expired')
         );
       }
       headers['authorization'] = 'Bearer bearer.token';

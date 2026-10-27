@@ -87,6 +87,12 @@ const SIGNER_CALLER = 'local';
 /** The most imported public keys the plugin keeps, across realms. */
 const MAX_IMPORTED_KEYS = 256;
 
+/** A key that may verify a token, with the `kid` the realm publishes it under. */
+interface VerifyingKey {
+  readonly kid: string;
+  readonly key: SigningKey;
+}
+
 /** The algorithm every access token is signed with. */
 const ACCESS_TOKEN_ALGORITHM = 'EdDSA';
 
@@ -152,6 +158,9 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       );
     }
 
+    /** The keys a token without a `kid` may be tried against (#491), by `kid`. */
+    const kidlessKeyIds: ReadonlySet<string> = new Set(options.kidlessKeyIds ?? []);
+
     /**
      * The public keys imported for verification, by realm and key. Public
      * material only, and bounded: the oldest entry goes first.
@@ -178,9 +187,11 @@ export const jwtPlugin = fp<JwtPluginOptions>(
 
     /**
      * The realm's EdDSA keys that may have signed `token`: the one its `kid`
-     * names or, for a token issued before tokens named their key (#491), every
-     * EdDSA verification key of the realm. The header is read unverified, only
-     * to pick the key; the signature check with that key comes next.
+     * names or, for a token issued before tokens named their key (#491), the
+     * realm's EdDSA verification keys that {@link JwtPluginOptions.kidlessKeyIds}
+     * names, the key imported from the key variable. The header is read
+     * unverified, only to pick the key; the signature check with that key
+     * comes next.
      *
      * @throws JWTInvalidError when the token is malformed, is not EdDSA, or
      *   names a key the realm does not publish for verification
@@ -188,7 +199,7 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     async function accessTokenKeys(
       realm: Pick<TokenRealm, 'id'>,
       token: string
-    ): Promise<{ keys: SigningKey[]; verificationKeys: readonly VerificationKey[] }> {
+    ): Promise<{ keys: VerifyingKey[]; verificationKeys: readonly VerificationKey[] }> {
       const header = decodeProtectedHeaderUnsafe(token);
       if (header['alg'] !== ACCESS_TOKEN_ALGORITHM) {
         throw new JWTInvalidError('Invalid JWT token: an access token is signed with EdDSA');
@@ -206,30 +217,35 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         (key) =>
           key.algorithm === ACCESS_TOKEN_ALGORITHM &&
           key.publicJwk.kty === 'OKP' &&
-          (kid === undefined || key.kid === kid)
+          (kid === undefined ? kidlessKeyIds.has(key.kid) : key.kid === kid)
       );
       if (candidates.length === 0) {
         throw new JWTInvalidError('Invalid JWT token: no key of this realm verifies it');
       }
       return {
-        keys: await Promise.all(candidates.map((key) => importEdKey(realm.id, key))),
+        keys: await Promise.all(
+          candidates.map(async (key) => ({ kid: key.kid, key: await importEdKey(realm.id, key) }))
+        ),
         verificationKeys,
       };
     }
 
     /**
      * Run `verify` with each key that may have signed the token, and return
-     * the first answer. Only the key that made the signature gets past it to
-     * the expiry check, so an expiry is that key's answer and ends the search.
+     * the first answer with the `kid` of the key that gave it, so a check on
+     * the verifying key (a `kid` denylist for emergency retirement, ADR-019)
+     * applies to a token without a `kid` too. Only the key that made the
+     * signature gets past it to the expiry check, so an expiry is that key's
+     * answer and ends the search.
      */
     async function withEachKey<T>(
-      keys: readonly SigningKey[],
+      keys: readonly VerifyingKey[],
       verify: (key: SigningKey) => Promise<T>
-    ): Promise<T> {
+    ): Promise<{ value: T; kid: string }> {
       let failure: unknown;
-      for (const key of keys) {
+      for (const { kid, key } of keys) {
         try {
-          return await verify(key);
+          return { value: await verify(key), kid };
         } catch (error) {
           if (error instanceof JWTExpiredError) throw error;
           failure ??= error;
@@ -245,13 +261,14 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       verifyOptions: { audience?: string | string[]; pinIssuer: boolean; requireTyp: boolean }
     ): Promise<JWTPayload> {
       const { keys } = await accessTokenKeys(realm, token);
-      return withEachKey(keys, (key) =>
+      const { value } = await withEachKey(keys, (key) =>
         verifyAccessToken(token, key, {
           ...(verifyOptions.pinIssuer ? { issuer: realm.issuer } : {}),
           ...(verifyOptions.audience !== undefined ? { audience: verifyOptions.audience } : {}),
           requireTyp: verifyOptions.requireTyp,
         })
       );
+      return value;
     }
 
     /** The algorithms of the realm's active `token_signing` keys. */
@@ -320,13 +337,16 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         };
         // `requirePqc` is a FLOOR, not the downgrade control: verifyHybrid
         // treats the issuer-signed `pqc_alg` as binding on its own (#248 F1).
-        const claims = await withEachKey(keys, (ed) =>
+        const { value: claims } = await withEachKey(keys, (ed) =>
           verifyHybridAccessToken(
             hybrid,
             { ed, mlDsa },
             {
               issuer: realm.issuer,
               requirePqc: verifyOptions.requirePqc,
+              // RFC 9068 `typ`, under the same rollout switch as the
+              // classical path (#283): never a hybrid ID token.
+              requireTyp: options.requireAccessTokenTyp === true,
               ...(verifyOptions.audience !== undefined ? { audience: verifyOptions.audience } : {}),
               ...pqcBackend,
             }

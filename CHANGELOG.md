@@ -953,8 +953,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   issued is refused by another outright: `requireJwt`, the API family guards,
   the SSF stream routes, introspection, revocation, logout, userinfo, the
   token-exchange subject and actor tokens and the Bearer path of
-  `/oauth/authorize`. A token issued before the upgrade carries no `kid` and
-  still verifies against the realm's Ed25519 keys. A deployment whose
+  `/oauth/authorize`. A token issued before the upgrade carries no `kid`: it
+  still verifies, but only against the Ed25519 key that `JWT_PRIVATE_KEY` (or
+  `JWT_PUBLIC_KEY` on a process without the signer role) holds, never against
+  a key the store generated; keep the variable set until those tokens expire.
+  This path goes away in the next release. The key boot step refuses to import
+  a key variable that holds a key another realm already stores, naming it. A
+  token's `typ` is checked before its expiry is reported, so logout's
+  expired-token path accepts an expired access token only, never an expired ID
+  token or ID-JAG; a hybrid token must be an access token (`typ: at+jwt`) too;
+  and the Bearer path of `/oauth/authorize` answers `access_denied` only for a
+  refused token, a key store or denylist failure failing the request closed
+  instead. A deployment whose
   `JWT_ISSUER` ends with a slash: its access and ID tokens now name the issuer
   without it, as discovery already did, so a relying party that compares `iss`
   with the slashed form must drop the slash. During a rolling upgrade the nodes

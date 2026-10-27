@@ -67,6 +67,20 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    */
   requireAccessTokenTyp?: boolean;
   /**
+   * The `kid`s of the keys a token WITHOUT a `kid` may be verified with: the
+   * Ed25519 key a deployment imported from its key variable, which signed
+   * every access token before tokens named their key (#491). The key store
+   * does not record where a key came from, so the auth-server derives these
+   * from the variable (`JWT_PRIVATE_KEY`, or `JWT_PUBLIC_KEY` on a process
+   * without the signer role). A key the store generated never signed a token
+   * without a `kid`, so it is never tried for one. Empty or absent: a token
+   * without a `kid` verifies with no key.
+   *
+   * Transitional: this path is removed one release after #491, once the
+   * tokens issued before the upgrade have expired.
+   */
+  kidlessKeyIds?: readonly string[];
+  /**
    * Turn on LIVE hybrid (Ed25519 + ML-DSA-65) access-token issuance (#275).
    * Sourced from `HYBRID_SIGNING_ENABLED`, default off. The signer signs the
    * hybrid token with the realm's hybrid pair; a realm without one refuses to

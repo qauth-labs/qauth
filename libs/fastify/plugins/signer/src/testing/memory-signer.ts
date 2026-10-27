@@ -115,6 +115,15 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     updateStatus: async () => undefined,
     deleteByScope: async () => [],
     lockRealm: async () => undefined,
+    anotherRealmPublishes: async (realmId, identity) =>
+      rows.some(
+        ({ key, publicJwk }) =>
+          key.realmId !== realmId &&
+          publicJwk !== undefined &&
+          Object.entries(identity).every(
+            ([name, value]) => (publicJwk as Record<string, unknown>)[name] === value
+          )
+      ),
     listPublicKeys: async (realmId) =>
       rows.flatMap(({ key, publicJwk }) =>
         key.realmId === realmId && publicJwk !== undefined

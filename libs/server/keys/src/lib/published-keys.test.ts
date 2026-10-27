@@ -6,7 +6,7 @@ import { createMemoryKeyStore } from '../testing/memory-key-store';
 import { createMemorySignerStore } from '../testing/memory-signer-store';
 import { createInProcessSigner } from './in-process-signer';
 import { createKeyFactory } from './key-factory';
-import { createPublishedKeyReader } from './published-keys';
+import { createPublishedKeyReader, publicKeyIdentity } from './published-keys';
 import { isSignerError } from './signer-errors';
 
 const REALM_A = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
@@ -98,5 +98,35 @@ describe('createPublishedKeyReader (#491, #495)', () => {
     ]) {
       await expect(attempt).rejects.toSatisfy((error: unknown) => isSignerError(error));
     }
+  });
+});
+
+describe('publicKeyIdentity', () => {
+  it('keeps the key type and public value only, for each key type', () => {
+    expect(
+      publicKeyIdentity({
+        kty: 'OKP',
+        crv: 'Ed25519',
+        x: 'abc',
+        kid: 'k',
+        use: 'sig',
+        alg: 'EdDSA',
+      })
+    ).toEqual({ kty: 'OKP', crv: 'Ed25519', x: 'abc' });
+    expect(publicKeyIdentity({ kty: 'RSA', n: 'nn', e: 'AQAB', kid: 'r' })).toEqual({
+      kty: 'RSA',
+      n: 'nn',
+      e: 'AQAB',
+    });
+    expect(publicKeyIdentity({ kty: 'AKP', alg: 'ML-DSA-65', pub: 'pp' })).toEqual({
+      kty: 'AKP',
+      alg: 'ML-DSA-65',
+      pub: 'pp',
+    });
+  });
+
+  it('names nothing for a key type it does not know or a missing public value', () => {
+    expect(publicKeyIdentity({ kty: 'oct', k: 'secret' })).toBeUndefined();
+    expect(publicKeyIdentity({ kty: 'OKP', crv: 'Ed25519' })).toBeUndefined();
   });
 });

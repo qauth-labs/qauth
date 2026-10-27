@@ -46,7 +46,7 @@ import {
   type EventTelemetry,
   eventTelemetrySettings,
 } from './helpers/event-telemetry';
-import { keyVariableSettings } from './helpers/key-variables';
+import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
@@ -453,6 +453,10 @@ async function registerJwt(fastify: FastifyInstance): Promise<void> {
     requestRealm: (request) => tokenRealm(requestRealm(request)),
     accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
+    // A token issued before tokens named their key (#491) carries no `kid`:
+    // it is tried only against the Ed25519 key the key variable holds, which
+    // signed it, never against a key the store generated. Transitional.
+    kidlessKeyIds: await kidlessTokenKeyIds(env),
     // RFC 7009 revocation: the shared `requireJwt` preHandler consults this
     // Redis-backed denylist after verification so a revoked access token is
     // rejected everywhere it is used as a bearer credential. Resolved lazily

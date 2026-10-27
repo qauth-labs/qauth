@@ -902,6 +902,17 @@ export interface RealmKeysRepository {
    */
   listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]>;
   /**
+   * Whether a realm other than `realmId` publishes a key whose public JWK has
+   * every member of `identity` (its key type and public value, such as
+   * `{ kty, crv, x }`), whatever its status or window: two realms never share a
+   * key (#491).
+   */
+  anotherRealmPublishes(
+    realmId: string,
+    identity: Readonly<Record<string, string>>,
+    tx?: DbClient
+  ): Promise<boolean>;
+  /**
    * The ONE method that returns wrapped key material: the full row, for the
    * signer to unwrap. Takes the realm id as well as the `kid`, so a `kid` from
    * one realm never opens another realm's key.

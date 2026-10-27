@@ -608,8 +608,8 @@ describe('OIDC conformance — ID token validation against the published key (OI
       ).rejects.toThrow(/no key of this realm verifies it/);
 
       // A foreign token with no `kid` (as a release before #491 signed one) is
-      // tried against each EdDSA key of the realm, and fails on the signature
-      // itself.
+      // tried only against the key a key variable imported; this server names
+      // none, so it is refused before any signature check (#491).
       const now = Math.floor(Date.now() / 1000);
       const forged = forgeKidlessIdToken({
         iss: ISSUER,
@@ -621,7 +621,7 @@ describe('OIDC conformance — ID token validation against the published key (OI
       });
       await expect(
         app.jwtUtils.verifyAccessToken(realm, forged, { audience: CLIENT_ID })
-      ).rejects.toThrow(/signature/i);
+      ).rejects.toThrow(/no key of this realm verifies it/);
     } finally {
       await app.close();
       await other.app.close();
