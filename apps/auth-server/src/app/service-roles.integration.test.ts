@@ -48,8 +48,10 @@ const DEFAULT_ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'GET /api/clients/:clientId/api-keys',
   'GET /api/clients/:id',
   'GET /api/consents',
+  'GET /auth/verify',
   'GET /consents',
   'GET /health',
+  'GET /interaction/v1-rc.0/openapi.json',
   'GET /metrics',
   'GET /oauth/authorize',
   'GET /oauth/userinfo',
@@ -74,6 +76,7 @@ const DEFAULT_ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'POST /oauth/userinfo',
   'POST /ui/consent',
   'POST /ui/login',
+  'POST /ui/verify',
 ];
 
 const MACHINE_CLIENT_ID = 'roles-machine-client';
