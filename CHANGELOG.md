@@ -858,6 +858,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gauges `qauth_events_delivery_signer_held` and
   `qauth_events_delivery_signer_held_oldest_seconds` show such holds.
 
+- **Security operations, defined by effect, as an enforced classification**
+  ([#508], ADR-019 Decision 7). The eleven effect tags (`credential-path`,
+  `token-content`, `issue-for-other`, `administration`, `import`,
+  `federation-operator`, `key-custody`, `realm-lifecycle`,
+  `authority-tree-power`, `posture-loosening`, `bulk-revocation`) are a closed
+  list in `@qauth-labs/shared-validation`. Every admin operation is defined once
+  with `defineOperation` (id, class, effects, permissions); the registry refuses
+  a `write` or `read` operation with an effect, a `security` operation without
+  one, a class other than the strictest class of its permissions and an unknown
+  member. An operation whose request decides what it needs declares the
+  security case and a pure `classify`; a `classify` that throws, meets an
+  unknown field or returns an unknown member, effect, class or permission, or
+  more than the declaration, gives the request the declared security
+  classification. The admin pipeline's classification stage
+  (`plugins/admin-operations.ts`, for the admin listener) loads only before any
+  route, refuses at boot a route that names no registered operation or whose
+  OpenAPI members differ from the registry, and on every request hands the
+  handler a frozen classification it cannot lower and freezes the parameters,
+  query and body it classified. A reserved table names, for each effect, the
+  operation ids later areas register; the registry refuses one registered with
+  a weaker classification, a case variant of one, and a `classify` on one whose
+  entry does not say the request decides. The API conventions check fails when
+  an admin operation of the OpenAPI document disagrees with the registry, and
+  the docs site's new **Security operations** page
+  (`reference/security-operations`) is generated from it. No admin operation is
+  registered yet.
+  - Each request-dependent reserved entry (`realms.policies.update`,
+    `clients.update`, `realms.imports.apply`) lists security cases; the registry
+    runs the operation's `classify` on them at boot and refuses one that gives a
+    case less than its effects or fails closed on it, so a `classify` that
+    answers `write` for everything cannot take the entry. By effect, lengthening
+    a token or session lifetime or the key rotation interval, and shortening or
+    switching off audit-event retention, are `posture-loosening`.
+    `mergePatchLeafPaths(body)` gives a merge patch's changed fields from the
+    body's own keys.
+  - An operation with `loadState` names the version of the state it read
+    (`stateVersion`); the classification carries it, the stage answers 428
+    (the new `PreconditionRequiredError`, `precondition_required`) when the
+    request has no `If-Match` and 412 (the new `PreconditionFailedError`,
+    `precondition_failed`) when it names another version, and the handler's
+    write must be conditional on it. The `posture-loosening` tag now names
+    lifetimes, the key rotation interval and audit-event retention.
+    The classification also carries the SHA-256 digest of a binary body
+    (`bodyDigest`), which cannot be frozen.
+  - The stage requires an `authorize(request, classification)` option and calls
+    it on every request right after classifying.
+  - Every admin route runs under a request ceiling: a listener that registers
+    the server's rate limit before the stage keeps it, and one that does not
+    gets the stage's own (`@fastify/rate-limit`, 100 requests a minute by
+    default, the `rateLimit` option).
+  - The reserved table adds realm roles and groups and their role mappings,
+    credentials an admin sets for an account (password, passkey, other
+    credential), and rotating a client's secret or registration access token.
+
 ### Changed
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
@@ -1541,6 +1595,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#493]: https://github.com/qauth-labs/qauth/issues/493
 [#495]: https://github.com/qauth-labs/qauth/issues/495
 [#507]: https://github.com/qauth-labs/qauth/issues/507
+[#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#513]: https://github.com/qauth-labs/qauth/issues/513
 [#524]: https://github.com/qauth-labs/qauth/issues/524

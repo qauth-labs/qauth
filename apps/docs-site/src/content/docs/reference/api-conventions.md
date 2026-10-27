@@ -282,7 +282,7 @@ protocol endpoint.
 | -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
 | `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                                                                                      |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                              |
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
 
@@ -295,22 +295,69 @@ that changes only a write field needs `qauth:admin:write`, one that changes a se
 case, so a security operation never hides behind a write class and always carries its effects and
 the two-admin marker.
 
-A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
+Every admin operation is defined once, in the admin operation registry
+([Security operations](/reference/security-operations/)), with its class, effects and permissions.
+The document's `operationId` must name a registered operation, and its `x-qauth-class`,
+`x-qauth-permission` and `x-qauth-effects` must be the registry's; the conventions check fails
+otherwise. A route of the admin listener names its operation in its route config (`operation`) and
+takes these members from the registry (`operationSchemaExtensions`), and the listener refuses to
+boot a route that names no registered operation or whose members differ.
+
+A request-dependent operation classifies each request (`classify`). By effect, a policy change
+that lengthens an access-token, refresh-token or session lifetime or the key rotation interval, or
+shortens or switches off audit-event retention, is `posture-loosening` and needs the security
+class; shortening a lifetime or lengthening retention is a write. A field `classify` has no rule
+for fails closed only when `classify` takes a merge patch's changed fields from the body with
+`mergePatchLeafPaths(body)` and classifies them with `classifyByField`, which throws on a field its
+table does not hold; a request-dependent merge-patch operation uses that pattern, since a
+`classify` that reads only the fields it expects never sees the others.
+
+An operation that reads the current state to classify (`loadState`) names the version of what it
+read (`stateVersion`), which the route sends quoted as its `ETag`. The listener puts the version on
+the classification and answers `428` when the request has no `If-Match` and `412` when it names
+another version. The route still declares `If-Match` required in its header schema, so the
+OpenAPI document says so; the listener checks for it before validation, so a request without it
+gets `428`, not the `400` of a failed schema. The handler's write must be conditional on `classification.stateVersion` (an update that
+matches the stored version, `412` when none does), or load, classify and write in one transaction
+under `SELECT … FOR UPDATE`: otherwise a change made between the classification and the write runs
+under a classification of other state.
+
+A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation. On
+the admin API the operation is defined once in the registry, and the route names it in its config
+and spreads the registry's members into its schema:
 
 ```ts
+// helpers/admin-operations.ts, listed in ADMIN_OPERATIONS
+export const REALM_POLICIES_UPDATE = defineOperation({
+  id: 'realms.policies.update',
+  class: 'security',
+  effects: ['credential-path', 'token-content', 'posture-loosening', 'administration'],
+  permissions: ['realms.policies.write', 'realms.policies.security'],
+  description: "Change a realm's policies.",
+  loadState: loadRealmPolicies,
+  stateVersion: (policies) => policies.version,
+  classify: classifyByField({
+    changedFields: (request) => mergePatchLeafPaths(request.body),
+    fields: POLICY_FIELDS,
+    unchanged: WRITE,
+  }),
+});
+
+// the route, on the admin listener
 fastify.patch(
   '/admin/v1-rc.0/realms/:realmId/policies',
   {
+    config: { operation: REALM_POLICIES_UPDATE.id },
     schema: {
-      operationId: 'realms.policies.update',
+      // operationId, x-qauth-class, x-qauth-permission, x-qauth-effects and
+      // x-qauth-two-admin, from the registry
+      ...operationSchemaExtensions(REALM_POLICIES_UPDATE),
       security: [{ bearerAuth: [] }],
-      'x-qauth-class': 'security',
-      'x-qauth-permission': ['realms.policies.write', 'realms.policies.security'],
-      'x-qauth-effects': ['credential-path'],
-      'x-qauth-two-admin': 'recommended',
       'x-qauth-stability': 'stable',
       consumes: ['application/merge-patch+json'],
       params: z.object({ realmId: z.uuid() }),
+      // Required, so the OpenAPI document says so. A request without it gets
+      // 428 from the listener, which checks before validation, not 400.
       headers: z.looseObject({ 'if-match': z.string() }),
       body: realmPoliciesPatchSchema,
       response: { 200: realmSchema, ...problemResponses(400, 401, 403, 404, 412, 422, 428) },

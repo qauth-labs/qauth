@@ -4,5 +4,7 @@ export * from './invalid-configuration.error';
 export * from './invalid-csrf-token.error';
 export * from './misdirected-request.error';
 export * from './not-found.error';
+export * from './precondition-failed.error';
+export * from './precondition-required.error';
 export * from './temporarily-unavailable.error';
 export * from './too-many-requests.error';

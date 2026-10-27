@@ -11,6 +11,16 @@ import {
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import {
+  type AdminOperation,
+  createOperationRegistry,
+  defineOperation,
+} from '../helpers/admin-operations';
+import {
+  createPermissionRegistry,
+  definePermission,
+  PERMISSION_REGISTRY,
+} from '../helpers/admin-permissions';
 import { openapiOptions } from '../openapi-options';
 import { checkApiConventions, type ConventionRule } from './openapi-conventions';
 import { pageQuerySchema, pageSchema } from './paging';
@@ -49,6 +59,41 @@ const clientSchema = z.object({
 });
 
 const realmParams = z.object({ realmId: z.uuid() });
+
+/**
+ * The fixture's admin operations as a registry defines them (#508). No admin
+ * operation is registered on the server yet, so the fixture document is
+ * checked against these.
+ */
+const FIXTURE_OPERATIONS = createOperationRegistry(
+  [
+    defineOperation({
+      id: 'realms.list',
+      class: 'read',
+      effects: [],
+      permissions: ['realms.read'],
+      description: 'List the realms.',
+    }),
+    defineOperation({
+      id: 'realms.get',
+      class: 'read',
+      effects: [],
+      permissions: ['realms.read'],
+      description: 'Read a realm.',
+    }),
+    defineOperation({
+      id: 'realms.policies.update',
+      class: 'security',
+      effects: ['credential-path'],
+      permissions: ['realms.policies.write', 'realms.policies.security'],
+      description: "Change a realm's policies.",
+    }),
+  ] as AdminOperation[],
+  { reserved: [] }
+);
+
+/** The check over a fixture document, against the fixture's registry. */
+const check = (doc: unknown) => checkApiConventions(doc, { operations: FIXTURE_OPERATIONS });
 
 /** Generate the fixture document through the server's own swagger options. */
 async function buildFixtureDocument(): Promise<Doc> {
@@ -167,7 +212,7 @@ function mutated(mutate: (doc: Doc) => void): Doc {
 }
 
 function rulesOf(doc: Doc): ConventionRule[] {
-  return [...new Set(checkApiConventions(doc).violations.map((violation) => violation.rule))];
+  return [...new Set(check(doc).violations.map((violation) => violation.rule))];
 }
 
 const LIST = (doc: Doc) => doc.paths['/admin/v1-rc.0/realms'].get;
@@ -179,7 +224,7 @@ const jsonSchema = (operation: Doc, status = '200') =>
 
 describe('the API conventions check — fixture document (#506)', () => {
   it('passes the fixture as the shared helpers and openapiOptions generate it', () => {
-    const report = checkApiConventions(fixture);
+    const report = check(fixture);
     expect(report.violations).toEqual([]);
     expect(report.checkedOperations).toBe(4);
   });
@@ -209,7 +254,7 @@ describe('the API conventions check — fixture document (#506)', () => {
     const doc = mutated((d) => {
       d.paths['/api/clients'] = { get: { responses: { 200: { description: 'x' } } } };
     });
-    expect(checkApiConventions(doc).violations).toEqual([]);
+    expect(check(doc).violations).toEqual([]);
   });
 
   describe('fails when an operation lacks a required element', () => {
@@ -311,6 +356,13 @@ describe('the API conventions check — fixture document (#506)', () => {
       expect(rulesOf(mutated((d) => delete PATCH(d)['x-qauth-two-admin']))).toEqual(['two-admin']);
     });
 
+    // #508: the effect tags are a closed list.
+    it('MUTATION: an effect tag outside the closed list', () => {
+      expect(rulesOf(mutated((d) => (PATCH(d)['x-qauth-effects'] = ['credential-paths'])))).toEqual(
+        ['effects']
+      );
+    });
+
     it('MUTATION: effects or the two-admin marker on an operation that is not security', () => {
       expect(rulesOf(mutated((d) => (GET(d)['x-qauth-effects'] = ['import'])))).toEqual([
         'effects',
@@ -321,13 +373,158 @@ describe('the API conventions check — fixture document (#506)', () => {
     });
   });
 
+  // #508: an admin operation of the document is the registry's operation.
+  describe('fails when an admin operation disagrees with the operation registry', () => {
+    const registryMessages = (doc: Doc) =>
+      check(doc)
+        .violations.filter((violation) => violation.rule === 'registry')
+        .map((violation) => violation.message);
+
+    // Acceptance criterion: the invariant test fails when x-qauth-class
+    // disagrees with the registry. The document stays well formed (a write
+    // class with a write permission), so only the registry rule speaks.
+    it('MUTATION: an x-qauth-class the registry does not give the operation', () => {
+      const doc = mutated((d) => {
+        GET(d)['x-qauth-class'] = 'write';
+        GET(d)['x-qauth-permission'] = 'realms.policies.write';
+      });
+      expect(rulesOf(doc)).toEqual(['registry']);
+      expect(registryMessages(doc)).toEqual([
+        'x-qauth-class is write, but the registry gives realms.get the class read',
+        'x-qauth-permission is realms.policies.write, but the registry gives realms.get realms.read',
+      ]);
+    });
+
+    it('MUTATION: the registry gives the operation another class than the document', () => {
+      const registry = createOperationRegistry(
+        FIXTURE_OPERATIONS.all.map((operation) =>
+          operation.id === 'realms.get'
+            ? defineOperation({
+                ...operation,
+                class: 'write',
+                permissions: ['realms.policies.write'],
+              })
+            : operation
+        ) as AdminOperation[],
+        { reserved: [] }
+      );
+      const { violations } = checkApiConventions(fixture, { operations: registry });
+      expect(violations.map((violation) => [violation.operation, violation.rule])).toEqual([
+        ['GET /admin/v1-rc.0/realms/{realmId}', 'registry'],
+        ['GET /admin/v1-rc.0/realms/{realmId}', 'registry'],
+      ]);
+      expect(violations[0].message).toBe(
+        'x-qauth-class is read, but the registry gives realms.get the class write'
+      );
+    });
+
+    it('MUTATION: an x-qauth-permission the registry does not give the operation', () => {
+      const doc = mutated((d) => (GET(d)['x-qauth-permission'] = ['realms.read', 'realms.export']));
+      expect(rulesOf(doc)).toEqual(['registry']);
+      // The same permissions in another order agree.
+      expect(
+        rulesOf(
+          mutated(
+            (d) =>
+              (PATCH(d)['x-qauth-permission'] = [
+                'realms.policies.security',
+                'realms.policies.write',
+              ])
+          )
+        )
+      ).toEqual([]);
+    });
+
+    it('MUTATION: x-qauth-effects the registry does not give the operation', () => {
+      const doc = mutated(
+        (d) => (PATCH(d)['x-qauth-effects'] = ['credential-path', 'posture-loosening'])
+      );
+      expect(rulesOf(doc)).toEqual(['registry']);
+      expect(registryMessages(doc)).toEqual([
+        'x-qauth-effects is credential-path, posture-loosening, but the registry gives realms.policies.update credential-path',
+      ]);
+    });
+
+    it('MUTATION: an admin operation the registry does not hold', () => {
+      const doc = mutated((d) => (GET(d).operationId = 'realms.read'));
+      expect(rulesOf(doc)).toEqual(['registry']);
+      expect(registryMessages(doc)[0]).toContain(
+        '"realms.read" is not in the admin operation registry'
+      );
+    });
+
+    it('reports a malformed member once, by its own rule', () => {
+      expect(rulesOf(mutated((d) => (GET(d)['x-qauth-class'] = 'admin')))).toEqual(['class']);
+      expect(rulesOf(mutated((d) => (GET(d).operationId = 'getRealm')))).toEqual(['operation-id']);
+    });
+
+    it("compares with the server's own registry by default, which holds no operation yet", () => {
+      const { violations } = checkApiConventions(fixture);
+      expect(violations.map((violation) => [violation.operation, violation.rule])).toEqual([
+        ['GET /admin/v1-rc.0/realms', 'registry'],
+        ['GET /admin/v1-rc.0/realms/{realmId}', 'registry'],
+        ['PATCH /admin/v1-rc.0/realms/{realmId}/policies', 'registry'],
+      ]);
+    });
+
+    it('leaves the account and developer families to their own rules', () => {
+      expect(rulesOf(mutated((d) => (CLIENTS(d).operationId = 'clients.search')))).toEqual([]);
+    });
+
+    it("checks x-qauth-permission against the selected registry's permission catalog", () => {
+      // A catalog in which realms.read is retired and realms.inspect is new:
+      // the two read operations need realms.inspect there.
+      const catalog = createPermissionRegistry([
+        ...PERMISSION_REGISTRY.all.map((permission) =>
+          permission.id === 'realms.read'
+            ? definePermission({ ...permission, retiredIn: 'v0.1.0' })
+            : permission
+        ),
+        definePermission({
+          id: 'realms.inspect',
+          class: 'read',
+          resource: 'realms',
+          description: 'Inspect a realm.',
+        }),
+      ]);
+      const registry = createOperationRegistry(
+        FIXTURE_OPERATIONS.all.map((operation) =>
+          operation.class === 'read'
+            ? defineOperation({ ...operation, permissions: ['realms.inspect'] })
+            : operation
+        ) as AdminOperation[],
+        { permissions: catalog, reserved: [] }
+      );
+      const rules = (doc: Doc) =>
+        checkApiConventions(doc, { operations: registry }).violations.map((violation) => [
+          violation.operation,
+          violation.rule,
+        ]);
+
+      // A permission only the selected catalog knows is grantable there...
+      const inspecting = mutated((d) => {
+        LIST(d)['x-qauth-permission'] = 'realms.inspect';
+        GET(d)['x-qauth-permission'] = 'realms.inspect';
+      });
+      expect(rules(inspecting)).toEqual([]);
+      // ...and not in the server's own catalog.
+      expect(rulesOf(inspecting)).toEqual(['permission']);
+      // A permission the selected catalog retired is refused, although the
+      // server's own catalog still grants it.
+      expect(rules(fixture)).toEqual([
+        ['GET /admin/v1-rc.0/realms', 'permission'],
+        ['GET /admin/v1-rc.0/realms/{realmId}', 'permission'],
+      ]);
+    });
+  });
+
   describe('fails when a name is not camelCase and not on the OAuth metadata allow list', () => {
     it('MUTATION: a snake_case response member', () => {
       const doc = mutated((d) => {
         const realm = jsonSchema(GET(d));
         realm.properties.display_name = { type: 'string' };
       });
-      const { violations } = checkApiConventions(doc);
+      const { violations } = check(doc);
       expect(violations.map((v) => v.rule)).toEqual(['naming']);
       expect(violations[0].message).toContain('"display_name"');
     });
@@ -338,7 +535,7 @@ describe('the API conventions check — fixture document (#506)', () => {
         const body = PATCH(d).requestBody.content['application/merge-patch+json'].schema;
         body.properties.lockout.properties.max_attempts = { type: 'integer' };
       });
-      expect(checkApiConventions(doc).violations.map((v) => v.rule)).toEqual(['naming', 'naming']);
+      expect(check(doc).violations.map((v) => v.rule)).toEqual(['naming', 'naming']);
     });
 
     it('MUTATION: a snake_case query parameter', () => {
@@ -475,7 +672,7 @@ describe('the API conventions check — fixture document (#506)', () => {
           })
         )
       ).toEqual(['if-match']);
-      const { violations } = checkApiConventions(
+      const { violations } = check(
         mutated((d) => {
           delete PATCH(d).responses['412'];
           delete PATCH(d).responses['428'];
