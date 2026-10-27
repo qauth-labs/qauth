@@ -1,0 +1,71 @@
+# The hand-written overlay of User, the users table: the identity anchor, which holds no credential and no address
+# (ADR-002). The entity and its fields are generated from the Drizzle schema (#563); an overlay only adds to them
+# (#564). This one adds the examples and the internal actions the two password sign-in flows (core.sign-in,
+# core.sign-in-token) invoke.
+schema: delurio-graph/0
+kind: domain
+id: qauth
+
+entities:
+  User:
+    examples:
+      # an enabled user who has never signed in: the account /auth/register created and /auth/verify confirmed
+      - id: 0199f9a0-11aa-7b22-8c33-4d44e55f6601
+        realmId: 0199f99e-4a5b-7c6d-8e7f-8091a2b3c4d5
+        enabled: true
+        firstName: null
+        lastName: null
+        metadata: null
+        createdAt: 1792832400000
+        updatedAt: 1792832400000
+        lastLoginAt: null
+      # the same user after a password sign-in (updateLastLogin)
+      - id: 0199f9a0-11aa-7b22-8c33-4d44e55f6601
+        realmId: 0199f99e-4a5b-7c6d-8e7f-8091a2b3c4d5
+        enabled: true
+        firstName: null
+        lastName: null
+        metadata: null
+        createdAt: 1792832400000
+        updatedAt: 1792918800000
+        lastLoginAt: 1792918800000
+      # a disabled user: the right password is refused like a wrong one
+      - id: 0199f9a0-22bb-7c33-8d44-5e55f6607702
+        realmId: 0199f99e-4a5b-7c6d-8e7f-8091a2b3c4d5
+        enabled: false
+        firstName: null
+        lastName: null
+        metadata: null
+        createdAt: 1792832400000
+        updatedAt: 1792846800000
+        lastLoginAt: 1792836000000
+
+actions:
+  User.findById:
+    # internal: invoked by core.sign-in and core.sign-in-token, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/users.repository.ts:78
+    body:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string } # the credential's userId
+    result: { returns: User }
+    note: >-
+      It answers no user, without querying, for an id that is not a UUID, and no user for an id with no row. The sign-in
+      flows read the row only after the password checked out, for its enabled flag.
+
+  User.updateLastLogin:
+    # internal: invoked by core.sign-in and core.sign-in-token, with no route and no actor policy
+    source: libs/infra/db/src/lib/repositories/users.repository.ts:145
+    body:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+    result: { returns: User }
+    refusals:
+      NOT_FOUND:
+        note: 'the id is not a UUID, or names no row; the sign-in flows answer it with 500'
+        source: libs/infra/db/src/lib/repositories/users.repository.ts:162
+    sideEffects:
+      - 'the User gets lastLoginAt = now and updatedAt = now'
