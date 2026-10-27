@@ -860,8 +860,15 @@ export function operationStateVersion(operation: AdminOperation, state: unknown)
   return version;
 }
 
-/** One entity-tag of an `If-Match` list: optional `W/`, then a quoted opaque value. */
-const ENTITY_TAG = /(?:[\t ]*,)*[\t ]*(W\/)?"([\x21\x23-\x7e\x80-\xff]*)"[\t ]*(?:,|$)/y;
+/** Whether `code` is an `etagc` (RFC 9110 §8.8.3): `%x21 / %x23-7E / obs-text`. */
+function isEntityTagChar(code: number): boolean {
+  return code === 0x21 || (code >= 0x23 && code <= 0x7e) || (code >= 0x80 && code <= 0xff);
+}
+
+/** Whether `char` is optional whitespace (RFC 9110 §5.6.3). */
+function isOws(char: string | undefined): boolean {
+  return char === ' ' || char === '\t';
+}
 
 /**
  * Whether an `If-Match` field (RFC 9110 §13.1.1) lets a request act on the
@@ -869,6 +876,9 @@ const ENTITY_TAG = /(?:[\t ]*,)*[\t ]*(W\/)?"([\x21\x23-\x7e\x80-\xff]*)"[\t ]*(
  * entity-tag `"stateVersion"`. A weak tag never matches (strong comparison),
  * empty list elements are skipped, and a field that does not parse matches
  * nothing.
+ *
+ * Parsed in one pass, without a regular expression: a pattern with repeated
+ * whitespace and comma groups is polynomial on a long run of either.
  */
 export function ifMatchAllows(field: string | string[] | undefined, stateVersion: string): boolean {
   if (field === undefined) return true;
@@ -876,11 +886,22 @@ export function ifMatchAllows(field: string | string[] | undefined, stateVersion
   if (value === '*') return true;
   if (value === '') return false;
   let matched = false;
-  ENTITY_TAG.lastIndex = 0;
-  while (ENTITY_TAG.lastIndex < value.length) {
-    const tag = ENTITY_TAG.exec(value);
-    if (tag === null) return false;
-    if (tag[1] === undefined && tag[2] === stateVersion) matched = true;
+  let i = 0;
+  while (i < value.length) {
+    // Optional whitespace and empty list elements before the next tag.
+    while (i < value.length && (isOws(value[i]) || value[i] === ',')) i++;
+    if (i >= value.length) break;
+    const weak = value.startsWith('W/', i);
+    if (weak) i += 2;
+    if (value[i] !== '"') return false;
+    const start = ++i;
+    while (i < value.length && isEntityTagChar(value.charCodeAt(i))) i++;
+    if (value[i] !== '"') return false;
+    const opaque = value.slice(start, i);
+    i++;
+    while (i < value.length && isOws(value[i])) i++;
+    if (i < value.length && value[i] !== ',') return false;
+    if (!weak && opaque === stateVersion) matched = true;
   }
   return matched;
 }

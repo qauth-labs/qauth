@@ -1311,8 +1311,20 @@ describe('the state version and If-Match (#508)', () => {
     ['r7', false],
     ['"r7" "r6"', false],
     ['', false],
+    [',', false],
+    ['"r7",', true],
+    ['"r6", W/"r7"', false],
+    ['"r,7"', false],
+    ['"r7', false],
   ])('If-Match %j allows version r7: %s', (field, allowed) => {
     expect(ifMatchAllows(field, 'r7')).toBe(allowed);
+  });
+
+  it('parses a long run of whitespace and commas in linear time', () => {
+    const field = `${' ,\t'.repeat(100_000)}"r6"`;
+    const started = performance.now();
+    expect(ifMatchAllows(field, 'r7')).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 
