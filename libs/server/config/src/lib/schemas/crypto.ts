@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { z } from 'zod';
 
-
 /**
  * Crypto / signing environment configuration (ADR-005, #243 + #245).
  *
