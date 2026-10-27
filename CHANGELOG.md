@@ -729,6 +729,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JWT plugin's new `verifyRequestAccessToken(request, policy)` runs
   `requireJwt`'s checks under a route's issuer rule and `typ` requirement.
 
+- **The Interaction API v1 contract** ([#590], ADR-019 Decision 6, ADR-017
+  Decision 3, ADR-018 §5). The API sign-in pages will use to reach the engine is
+  written down before its handlers: one OpenAPI 3.1 document for
+  `/interaction/v1-rc.0` and one JSON Schema per step, published on the docs
+  site under `/interaction/v1-rc.0/` and served by the auth server at
+  `GET /interaction/v1-rc.0/openapi.json`. It has four operations: read the
+  current step with the interaction id alone (no personal data), read the step's
+  personal data with the flow cookie, answer the step as JSON or as a plain form
+  post with the flow cookie and the step's CSRF value, and cancel. It reserves
+  `/interaction/v1-rc.0/wallet/` for the wallet return leg. Its 17 steps are the
+  nine of ADR-017 and eight only the Interaction API serves, each named
+  `urn:qauth:ia:<name>:v1-rc.0`, with its params, answer fields, closed error
+  set, `amr` and an example. Every step read carries the realm's brand block.
+  Errors are problem documents with a `code` and a `trace_id` and no prose,
+  whose `type` and `title` are their code's entry on the problem types page; the
+  registry gains `invalid_answer` (400) and `interaction_expired` (410).
+  The versioning rules are in the document and on the new **Interaction API**
+  reference page. A typed client generated from the document lives in
+  `libs/shared/interaction-client`. The operations themselves are not served
+  yet.
+  - Every params, personal-data and envelope object is closed
+    (`additionalProperties: false`); only the two maps keyed by step name and
+    the problem document stay open, and a test holds every schema a response
+    reaches to that. The versioning rules say so: a later version may add
+    members, so a client never validates a response strictly against an older
+    schema.
+  - Before a first factor succeeds, an identifier comes back exactly as the
+    person gave it, after the one normalisation; the form the account holds
+    appears only after authentication.
+  - A reset of an unknown address gets a phantom `email_code` with the same
+    `expires_in`, `resend_after` and error sequence as a real one.
+  - `email_code`'s purpose `verify_address` is `verify_account`, here and in
+    ADR-017.
+  - A `consent` step always names its client, and an `unverified` client's
+    `redirect`; `params` always holds the current step's own params;
+    `alternatives` holds no step twice.
+  - `ClientDisplay` refuses another kind's members: `federation` on a `cimd`
+    or `admin_registered` client, `verifiedDomain` on a `federation` one.
+  - Answer and cancel name the same-origin check: `Sec-Fetch-Site:
+    same-origin`, or, without it, an `Origin` equal to the realm origin (`null`
+    refused). The personal-data read gains a 403 for a `Sec-Fetch-Site` or an
+    `Origin` that names another origin, and allows a request with neither.
+  - The step read's `alternatives` after a first factor are documented as an
+    accepted exposure (methods, not identity), and a device's network name is
+    marked as declared.
+  - The typed client rejects a redirect a browser hides from `fetch` with
+    `UnexpectedRedirectError` rather than as status 0.
+
 ### Changed
 
 - **BREAKING (clients of the non-OAuth routes)**: every route that is not an
@@ -1364,6 +1412,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
+[#590]: https://github.com/qauth-labs/qauth/issues/590
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#627]: https://github.com/qauth-labs/qauth/issues/627

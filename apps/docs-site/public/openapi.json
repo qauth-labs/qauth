@@ -52,6 +52,7 @@
               "invalid_cursor",
               "invalid_verification_token",
               "invalid_csrf_token",
+              "invalid_answer",
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
@@ -67,6 +68,7 @@
               "email_already_verified",
               "verification_token_used",
               "verification_token_expired",
+              "interaction_expired",
               "request_timeout",
               "precondition_failed",
               "content_too_large",
@@ -254,6 +256,50 @@
           },
           "429": {
             "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interaction/v1-rc.0/openapi.json": {
+      "get": {
+        "tags": [
+          "Interaction"
+        ],
+        "description": "The OpenAPI 3.1 document of the Interaction API v1-rc.0, with one JSON Schema per step (ADR-019 Decision 6). The same document the docs site publishes. Unauthenticated, cacheable.",
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
             "content": {
               "application/problem+json": {
                 "schema": {

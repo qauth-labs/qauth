@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/totp.json",
+  "title": "urn:qauth:ia:totp:v1-rc.0",
+  "description": "A TOTP second factor (RFC 6238) with the fixed parameters of ADR-020 §3: SHA-1, six digits, 30 seconds, one step of tolerance. An accepted code is never accepted twice (ADR-017 Decision 8). Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction",
+    "fipa"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:totp:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:totp:v1-rc.0",
+      "params": {
+        "digits": 6
+      },
+      "answer": {
+        "otp": "482913"
+      },
+      "personal": {
+        "identifier": "alice@example.com"
+      },
+      "amr": [
+        "otp"
+      ]
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "digits": {
+          "type": "integer",
+          "enum": [
+            6
+          ],
+          "description": "How many digits the code has."
+        }
+      },
+      "required": [
+        "digits"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "digits": 6
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "otp": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$",
+          "description": "The six digits the authenticator app shows."
+        }
+      },
+      "required": [
+        "otp"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "otp": "482913"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "description": "Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier.",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+          "x-qauth-display": "account",
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "identifier": "alice@example.com"
+        }
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "invalid_credentials"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [
+        "otp"
+      ],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction."
+    }
+  }
+}

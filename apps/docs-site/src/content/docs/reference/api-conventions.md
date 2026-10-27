@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-26'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -13,10 +13,11 @@ contract ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)), s
 before the families' first route. A test enforces them over the generated OpenAPI document
 ([Enforcement](#enforcement)).
 
-The Interaction API (`/interaction/v1-rc.0`) reuses these rules. The OAuth protocol endpoints do
-not: they keep the shapes their specifications define ([Errors](#errors)). The error format of
-[Errors](#errors) is not limited to the families: every route that is not an OAuth protocol
-endpoint answers it.
+The Interaction API (`/interaction/v1-rc.0`) reuses these rules, with the differences its own
+page lists: its problem documents carry no prose, and its steps keep the names of the step grammar
+([Interaction API](/reference/interaction-api/)). The OAuth protocol endpoints do not: they keep
+the shapes their specifications define ([Errors](#errors)). The error format of [Errors](#errors)
+is not limited to the families: every route that is not an OAuth protocol endpoint answers it.
 
 ## The three families
 

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/email_code.json",
+  "title": "urn:qauth:ia:email_code:v1-rc.0",
+  "description": "An emailed code proves control of a mailbox: it verifies a password account and recovers an account. It is never a sign-in factor and adds no `amr` value (ADR-017 Decision 5). For `recovery`, an address that gets no mail (no account, or no password) gets a phantom code: the step comes with the same `expires_in` and `resend_after`, and its answers are refused with the same errors at the same times as a real code’s (`invalid_credentials` for a wrong code, `code_expired` once `expires_in` has passed), so neither error tells a known address from an unknown one. An answer with no `otp` asks for the code again. Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction",
+    "fipa"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:email_code:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:email_code:v1-rc.0",
+      "params": {
+        "purpose": "verify_account",
+        "length": 6,
+        "expires_in": 600,
+        "resend_after": 60
+      },
+      "answer": {
+        "otp": "482913"
+      },
+      "personal": {
+        "identifier": "alice@example.com"
+      },
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "verify_account",
+            "recovery",
+            "confirm_sign_in"
+          ],
+          "description": "Why the code was sent, so one screen can say so: to verify the account, to recover the account, or (FiPA endpoint only; the Interaction API never offers it) to confirm a sign-in after the password."
+        },
+        "length": {
+          "type": "integer",
+          "enum": [
+            6,
+            8
+          ],
+          "description": "How many digits the code has: six after a password, eight for recovery and registration."
+        },
+        "expires_in": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "description": "How many seconds the code stays valid."
+        },
+        "resend_after": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600,
+          "description": "How many seconds until another code may be asked for."
+        }
+      },
+      "required": [
+        "purpose",
+        "length",
+        "expires_in",
+        "resend_after"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "purpose": "verify_account",
+          "length": 6,
+          "expires_in": 600,
+          "resend_after": 60
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "otp": {
+          "type": "string",
+          "pattern": "^(?:[0-9]{6}|[0-9]{8})$",
+          "description": "The code. Leave it out to ask for a new one."
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "otp": "482913"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "description": "The address the code went to, when the transaction holds one.",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+          "x-qauth-display": "account",
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "identifier": "alice@example.com"
+        }
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "invalid_credentials",
+        "code_expired"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

@@ -141,6 +141,13 @@ export const PROBLEM_CODES = {
     description:
       "A cookie-authenticated request that changes state carries no CSRF token, or not the browser session's.",
   },
+  invalid_answer: {
+    status: 400,
+    type: 'invalid-answer',
+    title: 'Invalid answer',
+    description:
+      'An Interaction API answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field.',
+  },
   unauthorized: {
     status: 401,
     type: 'unauthorized',
@@ -232,6 +239,13 @@ export const PROBLEM_CODES = {
     type: 'verification-token-expired',
     title: 'Verification token expired',
     description: 'The email verification token has expired.',
+  },
+  interaction_expired: {
+    status: 410,
+    type: 'interaction-expired',
+    title: 'Interaction expired',
+    description:
+      'The interaction is unknown, expired or finished, or the flow cookie does not belong to it. The answer does not say which.',
   },
   request_timeout: {
     status: 408,

@@ -35,6 +35,7 @@
     "@qauth-labs/shared-validation": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
     "@qauth-labs/shared-events": "workspace:*",
+    "@qauth-labs/shared-interaction-contract": "workspace:*",
     "@qauth-labs/shared-stability": "workspace:*",
     "fastify-plugin": "catalog:",
     "jose": "catalog:",

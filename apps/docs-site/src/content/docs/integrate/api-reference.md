@@ -569,6 +569,14 @@ challenge; `404` is `not_found`, for a stream the receiver does not have and, as
 for any path no route serves, for a realm that does not run the transmitter;
 `409` is `conflict`; and `429` is `too_many_requests` with `Retry-After`.
 
+### Interaction API contract
+
+`GET /interaction/v1-rc.0/openapi.json` returns the OpenAPI 3.1 document of the Interaction API,
+the API sign-in pages use to reach the engine, with `Cache-Control: public, max-age=3600`. It is
+the same document the docs site publishes; the [Interaction API](/reference/interaction-api/) page
+describes its operations, steps and versioning rules. The operations it describes are not served
+yet: the document is published ahead of them.
+
 ---
 
 ## Hosted UI
