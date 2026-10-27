@@ -350,23 +350,32 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const operator = await defaultRealmId();
       const a = await tenant('alpha');
       const admin = await account(operator);
-      const role = await app().repositories.adminRoles.create({
-        realmId: a,
-        name: 'policy-editor',
-        permissionIds: ['realms.policies.write', 'realms.read'],
-      });
+      // Written straight to the test database: no route reads custom roles
+      // until the admin API's role routes ship (#679), so the app's service
+      // roles do not build their repository (#495), and the app may not reach
+      // `@qauth-labs/infra-db` to build one. The repository's own checks are
+      // `admin-grants.integration.test.ts`'s.
+      const setRole = (changes: string, values: unknown[]) =>
+        app().dbPool.query(
+          `UPDATE admin_roles SET ${changes}, updated_at = updated_at + 1 WHERE id = $1`,
+          values
+        );
+      const {
+        rows: [role],
+      } = await app().dbPool.query<{ id: string }>(
+        `INSERT INTO admin_roles (realm_id, name, permission_ids)
+         VALUES ($1, 'policy-editor', '["realms.policies.write", "realms.read"]') RETURNING id`,
+        [a]
+      );
       await grant(admin, a, { roleId: role.id });
       const token = await adminToken(admin);
 
       expect((await probe(a, token)).json()).toMatchObject({
         permissions: ['realms.policies.write', 'realms.read'],
       });
-      await app().repositories.adminRoles.update(a, role.id, { disabled: true });
+      await setRole('disabled_at = updated_at', [role.id]);
       expect((await probe(a, token)).statusCode).toBe(404);
-      await app().repositories.adminRoles.update(a, role.id, {
-        disabled: false,
-        permissionIds: ['realms.read'],
-      });
+      await setRole(`disabled_at = NULL, permission_ids = '["realms.read"]'`, [role.id]);
       expect((await probe(a, token)).json()).toMatchObject({ permissions: ['realms.read'] });
     });
 
@@ -436,10 +445,11 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
         requirePkce: true,
         provisionedByOperator: true,
       });
+      // Realm first (#489): the realm, the account, the client.
       await app().repositories.oauthConsents.upsertGrant(
+        realm,
         userId,
         client.id,
-        realm,
         ['openid', ...ADMIN_SCOPE_LIST],
         [ADMIN]
       );
