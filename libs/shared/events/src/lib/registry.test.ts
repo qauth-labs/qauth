@@ -302,6 +302,45 @@ describe('parseEvent', () => {
     );
   });
 
+  // A replayed grant's refusal names the refresh family it revoked (#627).
+  describe('a token.request_failed for a replayed grant', () => {
+    const { id, time, realm, category, client } = EXAMPLE_EVENT;
+    const replay = (data: Record<string, unknown>) => ({
+      id,
+      type: 'urn:qauth:event:token.request_failed:v1-rc.0',
+      time,
+      realm,
+      category,
+      client,
+      data: {
+        grantType: 'authorization_code',
+        error: 'invalid_grant',
+        reason: 'code_replay',
+        ...data,
+      },
+    });
+
+    it('accepts the family it revoked and how many tokens', () => {
+      expect(() =>
+        parseEvent(
+          replay({
+            refreshFamilyId: '0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42',
+            revokedRefreshCount: 3,
+          })
+        )
+      ).not.toThrow();
+      // A code that issued no refresh family: a count alone.
+      expect(() => parseEvent(replay({ revokedRefreshCount: 0 }))).not.toThrow();
+    });
+
+    it.each([
+      ['a family that is not a UUID', { refreshFamilyId: 'family-1' }, '/data/refreshFamilyId'],
+      ['a negative count', { revokedRefreshCount: -1 }, '/data/revokedRefreshCount'],
+    ])('refuses %s', (_label, data, where) => {
+      expect(() => parseEvent(replay(data))).toThrow(where);
+    });
+  });
+
   it('refuses a token-shaped value outside data too', () => {
     const jwt = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl';
     expect(() => parseEvent(event({ actor: { type: 'user', id: jwt } }))).toThrow(

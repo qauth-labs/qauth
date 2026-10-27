@@ -561,8 +561,13 @@ async function advanceWalletLoginFlow(
   // path below needs it too.
   const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
 
+  // A flow is resumed only at a host of the realm it was started in (#489):
+  // one of another realm is an unknown flow here, answered exactly as one,
+  // and left untouched for its own realm.
   const flow = await readWalletLoginFlow(fastify, handle);
-  if (flow === null) return resolveDoneMarker(fastify, request, reply, handle, binder);
+  if (flow === null || flow.realmId !== requestRealm(request).id) {
+    return resolveDoneMarker(fastify, request, reply, handle, binder);
+  }
 
   if (!binder || !csrfTokensEqual(flow.binder, binder)) {
     fastify.log.warn(
@@ -987,7 +992,7 @@ export default async function (fastify: FastifyInstance) {
       let invocationUri: string;
       try {
         const realm = requestRealm(request);
-        const invocation = await buildWalletLoginInvocation(fastify, capability);
+        const invocation = await buildWalletLoginInvocation(fastify, capability, realm);
 
         await fastify.repositories.oid4vpRequestStates.create({
           realmId: realm.id,

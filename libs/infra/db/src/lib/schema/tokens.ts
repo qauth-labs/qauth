@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   text,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -14,6 +15,7 @@ import {
 import { oauthClients, users } from './core';
 import { codeChallengeMethodEnum } from './enums';
 import { userCredentials } from './identity';
+import { sessions } from './sessions';
 import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
 
 export const emailVerificationTokens = pgTable(
@@ -121,6 +123,20 @@ export const authorizationCodes = pgTable(
      * for a code minted by a release before migration 0038.
      */
     sessionExpiresAt: bigint('session_expires_at', { mode: 'number' }),
+    /**
+     * The browser session that backs this code (ADR-019 Decisions 3 and 4,
+     * issue #549): its `sid`, which the code exchange puts in the ID token's
+     * `sid` claim and back-channel logout names.
+     *
+     * NULL when no browser session backs the code (the legacy Bearer path,
+     * whose ID token then has no `sid`), and for a code minted by a release
+     * before migration 0042. Deleting the session sets it to NULL and keeps
+     * the code, so a session purge never removes a code mid-flight.
+     *
+     * Not to be confused with the Authority Tree's `tree_id` (ADR-014): `sid`
+     * names the browser session and nothing else.
+     */
+    sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * RFC 8707 `resource` parameter(s) from /oauth/authorize. Absolute URIs
@@ -158,6 +174,9 @@ export const authorizationCodes = pgTable(
     index('idx_authorization_codes_expires_at').on(t.expiresAt),
     index('idx_authorization_codes_user_id').on(t.userId),
     index('idx_authorization_codes_oauth_client_id').on(t.oauthClientId),
+    // Serves the session foreign key's ON DELETE SET NULL, which would
+    // otherwise scan the table once per deleted session.
+    index('idx_authorization_codes_session_id').on(t.sessionId),
     /**
      * Only the two levels that BEAR an `acr` claim may be stored. `'low'` is
      * excluded deliberately: NULL is the single representation of "no assurance
@@ -253,6 +272,22 @@ export const refreshTokens = pgTable(
      * (RFC 9449 §5), and for every token issued without a proof.
      */
     cnfJkt: varchar('cnf_jkt', { length: 43 }),
+    /**
+     * The authorization code whose redemption issued this token (ADR-017
+     * Decision 10, issue #627). Set only on the first token of a family the
+     * code exchange starts; rotations leave it NULL and share the family's
+     * `family_id`, and the purge job deletes a family only whole, so the first
+     * token, and with it the link, stays while any token of the family lives.
+     * A second redemption of the code finds the family through it and revokes
+     * it (OAuth 2.1 §4.1.3).
+     *
+     * NULL for every other token, for a family that predates migration 0041,
+     * and once the code row is purged (`ON DELETE SET NULL`): a code that is
+     * gone can no longer be replayed, since the token endpoint finds no row.
+     */
+    authorizationCodeId: uuid('authorization_code_id').references(() => authorizationCodes.id, {
+      onDelete: 'set null',
+    }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     lastUsedAt: bigint('last_used_at', { mode: 'number' }),
   },
@@ -268,6 +303,11 @@ export const refreshTokens = pgTable(
       .where(sql`${t.revoked} = false`),
     // Fast family-wide revocation lookups for replay detection.
     index('idx_refresh_tokens_family_id').on(t.familyId),
+    // One family per code, and the index the code purge's `ON DELETE SET NULL`
+    // reads: without it every deleted code would scan the table.
+    uniqueIndex('idx_refresh_tokens_authorization_code_id')
+      .on(t.authorizationCodeId)
+      .where(sql`${t.authorizationCodeId} IS NOT NULL`),
     check(
       'refresh_tokens_cnf_jkt_format',
       sql`${t.cnfJkt} IS NULL OR ${t.cnfJkt} ~ '^[A-Za-z0-9_-]{43}$'`
@@ -288,6 +328,7 @@ export const authorizationCodesRelations = relations(authorizationCodes, ({ one 
     fields: [authorizationCodes.oauthClientId],
     references: [oauthClients.id],
   }),
+  session: one(sessions, { fields: [authorizationCodes.sessionId], references: [sessions.id] }),
 }));
 
 export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({

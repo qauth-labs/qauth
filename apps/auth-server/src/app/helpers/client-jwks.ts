@@ -1,12 +1,12 @@
+import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import type { JSONWebKeySet } from 'jose';
 import { z } from 'zod';
 
-import { env } from '../../config/env';
 import { REDIS_KEYS } from '../constants/redis-keys';
 import type { OAuthClientLike } from './client-auth';
-import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
+import { egressGet } from './egress-get';
 
 /**
  * Client JWK Set handling — RFC 7591 §2 `jwks` / `jwks_uri` (#384).
@@ -161,14 +161,17 @@ export function assertJwksMutuallyExclusive(jwks: unknown, jwksUri: unknown, sou
 }
 
 /**
- * Fetch a client's `jwks_uri` through the SSRF-guarded path and cache the
+ * Fetch a client's `jwks_uri` through the egress client and cache the
  * validated document for a bounded TTL.
  *
  * The URL is registration-supplied and dereferenced by the server, so it gets
  * exactly the treatment a CIMD document gets: https-only, no redirect
  * following, DNS-pinned IP validation, byte cap, timeout, non-200 rejection.
- * A private / loopback / link-local target is refused — the check that stops a
- * `jwks_uri` from being turned into a cloud-metadata read primitive.
+ * The client named it — at registration or in its own metadata document — so
+ * the fetch has `source: client` and the deployment allowlist never applies
+ * (ADR-019 Decision 8): a private / loopback / link-local target is always
+ * refused, the check that stops a `jwks_uri` from being turned into a
+ * cloud-metadata read primitive.
  */
 export async function fetchClientJwkSet(
   fastify: FastifyInstance,
@@ -190,16 +193,14 @@ export async function fetchClientJwkSet(
 
   let result;
   try {
-    result = await ssrfSafeGet(jwksUri, {
+    result = await egressGet(fastify, jwksUri, {
+      purpose: 'client-jwks',
+      source: 'client',
       timeoutMs: CLIENT_JWKS_FETCH_TIMEOUT_MS,
       maxBytes: CLIENT_JWKS_MAX_DOCUMENT_BYTES,
-      // Reuses the CIMD escape hatch: both settings gate exactly the same thing
-      // (a registration-supplied URL the AS dereferences) and #384 introduced no
-      // configuration surface of its own. Defaults to false.
-      allowPrivateAddresses: env.CIMD_ALLOW_PRIVATE_ADDRESSES,
     });
   } catch (err) {
-    if (err instanceof SsrfBlockedError) {
+    if (isEgressError(err) && err.outcome === 'blocked') {
       throw new InvalidClientError(`client jwks_uri fetch blocked: ${err.message}`);
     }
     throw new InvalidClientError('client jwks_uri fetch failed');

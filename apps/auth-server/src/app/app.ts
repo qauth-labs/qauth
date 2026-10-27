@@ -6,6 +6,7 @@ import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
+import { egressPlugin, type EgressPluginOptions } from '@qauth-labs/fastify-plugin-egress';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import { type DeliveryRoute, eventDeliveryPlugin } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
@@ -36,7 +37,7 @@ import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
-import type { DefaultRealmBootSettings } from './helpers/default-realm-boot';
+import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
 import {
@@ -47,6 +48,8 @@ import {
 import { keyVariableSettings, thumbprintKid } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { realmIssuer } from './helpers/realm-url';
+import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import { defaultRealmPlugin } from './plugins/default-realm';
@@ -132,6 +135,13 @@ export interface AppOptions {
    * lands (#538). A suite that watches the role passes a route of its own.
    */
   eventDeliveryRoutes?: readonly DeliveryRoute[];
+  /**
+   * TEST SUPPORT — builds the egress client (#481) instead of the production
+   * one: a suite passes `createTestEgressClient` to reach a local fixture
+   * server. The egress plugin refuses it unless NODE_ENV is `test`, and
+   * `main.ts` never sets it.
+   */
+  egressClientFactory?: EgressPluginOptions['createClient'];
 }
 
 declare module 'fastify' {
@@ -150,6 +160,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     realmLookup,
     eventTelemetryLimits,
     eventDeliveryRoutes,
+    egressClientFactory,
     ...pluginOptions
   } = opts;
 
@@ -256,14 +267,31 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     },
   });
 
+  // The SSRF-safe egress client (ADR-019 Decision 8, #481): `fastify.egress`,
+  // over the deployment allowlist that EGRESS_ALLOWLIST_PATH names, read once
+  // here. Every outbound call the routes make for a configuration value or a
+  // request — CIMD documents, client and issuer JWKS, ID-JAG discovery — goes
+  // through it, naming who set the destination. The list lives only in that
+  // file: not in the database, and no route reads or edits it.
+  await fastify.register(egressPlugin, {
+    ...(env.EGRESS_ALLOWLIST_PATH === undefined
+      ? {}
+      : { allowlistPath: env.EGRESS_ALLOWLIST_PATH }),
+    ...(egressClientFactory === undefined ? {} : { createClient: egressClientFactory }),
+  });
+
   // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the
   // shared verifier over the cache plugin's Redis, which records used proofs.
   // `fastify.dpop` is null while DPOP_ENABLED is off, and then no route reads
   // a `DPoP` header. A proof's `htu` is compared with the issuer URL (path
-  // included) and the request path, the endpoint URL discovery publishes,
-  // never the `Host` header. A request to one of DEFAULT_REALM_ENDPOINT_HOSTS
-  // must therefore name the published URL in `htu` too.
-  await fastify.register(dpopPlugin, { enabled: env.DPOP_ENABLED, baseUrl: env.JWT_ISSUER });
+  // included) of the request's realm and the request path, the endpoint URL
+  // that realm's discovery publishes (ADR-019 Decision 1, #490), never the
+  // `Host` header. A request to one of the realm's endpoint hosts must
+  // therefore name the published URL in `htu` too.
+  await fastify.register(dpopPlugin, {
+    enabled: env.DPOP_ENABLED,
+    baseUrl: (request) => realmIssuer(requestRealm(request)),
+  });
 
   await fastify.register(passwordPlugin, {
     hashConfig: {
@@ -474,12 +502,24 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
   // For 'mock' provider, providerConfig is undefined (no config needed)
 
+  // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
+  // set to another base than the default realm's issuer, where the links went.
+  const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
+  if (emailBaseUrlIgnored !== undefined) {
+    fastify.log.warn(
+      { variable: 'EMAIL_BASE_URL', value: env.EMAIL_BASE_URL, issuer: env.JWT_ISSUER },
+      emailBaseUrlIgnored
+    );
+  }
+
   await fastify.register(emailPlugin, {
     provider: emailProvider,
     providerConfig,
     serviceConfig: {
       defaultFrom: env.EMAIL_FROM_ADDRESS,
-      baseUrl: env.EMAIL_BASE_URL,
+      // No link base here: a mail's links start at the issuer of the realm
+      // the account belongs to, passed with each mail (ADR-019 Decision 1,
+      // #490). EMAIL_BASE_URL is no longer read.
       // Same value the send routes use to compute `expiresAt`, so the copy in
       // the email cannot drift from the lifetime actually enforced (#334).
       verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,

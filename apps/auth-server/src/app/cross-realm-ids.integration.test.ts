@@ -622,6 +622,17 @@ describe('an id from another realm is an unknown id (#489)', () => {
     expect(answer).toEqual({ status: 200, body: { active: false } });
   });
 
+  // A known gap until tokens are signed per realm (#491, PR #886). Every
+  // realm's tokens carry `iss = JWT_ISSUER`, the default realm's token issuer,
+  // and a client_credentials token names no user, so no realm-scoped user
+  // lookup stands between it and the default realm: introspection's audience
+  // rule (`audAuthoritative`) admits it on an audience match alone, and
+  // revocation denylists it, with no client_id shared between the realms.
+  // #886 gives each realm's tokens their own `iss` and turns this into a test.
+  it.todo(
+    "a realm-B client_credentials token, for an audience a resource server of the default realm is authoritative for, is inactive at the default realm's introspection and not denylisted by its revocation (#491)"
+  );
+
   it('a user id of realm A names no user at realm B', async () => {
     const w = await setUp();
 

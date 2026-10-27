@@ -1,0 +1,565 @@
+# POST /auth/login as the code works today (capture mode, #613): the password sign-in that answers with tokens instead
+# of a session, which the developer portal's server uses, and the baseline that PRO-09 replaces with the sign-in
+# engine. PRO-32 removes the route; it stays in this graph so that the removal shows as a graph change. PRO-09, PRO-12
+# and SES-03 change this flow later, and change this graph first. It has no screens. The states run in the order the
+# server runs them: the realm resolver and the rate limiter (onRequest hooks), the body schema, then the handler.
+#
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees. Every
+#   refusal and failure is the error handler's RFC 9457 problem document, sent as application/problem+json
+#   (apps/auth-server/src/app/plugins/error-handler.ts, #513), since /auth/login is not an OAuth protocol endpoint;
+#   <error> is the document's code, but for a 500, whose code is internal_error. A client branches on the code; the
+#   detail wording may change. No 401 carries a WWW-Authenticate challenge: the route takes no bearer token.
+# - The four 401 exits answer the same, by design (ANT-2026-SPEMY9GU), each document's own trace_id aside: only the
+#   event, the log line and the metric they record tell them apart, and the metric not even then. They are four states because they are four
+#   causes, and a replay that sees one of them answer differently names the state that changed.
+# - The checks run in the same order as on POST /ui/login (graphs/flows/core/sign-in): the lockout, the password, the
+#   verified-account gate, then the enabled flag, and the two routes share one failed-login counter.
+# - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
+#   `source:` of the transition it decides: the line of the check.
+# - `invoke: { external }` names a store or a service the domain graph holds no entity for: the token signer, which
+#   still signs with the JWT_PRIVATE_KEY variable rather than the realm's keys (#491 moves it, ADR-019 Decision 9), and
+#   the event store with its own writer (ADR-019 Decision 8). The database reads and writes are domain actions
+#   (graphs/domain/).
+schema: delurio-graph/0
+kind: flow
+id: core.sign-in-token
+status: captured
+domain: qauth
+title: Sign in with a password for tokens
+summary: >-
+  A caller posts an email address and a password as JSON. QAuth refuses a locked-out address, counts the attempt,
+  checks the password, the verified-account gate and the enabled flag, and refuses every failure with the same 401.
+  On success it signs an access token for the system client, which carries no scope, stores a new refresh-token
+  family, records the sign-in and answers with both tokens.
+
+scope:
+  shows: POST /auth/login from the request to the response, in the order the server runs its checks
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - 'a store failure while the password is checked or the user is read answers 500 the same way as one after it:
+      user.sign_in_failed is recorded with the reason internal_error first, and the answer waits out the floor; a
+      failure to record a refusal (user.sign_in_failed) turns that refusal into a 500'
+    - "Fastify's own answers before the schema check, as problem documents, such as a body of a media type no parser
+      takes (415, unsupported_media_type) or an empty body sent as application/json (400, bad_request)"
+    - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer) give one answer
+      and are drawn as one exit; an endpoint host of the realm is served, since this is an api route'
+    - 'with RATE_LIMIT_ENABLED=false the login limit is not applied'
+    - 'with FAILED_LOGIN_TRACKING_ENABLED=false no attempt is counted and no address is ever locked out; a cache
+      failure while an attempt is counted fails open: the attempt is let through, and what was counted stays counted'
+    - 'an attempt that reaches the threshold together with another one, which armed the lockout first, was counted on
+      its way in: it is refused as locked out and gives its count back best effort, so a cache failure at that moment
+      leaves it counted; its Retry-After is then the full FAILED_LOGIN_LOCKOUT_DURATION, not the seconds left'
+    - 'LOGIN_RATE_LIMIT must stay above FAILED_LOGIN_MAX_ATTEMPTS (the defaults are 5 and 5) for one client address to
+      meet the lockout: at or below it, the login limit refuses that address with its 429 by the request after its
+      last counted failure, and the lockout answer is never sent to it, though the lockout still holds against
+      attempts on the same account from other addresses. binding.yaml sets the limit above the threshold'
+    - 'a password credential whose credential_data is malformed, or whose provider identity disagrees with its row,
+      answers like a wrong password and logs an error; one whose users row is missing answers like a disabled user
+      and logs an error. Neither happens in normal operation'
+    - 'the system client is created on the realm with its first direct sign-in, with a random secret nobody is
+      given; SYSTEM_CLIENT_ID names it'
+    - 'with HYBRID_SIGNING_ENABLED the access token is the same Ed25519 JWS, and its detached ML-DSA signature
+      (JWT_MLDSA_PRIVATE_KEY) is stored in the cache for introspection; a failure to store it answers 500'
+    - 'the effects are not one transaction: a failure after the refresh token is stored leaves it stored, though the
+      caller never receives it'
+
+context:
+  # The checks before the password run in a fixed order and each refuses on its own, so one variable says which of
+  # them the request fails first, if any.
+  gate:
+    values: [open, unknownHost, rateLimited, invalidInput, lockedOut]
+    initial: any
+    say:
+      open: >-
+        the host is a host of an enabled realm with an issuer, the address is under its limit, the body passes the
+        schema, and neither the address being signed in to nor the client address is locked out
+      unknownHost: 'the host names no realm, a disabled realm or a realm with no issuer'
+      rateLimited: 'the client address has used up its login requests for the window'
+      invalidInput: >-
+        the body does not pass the schema: an email that is not an address or is longer than 254 characters, a
+        password longer than 256 characters, a missing field. An empty password passes the schema here, unlike on the
+        form, and is counted and refused like a wrong one
+      lockedOut: >-
+        the address being signed in to, or the client address, is locked out: FAILED_LOGIN_MAX_ATTEMPTS attempts were
+        counted on it within FAILED_LOGIN_WINDOW seconds, and FAILED_LOGIN_LOCKOUT_DURATION seconds have not passed;
+        or this attempt reached the threshold together with another one, which armed the lockout first
+  account:
+    values: [verified, unverified, disabled, disabledUnverified, unknown]
+    initial: any
+    say:
+      verified: 'the address has a password credential in this realm, its address confirmed, and its user is enabled'
+      unverified: 'the address has a password credential whose address is not confirmed yet, and its user is enabled'
+      disabled: 'the address has a confirmed password credential, and its user is disabled'
+      disabledUnverified: 'the credential is not confirmed, and its user is disabled'
+      unknown: 'the address has no password credential in this realm'
+  password:
+    values: [right, wrong]
+    initial: any
+    say:
+      right: "the posted password is the credential's"
+      wrong: 'it is another one'
+  requireVerified:
+    values: [true, false]
+    initial: any
+    say:
+      'true': 'REQUIRE_VERIFIED_ACCOUNT is on: unset, blank or true, the default'
+      'false': 'REQUIRE_VERIFIED_ACCOUNT=false, or its deprecated name REQUIRE_EMAIL_VERIFIED=false'
+  attemptCounted: { values: [false, true], initial: false }
+  # the 500 ms floor (MIN_RESPONSE_TIME_MS.LOGIN, counted from the request's arrival) was waited out
+  floorWaited: { values: [false, true], initial: false }
+  # Argon2id ran against the decoy hash, so an unknown address costs what a known one does
+  decoyVerified: { values: [false, true], initial: false }
+  refreshTokenStored: { values: [false, true], initial: false }
+
+guards:
+  hostUnknown: "gate == 'unknownHost'"
+  rateLimited: "gate == 'rateLimited'"
+  inputInvalid: "gate == 'invalidInput'"
+  lockedOut: "gate == 'lockedOut'"
+  noCredential: "account == 'unknown'"
+  wrongPassword: "password == 'wrong'"
+  # the verified-account gate (F-08), read before the users row
+  unverifiedUnderTheGate: "account in ['unverified', 'disabledUnverified'] and requireVerified"
+  userDisabled: "account in ['disabled', 'disabledUnverified']"
+
+effects:
+  countAttempt: { set: { attemptCounted: true } }
+  waitFloor: { set: { floorWaited: true } }
+  verifyDecoy: { set: { decoyVerified: true } }
+  storeRefreshToken: { set: { refreshTokenStored: true } }
+
+failures:
+  # each step fails only on a store error; the catch block records user.sign_in_failed with the reason
+  # internal_error, waits out the floor and rethrows, and the error handler answers 500
+  checkingPassword: { from: UserCredential.findByRealmProviderSub, server: [server_error] }
+  findingUser: { from: User.findById, server: [server_error] }
+  issuingAccessToken: { from: tokenSigner, server: [server_error] }
+  storingRefreshToken: { from: RefreshToken.create, server: [server_error] }
+  recordingSignIn: { from: eventStore, server: [server_error] }
+  updatingLastLogin: { from: User.updateLastLogin, server: [server_error] }
+
+# The main story: the portal's server signs a verified user in with the right password.
+main:
+  given:
+    gate: open
+    account: verified
+    password: right
+    requireVerified: true
+  events: [LOGIN, DONE, DONE, DONE, DONE, DONE, DONE]
+
+initial: idle
+states:
+  idle:
+    title: Wait for a sign-in request
+    source: apps/auth-server/src/app/routes/auth/login.ts:28
+    on:
+      LOGIN:
+        target: resolvingRealm
+        say: 'POST /auth/login arrives with an email address and a password'
+        source: apps/auth-server/src/app/routes/auth/login.ts:29
+
+  resolvingRealm:
+    title: Find the realm of the host
+    description: >-
+      The realm resolver's onRequest hook, before any route code. /auth/login is an api route, so it answers on a
+      realm's endpoint hosts too. A request refused here is never counted by the rate limiter.
+    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
+    always:
+      - guard: hostUnknown
+        target: misdirected_request.host
+        say: 'the host names no enabled realm with an issuer'
+        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
+      - target: rateLimiting
+        say: 'the request has its realm'
+        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
+
+  rateLimiting:
+    title: Count the request against the login limit
+    description: >-
+      LOGIN_RATE_LIMIT requests per LOGIN_RATE_WINDOW seconds, for each client address and realm, whatever the request
+      ends in. This is the limiter, not the lockout: it counts requests, before the body is read.
+    source: apps/auth-server/src/app/routes/auth/login.ts:45
+    always:
+      - guard: rateLimited
+        target: too_many_requests.login_limit
+        say: 'the address has used up its login requests'
+        source: apps/auth-server/src/app/plugins/rate-limit.ts:25
+      - target: validatingBody
+        say: 'the address is under its limit'
+        source: apps/auth-server/src/app/routes/auth/login.ts:45
+
+  validatingBody:
+    title: Check the body against the login schema
+    description: loginSchema in apps/auth-server/src/app/schemas/auth.ts.
+    source: apps/auth-server/src/app/routes/auth/login.ts:38
+    always:
+      - guard: inputInvalid
+        target: validation_error.body
+        say: 'the body does not match the schema'
+        source: apps/auth-server/src/app/plugins/error-handler.ts:263
+      - target: checkingLockout
+        say: 'the body matches the schema'
+        source: apps/auth-server/src/app/schemas/auth.ts:108
+
+  checkingLockout:
+    title: Refuse a locked-out address, else count the attempt
+    description: >-
+      Two identifiers, both kept per realm and shared with POST /ui/login: the hash of the normalized address, and the
+      client address (an IPv6 one by its /64). A locked-out identifier refuses the attempt before anything is counted.
+      Otherwise the attempt is counted on both before the password is looked at, and the attempt that reaches
+      FAILED_LOGIN_MAX_ATTEMPTS arms the lockout on its way in.
+    source: apps/auth-server/src/app/routes/auth/login.ts:73
+    always:
+      - guard: lockedOut
+        target: too_many_requests.locked_out
+        effect: [waitFloor]
+        say: 'an identifier is locked out; the floor is waited out'
+        source: apps/auth-server/src/app/routes/auth/login.ts:74
+      - target: checkingPassword
+        effect: [countAttempt]
+        say: 'the attempt is counted on the address being signed in to and on the client address'
+        source: apps/auth-server/src/app/helpers/failed-login.ts:104
+
+  checkingPassword:
+    title: Check the password
+    description: >-
+      The password credential of the normalized address in this realm, then Argon2id against its hash. With no
+      credential the password is verified against a decoy hash, so every outcome costs one verification.
+    source: apps/auth-server/src/app/routes/auth/login.ts:90
+    invoke: { action: UserCredential.findByRealmProviderSub }
+    on:
+      DONE:
+        - guard: noCredential
+          target: invalid_credentials.unknown_identifier
+          effect: [verifyDecoy, waitFloor]
+          say: 'no credential has this address; the decoy hash is verified, and the floor waited out'
+          source: apps/auth-server/src/app/helpers/credential-auth.ts:63
+        - guard: wrongPassword
+          target: invalid_credentials.wrong_password
+          effect: [waitFloor]
+          say: 'the password does not verify against the hash; the floor is waited out'
+          source: apps/auth-server/src/app/helpers/credential-auth.ts:84
+        - target: checkingVerified
+          say: 'the password is right'
+          source: apps/auth-server/src/app/helpers/credential-auth.ts:105
+      FAIL.server:
+        target: server_error.store
+        effect: [waitFloor]
+        say: 'the database fails'
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
+
+  checkingVerified:
+    title: Apply the verified-account gate
+    description: >-
+      F-08: under REQUIRE_VERIFIED_ACCOUNT, a password account is used only once its address is confirmed. It is read
+      from the credential, before the users row, so an unconfirmed disabled account is refused here. It used to answer
+      403 with the code EMAIL_NOT_VERIFIED, which let anyone tell a free address from a registered one (ANT-2026-SPEMY9GU).
+    source: apps/auth-server/src/app/routes/auth/login.ts:110
+    always:
+      - guard: unverifiedUnderTheGate
+        target: invalid_credentials.email_not_verified
+        effect: [waitFloor]
+        say: 'the address is not confirmed, and the gate is on; the floor is waited out'
+        source: apps/auth-server/src/app/routes/auth/login.ts:133
+      - target: findingUser
+        say: 'the address is confirmed, or the gate is off'
+        source: apps/auth-server/src/app/routes/auth/login.ts:116
+
+  findingUser:
+    title: Read the user, for its enabled flag
+    source: apps/auth-server/src/app/routes/auth/login.ts:118
+    invoke: { action: User.findById }
+    on:
+      DONE:
+        - guard: userDisabled
+          target: invalid_credentials.account_disabled
+          effect: [waitFloor]
+          say: 'the user is disabled; the floor is waited out'
+          source: apps/auth-server/src/app/routes/auth/login.ts:133
+        - target: issuingAccessToken
+          say: 'the user is enabled'
+          source: apps/auth-server/src/app/routes/auth/login.ts:167
+      FAIL.server:
+        target: server_error.store
+        effect: [waitFloor]
+        say: 'the database fails'
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
+
+  issuingAccessToken:
+    title: Sign an access token for the system client
+    description: >-
+      The system client is found, or created on the realm's first direct sign-in. The token's subject is the user, its
+      client and its audience the system client (which registers no audience of its own), and it carries no scope and
+      neither email nor email_verified (ANT-2026-2O0T72HY). It is signed with the JWT_PRIVATE_KEY key and its iss is
+      JWT_ISSUER, in every realm, until #491 moves tokens onto the realm's keys. It lives ACCESS_TOKEN_LIFESPAN
+      seconds, whatever the client's environment.
+    source: apps/auth-server/src/app/routes/auth/login.ts:174
+    invoke: { external: tokenSigner }
+    on:
+      DONE:
+        target: storingRefreshToken
+        say: 'the access token is signed, and a refresh token of 32 random bytes generated'
+        source: apps/auth-server/src/app/routes/auth/login.ts:181
+      FAIL.server:
+        target: server_error.store
+        effect: [waitFloor]
+        say: 'the database fails, or the hybrid signature cannot be stored'
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
+
+  storingRefreshToken:
+    title: Store the refresh token, hashed, as a new family
+    description: >-
+      A new family with a random id, started now. Its expiry is REFRESH_TOKEN_LIFESPAN from now, capped at the end of
+      the family when the realm sets sso_max_lifespan; no browser session caps it.
+    source: apps/auth-server/src/app/routes/auth/login.ts:199
+    invoke: { action: RefreshToken.create }
+    on:
+      DONE:
+        target: recordingSignIn
+        effect: [storeRefreshToken]
+        say: 'the refresh token is stored'
+        source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:92
+      FAIL.server:
+        target: server_error.store
+        effect: [waitFloor]
+        say: 'the database fails'
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
+
+  recordingSignIn:
+    title: Record the sign-in
+    description: The event urn:qauth:event:user.signed_in:v1-rc.0, with the method password and the system client.
+    source: apps/auth-server/src/app/routes/auth/login.ts:211
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        target: updatingLastLogin
+        say: 'the event is recorded'
+        source: apps/auth-server/src/app/routes/auth/login.ts:224
+      FAIL.server:
+        target: server_error.store
+        effect: [waitFloor]
+        say: 'the event store fails'
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
+
+  updatingLastLogin:
+    title: Record the time of the sign-in on the user
+    source: apps/auth-server/src/app/routes/auth/login.ts:224
+    invoke: { action: User.updateLastLogin }
+    on:
+      DONE:
+        target: clearingFailures
+        say: 'lastLoginAt is written'
+        source: libs/infra/db/src/lib/repositories/users.repository.ts:165
+      FAIL.server:
+        target: server_error.store
+        effect: [waitFloor]
+        say: 'the database fails'
+        source: apps/auth-server/src/app/routes/auth/login.ts:252
+
+  clearingFailures:
+    title: Settle the counted attempt
+    description: >-
+      The address the password proved gets its counter and its lockout cleared. The client address gets back only
+      this attempt's own count, and the lockout if this attempt armed it, so signing in to an account of one's own
+      does not wipe a password spray from the same address. Best effort: a cache failure here is ignored.
+    source: apps/auth-server/src/app/routes/auth/login.ts:232
+    always:
+      - target: tokens_issued
+        say: 'the attempt is settled'
+        source: apps/auth-server/src/app/helpers/failed-login.ts:152
+
+  # Exits
+
+  tokens_issued:
+    type: final
+    title: Answer with the tokens
+    source: apps/auth-server/src/app/routes/auth/login.ts:246
+    response:
+      status: 200
+      headers:
+        Cache-Control: no-store
+        Pragma: no-cache
+      body:
+        access_token: 'an Ed25519 JWT signed with JWT_PRIVATE_KEY, iss JWT_ISSUER, for the system client'
+        refresh_token: 64 hexadecimal characters
+        expires_in: the access token's lifespan, in seconds
+        token_type: Bearer
+
+  too_many_requests.locked_out:
+    type: final
+    title: Refuse a locked-out address
+    description: >-
+      Not counted, and no password is checked, even the right one. No event is recorded, unlike on POST /ui/login: only
+      the metric login_attempts (result failure, reason locked_out) and the log line user.login.failure. The answer
+      waits out the 500 ms floor that every refused credential waits. Distinct from the login limit, which the rate
+      limiter answers.
+    source: apps/auth-server/src/app/routes/auth/login.ts:84
+    response:
+      status: 429
+      headers:
+        Retry-After: >-
+          the seconds left on the lockout; the full FAILED_LOGIN_LOCKOUT_DURATION for an attempt that lost the race to
+          arm it
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
+        title: Too many requests
+        status: 429
+        detail: Too many failed login attempts. Please try again later.
+        instance: /auth/login
+        code: too_many_requests
+        trace_id: the request id
+
+  invalid_credentials.unknown_identifier:
+    type: final
+    title: Refuse an address with no account, like a wrong password
+    description: >-
+      user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
+      and the answer waits out the 500 ms floor.
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
+    response: &invalidCredentials
+      status: 401
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-credentials
+        title: Invalid credentials
+        status: 401
+        detail: Invalid email or password
+        instance: /auth/login
+        code: invalid_credentials
+        trace_id: the request id
+
+  invalid_credentials.wrong_password:
+    type: final
+    title: Refuse a wrong password
+    description: >-
+      user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
+      and the answer waits out the 500 ms floor.
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
+    response: *invalidCredentials
+
+  invalid_credentials.email_not_verified:
+    type: final
+    title: Refuse an unconfirmed account under the gate, like a wrong password
+    description: >-
+      user.sign_in_failed is recorded with the reason email_not_verified and the user as its subject, and the log line
+      says email_not_verified; the metric's label stays invalid_credentials, since /metrics is not authenticated. The
+      attempt stays counted, and the answer waits out the 500 ms floor.
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
+    response: *invalidCredentials
+
+  invalid_credentials.account_disabled:
+    type: final
+    title: Refuse a disabled user, like a wrong password
+    description: >-
+      The password was right. user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The
+      attempt stays counted, and the answer waits out the 500 ms floor.
+    source: apps/auth-server/src/app/routes/auth/login.ts:163
+    response: *invalidCredentials
+
+  validation_error.body:
+    type: final
+    title: Refuse a body that does not match the login schema
+    description: Nothing is counted against the lockout.
+    source: apps/auth-server/src/app/plugins/error-handler.ts:337
+    response:
+      status: 400
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#validation-error
+        title: Validation error
+        status: 400
+        detail: The request is not valid.
+        instance: /auth/login
+        code: validation_error
+        trace_id: the request id
+        errors:
+          - pointer: '/<the field>, such as /email'
+            message: "the schema's message, such as: Invalid email format"
+
+  misdirected_request.host:
+    type: final
+    title: Refuse a host QAuth does not answer for
+    source: apps/auth-server/src/app/plugins/realm-resolver.ts:149
+    response:
+      status: 421
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#misdirected-request
+        title: Misdirected request
+        status: 421
+        detail: This server does not answer for the requested host
+        instance: /auth/login
+        code: misdirected_request
+        trace_id: the request id
+
+  too_many_requests.login_limit:
+    type: final
+    title: Refuse a request over the login limit
+    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
+    response:
+      status: 429
+      headers:
+        x-ratelimit-limit: LOGIN_RATE_LIMIT
+        x-ratelimit-remaining: '0'
+        x-ratelimit-reset: the seconds until the window resets
+        retry-after: the same seconds
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
+        title: Too many requests
+        status: 429
+        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 15 minutes}'
+        instance: /auth/login
+        code: too_many_requests
+        trace_id: the request id
+
+  server_error.store:
+    type: final
+    title: Fail on a store error
+    description: >-
+      user.sign_in_failed is recorded with the reason internal_error and the answer waits out the floor first. The
+      steps before the failing one stay done: a refresh token stored before a later failure stays, though the caller
+      never receives it. The body says nothing of the failure, in any NODE_ENV; its trace_id finds the log line.
+    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    response:
+      status: 500
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#internal-error
+        title: Internal error
+        status: 500
+        instance: /auth/login
+        code: internal_error
+        trace_id: the request id
+
+assertions:
+  - id: no-tokens-for-a-refused-account
+    never:
+      "(refreshTokenStored or state == 'tokens_issued') and (noCredential or wrongPassword or userDisabled or
+      unverifiedUnderTheGate)"
+    say: >-
+      Tokens are issued only for an existing, enabled account and its right password, and under the gate only for a
+      confirmed address
+    source: apps/auth-server/src/app/routes/auth/login.ts:133
+  - id: attempt-counted-before-the-password
+    never: "state == 'checkingPassword' and not attemptCounted"
+    say: 'Every password checked has been counted first, so guesses sent at once cannot outrun the lockout'
+    source: apps/auth-server/src/app/helpers/failed-login.ts:104
+  - id: locked-out-checks-no-password
+    never: "state == 'too_many_requests.locked_out' and attemptCounted"
+    say: >-
+      A locked-out attempt is refused before any password is checked, the right one too, and leaves no count behind:
+      one that lost the race to arm the lockout gives back what it counted
+    source: apps/auth-server/src/app/routes/auth/login.ts:74
+  - id: every-refused-credential-waits-the-floor
+    never: >-
+      state in ['too_many_requests.locked_out', 'invalid_credentials.unknown_identifier',
+      'invalid_credentials.wrong_password', 'invalid_credentials.email_not_verified',
+      'invalid_credentials.account_disabled', 'server_error.store'] and not floorWaited
+    say: >-
+      Every refused credential, the lockout and a failure inside the handler answer only once 500 ms have passed since
+      the request arrived, so the time of the answer does not tell the causes apart
+    source: apps/auth-server/src/app/routes/auth/login.ts:145
+  - id: unknown-address-verifies-the-decoy
+    never: "state == 'invalid_credentials.unknown_identifier' and not decoyVerified"
+    say: 'An address with no account still costs one Argon2id verification, against the decoy hash'
+    source: apps/auth-server/src/app/helpers/credential-auth.ts:64
+  - id: tokens-issued-means-stored
+    never: "state == 'tokens_issued' and not refreshTokenStored"
+    say: 'A refresh token reaches the caller only once its hash is stored'
+    source: apps/auth-server/src/app/routes/auth/login.ts:199

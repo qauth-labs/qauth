@@ -4,13 +4,14 @@ import { resolveIssuerIdentifier } from './discovery';
 import type { RealmRow } from './request-realm';
 
 /**
- * The realm's issuer, as a presented token is checked against it (ADR-019
- * Decision 1, issues #489 and #490).
+ * Absolute URLs from the realm row (ADR-019 Decision 1, issue #490).
  *
- * A token is accepted at the realm whose issuer it names, and nowhere else:
- * introspection, userinfo, revocation and logout pin the `iss` they verify to
- * the issuer of the realm the request was resolved to (`requestRealm`), never
- * to one issuer for the whole deployment.
+ * No URL is built from the request: the issuer, every endpoint URL, the links
+ * in mail and the URLs a wallet is handed all start at the issuer of the realm
+ * the request was resolved to (`requestRealm(request)`). The `Host` header,
+ * `X-Forwarded-*`, `JWT_ISSUER` and `EMAIL_BASE_URL` decide none of them; the
+ * lint configuration refuses the request's authority outside the realm
+ * resolver (`.oxlintrc.json`).
  */
 
 /** The column of a realm row its URLs are built from. */
@@ -35,6 +36,35 @@ export function realmIssuer(realm: RealmUrlSource): string {
     );
   }
   return realm.issuer;
+}
+
+/**
+ * The absolute URL of `path` on the realm's issuer: the issuer identifier
+ * followed by `path`, as discovery builds every endpoint URL.
+ *
+ * Joined as strings, never through `new URL(path, issuer)`, which would drop a
+ * path the issuer carries (the default realm's issuer keeps the path of
+ * `JWT_ISSUER`) and normalise the authority.
+ *
+ * @param path - an absolute path such as `/oauth/token`, with a query when the
+ * URL needs one.
+ * @throws Error when `path` does not start with a single `/`, which would join
+ * into another host (`//evil.example`) or into the issuer's last label.
+ */
+export function buildRealmUrl(realm: RealmUrlSource, path: string): string {
+  if (!path.startsWith('/') || path.startsWith('//')) {
+    throw new Error(`A realm URL path must start with a single "/": ${JSON.stringify(path)}`);
+  }
+  return `${realmIssuer(realm)}${path}`;
+}
+
+/**
+ * Where the links in a realm's mail point: the realm's issuer, so a link
+ * opens the auth server of the realm the account belongs to (ADR-019
+ * Decisions 1 and 6), never a `/ui/*` path and never `EMAIL_BASE_URL`.
+ */
+export function realmMailLink(realm: RealmUrlSource): { readonly baseUrl: string } {
+  return { baseUrl: realmIssuer(realm) };
 }
 
 /**

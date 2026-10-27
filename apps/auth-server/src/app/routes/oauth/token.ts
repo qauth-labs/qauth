@@ -26,7 +26,9 @@ import {
   enforceAgentScopeCap,
   type OAuthClientLike,
   resolveAudience,
+  resolveUserGrantAudience,
   toAgentScopeContext,
+  unlistedReservedAudiences,
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
@@ -39,6 +41,7 @@ import {
   resolveAccessTokenLifespanSeconds,
   resolveEnvironmentPolicy,
 } from '../../helpers/environment-policy';
+import { recordGrantAccessToken, revokeGrantAccessTokens } from '../../helpers/grant-access-tokens';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import {
   idJagCredentialProviderType,
@@ -49,7 +52,7 @@ import {
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { realmTokenIssuer } from '../../helpers/realm-url';
+import { realmIssuer, realmTokenIssuer } from '../../helpers/realm-url';
 import {
   refreshFamilyEnd,
   refreshFamilyEnded,
@@ -60,7 +63,12 @@ import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
 import { inactiveSubjectTokenError } from '../../helpers/token-subject';
-import { emitUserEvent, failureData, oauthErrorCode } from '../../helpers/user-events';
+import {
+  emitUserEvent,
+  type EventTransaction,
+  failureData,
+  oauthErrorCode,
+} from '../../helpers/user-events';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
@@ -261,7 +269,7 @@ export default async function (fastify: FastifyInstance) {
         try {
           client = await authenticateClientRequest(
             fastify,
-            realm.id,
+            realm,
             request as FastifyRequest,
             body,
             {
@@ -573,6 +581,12 @@ function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: Environm
   });
 }
 
+/** What a replay's `token.request_failed` adds: the family it revoked, and how much of it. */
+interface ReplayRevocation {
+  readonly refreshFamilyId?: string;
+  readonly revokedRefreshCount: number;
+}
+
 /**
  * Record a refused token request (`token.request_failed`) for a grant
  * handler: the dispatch's realm, the authenticated client as the actor, the
@@ -581,42 +595,143 @@ function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: Environm
  * @param error - the OAuth `error` code the response carries
  * @param reason - why, as a `snake_case` code
  * @param userId - the end user the grant is for, when known
+ * @param options - `tx`, the transaction of the change the refusal made (a
+ *   replay's revocation), so the event commits with it (ADR-019 Decision 8);
+ *   `revocation`, what that change revoked
  */
 async function emitRequestFailed(
   ctx: HandlerContext<{ grant_type: string }>,
   error: string,
   reason: string,
-  userId: string | null = null
+  userId: string | null = null,
+  options: { tx?: EventTransaction; revocation?: ReplayRevocation } = {}
 ): Promise<void> {
   await emitUserEvent(
     ctx.request,
     TOKEN_REQUEST_FAILED,
-    { grantType: ctx.body.grant_type, error, reason },
-    { realmId: ctx.realmId, userId, clientId: ctx.client.clientId, actor: 'client' }
+    { grantType: ctx.body.grant_type, error, reason, ...options.revocation },
+    {
+      ...(options.tx === undefined ? {} : { tx: options.tx }),
+      realmId: ctx.realmId,
+      userId,
+      clientId: ctx.client.clientId,
+      actor: 'client',
+    }
   );
 }
 
 /** What a caller is told about an authorization code it cannot redeem. */
 const UNUSABLE_CODE = 'Invalid or expired authorization code';
 
+/**
+ * What a caller is told when it leaves out `redirect_uri` for a code that
+ * needs it. Only a client that passed authentication and holds a code it was
+ * issued gets this far, so the answer tells it nothing about the code it did
+ * not already know, and tells a client written for OAuth 2.1 alone what to
+ * send.
+ */
+const REDIRECT_URI_REQUIRED = 'redirect_uri is required for this code';
+
 /** What a caller is told about a refresh token it cannot use. */
 const UNUSABLE_REFRESH_TOKEN = 'Invalid or expired refresh token';
 
 /**
  * Spend a grant through its compare-and-set (`authorizationCodes.markUsed`,
- * `refreshTokens.revoke`). The repository answers a row that is no longer
- * unspent with `NotFoundError`: a concurrent request spent or revoked it
- * first. That is a grant the client may not use, RFC 6749 §5.2
- * `invalid_grant` with the usual wording, never a 404 `invalid_request`
- * naming the row's internal id.
+ * `refreshTokens.revoke`): the one place a token request learns that another
+ * request spent the grant first. The repository answers a row that is no
+ * longer unspent with `NotFoundError`, and that is never answered as a 404
+ * `invalid_request` naming the row's internal id. A lost compare-and-set is a
+ * grant already spent, which the client may not use (RFC 6749 §5.2
+ * `invalid_grant`). What else it means depends on why the grant was being
+ * spent, so the caller is told:
+ *
+ * - A redemption that loses is the second redemption of its code, a replay:
+ *   once the losing transaction has rolled back, {@link rejectCodeReplay}
+ *   revokes what the winner issued and answers `invalid_grant`.
+ * - A refusal that burns the grant (a disabled user, the agent-mode cap) finds
+ *   it burned already and gives its own answer, `invalid_grant` or
+ *   `invalid_scope`.
+ *
+ * Any other failure propagates unchanged.
+ *
+ * @param spend - the compare-and-set
+ * @returns `true` when this request spent the grant, `false` when it had been
+ *   spent already
  */
-async function spendGrant<T>(spend: () => Promise<T>, description: string): Promise<T> {
+async function spendGrant(spend: () => Promise<unknown>): Promise<boolean> {
   try {
-    return await spend();
+    await spend();
+    return true;
   } catch (error) {
-    if (error instanceof NotFoundError) throw new InvalidGrantError(description);
+    if (error instanceof NotFoundError) return false;
     throw error;
   }
+}
+
+/**
+ * Deny a second redemption of an authorization code and revoke what the first
+ * one issued (OAuth 2.1 §4.1.3 "SHOULD revoke (when possible) all access
+ * tokens and refresh tokens previously issued based on that authorization
+ * code"; ADR-017 Decision 10): the refresh family it started, rotations
+ * included, and every access token issued from the code or in that family
+ * that has not expired.
+ *
+ * Reached two ways: the code was already spent when read, or a concurrent
+ * redemption spent it between the read and this request's compare-and-set.
+ * Both are the same event. A code a logout or a consent revocation spent
+ * issued nothing, so nothing is revoked for it.
+ *
+ * The family's revocation and the `token.request_failed` event commit in one
+ * transaction (ADR-019 Decision 8). The access tokens go on the denylist, in
+ * Redis, after that commit.
+ */
+async function rejectCodeReplay(
+  ctx: HandlerContext<TokenExchangeAuthCodeBody>,
+  authCode: { id: string; userId: string }
+): Promise<never> {
+  const { fastify } = ctx;
+  const family = await fastify.db.transaction(async (tx) => {
+    const revoked = await fastify.repositories.refreshTokens.revokeFamilyByAuthorizationCode(
+      authCode.id,
+      'code_replay',
+      tx
+    );
+    await emitRequestFailed(ctx, 'invalid_grant', 'code_replay', authCode.userId, {
+      tx,
+      revocation: {
+        ...(revoked.familyId === null ? {} : { refreshFamilyId: revoked.familyId }),
+        revokedRefreshCount: revoked.revokedCount,
+      },
+    });
+    return revoked.familyId;
+  });
+  await revokeGrantAccessTokens(fastify, {
+    authorizationCodeId: authCode.id,
+    refreshFamilyId: family,
+  });
+  throw new InvalidGrantError(UNUSABLE_CODE);
+}
+
+/**
+ * Refuse to mint `aud` when it holds a QAuth API audience (`urn:qauth:aud:`)
+ * the client does not list (#509, ADR-019 Decision 7): RFC 8707 §2
+ * `invalid_target`, the server being unwilling to issue a token for that
+ * resource. A family accepts any token with its audience, whichever client it
+ * was issued to, so the operator decides which clients get one. Called by
+ * every grant once the audience is known and before it issues a token or
+ * spends its grant: a code, a refresh token or a subject token is left as it
+ * was. The ID-JAG consume path is the exception: the assertion's single-use
+ * `jti` was spent when the assertion was validated (GATE 2), as it is for
+ * every refusal after that gate.
+ */
+async function assertReservedAudiencesListed(
+  ctx: HandlerContext<{ grant_type: string }>,
+  aud: string | readonly string[],
+  userId: string | null = null
+): Promise<void> {
+  if (unlistedReservedAudiences(ctx.client, aud).length === 0) return;
+  await emitRequestFailed(ctx, 'invalid_target', 'reserved_audience_not_listed', userId);
+  throw new InvalidTargetError('a QAuth API audience is issued only to a client that lists it');
 }
 
 /**
@@ -635,9 +750,16 @@ async function handleAuthorizationCode(
   }
 
   // Authorization code lookup, in the request's realm (#489): a code issued
-  // by another realm is not found, and answers as an unknown code does.
-  const authCode = await fastify.repositories.authorizationCodes.findByCode(ctx.realmId, body.code);
-  if (!authCode) {
+  // by another realm is not found, and answers as an unknown code does, its
+  // replay included. A spent code is read too, so that a second redemption
+  // is recognised as the replay it is (below) instead of looking like a code
+  // that never existed. An unspent code past its expiry is as good as
+  // unknown.
+  const authCode = await fastify.repositories.authorizationCodes.findByCodeIncludingUsed(
+    ctx.realmId,
+    body.code
+  );
+  if (!authCode || (!authCode.used && authCode.expiresAt <= Date.now())) {
     await emitRequestFailed(ctx, 'invalid_grant', 'code_invalid');
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
@@ -647,10 +769,20 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
+  // Every code QAuth issues today came through a browser redirect, so the
+  // request names the redirect URI again (RFC 6749 §4.1.3; OAuth 2.1 §10.2
+  // keeps that rule for a server that also serves OAuth 2.0 clients). A
+  // missing or empty value is a mismatch, `invalid_grant` (RFC 6749 §5.2;
+  // ADR-017 Decision 10), not a malformed request.
+  //
   // Exact string match, port included (RFC 6749 §4.1.3). The loopback-port
   // relaxation of `redirectUriMatchesRegistered` (#414) applies only at the
   // authorization request: the code stores the URI as requested, with the
   // port the client actually listened on, so there is nothing to relax here.
+  if (!body.redirect_uri) {
+    await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_missing', authCode.userId);
+    throw new InvalidGrantError(REDIRECT_URI_REQUIRED);
+  }
   if (body.redirect_uri !== authCode.redirectUri) {
     await emitRequestFailed(ctx, 'invalid_grant', 'redirect_uri_mismatch', authCode.userId);
     throw new InvalidGrantError('Invalid or expired authorization code');
@@ -661,11 +793,12 @@ async function handleAuthorizationCode(
   // OAuth 2.1 default — REQUIRES a bound S256 challenge; `development` only
   // RECOMMENDS it. Two distinct cases:
   //
-  //   1. No challenge bound to the code. Today the authorize endpoint always
-  //      binds one (the schema mandates `code_challenge`), so this is a defence-
-  //      in-depth guard for any future dev-only flow that mints a code without
-  //      PKCE: when `policy.pkceRequired` it is rejected; in `development` it is
-  //      allowed (with a warning) since PKCE is merely recommended there.
+  //   1. No challenge bound to the code. `mintAuthorizationCode` refuses to
+  //      mint a code without an S256 challenge in every environment (ADR-017
+  //      Decision 10), so only a row written some other way reaches this; it
+  //      stays as defence in depth: when `policy.pkceRequired` it is rejected;
+  //      in `development` it is allowed (with a warning) since PKCE is merely
+  //      recommended there.
   //   2. PKCE DOWNGRADE (RFC 9700 §2.1.1 / §4.5): a `code_verifier` presented
   //      against a code that carries NO challenge must NEVER be silently
   //      accepted — that is the downgrade attack. This is a HARD FLOOR enforced
@@ -700,28 +833,44 @@ async function handleAuthorizationCode(
   // RFC 9449 §10 (#480): a code the authorization request bound to a DPoP key
   // (`dpop_jkt`) is redeemed only with a proof under that key. It is not
   // burned on a refusal: whoever lacks the key cannot spend the code the
-  // client is about to redeem.
+  // client is about to redeem. A spent code is `invalid_grant` whatever the
+  // proof (RFC 6749 §5.2), as it was before spent codes were read at all.
   const codeBinding = dpopBindingRefusal(ctx, authCode.dpopJkt);
   if (codeBinding) {
-    await emitRequestFailed(ctx, codeBinding.error, codeBinding.reason, authCode.userId);
-    throw codeBinding.error === 'invalid_grant'
+    const error = authCode.used ? 'invalid_grant' : codeBinding.error;
+    await emitRequestFailed(ctx, error, codeBinding.reason, authCode.userId);
+    throw error === 'invalid_grant'
       ? new InvalidGrantError('Invalid or expired authorization code')
       : new InvalidDpopProofError();
   }
 
   // RFC 8707 §2.2: if the token request also includes `resource`, it MUST
   // be a subset of the one bound to the auth code. Empty request resource
-  // carries forward the code's resource unchanged.
+  // carries forward the code's resource unchanged. A spent code is
+  // `invalid_grant` here too.
   const codeResource = authCode.resource ?? [];
   const requestedResource = body.resource ?? [];
   if (requestedResource.length > 0) {
     const extra = requestedResource.filter((r) => !codeResource.includes(r));
     if (extra.length > 0) {
+      if (authCode.used) {
+        await emitRequestFailed(ctx, 'invalid_grant', 'resource_outside_binding', authCode.userId);
+        throw new InvalidGrantError('Invalid or expired authorization code');
+      }
       await emitRequestFailed(ctx, 'invalid_target', 'resource_outside_binding', authCode.userId);
       throw new InvalidTargetError('requested resource is outside the authorization-code binding');
     }
   }
   const effectiveResource = requestedResource.length > 0 ? requestedResource : codeResource;
+
+  // A spent code, presented by its own client with its redirect URI, its PKCE
+  // verifier, its DPoP key and a resource inside its binding: a second valid
+  // redemption (OAuth 2.1 §4.1.3). Only now, after every check of the request,
+  // does it revoke anything, so whoever saw the code but holds neither the
+  // client's credentials nor the verifier cannot end the client's tokens with
+  // it (OAuth 2.1 §7.5.3). It comes before the checks below, which spend an
+  // unspent code.
+  if (authCode.used) return rejectCodeReplay(ctx, authCode);
 
   const user = await fastify.repositories.users.findById(ctx.realmId, authCode.userId);
   if (!user) {
@@ -734,12 +883,10 @@ async function handleAuthorizationCode(
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the
   // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
-  // code is burned all the same, so it cannot be retried.
+  // code is burned all the same, so it cannot be retried; a code a concurrent
+  // request spent first is burned already, and the answer is the same.
   if (!user.enabled) {
-    await spendGrant(
-      () => fastify.repositories.authorizationCodes.markUsed(authCode.id),
-      UNUSABLE_CODE
-    );
+    await spendGrant(() => fastify.repositories.authorizationCodes.markUsed(authCode.id));
     await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
     throw new InvalidGrantError(UNUSABLE_CODE);
   }
@@ -751,14 +898,12 @@ async function handleAuthorizationCode(
   // client is no longer an agent), redeeming the code must not mint the old
   // mode. Fail-closed via `toAgentScopeContext`. The code is burned all the
   // same: a client cannot narrow a code, so it goes back through
-  // /oauth/authorize.
+  // /oauth/authorize. A code a concurrent request spent first is burned
+  // already, and the answer stays `invalid_scope`.
   try {
     enforceAgentScopeCap(authCode.scopes, toAgentScopeContext(client));
   } catch (err) {
-    await spendGrant(
-      () => fastify.repositories.authorizationCodes.markUsed(authCode.id),
-      UNUSABLE_CODE
-    );
+    await spendGrant(() => fastify.repositories.authorizationCodes.markUsed(authCode.id));
     await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_exceeds_agent_mode', user.id);
     throw err;
   }
@@ -805,7 +950,11 @@ async function handleAuthorizationCode(
   // mapped to concrete seconds in one place. Passed both as the signed `exp`
   // override and the response `expires_in` so they always agree.
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-  const aud = resolveAudience(client, effectiveResource);
+  // A QAuth API audience only when a `resource` named it (#509).
+  const aud = resolveUserGrantAudience(client, effectiveResource);
+  // Not burned on a refusal, like a `resource` outside the binding: the client
+  // may redeem the code again with a `resource` that names no such audience.
+  await assertReservedAudiencesListed(ctx, aud, user.id);
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 
@@ -827,11 +976,15 @@ async function handleAuthorizationCode(
   // matches nothing, or waits on the row lock taken here until the refresh
   // token is committed, where the sweep that follows sees it. The
   // `token.issued` event commits with the redemption, or neither does.
-  const { accessToken, idToken } = await fastify.db.transaction(async (tx) => {
-    await spendGrant(
-      () => fastify.repositories.authorizationCodes.markUsed(authCode.id, tx),
-      UNUSABLE_CODE
+  //
+  // A redemption that loses the compare-and-set to a concurrent one is the
+  // second redemption of the code: the transaction writes nothing and the
+  // family the winner started is revoked once it has rolled back.
+  const redeemed = await fastify.db.transaction(async (tx) => {
+    const spent = await spendGrant(() =>
+      fastify.repositories.authorizationCodes.markUsed(authCode.id, tx)
     );
+    if (!spent) return undefined;
     if (refresh) {
       await fastify.repositories.refreshTokens.create(
         {
@@ -839,6 +992,9 @@ async function handleAuthorizationCode(
           oauthClientId: client.id,
           tokenHash: refresh.tokenHash,
           familyId: refresh.familyId,
+          // The code that started the family, so a second redemption of it
+          // finds the family and revokes it (ADR-017 Decision 10).
+          authorizationCodeId: authCode.id,
           familyCreatedAt: refresh.familyCreatedAt,
           familySessionExpiresAt: refresh.familySessionExpiresAt,
           expiresAt: refresh.expiresAt,
@@ -864,6 +1020,12 @@ async function handleAuthorizationCode(
       aud,
       ...dpopConfirmation(ctx),
       expiresInOverride: accessTokenExpiresIn,
+    });
+    // Recorded against the code and the family it starts, before the commit,
+    // so a second redemption of the code can revoke it (ADR-017 Decision 10).
+    await recordGrantAccessToken(fastify, accessToken, {
+      authorizationCodeId: authCode.id,
+      refreshFamilyId: refresh?.familyId ?? null,
     });
 
     // OIDC Core §3.1.3.3: when the granted scope includes `openid`, the token
@@ -897,6 +1059,13 @@ async function handleAuthorizationCode(
           // issuer the realm assures nothing about — spreads to NOTHING, so the
           // claim is absent rather than present-and-low.
           ...resolveAcrClaims(authCode.assuranceLevel),
+          // ADR-019 Decisions 3 and 4 (#549): the browser session behind the
+          // code, as back-channel logout will name it. The only place an ID
+          // token gets `sid` (`id-token-sid.test.ts`). A code from the legacy
+          // Bearer path has none, and neither does one minted before
+          // migration 0042: the claim is then absent. Never on the access
+          // token, the introspection response or the refresh row.
+          sid: authCode.sessionId ?? undefined,
         })
       : undefined;
 
@@ -915,6 +1084,8 @@ async function handleAuthorizationCode(
     );
     return { accessToken, idToken };
   });
+  if (redeemed === undefined) return rejectCodeReplay(ctx, authCode);
+  const { accessToken, idToken } = redeemed;
 
   // Token issuance metrics (#126).
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });
@@ -998,6 +1169,7 @@ async function handleClientCredentials(
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
   const aud = resolveAudience(client, requestedResource);
+  await assertReservedAudiencesListed(ctx, aud);
   const accessToken = await issueAccessToken(fastify, {
     sub: client.clientId,
     clientId: client.clientId,
@@ -1043,20 +1215,34 @@ async function handleClientCredentials(
  *
  * RFC 9700 §2.2.2 / OAuth 2.1 §4.3.1: presenting a refresh token that is no
  * longer live means either the client or an attacker holds a copy, so every
- * token descended from the same grant is revoked. Reached two ways — the token
- * was already revoked when read, or a concurrent request rotated it between
- * the read and this request's compare-and-set — and both are the same event.
+ * token descended from the same grant is revoked: the family's refresh tokens
+ * and every access token issued in it that has not expired. Reached two ways —
+ * the token was already revoked when read, or a concurrent request rotated it
+ * between the read and this request's compare-and-set — and both are the same
+ * event.
+ *
+ * The family's revocation and the `token.request_failed` event commit in one
+ * transaction (ADR-019 Decision 8). The access tokens go on the denylist, in
+ * Redis, after that commit.
  */
 async function rejectRefreshTokenReplay(
   ctx: HandlerContext<TokenExchangeRefreshBody>,
   storedToken: { userId: string; familyId: string }
 ): Promise<never> {
-  await ctx.fastify.repositories.refreshTokens.revokeFamily(
-    storedToken.familyId,
-    'replay_detected'
-  );
-  await emitRequestFailed(ctx, 'invalid_grant', 'refresh_replay', storedToken.userId);
-  throw new InvalidGrantError('Invalid or expired refresh token');
+  const { fastify } = ctx;
+  await fastify.db.transaction(async (tx) => {
+    const revokedRefreshCount = await fastify.repositories.refreshTokens.revokeFamily(
+      storedToken.familyId,
+      'replay_detected',
+      tx
+    );
+    await emitRequestFailed(ctx, 'invalid_grant', 'refresh_replay', storedToken.userId, {
+      tx,
+      revocation: { refreshFamilyId: storedToken.familyId, revokedRefreshCount },
+    });
+  });
+  await revokeGrantAccessTokens(fastify, { refreshFamilyId: storedToken.familyId });
+  throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
 }
 
 /**
@@ -1177,9 +1363,10 @@ async function handleRefreshToken(
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
   if (!user.enabled) {
-    await spendGrant(
-      () => fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled'),
-      UNUSABLE_REFRESH_TOKEN
+    // Burned all the same; a token a concurrent request revoked first is
+    // burned already, and the answer is the same.
+    await spendGrant(() =>
+      fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled')
     );
     await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
     throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
@@ -1268,7 +1455,9 @@ async function handleRefreshToken(
 
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-  const aud = resolveAudience(client, effectiveResource);
+  // A QAuth API audience only when a `resource` named it (#509).
+  const aud = resolveUserGrantAudience(client, effectiveResource);
+  await assertReservedAudiencesListed(ctx, aud, user.id);
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
@@ -1319,6 +1508,9 @@ async function handleRefreshToken(
       ...dpopConfirmation(ctx),
       expiresInOverride: accessTokenExpiresIn,
     });
+    // Recorded against the family before the commit, so a replay of its code
+    // or of one of its refresh tokens can revoke it (ADR-017 Decision 10).
+    await recordGrantAccessToken(fastify, signed, { refreshFamilyId: storedToken.familyId });
     await emitUserEvent(
       request,
       TOKEN_ISSUED,
@@ -1482,7 +1674,7 @@ async function handleTokenExchange(
   // verification here. Only QAuth's signing key + issuer verifies, so success
   // establishes provenance; an unverifiable / expired / foreign-issuer token is
   // "unacceptable" → invalid_request. The issuer is the one the request realm's
-  // tokens carry (#489), so a token naming another realm's issuer fails too.
+  // tokens carry (#489, #490), so a token naming another realm's issuer fails too.
   const expectedIssuer = realmTokenIssuer(fastify, requestRealm(request));
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
@@ -1716,6 +1908,7 @@ async function handleTokenExchange(
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
   const aud = arrayToAud(effectiveAudience);
+  await assertReservedAudiencesListed(ctx, aud, user.id);
 
   // Clamp lifespan so the delegated token NEVER outlives the subject token's
   // authority (and so it cannot be re-exchanged to extend it indefinitely).
@@ -1917,10 +2110,7 @@ async function mintIdJagForExchange(args: {
   // The consume side refuses a self-issued assertion too; refusing here keeps the
   // pair from ever forming a loop, and keeps a misconfigured allowlist from
   // handing a client a way around the delegation path's audience narrowing.
-  if (
-    resolveIssuerIdentifier(targetAuthorizationServer) ===
-    resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())
-  ) {
+  if (resolveIssuerIdentifier(targetAuthorizationServer) === realmIssuer(requestRealm(request))) {
     await emitFailure('invalid_target', 'id_jag_audience_is_self');
     throw new InvalidTargetError('an ID-JAG cannot be minted for this authorization server');
   }
@@ -1958,7 +2148,7 @@ async function mintIdJagForExchange(args: {
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
-  const minted = await mintIdJag(fastify, {
+  const minted = await mintIdJag(requestRealm(request), {
     subject: user.id,
     audience: targetAuthorizationServer,
     resource: targetResource,
@@ -2072,9 +2262,10 @@ async function handleJwtBearer(
   // once and being refused a step later.
   let assertion: ValidatedIdJag;
   try {
-    assertion = await validateIdJagAssertion(fastify, {
+    assertion = await validateIdJagAssertion(fastify, requestRealm(request), {
       assertion: body.assertion,
       expectedClientId: client.clientId,
+      realm: requestRealm(request).name,
     });
   } catch (err) {
     // Every distinct refusal reason is recorded for the operator and collapsed
@@ -2204,6 +2395,8 @@ async function handleJwtBearer(
   // whole allowlist. `resolveAudience` collapses the single value to a string
   // `aud`, so the token names exactly one resource server.
   const aud = resolveAudience(client, [assertion.resource]);
+  // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
+  await assertReservedAudiencesListed(ctx, aud, user.id);
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,

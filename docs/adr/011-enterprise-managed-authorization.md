@@ -27,6 +27,10 @@
 > cooldown, a negative cache and a one-hour ceiling on its cache TTL. §4, the
 > negative consequences and the review findings now say what each bounds and what it
 > costs.
+>
+> **Amended 2026-10-26 (#481):** the issuer fetches go through the egress client of
+> ADR-019 Decision 8, and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` is gone. §4 now says which
+> fetch the deployment egress allowlist may open and which it never opens.
 
 ## Context
 
@@ -344,10 +348,11 @@ The rules that make this a trust model rather than a list:
   `authorization_grant_profiles_supported` appear **only** when `ID_JAG_ENABLED`
   is true **and** the allowlist is non-empty. ADR-007 already established that an
   advertisement must not be able to drift from the behaviour it describes.
-- **Every outbound fetch uses the CIMD SSRF-guard pattern** —
-  `apps/auth-server/src/app/helpers/ssrf-safe-fetch.ts`: https-only, no
-  credentials in the URL, DNS-pinned TOCTOU-safe IP validation, **no redirect
-  following**, response size and time bounds, non-200 rejection, and a bounded Redis cache (`ID_JAG_JWKS_CACHE_TTL`, default 5 minutes). The
+- **Every outbound fetch goes through the egress client** (ADR-019 Decision 8,
+  `@qauth-labs/server-egress` as `fastify.egress`), as the CIMD fetch does:
+  https-only, no credentials in the URL, DNS-pinned TOCTOU-safe IP validation,
+  **no redirect following**, response size and time bounds, non-200 rejection,
+  and a bounded Redis cache (`ID_JAG_JWKS_CACHE_TTL`, default 5 minutes). The
   TTL has a hard ceiling of one hour, as `CIMD_CACHE_MAX_TTL` is for CIMD. A larger
   value fails config validation rather than being clamped (#433).
 - **How often an issuer is dialled is bounded per issuer, in Redis, across every
@@ -364,12 +369,22 @@ The rules that make this a trust model rather than a list:
   Redis cannot be reached, the cooldown refuses the refresh. The cooldown bounds forced
   refreshes only: with `ID_JAG_JWKS_CACHE_TTL=0` nothing is cached, and every
   assertion fetches both documents on its own.
-- **One escape hatch exists.** `ID_JAG_ALLOW_PRIVATE_ADDRESSES` (default `false`) turns the
-  address check off so tests can use a localhost IdP. The auth-server refuses to start with
-  it set to `true` when `NODE_ENV` is `production`, and refuses its CIMD twin,
-  `CIMD_ALLOW_PRIVATE_ADDRESSES`, the same way (#435). The error names the variable. The
-  rule keys on `NODE_ENV`, not on ADR-008's per-realm environment profile, because the
-  switch applies to the whole process.
+- **A private issuer needs the deployment allowlist, and its keys cannot sit on a
+  private address** (#481). The discovery URL is built from `ID_JAG_TRUSTED_ISSUERS`,
+  so it is an operator-set destination: an entry of the file `EGRESS_ALLOWLIST_PATH`
+  names that opens its host or range for the realm the assertion is presented to lets
+  the discovery fetch reach a private address. The `jwks_uri` comes from the fetched
+  document, a remote document that the allowlist never opens. An issuer whose keys sit
+  on a private network is therefore unusable from discovery alone; setting its
+  endpoints in configuration belongs to the upstream provider work (#432 to #435). The
+  former escape hatch, `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD twin
+  `CIMD_ALLOW_PRIVATE_ADDRESSES` are removed: set to any value, they stop the boot with
+  a message that names `EGRESS_ALLOWLIST_PATH`. Tests reach a localhost IdP through the
+  test-only `createTestEgressClient`. The caches stay per issuer, since a document is
+  the same whichever realm fetched it. A discovery fetch that the address check refuses
+  for one realm is not written to the negative cache, and concurrent discovery fetches
+  are shared only within a realm, so a realm without an allowlist entry cannot hold the
+  issuer back for a realm that has one.
 
 ### 5. Why an allowlist, and not the alternatives
 
@@ -652,8 +667,9 @@ Each new test was checked to fail when its fix is removed.
 - #434, since fixed: the ID-JAG targets have their own column,
   `oauth_clients.id_jag_targets`, and `audience` no longer grants an ID-JAG target.
   See §3.
-- #435, since fixed: the auth-server refuses `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD
-  twin, when `NODE_ENV` is `production`. See §4.
+- #435, since fixed: the auth-server refused `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD
+  twin, when `NODE_ENV` is `production`. #481 removed both; setting either stops the
+  boot. See §4.
 
 ### The draft dependency
 

@@ -165,7 +165,7 @@ async function tryRevokeAccessToken(
 ): Promise<boolean> {
   let payload;
   try {
-    // RFC 9700 mix-up defence: only a token this realm issued (#489).
+    // RFC 9700 mix-up defence: only a token this realm issued (#489, #490).
     payload = await fastify.jwtUtils.verifyAccessToken(token, {
       issuer: realmTokenIssuer(fastify, realm),
     });

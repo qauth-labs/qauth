@@ -1,9 +1,18 @@
 import { validateHeaderName, validateHeaderValue } from 'node:http';
 
+import { addressKind } from './address';
+import {
+  type AddressPermit,
+  allowlistPermit,
+  type EgressAllowlist,
+  EMPTY_EGRESS_ALLOWLIST,
+  isEgressAllowlist,
+} from './allowlist';
 import { type CheckedUrl, checkUrl, hostForLog, resolveCheckedAddresses } from './destination';
 import { EgressError, type EgressErrorReason, EgressFailure, type EgressOutcome } from './errors';
 import { DEFAULT_EGRESS_LIMITS, type EgressLimits, mergeLimits } from './limits';
-import { type EgressTransport, NODE_TRANSPORT } from './transport';
+import { allowlistApplies, checkRealm, checkSource, type EgressSource } from './source';
+import { type EgressTransport, LOCAL_TEST_TRANSPORT, NODE_TRANSPORT } from './transport';
 
 /** The HTTP methods the client sends. */
 export const EGRESS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;
@@ -28,7 +37,30 @@ export interface EgressRequest {
    * digits and `_ . : -`, starting with a letter, at most 64 characters.
    */
   purpose: string;
+  /**
+   * Who set the destination: `operator`, `admin`, `client`, `end_user` or
+   * `remote_document`. Only an `operator` or `admin` destination may use the
+   * deployment allowlist, and only for a {@link realm} its entry names.
+   */
+  source: EgressSource;
+  /**
+   * The name of the realm the destination belongs to. The allowlist entries
+   * that name it apply to an `operator` or `admin` destination; without a
+   * realm none does.
+   */
+  realm?: string;
   /** Caps for this call, over the client's. */
+  limits?: Partial<EgressLimits>;
+}
+
+/** Where a destination checked by {@link EgressClient.validateDestination} comes from. */
+export interface EgressDestinationOptions {
+  /** As {@link EgressRequest.purpose}. */
+  purpose: string;
+  /** As {@link EgressRequest.source}. */
+  source: EgressSource;
+  /** As {@link EgressRequest.realm}. */
+  realm?: string;
   limits?: Partial<EgressLimits>;
 }
 
@@ -82,10 +114,16 @@ export interface EgressLogger {
 export interface EgressClientOptions {
   /** Caps of every call, over {@link DEFAULT_EGRESS_LIMITS}. */
   limits?: Partial<EgressLimits>;
-  /** Gets one line per blocked or failed call: purpose, host and reason. */
+  /** Gets one line per blocked or failed call: purpose, source, realm, host and reason. */
   logger?: EgressLogger;
   /** Also counts blocked and failed calls, besides {@link EgressClient.counts}. */
   counter?: EgressCounter;
+  /**
+   * The deployment allowlist (`EGRESS_ALLOWLIST_PATH`), from
+   * `parseEgressAllowlist` or `loadEgressAllowlist`. None unless set: every
+   * non-public address is refused.
+   */
+  allowlist?: EgressAllowlist;
 }
 
 /** The SSRF-safe client for every outbound call (ADR-019 Decision 8). */
@@ -103,7 +141,7 @@ export interface EgressClient {
    */
   validateDestination(
     url: string | URL,
-    options: { purpose: string; limits?: Partial<EgressLimits> }
+    options: EgressDestinationOptions
   ): Promise<ValidatedDestination>;
   /** Blocked and failed calls since the client was created, by purpose. */
   counts(): EgressCounts;
@@ -210,19 +248,63 @@ function withinDeadline<T>(work: Promise<T>, signal: AbortSignal, host: string):
   });
 }
 
+/** Either permit, or `undefined` when neither exists. */
+function eitherPermit(
+  a: AddressPermit | undefined,
+  b: AddressPermit | undefined
+): AddressPermit | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return (hostname, address) => a(hostname, address) || b(hostname, address);
+}
+
 /**
- * The client over `transport`. Only {@link createEgressClient} calls it, with
- * the real network: no export lets a caller hand in a network of its own. The
- * tests replace the transport module instead.
+ * The client over `transport`. Only {@link createEgressClient} calls it with
+ * the real network, and {@link createTestEgressClient} with the local test
+ * network and `basePermit`: no export lets a caller hand in a network or a
+ * permit of its own. The tests of this library replace the transport module
+ * instead.
+ *
+ * @param basePermit - non-public addresses every call may reach, whatever its
+ *   source; only the test client sets it, to loopback
  */
-function buildEgressClient(options: EgressClientOptions, transport: EgressTransport): EgressClient {
+function buildEgressClient(
+  options: EgressClientOptions,
+  transport: EgressTransport,
+  basePermit?: AddressPermit
+): EgressClient {
   const baseLimits = mergeLimits(DEFAULT_EGRESS_LIMITS, options.limits);
+  if (options.allowlist !== undefined && !isEgressAllowlist(options.allowlist)) {
+    throw new TypeError(
+      'egress allowlist must come from parseEgressAllowlist or loadEgressAllowlist'
+    );
+  }
+  const allowlist = options.allowlist ?? EMPTY_EGRESS_ALLOWLIST;
+
+  /**
+   * The non-public addresses a call to a destination of `source` for `realm`
+   * may reach: the allowlist entries that name the realm, for an `operator`
+   * or `admin` destination only.
+   */
+  const callPermit = (source: EgressSource, realm: string | undefined) =>
+    eitherPermit(
+      basePermit,
+      realm !== undefined && allowlistApplies(source)
+        ? allowlistPermit(allowlist, realm)
+        : undefined
+    );
   // A Map, not an object: a purpose such as `constructor` must not reach a
   // prototype.
   const counts = new Map<string, EgressCounts[string]>();
 
   /** Count, log and convert a refusal or failure into the error the caller gets. */
-  const report = (err: unknown, purpose: string, host: string | undefined): EgressError => {
+  const report = (
+    err: unknown,
+    purpose: string,
+    source: EgressSource,
+    realm: string | undefined,
+    host: string | undefined
+  ): EgressError => {
     const failure =
       err instanceof EgressFailure
         ? err
@@ -241,7 +323,7 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
     entry.reasons[reason] = (entry.reasons[reason] ?? 0) + 1;
     options.counter?.inc({ purpose, outcome, reason });
     options.logger?.warn(
-      { purpose, host, reason, outcome },
+      { purpose, source, ...(realm === undefined ? {} : { realm }), host, reason, outcome },
       outcome === 'blocked' ? 'egress call blocked' : 'egress call failed'
     );
     return new EgressError({ reason, outcome, purpose, host, message: failure.message });
@@ -265,6 +347,9 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
 
   const request = async (call: EgressRequest): Promise<EgressResponse> => {
     const purpose = checkPurpose(call.purpose);
+    const source = checkSource(call.source);
+    const realm = checkRealm(call.realm);
+    const permit = callPermit(source, realm);
     if (!(EGRESS_METHODS as readonly string[]).includes(call.method)) {
       throw new TypeError(`egress method must be one of ${EGRESS_METHODS.join(', ')}`);
     }
@@ -287,15 +372,25 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
       body = copyBody(call.body);
       return await withDeadline(limits, async (signal) => {
         const startedAt = Date.now();
-        let target = checkUrl(call.url);
+        let target = checkUrl(call.url, permit);
+        // The allowlist is for the destination the operator or an admin set.
+        // A redirect to another host is the remote side's choice, so its
+        // target gets no more than the test client's base permit.
+        const origin = target.hostname;
+        let targetPermit = permit;
         let redirects = 0;
         for (;;) {
           host = target.hostname;
           const addresses = await withinDeadline(
-            resolveCheckedAddresses(target, transport.resolveHost, {
-              timeoutMs: Math.max(1, limits.totalTimeoutMs - (Date.now() - startedAt)),
-              signal,
-            }),
+            resolveCheckedAddresses(
+              target,
+              transport.resolveHost,
+              {
+                timeoutMs: Math.max(1, limits.totalTimeoutMs - (Date.now() - startedAt)),
+                signal,
+              },
+              targetPermit
+            ),
             signal,
             target.hostname
           );
@@ -350,7 +445,8 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
           }
           host = hostForLog(next) ?? host;
           // The same checks as the first URL, before anything is sent to it.
-          const nextTarget = checkUrl(next);
+          targetPermit = hostForLog(next) === origin ? permit : basePermit;
+          const nextTarget = checkUrl(next, targetPermit);
           if (!sameOrigin(target, nextTarget)) {
             headers = Object.fromEntries(
               Object.entries(headers).filter(([name]) => !CREDENTIAL_HEADERS.includes(name))
@@ -373,24 +469,29 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
         }
       });
     } catch (err) {
-      throw report(err, purpose, host);
+      throw report(err, purpose, source, realm, host);
     }
   };
 
   const validateDestination = async (
     url: string | URL,
-    validateOptions: { purpose: string; limits?: Partial<EgressLimits> }
+    validateOptions: EgressDestinationOptions
   ): Promise<ValidatedDestination> => {
     const purpose = checkPurpose(validateOptions.purpose);
+    const source = checkSource(validateOptions.source);
+    const realm = checkRealm(validateOptions.realm);
+    const permit = callPermit(source, realm);
     const limits = mergeLimits(baseLimits, validateOptions.limits);
     try {
       return await withDeadline(limits, async (signal) => {
-        const target = checkUrl(url);
+        const target = checkUrl(url, permit);
         const addresses = await withinDeadline(
-          resolveCheckedAddresses(target, transport.resolveHost, {
-            timeoutMs: limits.totalTimeoutMs,
-            signal,
-          }),
+          resolveCheckedAddresses(
+            target,
+            transport.resolveHost,
+            { timeoutMs: limits.totalTimeoutMs, signal },
+            permit
+          ),
           signal,
           target.hostname
         );
@@ -402,7 +503,7 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
         };
       });
     } catch (err) {
-      throw report(err, purpose, hostForLog(url));
+      throw report(err, purpose, source, realm, hostForLog(url));
     }
   };
 
@@ -425,9 +526,62 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
  * public, and connects only to an address it checked, with the host name in
  * SNI and in the certificate check. It checks each redirect target the same way
  * before following it, at most `maxRedirects` times. It caps the connect time,
- * the total time and both bodies, and it never goes through a proxy. There is
- * no switch that lets it reach a private address.
+ * the total time and both bodies, and it never goes through a proxy.
+ *
+ * A non-public address is reachable only through the deployment allowlist
+ * (`allowlist`), for a destination whose `source` is `operator` or `admin`
+ * and whose `realm` an entry names. A destination that a client, an end user
+ * or a remote document supplies never is, and no allowlist entry opens an
+ * unspecified, multicast or cloud metadata address.
  */
 export function createEgressClient(options: EgressClientOptions = {}): EgressClient {
   return buildEgressClient(options, NODE_TRANSPORT);
+}
+
+/** Loopback addresses: the test client's fixture servers listen there. */
+const LOOPBACK_PERMIT: AddressPermit = (_hostname, address) => addressKind(address) === 'loopback';
+
+/** Refuse unless the process is a test run. */
+function assertTestEnvironment(): void {
+  if (process.env['NODE_ENV'] !== 'test') {
+    throw new Error(
+      `createTestEgressClient is for tests only: NODE_ENV is ${JSON.stringify(process.env['NODE_ENV'] ?? '')}, not "test"`
+    );
+  }
+}
+
+/**
+ * TEST SUPPORT — an egress client that also reaches local fixture servers on
+ * loopback (`localhost`, `127.0.0.1`, `::1`), for any source. It exists only
+ * while `NODE_ENV` is `test`: creating one, and every call through one,
+ * throws otherwise.
+ *
+ * Everything else is the production client: `https` only, the address checks
+ * (a private, link-local or metadata address is still refused), redirects,
+ * caps and the allowlist. Two things differ. Names resolve with the operating
+ * system's resolver, so `localhost` resolves, and each exchange runs in the
+ * test's process rather than in a fetch process. TLS trusts the process's
+ * default CA certificates; a test adds its fixture's CA with
+ * `tls.setDefaultCACertificates`.
+ *
+ * It replaces the removed `CIMD_ALLOW_PRIVATE_ADDRESSES` and
+ * `ID_JAG_ALLOW_PRIVATE_ADDRESSES` switches: a deployment has no setting that
+ * lets the egress client reach loopback.
+ *
+ * @throws Error when `NODE_ENV` is not `test`
+ */
+export function createTestEgressClient(options: EgressClientOptions = {}): EgressClient {
+  assertTestEnvironment();
+  const client = buildEgressClient(options, LOCAL_TEST_TRANSPORT, LOOPBACK_PERMIT);
+  return {
+    async request(call) {
+      assertTestEnvironment();
+      return client.request(call);
+    },
+    async validateDestination(url, validateOptions) {
+      assertTestEnvironment();
+      return client.validateDestination(url, validateOptions);
+    },
+    counts: () => client.counts(),
+  };
 }

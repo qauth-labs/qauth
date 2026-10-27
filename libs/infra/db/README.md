@@ -302,9 +302,9 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `deleteBatch({ realmId, category, before, through, limit, now })` deletes one batch of the realm's oldest rows of one category, older than `before` and at or before `through`, in a short transaction under the realm's retention lock (`busy` when another instance holds it). Admin rows go only from the start of the chain, never its head, and only while each verifies; the last one deleted becomes the realm's anchor in `event_chain_anchors`, in the same transaction, and a row that breaks the chain stays (`chainBreak`).
   - `oldestEventTimes()` returns the time of each category's oldest event, for the `qauth_events_oldest_age_seconds` gauge.
 - **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
-  - `create()`, `findByCode()`, `markUsed()`
+  - `create()`, `findByCode()`, `findByCodeIncludingUsed()` (spent and expired codes too, so a second redemption is recognised as a replay), `markUsed()`
 - **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
-  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`
+  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`, `revokeFamilyByAuthorizationCode(codeId, reason, tx?)` (the family whose first token carries `authorization_code_id`; returns `{ familyId, revokedCount }`)
 - **`createEmailVerificationTokensRepository(db)`**: Verification tokens
   - `create()`, `findByTokenHash()`, `markUsed()`, `deleteExpired()`
 
@@ -804,7 +804,7 @@ libs/infra/db/
 ### Token Tables
 
 - **email_verification_tokens**: Email verification tokens with expiration, pointed at a `credential_id`
-- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010)
+- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010); `session_id` (0042, #549) names the browser session behind the code, the ID token's `sid`, and a deleted session sets it to NULL
 - **refresh_tokens**: Refresh tokens with rotation support
 
 ### Federation Tables
@@ -832,7 +832,7 @@ libs/infra/db/
 ### Additional Tables
 
 - **sessions**: Browser sessions (ADR-019 Decision 3, #468): one row per account signed in on one browser, in one realm. The `id` (`uuidv7()`) is the session's `sid`. Holds the authentication (`auth_time`, `amr`, `assurance_level`), the address and user agent at creation, `last_seen_at`, the absolute end `expires_at`, and `revoked_at` with `revoked_reason` (set together). `(user_id, realm_id)` references `users (id, realm_id)`, so a session never names a user of another realm. Not stored here: the cookie, the CSRF values and the consent scopes. The auth server writes it through the session service (#469) at every browser sign-in and reads it whenever it resolves the session cookie (#488)
-- **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Deleting the session or the client deletes its rows
+- **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Written in the transaction that mints an authorization code, under a share lock on the live session (`recordClient`, #549); read by session, by user or by client within a realm, for live sessions only. Revoking the session deletes its rows and returns them; deleting the session or the client deletes them too
 - **audit_logs**: The audit log of the releases before the event store; read-only since #458, its rows copied into `events`
 - **api_keys**: Environment-gated static developer API keys (ADR-008 §6)
 - **roles**: Role-based access control (currently unused)

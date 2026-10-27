@@ -43,6 +43,7 @@ const texts = (queries: CapturedQuery[]) => queries.map((q) => q.text.toLowerCas
 
 const USER_ID = '0192f1c4-1111-7000-8000-000000000001';
 const CLIENT_ID = '0192f1c4-2222-7000-8000-000000000002';
+const CODE_ID = '0192f1c4-3333-7000-8000-000000000003';
 
 describe('refresh-token rotation lock', () => {
   it('rotation (revokeIfActive) takes the shared lock on the token owner before its UPDATE', async () => {
@@ -65,6 +66,11 @@ describe('refresh-token rotation lock', () => {
       'revokeFamily',
       (repo: ReturnType<typeof createRefreshTokensRepository>) =>
         repo.revokeFamily('family-1', 'replay_detected'),
+    ],
+    [
+      'revokeFamilyByAuthorizationCode',
+      (repo: ReturnType<typeof createRefreshTokensRepository>) =>
+        repo.revokeFamilyByAuthorizationCode(CODE_ID, 'code_replay'),
     ],
     [
       'revokeAllForUser',
@@ -98,6 +104,27 @@ describe('refresh-token rotation lock', () => {
       expect(sql.some((t) => t.includes('pg_advisory_xact_lock_shared('))).toBe(false);
     }
   );
+
+  it('revokeFamilyByAuthorizationCode keys the lock on the owner of the token the code started', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db).revokeFamilyByAuthorizationCode(CODE_ID, 'code_replay');
+
+    const sql = texts(queries);
+    const lock = sql.findIndex((t) => /pg_advisory_xact_lock\(/.test(t));
+    const family = sql.findIndex((t) => t.startsWith('select "family_id"'));
+    const update = sql.findIndex((t) => t.startsWith('update "refresh_tokens"'));
+    expect(sql[lock]).toContain('"user_id"');
+    expect(sql[lock]).toContain('"authorization_code_id"');
+    expect(queries[lock].values).toContain(CODE_ID);
+    // The family is named under the lock, before the UPDATE.
+    expect(family).toBeGreaterThan(lock);
+    expect(update).toBeGreaterThan(family);
+    expect(queries[family].values).toContain(CODE_ID);
+    // The whole family, found through the token that carries the link.
+    expect(sql[update]).toContain('"family_id" in (select "family_id"');
+    expect(queries[update].values).toContain(CODE_ID);
+  });
 
   it("uses the caller's transaction when one is passed", async () => {
     const { db, queries } = createRecordingDb();

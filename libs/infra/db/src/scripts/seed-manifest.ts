@@ -6,6 +6,7 @@
  */
 import {
   InvalidWebAuthnOriginError,
+  isReservedAudience,
   isReservedQauthScope,
   normaliseWebAuthnOrigin,
 } from '@qauth-labs/shared-validation';
@@ -175,7 +176,22 @@ export const cimdClientSpecSchema = z
             `"${String(issue.input)}" is in the "qauth:" scope namespace, which is reserved for QAuth's own scopes: a CIMD client is never granted one`,
         })
     ),
-    audience: z.array(z.string().min(1)).nullable().optional(),
+    // Never a QAuth API audience (#509, ADR-019 Decision 7): a CIMD client is
+    // whoever controls its URL, and it never holds a family audience, as its
+    // own document cannot claim one either. A pre-registered client of
+    // `clients` may.
+    audience: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine((value) => !isReservedAudience(value), {
+            error: (issue) =>
+              `"${String(issue.input)}" is in the "urn:qauth:aud:" audience namespace, which is reserved for QAuth's own API audiences: a CIMD client is never granted one`,
+          })
+      )
+      .nullable()
+      .optional(),
   })
   .strict();
 

@@ -113,6 +113,20 @@
 > event of a registered type, in the transaction of the change it records. The audit rules of §11
 > hold for the event's `data`; the row fields it names map to the envelope (`ip_address` to
 > `request.ip`, `userId` to the subject). No rule changed.
+>
+> **Amended 2026-10-26** with #627, which builds Decision 10's replay revocation (F0). A second
+> redemption of a code is recorded as the registered type `token.request_failed` with the reason
+> `code_replay`, and the family it revoked in `refreshFamilyId` and `revokedRefreshCount`, in the
+> transaction of the revocation. `oauth.token.code_replay` predates the event contract of ADR-018
+> §3 and is not a type. The revocation also has a condition this record did not state: it happens
+> only for a second redemption that is otherwise a valid request (the code's client, its
+> `redirect_uri`, its PKCE verifier, its DPoP key and a `resource` inside its binding). OAuth 2.1
+> -16 §7.5.3 "Authorization Code Injection" says the server "SHOULD NOT revoke any issued tokens
+> when receiving a replayed authorization code that contains invalid parameters", so whoever holds a
+> code but not the client's credentials or verifier cannot end the client's tokens with it. A replay
+> that fails a check is refused for that check and revokes nothing. The revocation reaches the
+> access tokens issued from the code and in its family as well, through the `jti` denylist. Decision
+> 10 is edited in place.
 
 ## Context
 
@@ -453,7 +467,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | ------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------- |
 | `identifier`                         | F1    | `{}`                                                                                                         | `login_hint`                                  | —             |
 | `password`                           | F1    | `{}`                                                                                                         | `password` (+ `login_hint` if none was given) | `pwd`         |
-| `email_code`                         | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
+| `email_code`                         | F1    | `purpose` (`verify_account`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
 | `new_password`                       | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
 | `password_reset`                     | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
 | `captcha`                            | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
@@ -510,7 +524,7 @@ is not yet verified (a password account whose address is unproved), followed by 
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example", "auth_session": "p0Lr…",
         "interaction_type_required": "urn:qauth:ia:email_code:v1-rc.0", "qauth_interaction_types_offered": ["urn:qauth:ia:email_code:v1-rc.0"],
         "qauth_interaction_params": { "urn:qauth:ia:email_code:v1-rc.0":
-            { "purpose": "verify_address", "length": 6, "expires_in": 600, "resend_after": 60 } } }
+            { "purpose": "verify_account", "length": 6, "expires_in": 600, "resend_after": 60 } } }
 → auth_session=p0Lr…&qauth_interaction_type=urn%3Aqauth%3Aia%3Aemail_code%3Av1&otp=482913&CA
 ← 200 { "authorization_code": "…", "iss": "https://auth.acme.example" }
 ```
@@ -990,7 +1004,7 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
 - With `prompt=create`, `openid` is required: the flow "MUST NOT be considered successful without
   the return of a valid id_token" (§4.1 "Authorization Request").
 
-- The first answer is always 403 `email_code` (`verify_address`, 8 digits), identical for new and
+- The first answer is always 403 `email_code` (`verify_account`, 8 digits), identical for new and
   existing addresses; an existing address receives a code with an "account exists" notice. After the
   code, a new address gets `new_password` (and, from F2b, an offered `webauthn_create`). An existing
   verified account is helped to sign in (`password`, `webauthn_get` from F2b, or `redirect_to_web`
@@ -1214,7 +1228,9 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
   on the code, so a missing value counts as a mismatch, not as a missing parameter
   (`invalid_request`).
 - Challenge codes live 60 s; browser codes keep `AUTHORIZATION_CODE_TTL_MS`. A second redemption of
-  any code is denied and revokes the family issued from it, audited as `oauth.token.code_replay`.
+  any code is denied. When it is otherwise a valid request (OAuth 2.1 -16 §7.5.3), it also revokes
+  the refresh family and the access tokens issued from the code, and is recorded as
+  `token.request_failed` with the reason `code_replay` (amended 2026-10-26).
 - Refresh-family lifetime (question 23, decided 2026-10-09). When a realm's `sso_max_lifespan` is
   set, it caps every refresh family in that realm. When it is unset, today's sliding
   `REFRESH_TOKEN_LIFESPAN` is unchanged. As of 2026-10-09 the column exists on `realms`, is

@@ -52,6 +52,7 @@ vi.mock('./user-events', async (importOriginal) => {
 
 import { testRealm } from '../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../constants';
+import type { RealmRow } from './request-realm';
 import { readWalletFlowBindings } from './session-cookie';
 import { emitUserEvent } from './user-events';
 import { advanceWalletLinkFlow, startWalletLinkFlow } from './wallet-link-flow';
@@ -117,8 +118,8 @@ function makeFastify() {
  * A request as the state machine sees it: a cookie header, an address and the
  * realm of its host.
  */
-function makeRequest(cookie?: string): any {
-  return { headers: cookie === undefined ? {} : { cookie }, ip: '127.0.0.1', realm: REALM };
+function makeRequest(cookie?: string, realm: RealmRow = REALM): any {
+  return { headers: cookie === undefined ? {} : { cookie }, ip: '127.0.0.1', realm };
 }
 
 /** A reply that records only what the state machine touches: Set-Cookie. */
@@ -186,12 +187,12 @@ async function advance(
   fastify: FastifyInstance,
   handle: string,
   userId: string,
-  opts: { cookie?: string; via?: 'poll' | 'return' } = {}
+  opts: { cookie?: string; via?: 'poll' | 'return'; realm?: RealmRow } = {}
 ) {
   const { reply, setCookies } = makeReply();
   const outcome = await advanceWalletLinkFlow(
     fastify,
-    makeRequest(opts.cookie),
+    makeRequest(opts.cookie, opts.realm),
     reply,
     handle,
     userId,
@@ -397,6 +398,30 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
       },
       { tx: LINK_TX, realmId: 'realm-1', userId, actor: 'user' }
     );
+  });
+});
+
+describe('advanceWalletLinkFlow — a flow of another realm (#489)', () => {
+  it('answers it exactly as an unknown flow, and leaves it to its own realm', async () => {
+    const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink();
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    linkAs(LINKED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    // At a host of another realm, with the browser's own binder: the answer
+    // of an unknown handle, and the presentation is not looked at.
+    const unknown = await advance(fastify, 'A'.repeat(43), userId, { cookie });
+    const foreign = await advance(fastify, handle, userId, {
+      cookie,
+      realm: testRealm({ id: 'realm-2' }),
+    });
+    expect(foreign.outcome).toEqual(unknown.outcome);
+    expect(foreign.setCookies).toEqual(unknown.setCookies);
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+
+    // The flow is untouched: at its own realm's host it still links.
+    const own = await advance(fastify, handle, userId, { cookie });
+    expect(own.outcome).toEqual({ status: 'linked', rebound: false });
   });
 });
 

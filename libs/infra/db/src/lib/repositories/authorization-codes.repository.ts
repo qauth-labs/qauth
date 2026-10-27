@@ -73,6 +73,41 @@ export function createAuthorizationCodesRepository(
     },
 
     /**
+     * Find an authorization code by its code value, used or expired as well.
+     *
+     * The token endpoint reads codes through this so that a second redemption
+     * of a spent code is recognised as a replay (OAuth 2.1 §4.1.3, ADR-017
+     * Decision 10) rather than looking like an unknown code. Callers MUST
+     * check `used` and `expiresAt` themselves before trusting the row.
+     *
+     * Scoped to the realm as {@link findByCode} is (#489): the read joins the
+     * client the code was issued to and filters on its realm, so a code of
+     * another realm, spent or not, is no row at all and its replay revokes
+     * nothing there.
+     *
+     * @param realmId - Realm the request was resolved to
+     * @param code - Authorization code value
+     * @param tx - Optional transaction client
+     * @returns Authorization code if a row with this value exists in the realm, undefined otherwise
+     */
+    async findByCodeIncludingUsed(
+      realmId: string,
+      code: string,
+      tx?: DbClient
+    ): Promise<AuthorizationCode | undefined> {
+      const invoker = tx ?? defaultDb;
+
+      const [result] = await invoker
+        .select(getTableColumns(authorizationCodes))
+        .from(authorizationCodes)
+        .innerJoin(oauthClients, eq(authorizationCodes.oauthClientId, oauthClients.id))
+        .where(and(eq(oauthClients.realmId, realmId), eq(authorizationCodes.code, code)))
+        .limit(1);
+
+      return result;
+    },
+
+    /**
      * Mark a code as used (atomic operation)
      * Sets used=true and usedAt=now only if not already used.
      * Prevents race conditions where two concurrent requests could both use the same code.
@@ -106,9 +141,11 @@ export function createAuthorizationCodesRepository(
      * Invalidate all unredeemed codes for a user
      * Useful for security events (logout, password change, account compromise)
      *
-     * Expiry is not part of the predicate: a redemption checks it in
-     * `findByCode` only, so a code that expired right after that read is still
-     * spent by the `markUsed` that follows and must be caught here too.
+     * Expiry is not part of the predicate: a redemption checks it only on its
+     * read (the token endpoint's `handleAuthorizationCode`, through
+     * `findByCodeIncludingUsed`), so a code that expired right after that read
+     * is still spent by the `markUsed` that follows and must be caught here
+     * too.
      *
      * @param userId - User ID whose codes should be invalidated
      * @param tx - Optional transaction client

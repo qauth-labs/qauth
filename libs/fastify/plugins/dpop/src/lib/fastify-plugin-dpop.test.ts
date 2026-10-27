@@ -7,7 +7,12 @@ import { calculateJwkThumbprint, CompactSign, exportJWK, generateKeyPair, type J
 import { describe, expect, it } from 'vitest';
 
 import { DpopProofError } from '../index';
-import { DPOP_REPLAY_KEY_PREFIX, dpopPlugin, type DpopRequestCheck } from './fastify-plugin-dpop';
+import {
+  DPOP_REPLAY_KEY_PREFIX,
+  dpopPlugin,
+  type DpopPluginOptions,
+  type DpopRequestCheck,
+} from './fastify-plugin-dpop';
 
 const ORIGIN = 'https://auth.example.com';
 
@@ -29,7 +34,7 @@ async function buildApp(options: {
   enabled: boolean;
   redis?: ReturnType<typeof fakeRedis>;
   check?: DpopRequestCheck;
-  baseUrl?: string;
+  baseUrl?: DpopPluginOptions['baseUrl'];
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(
@@ -148,6 +153,43 @@ describe('dpopPlugin (#480)', () => {
         },
       });
       expect(response.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("compares htu with each request's own base when baseUrl is a function (#490)", async () => {
+    // One server, two issuers: which one a request belongs to is the caller's
+    // decision (the auth server's request realm), here a test header.
+    const app = await buildApp({
+      enabled: true,
+      baseUrl: (request) =>
+        request.headers['x-test-realm'] === 'b' ? 'https://b.example.com/' : ORIGIN,
+    });
+    try {
+      const key = await proofKey();
+      const atB = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: {
+          'x-test-realm': 'b',
+          dpop: await proof(key, { htu: 'https://b.example.com/oauth/token' }),
+        },
+      });
+      expect(atB.json()).toEqual({ thumbprint: key.thumbprint });
+      // A proof for the other issuer is refused at B, and the reverse.
+      const forAAtB = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: { 'x-test-realm': 'b', dpop: await proof(key) },
+      });
+      expect(forAAtB.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
+      const forBAtA = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: { dpop: await proof(key, { htu: 'https://b.example.com/oauth/token' }) },
+      });
+      expect(forBAtA.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
     } finally {
       await app.close();
     }

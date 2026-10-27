@@ -153,7 +153,8 @@ describe('POST /auth/resend-verification', () => {
     // registered normalized form (users.email no longer exists).
     expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
       'user@example.com',
-      'plain'
+      'plain',
+      { baseUrl: REALM.issuer }
     );
     expect(result).toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
   });
@@ -288,7 +289,8 @@ describe('POST /auth/resend-verification', () => {
       await expect(answer).resolves.toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
       expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
         'user@example.com',
-        'plain'
+        'plain',
+        { baseUrl: REALM.issuer }
       );
       send.resolve?.();
     });

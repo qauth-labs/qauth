@@ -9,10 +9,14 @@ signing/verification from any specific cryptographic backend, per
 
 QAuth signs OAuth 2.1 access tokens and OIDC ID tokens as a core function. To
 keep crypto-agility (Ed25519 by default; hybrid ML-DSA-65 + Ed25519 as an option)
-without rewriting service code on every backend change, all signing,
-verification, and key generation go through this small interface. Service layers
-(`@qauth-labs/server-jwt` and friends) depend on this abstraction, never on
-`jose` (or any other backend) directly.
+without rewriting service code on every backend change, signing,
+verification, and key generation are meant to go through this small interface.
+`@qauth-labs/server-jwt` signs, verifies and imports keys through it, but calls
+`jose` directly to decode tokens unverified and export public keys.
+Three more libraries call `jose` directly. `@qauth-labs/server-dpop` verifies
+DPoP proofs with it, `@qauth-labs/server-federation` uses it in wallet
+federation, and `@qauth-labs/server-keys` uses it for the key store's JWS
+signing and key generation.
 
 Behind the seam, `jose` signs the classical JWS. ML-DSA-65 runs on
 `@noble/post-quantum`. Hybrid ML-DSA-65 + Ed25519 signing (`signHybrid` /
@@ -154,8 +158,9 @@ rest**, scoped to its one request. Age them with
 
 Adding a backend/algorithm (e.g. a composite signature) means widening
 `SignatureAlgorithm` and branching inside `sign` / `verify` / the key functions.
-Because every call site consumes only this interface, no service-layer code
-changes when a backend is added — that is the entire point of the seam.
+A call site that goes through this interface needs no change when a backend is
+added; that is the point of the seam. The direct `jose` calls listed under
+[Why](#why) sit outside it, so a new algorithm must be checked there too.
 
 ## Development
 
