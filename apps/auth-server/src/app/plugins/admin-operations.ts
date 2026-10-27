@@ -1,3 +1,4 @@
+import rateLimit from '@fastify/rate-limit';
 import { PreconditionFailedError, PreconditionRequiredError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, RouteOptions } from 'fastify';
 import fp from 'fastify-plugin';
@@ -48,7 +49,17 @@ export interface AdminOperationsPluginOptions extends FastifyPluginOptions {
    * the admin listener runs on a classification nothing checked.
    */
   authorize: (request: FastifyRequest, classification: OperationClassification) => unknown;
+  /**
+   * The request ceiling of the admin listener when it has none of its own
+   * (`@fastify/rate-limit` not registered before this stage). A listener
+   * that registers the server's rate limit first keeps that one, and this is
+   * not read. Defaults to {@link DEFAULT_ADMIN_RATE_LIMIT}.
+   */
+  rateLimit?: { readonly max: number; readonly timeWindow: number };
 }
+
+/** The ceiling the stage applies on a listener that has no rate limit of its own. */
+export const DEFAULT_ADMIN_RATE_LIMIT = Object.freeze({ max: 100, timeWindow: 60_000 });
 
 export const ADMIN_OPERATIONS_PLUGIN_NAME = '@qauth-labs/admin-operations';
 
@@ -127,6 +138,10 @@ export function requestClassification(request: FastifyRequest): OperationClassif
  * whose boot check would have been skipped, and its hooks reach only the
  * scope it is registered in and that scope's children.
  *
+ * - A REQUEST CEILING: every admin route authorizes, so the stage makes sure
+ *   the listener has a rate limit. One registered before the stage (the
+ *   server's own) is kept; otherwise the stage registers
+ *   `@fastify/rate-limit` with `rateLimit` ({@link DEFAULT_ADMIN_RATE_LIMIT}).
  * - AT BOOT, an `onRoute` hook refuses every route that names no registered
  *   operation in `config.operation`, and every route whose schema's
  *   `operationId`, `x-qauth-class`, `x-qauth-permission`, `x-qauth-effects`
@@ -179,6 +194,19 @@ export const adminOperationsPlugin = fp<AdminOperationsPluginOptions>(
       throw new Error(
         'The admin operations stage must be registered before any route of the admin listener: a route registered earlier never passes its boot check'
       );
+    }
+
+    // Every admin route authorizes, so none runs without a request ceiling:
+    // a listener that registered the server's rate limit (Redis-backed,
+    // realm-keyed) before this stage keeps it; one that did not gets this
+    // stage's own, in memory, for every route registered after it.
+    if (!fastify.hasDecorator('rateLimit')) {
+      const ceiling = options.rateLimit ?? DEFAULT_ADMIN_RATE_LIMIT;
+      await fastify.register(rateLimit, {
+        global: true,
+        max: ceiling.max,
+        timeWindow: ceiling.timeWindow,
+      });
     }
 
     fastify.decorateRequest('adminOperation', undefined);

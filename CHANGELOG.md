@@ -904,6 +904,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`bodyDigest`), which cannot be frozen.
   - The stage requires an `authorize(request, classification)` option and calls
     it on every request right after classifying.
+  - Every admin route runs under a request ceiling: a listener that registers
+    the server's rate limit before the stage keeps it, and one that does not
+    gets the stage's own (`@fastify/rate-limit`, 100 requests a minute by
+    default, the `rateLimit` option).
   - The reserved table adds realm roles and groups and their role mappings,
     credentials an admin sets for an account (password, passkey, other
     credential), and rotating a client's secret or registration access token.

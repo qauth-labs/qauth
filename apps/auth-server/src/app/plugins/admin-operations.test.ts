@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -87,6 +88,52 @@ async function listener(
   await app.register(async (scope) => routes(scope));
   return app;
 }
+
+describe('request ceiling', () => {
+  it('limits a listener that has no rate limit of its own', async () => {
+    app = Fastify({ logger: false });
+    await app.register(adminOperationsPlugin, {
+      registry: REGISTRY,
+      authorize: ALLOW,
+      rateLimit: { max: 2, timeWindow: 60_000 },
+    });
+    expect(app.hasDecorator('rateLimit')).toBe(true);
+    await app.register(async (scope) => {
+      scope.get(
+        '/admin/v1-rc.0/widgets',
+        { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
+        async () => ({})
+      );
+    });
+    await app.ready();
+    const statuses: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      statuses.push(
+        (await app.inject({ method: 'GET', url: '/admin/v1-rc.0/widgets' })).statusCode
+      );
+    }
+    expect(statuses.slice(0, 2)).not.toContain(429);
+    expect(statuses[2]).toBe(429);
+  });
+
+  it("keeps a listener's own rate limit and registers none of its own", async () => {
+    app = Fastify({ logger: false });
+    await app.register(rateLimit, { global: true, max: 1, timeWindow: 60_000 });
+    await app.register(adminOperationsPlugin, { registry: REGISTRY, authorize: ALLOW });
+    await app.register(async (scope) => {
+      scope.get(
+        '/admin/v1-rc.0/widgets',
+        { config: { operation: 'widgets.get' }, schema: schemaOf(READ_OPERATION) },
+        async () => ({})
+      );
+    });
+    await app.ready();
+    await app.inject({ method: 'GET', url: '/admin/v1-rc.0/widgets' });
+    expect((await app.inject({ method: 'GET', url: '/admin/v1-rc.0/widgets' })).statusCode).toBe(
+      429
+    );
+  });
+});
 
 /** `listener(routes)` and `ready()`, as one promise for `rejects`. */
 const boot = (routes: (instance: FastifyInstance) => void) =>
