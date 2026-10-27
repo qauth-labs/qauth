@@ -82,8 +82,12 @@ describe('the route-to-role check', () => {
 });
 
 describe('what each role loads (the boot-time list)', () => {
-  /** The repositories no process builds: nothing reads them. */
-  const UNUSED: readonly RepositoryName[] = ['auditLogs'];
+  /**
+   * The repositories no process builds: nothing reads them. Custom admin
+   * roles are read only through the grants until the admin API's role routes
+   * ship (#679).
+   */
+  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles'];
 
   it('builds every repository but the unused ones in a single process', () => {
     expect(repositoriesFor(SERVICE_ROLE_NAMES)).toEqual(

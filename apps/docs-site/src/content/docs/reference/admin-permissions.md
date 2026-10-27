@@ -49,6 +49,12 @@ extension ([API conventions](/reference/api-conventions/#openapi)). An operation
 decides whether it is a security operation, such as a policy patch, names a write permission and
 a security permission, and a request that touches both needs both.
 
+The caller's roles come from its admin grants, which name a role and a realm, or every realm. They
+are read from the database on every request, never from the token, so a revoked grant counts from
+the next request ([Admin authority](/reference/api-conventions/#admin-authority)). The token
+endpoint already applies the scope side: it issues an admin scope only to an account whose live
+grants reach that scope's class, through a client that lists the admin API's audience.
+
 ## Permissions
 
 | Permission                 | Class    | Scope                  | Resource          | Description                                                                                                                     |
@@ -76,7 +82,10 @@ role reaches a security operation through `qauth:admin:write`.
 - Built-in roles are defined in code, by class, and cannot be edited. A permission added to the
   catalog joins every built-in role of its class.
 - A custom role lists permission ids from the table above. An unknown id is refused, and so is a
-  retired one.
+  retired one. Its name is lower-case ASCII words joined by single hyphens, such as
+  `realm-auditor`, and never reads as a built-in role's name.
+- A custom role is defined in one realm, and granted only to that realm's accounts or for that
+  realm. Disabling it takes its permissions from every grant at the next request.
 - Admin roles are not the realm's application roles, which reach tokens as claims
   ([ADR-020](/reference/records/adr/020-ui-surfaces-and-acceptance-criteria/), fork D).
 

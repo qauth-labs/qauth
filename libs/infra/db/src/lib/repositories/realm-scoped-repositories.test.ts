@@ -3,6 +3,8 @@ import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../db';
+import { createAdminGrantsRepository } from './admin-grants.repository';
+import { createAdminRolesRepository } from './admin-roles.repository';
 import { createApiKeysRepository } from './api-keys.repository';
 import { createAuthorizationCodesRepository } from './authorization-codes.repository';
 import { createEmailVerificationTokensRepository } from './email-verification-tokens.repository';
@@ -66,6 +68,19 @@ export function requiredRealmArgument(db: DbClient): void {
   const verificationTokens = createEmailVerificationTokensRepository(db);
   const sessions = createSessionsRepository(db);
   const walletRequests = createOid4vpRequestStatesRepository(db);
+  const adminGrants = createAdminGrantsRepository(db);
+  const adminRoles = createAdminRolesRepository(db);
+
+  // @ts-expect-error an admin grant is looked up in a realm (#489, #510)
+  void adminGrants.findById(ID);
+  // @ts-expect-error an account's admin grants are those a realm sees (#489, #510)
+  void adminGrants.listByUser(ID);
+  // @ts-expect-error an account's admin grants are those a realm sees (#489, #510)
+  void adminGrants.listLive(ID);
+  // @ts-expect-error an admin grant is revoked in a realm (#489, #510)
+  void adminGrants.revoke(ID);
+  // @ts-expect-error an admin role is looked up in a realm (#510)
+  void adminRoles.findById(ID);
 
   // @ts-expect-error a user id is looked up in a realm (#489)
   void users.findById(ID);
@@ -144,6 +159,12 @@ export function requiredRealmArgument(db: DbClient): void {
 type RealmScopedCall = readonly [name: string, call: (db: DbClient) => Promise<unknown>];
 
 const CALLS: readonly RealmScopedCall[] = [
+  ['adminGrants.findById', (db) => createAdminGrantsRepository(db).findById(REALM_ID, ID)],
+  ['adminGrants.listByUser', (db) => createAdminGrantsRepository(db).listByUser(REALM_ID, ID)],
+  ['adminGrants.listLive', (db) => createAdminGrantsRepository(db).listLive(REALM_ID, ID)],
+  ['adminGrants.revoke', (db) => createAdminGrantsRepository(db).revoke(REALM_ID, ID)],
+  ['adminRoles.findById', (db) => createAdminRolesRepository(db).findById(REALM_ID, ID)],
+  ['adminRoles.listByRealm', (db) => createAdminRolesRepository(db).listByRealm(REALM_ID)],
   ['users.findById', (db) => createUsersRepository(db).findById(REALM_ID, ID)],
   ['users.findByIdOrThrow', (db) => createUsersRepository(db).findByIdOrThrow(REALM_ID, ID)],
   ['users.update', (db) => createUsersRepository(db).update(REALM_ID, ID, { firstName: 'x' })],
@@ -252,5 +273,25 @@ describe('realm-scoped repository methods (#489)', () => {
       );
       expect(filters, query.text).toContain(REALM_ID);
     }
+  });
+});
+
+describe('adminGrants.revoke (#489, #510)', () => {
+  it("revokes only from the realm of the grant's account, never from the realm it covers", async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createAdminGrantsRepository(db).revoke(REALM_ID, ID);
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0].text).not.toContain('"target_realm_id" =');
+    expect(queries[0].text).toMatch(/"users"\."realm_id" = \$\d+/);
+  });
+
+  it('reads from the realm a grant covers too', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createAdminGrantsRepository(db).findById(REALM_ID, ID);
+
+    expect(queries[0].text).toContain('"target_realm_id" =');
   });
 });

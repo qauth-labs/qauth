@@ -207,7 +207,7 @@ export async function bootDefaultRealm(
     let realm = await provisionIssuer(deps.realms, tx, settings, identity);
 
     if (!realm.isOperator && !(await deps.realms.findOperator(tx))) {
-      realm = await deps.realms.update(realm.id, { isOperator: true }, tx);
+      realm = await deps.realms.setOperator(realm.id, true, tx);
     }
 
     const endpointHostsAdded = await addEndpointHosts(deps.realms, tx, realm, settings);

@@ -284,6 +284,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     roles: ['api'],
     plugins: ['dpop', 'egress', 'jwt', 'password', 'pkce'],
     repositories: [
+      'adminGrants',
       'authorizationCodes',
       'events',
       'oauthClients',

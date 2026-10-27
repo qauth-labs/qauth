@@ -224,6 +224,22 @@ sign-out, minting a code and redeeming one wait until the runner commits, on
 nodes of either version. Codes live five minutes and the purge job deletes
 expired ones, so the table is usually small and the pause short.
 
+### Admin scopes and the admin audience need an admin grant
+
+From this release the token endpoint issues a `qauth:admin:*` scope only to an
+account that holds an admin grant reaching that scope's class, through a client
+that lists the admin API's audience, and the admin audience only to an account
+that holds an admin grant ([#510](https://github.com/qauth-labs/qauth/issues/510)).
+A `client_credentials` token gets neither, and neither do the ID-JAG grants or a
+delegated token from token exchange. Migration 0043 adds the empty
+`admin_grants` and `admin_roles` tables. Their foreign keys briefly lock
+`realms` and then `users` against writes (reads go on), so a realm or account
+change waits for the runner's commit. No admin route ships in this release,
+so nothing that works today stops working; before you use the admin API, give
+each account that will use it a grant. During a rolling upgrade a node of the
+previous release still issues those scopes without the check, which reaches no
+route either.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

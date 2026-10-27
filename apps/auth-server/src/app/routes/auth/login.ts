@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { withoutAdminAudience } from '../../helpers/admin-scopes';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
@@ -174,7 +175,9 @@ export default async function (fastify: FastifyInstance) {
         const accessToken = await issueAccessToken(fastify, {
           sub: user.id,
           clientId: systemClient.clientId,
-          aud: resolveAudience(systemClient),
+          // Never the admin API's audience: this sign-in checks no admin
+          // grant (#510), whatever the system client's row lists.
+          aud: withoutAdminAudience(resolveAudience(systemClient), systemClient.clientId),
         });
 
         // Generate refresh token using JWT plugin

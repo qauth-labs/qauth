@@ -116,6 +116,26 @@ const REALM = testRealm({ id: 'realm-1', name: 'default' });
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
 
+/** A live admin grant of a built-in role on every realm, as `adminGrants.listLive` lists it (#510). */
+function liveBuiltInGrant(role: string) {
+  return {
+    grant: {
+      id: `grant-${role}`,
+      userId: 'granted-user',
+      builtInRole: role,
+      roleId: null,
+      targetRealmId: null,
+      createdBy: null,
+      createdAt: 0,
+      revokedAt: null,
+      lastSecurityChangeAt: 0,
+    },
+    role: null,
+  };
+}
+
+const ADMIN_API_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+
 /** The `data` of every event of the given type the route emitted. */
 function emittedData(type: string): unknown[] {
   return emitUserEventMock.mock.calls.filter(([, t]) => t === type).map(([, , data]) => data);
@@ -228,6 +248,15 @@ function createFastifyStub() {
         // Deny-by-default: no stored consent means no refresh token on the
         // authorization_code grant, so those tests opt IN by overriding this.
         findActive: vi.fn().mockResolvedValue(undefined),
+      },
+      // The admin issuance gate (#510) reads these only when a token would
+      // carry a `qauth:` scope or the admin audience. Deny-by-default: no
+      // live grant, so the tests of that gate opt IN by overriding them.
+      realms: {
+        findById: vi.fn().mockResolvedValue({ id: 'realm-1', isOperator: true }),
+      },
+      adminGrants: {
+        listLive: vi.fn().mockResolvedValue([]),
       },
     },
     passwordHasher: {
@@ -343,6 +372,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
   describe('a QAuth API audience (#509)', () => {
     const ADMIN_AUDIENCE = 'urn:qauth:aud:admin:v1-rc.0';
+    const ACCOUNT_AUDIENCE = 'urn:qauth:aud:account:v1-rc.0';
 
     async function issue(client: Record<string, unknown>, resource?: string[]) {
       const { fastify, ctx } = createFastifyStub();
@@ -375,13 +405,34 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     it('maps the resource value to the audience of a client that lists it', async () => {
       const { fastify, result } = await issue(
-        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
-        [ADMIN_AUDIENCE]
+        { clientId: 'family-client', audience: [ACCOUNT_AUDIENCE, 'https://api.example.com'] },
+        [ACCOUNT_AUDIENCE]
       );
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
-        expect.objectContaining({ aud: ADMIN_AUDIENCE })
+        expect.objectContaining({ aud: ACCOUNT_AUDIENCE })
       );
+    });
+
+    // Admin grants belong to accounts, and a client_credentials token names
+    // none (#510): the admin audience is refused even to a client that lists
+    // it, asked for or in its default, and nothing reads a grant.
+    it.each([
+      ['asked for with resource', [ADMIN_AUDIENCE]],
+      ['in the default audience', undefined],
+    ])('refuses the admin audience %s', async (_label, resource) => {
+      const { fastify, result } = await issue(
+        { clientId: 'family-client', audience: [ADMIN_AUDIENCE, 'https://api.example.com'] },
+        resource
+      );
+      await expect(result).rejects.toThrow(InvalidTargetError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        expect.objectContaining({
+          error: 'invalid_target',
+          reason: 'admin_audience_without_grant',
+        }),
+      ]);
     });
 
     it('never falls back to a client id in the reserved namespace', async () => {
@@ -395,11 +446,11 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     it("keeps a listed family audience in the client's default audience", async () => {
       const { fastify, result } = await issue({
         clientId: 'family-client',
-        audience: [ADMIN_AUDIENCE, 'https://api.example.com'],
+        audience: [ACCOUNT_AUDIENCE, 'https://api.example.com'],
       });
       await expect(result).resolves.toMatchObject({ access_token: 'signed.jwt.token' });
       expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
-        expect.objectContaining({ aud: [ADMIN_AUDIENCE, 'https://api.example.com'] })
+        expect.objectContaining({ aud: [ACCOUNT_AUDIENCE, 'https://api.example.com'] })
       );
     });
 
@@ -4630,6 +4681,60 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     });
   });
 
+  // #510: an admin acts as itself, never through an exchanged token. The
+  // delegated token gets no admin scope and no admin audience, whatever grants
+  // the user holds, whatever the agent lists and whatever the subject token
+  // carried: decided as for a token that names no account, as jwt-bearer does.
+  describe('admin scopes and the admin audience (#510)', () => {
+    const SUBJECT_SCOPE = 'read:docs qauth:admin:read qauth:admin:write';
+
+    function grants(fastify: FastifyInstance, ...roles: string[]) {
+      (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue(
+        roles.map(liveBuiltInGrant)
+      );
+    }
+
+    it.each([
+      ['a viewer grant, an agent that lists the admin audience', ['viewer'], true],
+      ['an editor grant, an agent that lists it', ['editor'], true],
+      ['an editor grant, an agent that does not list it', ['editor'], false],
+      ['no grant', [], true],
+    ] as const)('with %s, issues no admin scope', async (_label, roles, listsAdmin) => {
+      const { fastify, ctx, client } = setupExchangeStub({ subjectScope: SUBJECT_SCOPE });
+      if (listsAdmin) client.audience = [ADMIN_API_AUDIENCE] as never;
+      grants(fastify, ...roles);
+      const result = (await invoke(fastify, ctx, exchangeRequest())) as Record<string, unknown>;
+      expect(result['scope']).toBe('read:docs');
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'read:docs' })
+      );
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+    });
+
+    it('refuses the admin audience, with a live grant too', async () => {
+      for (const roles of [[], ['viewer']]) {
+        emitUserEventMock.mockClear();
+        const { fastify, ctx, client } = setupExchangeStub({
+          subjectAud: ADMIN_API_AUDIENCE,
+          subjectScope: SUBJECT_SCOPE,
+        });
+        client.audience = [ADMIN_API_AUDIENCE] as never;
+        grants(fastify, ...roles);
+        await expect(
+          invoke(fastify, ctx, exchangeRequest({ audience: [ADMIN_API_AUDIENCE] }))
+        ).rejects.toThrow(InvalidTargetError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          expect.objectContaining({
+            error: 'invalid_target',
+            reason: 'admin_audience_without_grant',
+          }),
+        ]);
+      }
+    });
+  });
+
   it('rejects a resource/audience outside the subject token audience (invalid_target)', async () => {
     const { fastify, ctx } = setupExchangeStub({ subjectAud: 'https://api.example.com/v1' });
     await expect(
@@ -5091,6 +5196,54 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     // `issued_token_type`.
     expect(result).not.toHaveProperty('refresh_token');
     expect(result).not.toHaveProperty('issued_token_type');
+  });
+
+  // #510: an admin token comes only from a sign-in at QAuth itself, never
+  // from another identity provider's assertion, whatever grants the user holds.
+  it('never issues an admin scope, whatever the grants (#510)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({
+      scopes: ['chat.read', 'qauth:admin:read', 'qauth:admin:write'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
+      liveBuiltInGrant('viewer'),
+    ]);
+
+    const result = (await invoke(
+      fastify,
+      ctx,
+      bearerRequest(
+        await signIdJag(idpKey, { scope: 'chat.read qauth:admin:read qauth:admin:write' })
+      )
+    )) as Record<string, unknown>;
+    expect(result['scope']).toBe('chat.read');
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'chat.read', aud: MCP_SERVER })
+    );
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+  });
+
+  it('refuses the admin audience, whatever the grants (#510)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({
+      idJagTargets: [ADMIN_API_AUDIENCE],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { scope: 'chat.read', resource: ADMIN_API_AUDIENCE }))
+      )
+    ).rejects.toThrow(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toContainEqual(
+      expect.objectContaining({ error: 'invalid_target', reason: 'admin_audience_without_grant' })
+    );
   });
 
   it('carries the email claims only under the email scope (ANT-2026-2O0T72HY)', async () => {
@@ -5697,6 +5850,53 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(claims).not.toHaveProperty('email');
     // An ID-JAG is NOT an access token: no access token was signed on this path.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  // #510: QAuth's own `qauth:` scopes never go to another authorization
+  // server, whatever grants the user holds.
+  it('never puts a qauth: scope in an assertion, whatever the grants (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'chat.read qauth:admin:read qauth:admin:security',
+      scopes: ['chat.read', 'qauth:admin:read', 'qauth:admin:security'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
+      liveBuiltInGrant('security-admin'),
+    ]);
+
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+    expect(result['scope']).toBe('chat.read');
+    expect(decodeJwt(result['access_token'] as string)['scope']).toBe('chat.read');
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assertion that would carry only qauth: scopes (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'qauth:admin:read',
+      scopes: ['qauth:admin:read'],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toThrow(InvalidScopeError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_scope', reason: 'admin_scope_without_grant' }),
+    ]);
+  });
+
+  it('refuses an assertion for the admin audience to a user with no live grant (#510)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({
+      idJagTargets: [ADMIN_API_AUDIENCE, MCP_SERVER],
+      audience: [ADMIN_API_AUDIENCE],
+    });
+
+    await expect(
+      invoke(fastify, ctx, mintRequest({ audience: [ADMIN_API_AUDIENCE] }))
+    ).rejects.toThrow(InvalidTargetError);
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_target', reason: 'admin_audience_without_grant' }),
+    ]);
   });
 
   it("caps the assertion at the subject token's remaining lifetime (never outlives its authority)", async () => {

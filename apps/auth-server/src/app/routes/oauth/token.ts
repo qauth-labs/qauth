@@ -20,6 +20,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
+import { adminIssuance } from '../../helpers/admin-issuance';
 import { actDepth, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
   authenticateClientRequest,
@@ -735,6 +736,48 @@ async function assertReservedAudiencesListed(
 }
 
 /**
+ * Apply the admin issuance rule (#510, `helpers/admin-issuance.ts`) to the
+ * token a grant is about to issue, and return the scopes to issue.
+ *
+ * - A `qauth:` scope is withheld unless it is an admin scope, the client lists
+ *   the admin API's audience, and the account holds a live admin grant with a
+ *   permission of its class. The token is issued without it (RFC 6749 §3.3).
+ *   When that leaves no scope of the ones asked for, the request is refused,
+ *   `invalid_scope`: a response with no `scope` would read as the scope asked
+ *   for.
+ * - The admin audience is refused, RFC 8707 §2 `invalid_target`, for a token
+ *   whose account holds no live admin grant, or that names no account.
+ *
+ * Every grant calls it after {@link assertReservedAudiencesListed}, before it
+ * issues anything or spends its grant: a refused code, refresh token or
+ * subject token is left as it was, as that gate leaves it. Grants are read now,
+ * so a revoked grant stops reaching tokens at the next issuance.
+ */
+async function issuableScopes(
+  ctx: HandlerContext<{ grant_type: string }>,
+  issuance: { userId: string | null; scopes: readonly string[]; aud: string | readonly string[] },
+  /** The user a refusal's event names; the grant's user even when it is decided for none. */
+  eventUserId: string | null = issuance.userId
+): Promise<string[]> {
+  const decision = await adminIssuance(ctx.fastify, {
+    client: ctx.client,
+    realmId: ctx.realmId,
+    ...issuance,
+  });
+  if (decision.audienceRefused) {
+    await emitRequestFailed(ctx, 'invalid_target', 'admin_audience_without_grant', eventUserId);
+    throw new InvalidTargetError(
+      'the admin API audience is issued only to an account that holds an admin grant'
+    );
+  }
+  if (decision.scopes.length === 0 && decision.withheld.length > 0) {
+    await emitRequestFailed(ctx, 'invalid_scope', 'admin_scope_without_grant', eventUserId);
+    throw new InvalidScopeError(`${decision.withheld.join(' ')} not issued to this account`);
+  }
+  return decision.scopes;
+}
+
+/**
  * Handle the authorization_code grant (legacy flow from Phase 1).
  * Now also issues `aud` + `scope` claims on the access token.
  */
@@ -955,8 +998,16 @@ async function handleAuthorizationCode(
   // Not burned on a refusal, like a `resource` outside the binding: the client
   // may redeem the code again with a `resource` that names no such audience.
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  // The code's scopes, without the admin scopes the account holds no grant
+  // for (#510). The refresh token keeps the code's scopes: every refresh
+  // applies the rule again.
+  const issuedScopes = await issuableScopes(ctx, {
+    userId: user.id,
+    scopes: authCode.scopes,
+    aud,
+  });
 
-  const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
+  const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
   // BREAKING (#229, ADR-002): ONE trust-ordered resolution shared by the
   // access token AND the ID token, so the two can never disagree about the
@@ -966,7 +1017,7 @@ async function handleAuthorizationCode(
   // BREAKING (#259, then ANT-2026-2O0T72HY): released only under the `email`
   // scope, in BOTH tokens. The access token is a JWT the client reads in the
   // same response as the ID token, so gating only the ID token gated nothing.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, authCode.scopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
   // Spend the code and store the refresh token it buys in ONE transaction, so
   // the grant is never observable in between: code already used, refresh
@@ -1074,7 +1125,7 @@ async function handleAuthorizationCode(
       TOKEN_ISSUED,
       {
         grantType: body.grant_type,
-        scopes: authCode.scopes,
+        scopes: issuedScopes,
         audience: audToArray(aud),
         ...(effectiveResource.length > 0 ? { resources: effectiveResource } : {}),
         expiresIn: accessTokenExpiresIn,
@@ -1145,8 +1196,6 @@ async function handleClientCredentials(
     throw new InvalidScopeError('client_credentials grant requires at least one scope');
   }
 
-  const scopeString = grantedScopes.join(' ');
-
   // RFC 8707 §2.2: machine clients MAY include `resource` to scope the
   // minted token to a specific resource server, but only WITHIN the
   // client's pre-configured audience allowlist. Without this check, a
@@ -1170,6 +1219,10 @@ async function handleClientCredentials(
 
   const aud = resolveAudience(client, requestedResource);
   await assertReservedAudiencesListed(ctx, aud);
+  // The token names no account, and admin grants belong to accounts (#510):
+  // no admin scope, and no admin audience.
+  const issuedScopes = await issuableScopes(ctx, { userId: null, scopes: grantedScopes, aud });
+  const scopeString = issuedScopes.join(' ');
   const accessToken = await issueAccessToken(fastify, {
     sub: client.clientId,
     clientId: client.clientId,
@@ -1184,13 +1237,13 @@ async function handleClientCredentials(
   // so the event has no subject and its actor is the client. Only an agent
   // client (fail-closed `isAgentClient`) has its effective scope mode
   // recorded; an ordinary machine client records none.
-  const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(grantedScopes) : null;
+  const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(issuedScopes) : null;
   await emitUserEvent(
     request,
     TOKEN_ISSUED,
     {
       grantType: body.grant_type,
-      scopes: grantedScopes,
+      scopes: issuedScopes,
       audience: audToArray(aud),
       ...(requestedResource.length > 0 ? { resources: requestedResource } : {}),
       expiresIn: accessTokenExpiresIn,
@@ -1458,12 +1511,16 @@ async function handleRefreshToken(
   // A QAuth API audience only when a `resource` named it (#509).
   const aud = resolveUserGrantAudience(client, effectiveResource);
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  // Without the admin scopes the account holds no live grant for now (#510).
+  // The rotated refresh token keeps `grantedScopes`, so a grant given again
+  // reaches the next refresh.
+  const issuedScopes = await issuableScopes(ctx, { userId: user.id, scopes: grantedScopes, aud });
 
-  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+  const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
   // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
   // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, grantedScopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
   const accessToken = await fastify.db.transaction(async (tx) => {
     const revoked = await fastify.repositories.refreshTokens.revokeIfActive(
@@ -1516,7 +1573,7 @@ async function handleRefreshToken(
       TOKEN_ISSUED,
       {
         grantType: body.grant_type,
-        scopes: grantedScopes,
+        scopes: issuedScopes,
         audience: audToArray(aud),
         ...(effectiveResource.length > 0 ? { resources: effectiveResource } : {}),
         expiresIn: accessTokenExpiresIn,
@@ -1906,9 +1963,19 @@ async function handleTokenExchange(
     throw new InvalidRequestError('delegation chain exceeds the maximum depth');
   }
 
-  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
   const aud = arrayToAud(effectiveAudience);
+  // The agent itself must list a QAuth API audience (#509). An admin acts as
+  // itself, never through an exchanged token (ADR-019 Decision 7, #510): the
+  // admin scopes and audience are decided as for a token that names no
+  // account, as the jwt-bearer grant decides them, whatever grants the user
+  // holds and whatever the subject token carried.
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  const issuedScopes = await issuableScopes(
+    ctx,
+    { userId: null, scopes: grantedScopes, aud },
+    user.id
+  );
+  const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
   // Clamp lifespan so the delegated token NEVER outlives the subject token's
   // authority (and so it cannot be re-exchanged to extend it indefinitely).
@@ -1932,7 +1999,7 @@ async function handleTokenExchange(
   // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
   // under the delegated (narrowed) scope's `email` (ANT-2026-2O0T72HY): an
   // agent learns the address only when the user's grant included it.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, grantedScopes);
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -1953,13 +2020,13 @@ async function handleTokenExchange(
   // its actor the agent, with the minted token's `act` chain as its
   // delegation chain (this agent first). Only public identifiers are
   // recorded; no subject/actor token, secret, or minted token.
-  const scopeMode = highestAgentModeInScopes(grantedScopes);
+  const scopeMode = highestAgentModeInScopes(issuedScopes);
   await emitUserEvent(
     request,
     TOKEN_ISSUED,
     {
       grantType: body.grant_type,
-      scopes: grantedScopes,
+      scopes: issuedScopes,
       audience: effectiveAudience,
       expiresIn: accessTokenExpiresIn,
       issuedTokenType: TOKEN_TYPE_ACCESS_TOKEN,
@@ -2146,7 +2213,28 @@ async function mintIdJagForExchange(args: {
     throw new InvalidRequestError('subject_token has expired');
   }
 
-  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+  // QAuth's own `qauth:` scopes, the admin API's among them, never go to
+  // another authorization server, and the admin API's audience is never the
+  // target of an assertion (#510): decided as for no account.
+  const issuance = await adminIssuance(fastify, {
+    client,
+    realmId,
+    userId: null,
+    scopes: grantedScopes,
+    aud: targetAuthorizationServer,
+  });
+  if (issuance.audienceRefused) {
+    await emitFailure('invalid_target', 'admin_audience_without_grant');
+    throw new InvalidTargetError(
+      'the admin API audience is issued only to an account that holds an admin grant'
+    );
+  }
+  if (issuance.scopes.length === 0 && issuance.withheld.length > 0) {
+    await emitFailure('invalid_scope', 'admin_scope_without_grant');
+    throw new InvalidScopeError(`${issuance.withheld.join(' ')} not issued in an assertion`);
+  }
+  const issuedScopes = issuance.scopes;
+  const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
   const minted = await mintIdJag(requestRealm(request), {
     subject: user.id,
@@ -2159,13 +2247,13 @@ async function mintIdJagForExchange(args: {
 
   // The actor is this agent with the delegation chain the assertion was
   // derived through, though the assertion itself carries no `act` claim.
-  const scopeMode = highestAgentModeInScopes(grantedScopes);
+  const scopeMode = highestAgentModeInScopes(issuedScopes);
   await emitUserEvent(
     request,
     TOKEN_ISSUED,
     {
       grantType: body.grant_type,
-      scopes: grantedScopes,
+      scopes: issuedScopes,
       audience: [targetAuthorizationServer],
       resources: [targetResource],
       expiresIn: minted.expiresIn,
@@ -2376,18 +2464,12 @@ async function handleJwtBearer(
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
-  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
-
   // Access-token lifespan under the environment policy (ADR-008 §5, #197). The
   // token is NOT clamped to the assertion's remaining lifetime: an assertion is
   // a GRANT, like an authorization code, and a grant's short single-use window
   // exists to bound REDEMPTION, not to bound what redemption produces. EMA §5.2
   // shows exactly this (a 300s assertion yielding an 86400s access token).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-
-  // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other
-  // grant: the assertion's scope, narrowed and capped by GATE 5, decides.
-  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, grantedScopes);
 
   // EMA §5.1, the profile's central MUST: the issued access token is
   // audience-restricted to the MCP server the assertion's `resource` claim
@@ -2397,6 +2479,19 @@ async function handleJwtBearer(
   const aud = resolveAudience(client, [assertion.resource]);
   // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  // An admin token comes only from a sign-in at QAuth itself (ADR-019
+  // Decision 7), never from another identity provider's assertion: no admin
+  // scope and no admin audience here, whatever grants the user holds (#510).
+  const issuedScopes = await issuableScopes(
+    ctx,
+    { userId: null, scopes: grantedScopes, aud },
+    user.id
+  );
+  const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
+
+  // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other
+  // grant: the assertion's scope, narrowed and capped by GATE 5, decides.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user, issuedScopes);
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,
@@ -2407,13 +2502,13 @@ async function handleJwtBearer(
     expiresInOverride: accessTokenExpiresIn,
   });
 
-  const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(grantedScopes) : null;
+  const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(issuedScopes) : null;
   await emitUserEvent(
     request,
     TOKEN_ISSUED,
     {
       grantType: body.grant_type,
-      scopes: grantedScopes,
+      scopes: issuedScopes,
       audience: audToArray(aud),
       resources: [assertion.resource],
       expiresIn: accessTokenExpiresIn,

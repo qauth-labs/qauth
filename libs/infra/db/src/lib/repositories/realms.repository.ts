@@ -26,10 +26,12 @@ export type NewRealm = InferInsertModel<typeof realms>;
 /**
  * Fields a realm update may change. The passkey RP ID columns are left out on
  * purpose (#467, #553): `setWebAuthnRpId` writes the RP ID, refusing it once
- * the realm is locked, and only `lockRpIdForEnrolment` writes the lock.
+ * the realm is locked, and only `lockRpIdForEnrolment` writes the lock. The
+ * operator flag is left out too (#510): the realm rule of admin grants rests
+ * on it, and only `setOperator` writes it.
  */
 export type UpdateRealm = Partial<
-  Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId' | 'webauthnRpIdLockedAt'>
+  Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId' | 'webauthnRpIdLockedAt' | 'isOperator'>
 > & {
   updatedAt?: number;
 };
@@ -103,6 +105,14 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * NULL, is the caller's to refuse.
    */
   findByHost(host: string, tx?: DbClient): Promise<RealmWithHost | undefined>;
+
+  /**
+   * Find the realm whose issuer is exactly `issuer` (#510): the realm a
+   * token's `iss` names. Exact match: issuers are stored without a trailing
+   * slash, so `https://auth.example.com/` names no realm. The realm comes back
+   * as stored: a disabled realm is the caller's to refuse.
+   */
+  findByIssuer(issuer: string, tx?: DbClient): Promise<Realm | undefined>;
 
   /**
    * Whether one of `values` is the issuer of a realm other than `realmId`:
@@ -182,6 +192,19 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * @throws NotFoundError if the realm does not exist
    */
   setWebAuthnRpId(realmId: string, rpId: string | null, tx?: DbClient): Promise<Realm>;
+
+  /**
+   * Set or clear the realm's operator flag (ADR-019 Decision 7, #510): the
+   * only writer of `is_operator` after a realm's creation, since the realm
+   * rule of admin grants rests on it. The default realm's boot step marks the
+   * operator realm when there is none; moving the flag clears it on one realm
+   * and sets it on another, in one transaction.
+   *
+   * @throws NotFoundError if the realm does not exist
+   * @throws UniqueConstraintError if another realm is the operator realm
+   *   (`idx_realms_one_operator`)
+   */
+  setOperator(realmId: string, isOperator: boolean, tx?: DbClient): Promise<Realm>;
 
   /**
    * Lock the realm's passkey RP ID for an enrolment, and return the RP ID to
@@ -473,6 +496,13 @@ export function createRealmsRepository(
       return row;
     },
 
+    async findByIssuer(issuer: string, tx?: DbClient): Promise<Realm | undefined> {
+      if (typeof issuer !== 'string' || issuer.length === 0) return undefined;
+      const invoker = tx ?? defaultDb;
+      const [realm] = await invoker.select().from(realms).where(eq(realms.issuer, issuer)).limit(1);
+      return realm;
+    },
+
     async anotherRealmHasIssuer(
       realmId: string,
       values: readonly string[],
@@ -581,6 +611,28 @@ export function createRealmsRepository(
         .where(eq(realms.isOperator, true))
         .limit(1);
       return realm;
+    },
+
+    async setOperator(realmId: string, isOperator: boolean, tx?: DbClient): Promise<Realm> {
+      try {
+        const [realm] = await (tx ?? defaultDb)
+          .update(realms)
+          .set({ isOperator, updatedAt: Date.now() })
+          .where(eq(realms.id, realmId))
+          .returning();
+        if (!realm) {
+          throw new NotFoundError('Realm', realmId);
+        }
+        return realm;
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          throw new UniqueConstraintError(
+            extractConstraintName(error) || 'idx_realms_one_operator',
+            error
+          );
+        }
+        throw error;
+      }
     },
 
     async setWebAuthnRpId(realmId: string, rpId: string | null, tx?: DbClient): Promise<Realm> {
@@ -707,9 +759,8 @@ export function createRealmsRepository(
      * @throws UniqueConstraintError if realm name or issuer would violate uniqueness
      *
      * `issuer` may be set where it is NULL. Changing a set issuer fails in the
-     * database (trigger `realms_issuer_permanent`, SQLSTATE 23514), and so
-     * does a second realm with `isOperator: true` (`idx_realms_one_operator`,
-     * a {@link UniqueConstraintError}).
+     * database (trigger `realms_issuer_permanent`, SQLSTATE 23514). The
+     * operator flag is `setOperator`'s to write.
      */
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       assertEventRetention(data);
