@@ -13,6 +13,7 @@ export {
   loadEgressAllowlist,
   parseEgressAllowlist,
 } from './lib/allowlist';
+export { hostForLog } from './lib/destination';
 export {
   createEgressClient,
   createTestEgressClient,

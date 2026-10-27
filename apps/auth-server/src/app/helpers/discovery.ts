@@ -9,6 +9,7 @@
  */
 
 import type { BuiltServerItemId, ExperimentalItem } from '@qauth-labs/shared-stability';
+import { isReservedQauthScope } from '@qauth-labs/shared-validation';
 
 import {
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
@@ -40,7 +41,10 @@ export const DEFAULT_SCOPES_SUPPORTED: readonly string[] = [
 export interface DiscoveryMetadataInput {
   /** `iss` value; also used as the base URL for well-known endpoints. */
   issuer: string;
-  /** Supported scopes list; defaults to {@link DEFAULT_SCOPES_SUPPORTED}. */
+  /**
+   * Supported scopes list; defaults to {@link DEFAULT_SCOPES_SUPPORTED}. A
+   * scope in the reserved `qauth:` namespace is never advertised (#507).
+   */
   scopesSupported?: readonly string[];
   /**
    * Whether the server accepts Client ID Metadata Documents (CIMD) —
@@ -221,7 +225,14 @@ export function buildAuthorizationServerMetadata(
     token_endpoint_auth_signing_alg_values_supported: [...ASSERTION_SIGNING_ALG_VALUES_SUPPORTED],
     introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
     revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-    scopes_supported: Array.from(input.scopesSupported ?? DEFAULT_SCOPES_SUPPORTED),
+    // QAuth's own scopes are never advertised (#507, ADR-019 Decision 7): the
+    // admin API's belong to clients the operator provisions, and a client that
+    // discovers them from here would only ask for what it can never be
+    // granted. Any scope in the reserved `qauth:` namespace is dropped,
+    // whatever list the caller passes.
+    scopes_supported: Array.from(input.scopesSupported ?? DEFAULT_SCOPES_SUPPORTED).filter(
+      (scope) => !isReservedQauthScope(scope)
+    ),
     // Public subject identifiers — no pairwise salts today.
     subject_types_supported: ['public'],
     // #309: reflects the keys actually configured/published. `['EdDSA']` by
@@ -339,13 +350,15 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
  * through `new URL(...)`, which would case-fold the authority, elide default
  * ports and rewrite percent-encoding.
  *
- * This is the shared choke point for #282: `/oauth/authorize` derives the
- * RFC 9207 `iss` response parameter from the SAME function over the SAME
- * source (`fastify.jwtUtils.getIssuer()`), so the redirect value is
- * byte-identical to the advertised `issuer`. Clients compare the two by simple
- * string comparison (RFC 9207 §2.4, RFC 3986 §6.2.1) and MUST NOT normalise
- * before comparing — a one-character divergence is a failed authorization, so
- * this must stay the only place the issuer string is shaped.
+ * This is the shared choke point for #282. A realm's issuer is stored in this
+ * form (the default realm's boot step shapes `JWT_ISSUER` with it, and a CHECK
+ * refuses a trailing slash), and `/oauth/authorize` echoes that stored value
+ * as the RFC 9207 `iss` response parameter (`realmIssuer`,
+ * `helpers/realm-url.ts`, #490), so the redirect value is byte-identical to
+ * the advertised `issuer`. Clients compare the two by simple string comparison
+ * (RFC 9207 §2.4, RFC 3986 §6.2.1) and MUST NOT normalise before comparing — a
+ * one-character divergence is a failed authorization, so this must stay the
+ * only place the issuer string is shaped.
  */
 export function resolveIssuerIdentifier(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;

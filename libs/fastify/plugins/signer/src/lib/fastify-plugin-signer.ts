@@ -59,6 +59,11 @@ export const signerPlugin = fp<SignerPluginOptions>(
       env: options.kekEnv,
       warn: ({ variable, message }) => fastify.log.warn({ variable }, message),
     });
+    // A provider may keep a backend session alive, such as a Vault token it
+    // renews: release it with the server.
+    fastify.addHook('onClose', async () => {
+      await kekProvider.close?.();
+    });
 
     if (options.realmKeysBoot !== undefined) {
       const settings = options.realmKeysBoot;

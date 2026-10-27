@@ -307,9 +307,10 @@ does an issuer sign with?_. Configuring a key grants no trust, and allowlisting
 an issuer with no configured key can never verify anything — both directions fail
 closed.
 
-The `response_uri` is derived from `JWT_ISSUER`, so it is always the same origin
-the server publishes as its issuer identifier. So is the `request_uri` base, for
-the same reason.
+The `response_uri` is built on the issuer of the realm the sign-in page was
+served for, so it is always the same origin that realm publishes as its issuer
+identifier. So are the `request_uri` and the same-device return URI, for the same
+reason. No request header decides any of them.
 
 The three `OID4VP_VERIFIER_*` variables are a FOURTH question, and the only one
 pointing outward: _how does QAuth prove who IT is to a wallet?_ Each has a

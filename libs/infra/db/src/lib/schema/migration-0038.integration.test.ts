@@ -26,7 +26,7 @@ import {
   type StartedPostgres,
   startPostgresContainer,
 } from '@qauth-labs/shared-testing';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const MIGRATION_IDX = 38;
@@ -324,4 +324,94 @@ describe('migration 0038 — refresh-token family start (seed-then-migrate)', ()
       db().query(`UPDATE realms SET sso_idle_timeout = 0 WHERE name = 'idle-half-hour'`)
     ).rejects.toThrow(/realms_sso_idle_timeout_positive/);
   });
+
+  /** Wait until `count` sessions of the database are waiting on a lock. */
+  async function lockWaits(count: number): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const { rows } = await db().query<{ waiting: number }>(
+        `SELECT count(*)::int AS waiting FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock'`
+      );
+      if ((rows[0]?.waiting ?? 0) >= count) return;
+      if (Date.now() > deadline) throw new Error(`fewer than ${count} sessions wait on a lock`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // A redemption, on either release, spends its code in authorization_codes
+  // and then inserts its refresh token. Here the migration waits behind a
+  // transaction that holds refresh_tokens (a rotation in flight), and a
+  // redemption arrives while it waits. Had the migration taken refresh_tokens
+  // first and authorization_codes only for its ADD COLUMN, the two would wait
+  // on each other once the rotation committed, and PostgreSQL would abort one
+  // of them as a deadlock (40P01), the migration included.
+  it('does not deadlock with a redemption that arrives while it waits for refresh_tokens', async () => {
+    if (!container) throw new Error('no container');
+    const owner = await seedOwner();
+    const {
+      rows: [code],
+    } = await db().query<{ id: string }>(
+      `INSERT INTO authorization_codes
+         (code, oauth_client_id, user_id, redirect_uri, code_challenge, expires_at)
+       VALUES ('code-1', $1, $2, 'https://app.example.com/cb', 'challenge', $3) RETURNING id`,
+      [owner.clientId, owner.userId, Date.now() + 60_000]
+    );
+    const rotation = new Client({ connectionString: container.connectionString });
+    const redemption = new Client({ connectionString: container.connectionString });
+    await rotation.connect();
+    await redemption.connect();
+    try {
+      await rotation.query('BEGIN');
+      await rotation.query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_id, expires_at)
+         VALUES (repeat('r', 64), $1, $2, $3, 1)`,
+        [owner.userId, owner.clientId, FAMILY_A]
+      );
+
+      const migrated = migrate();
+      await lockWaits(1);
+
+      // The previous release's redemption: spend the code, then store the
+      // refresh token it buys, in one transaction. It sets no family start;
+      // the trigger 0038 adds fills it once the migration has committed.
+      const redeemed = (async () => {
+        await redemption.query('BEGIN');
+        await redemption.query(
+          'UPDATE authorization_codes SET used = true, used_at = $2 WHERE id = $1 AND used = false',
+          [code.id, Date.now()]
+        );
+        await redemption.query(
+          `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_id, expires_at)
+           VALUES (repeat('s', 64), $1, $2, $3, 1)`,
+          [owner.userId, owner.clientId, FAMILY_B]
+        );
+        await redemption.query('COMMIT');
+      })();
+      await lockWaits(2);
+
+      await rotation.query('COMMIT');
+
+      const outcomes = await Promise.allSettled([migrated, redeemed]);
+      expect(
+        outcomes.map((outcome) =>
+          outcome.status === 'fulfilled'
+            ? 'committed'
+            : ((outcome.reason as { code?: string }).code ?? String(outcome.reason))
+        )
+      ).toEqual(['committed', 'committed']);
+    } finally {
+      await rotation.end();
+      await redemption.end();
+    }
+
+    const { rows } = await db().query<{ token_hash: string; started: boolean }>(
+      `SELECT left(token_hash, 1) AS token_hash, family_created_at IS NOT NULL AS started
+       FROM refresh_tokens ORDER BY token_hash`
+    );
+    expect(rows).toEqual([
+      { token_hash: 'r', started: true },
+      { token_hash: 's', started: true },
+    ]);
+  }, 60_000);
 });

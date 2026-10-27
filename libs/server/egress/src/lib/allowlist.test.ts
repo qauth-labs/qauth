@@ -115,6 +115,33 @@ describe('parseEgressAllowlist', () => {
       'first address',
     ],
     ['a zone id', { entries: [{ cidr: 'fe80::%eth0/64', realms: ['r'] }] }, 'IPv4 or IPv6'],
+    ['an IPv4 range wider than /8', { entries: [{ cidr: '10.0.0.0/7', realms: ['r'] }] }, '/8'],
+    ['every IPv4 address', { entries: [{ cidr: '0.0.0.0/0', realms: ['r'] }] }, '/8'],
+    ['an IPv6 range wider than /32', { entries: [{ cidr: 'fd00::/8', realms: ['r'] }] }, '/32'],
+    [
+      'the IPv4-mapped range',
+      { entries: [{ cidr: '::ffff:0:0/96', realms: ['r'] }] },
+      'IPv4-mapped',
+    ],
+    [
+      'a range inside the IPv4-mapped range',
+      { entries: [{ cidr: '::ffff:a00:0/104', realms: ['r'] }] },
+      'IPv4-mapped',
+    ],
+    ['the NAT64 range', { entries: [{ cidr: '64:ff9b::/96', realms: ['r'] }] }, 'NAT64'],
+    [
+      'a range that holds the NAT64 range',
+      { entries: [{ cidr: '64:ff9b::/32', realms: ['r'] }] },
+      'NAT64',
+    ],
+    [
+      'the local-use NAT64 range',
+      { entries: [{ cidr: '64:ff9b:1::/48', realms: ['r'] }] },
+      'NAT64',
+    ],
+    ['a 6to4 range', { entries: [{ cidr: '2002:a00::/32', realms: ['r'] }] }, '6to4'],
+    ['the Teredo range', { entries: [{ cidr: '2001::/32', realms: ['r'] }] }, 'Teredo'],
+    ['a range inside Teredo', { entries: [{ cidr: '2001:0:a00::/48', realms: ['r'] }] }, 'Teredo'],
     [
       'a note that is not a string',
       { entries: [{ host: 'a.example', realms: ['r'], note: 1 }] },
@@ -223,14 +250,18 @@ describe('allowlistPermit', () => {
   });
 
   it('never matches an IPv4 range with an IPv6 address or the reverse', () => {
-    const wide = allowlistPermit(
+    const permit = allowlistPermit(
       parse([
-        { cidr: '0.0.0.0/0', realms: ['r'] },
-        { cidr: 'fd00::/8', realms: ['v6'] },
+        { cidr: '10.0.0.0/8', realms: ['r'] },
+        { cidr: 'a00::/32', realms: ['v6'] },
       ]),
       'r'
     );
-    expect(wide?.('h', '10.0.0.1')).toBe(true);
-    expect(wide?.('h', 'fd00::1')).toBe(false);
+    expect(permit?.('h', '10.0.0.1')).toBe(true);
+    // The same leading bytes in an IPv6 address are not the IPv4 range.
+    expect(permit?.('h', 'a00::1')).toBe(false);
+    expect(
+      allowlistPermit(parse([{ cidr: 'a00::/32', realms: ['r'] }]), 'r')?.('h', '10.0.0.1')
+    ).toBe(false);
   });
 });

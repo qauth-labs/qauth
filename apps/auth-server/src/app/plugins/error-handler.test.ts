@@ -132,6 +132,16 @@ async function buildApp(): Promise<FastifyInstance> {
   app.get('/auth/misdirected', async () => {
     throw new MisdirectedRequestError({ host: 'unknown.example' });
   });
+  app.get('/admin/v1-rc.0/scoped', async () => {
+    throw new ForbiddenError('The access token lacks a scope this operation needs', {
+      requiredScope: ['qauth:admin:read', 'qauth:admin:write'],
+    });
+  });
+  app.get('/admin/v1-rc.0/scoped-odd', async () => {
+    throw new ForbiddenError('The access token lacks a scope this operation needs', {
+      requiredScope: ['account:read', 'bad"scope', 'bad\\scope'],
+    });
+  });
   app.get('/auth/shed', async () => {
     throw new TemporarilyUnavailableError(3, { reason: 'argon2_queue_full' });
   });
@@ -142,7 +152,9 @@ async function buildApp(): Promise<FastifyInstance> {
     throw new ForbiddenError('No.');
   });
   app.get('/admin/v1-rc.0/needs-scope', async () => {
-    throw new ForbiddenError('This operation needs admin:read.', { requiredScope: 'admin:read' });
+    throw new ForbiddenError('This operation needs qauth:admin:read.', {
+      requiredScope: 'qauth:admin:read',
+    });
   });
   app.get('/auth/credentials', async () => {
     throw new InvalidCredentialsError();
@@ -223,7 +235,10 @@ function bodyOf(response: { json: () => unknown }): Record<string, unknown> {
   return response.json() as Record<string, unknown>;
 }
 
-describe('error-handler plugin (#513)', () => {
+// The first test pays for loading Fastify and the plugin: half a second alone,
+// but more than Vitest's 5 s default while every project's suite runs at once
+// (`nx run-many -t test --all`).
+describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
   describe('the problem formatter, the default', () => {
     it('answers application/problem+json with type, title, status, instance, code and trace_id', async () => {
       const app = await buildApp();
@@ -441,6 +456,45 @@ describe('error-handler plugin (#513)', () => {
       await app.close();
     });
 
+    it('answers a 403 that needs several scopes with forbidden and a challenge naming them all (#509)', async () => {
+      const app = await buildApp();
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/admin/v1-rc.0/scoped',
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      expect(response.json()).toMatchObject({
+        type: 'https://docs.qauth.dev/reference/problem-types/#forbidden',
+        status: 403,
+        code: 'forbidden',
+      });
+      expect(response.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="qauth:admin:read qauth:admin:write"'
+      );
+
+      await app.close();
+    });
+
+    it('leaves a scope outside the scope-token grammar out of the challenge', async () => {
+      const app = await buildApp();
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/admin/v1-rc.0/scoped-odd',
+        headers: { authorization: 'Bearer a.b.c' },
+      });
+
+      expect(response.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="insufficient_scope", scope="account:read"'
+      );
+
+      await app.close();
+    });
+
     it('puts weak-password feedback in errors[] under /password', async () => {
       const app = await buildApp();
 
@@ -501,7 +555,7 @@ describe('error-handler plugin (#513)', () => {
         expect(response.statusCode).toBe(403);
         expect(bodyOf(response)['code']).toBe('forbidden');
         expect(response.headers['www-authenticate']).toBe(
-          'Bearer realm="OAuth", error="insufficient_scope", scope="admin:read"'
+          'Bearer realm="OAuth", error="insufficient_scope", scope="qauth:admin:read"'
         );
 
         await app.close();

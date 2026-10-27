@@ -986,7 +986,7 @@ export default async function (fastify: FastifyInstance) {
       let invocationUri: string;
       try {
         const realm = requestRealm(request);
-        const invocation = await buildWalletLoginInvocation(fastify, capability);
+        const invocation = await buildWalletLoginInvocation(fastify, capability, realm);
 
         await fastify.repositories.oid4vpRequestStates.create({
           realmId: realm.id,

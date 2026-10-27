@@ -18,7 +18,7 @@ import {
   type RedeemedOid4vpRequestState,
   resolveVerifierProfile,
 } from '@qauth-labs/fastify-plugin-federation';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { JWK } from 'jose';
 
@@ -26,6 +26,7 @@ import { env } from '../../../config/env';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
 import { unprotectOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 import { provisionedVerifierMaterial } from '../../helpers/verifier-identity';
 import {
@@ -146,7 +147,8 @@ import {
  * query value when a browser brings it back (`config/logger.ts`).
  *
  * The `redirect_uri` is `<issuer>/ui/wallet-login/return?response_code=<code>`,
- * built from `JWT_ISSUER` by `buildWalletLoginReturnUri` — never from `Host`.
+ * built from the request realm's issuer by `buildWalletLoginReturnUri` — never
+ * from `Host` (#490).
  * It carries NOTHING browser-derived: no flow handle, no cookie, no session,
  * no IP, nothing from the row beyond the code itself. That is not a gap but
  * the posture: this endpoint cannot name a browser, and the wallet it answers
@@ -429,7 +431,7 @@ export default async function (fastify: FastifyInstance) {
           return reply
             .header('Cache-Control', 'no-store')
             .code(200)
-            .send(transportAcknowledgement(redeemed.sameDevice, code));
+            .send(transportAcknowledgement(request, redeemed.sameDevice, code));
         }
 
         if (parameters.vpToken === undefined) {
@@ -501,7 +503,7 @@ export default async function (fastify: FastifyInstance) {
         return reply
           .header('Cache-Control', 'no-store')
           .code(200)
-          .send(transportAcknowledgement(redeemed.sameDevice, code));
+          .send(transportAcknowledgement(request, redeemed.sameDevice, code));
       } catch (error) {
         if (error instanceof Oid4vpTransportRejection) {
           // The detailed reason stays here. The wire gets one fixed sentence.
@@ -546,16 +548,26 @@ type RedeemedRequestStateRow = NonNullable<
  * applicable" and §13.3's step 6 note says the wallet simply stops.
  *
  * The `redirect_uri` is built by `buildWalletLoginReturnUri` from the issuer
- * identifier, so this function contributes nothing of its own to the URL —
- * in particular nothing from the row, the request or the caller. The code is
- * the only variable part, by construction.
+ * of the realm the wallet posted to (#490), which is the realm the
+ * `response_uri` it was handed names, so this function contributes nothing of
+ * its own to the URL — in particular nothing from the row or the request's
+ * headers. The code is the only variable part, by construction. The redeemed
+ * row's realm is not yet compared with the request's: a state is found by its
+ * digest alone until lookups take the realm (#489). A code posted to another
+ * realm's host lands there, where the flow's browser holds no binder cookie,
+ * so the flow cannot finish.
  *
+ * @param request - the wallet's request, for the realm it was resolved to.
  * @param sameDevice - the redeemed row's `sameDevice` column, as returned.
  * @param code - the Response Code minted before the redemption that returned
  *   the row; its digest is already on that row.
  */
-function transportAcknowledgement(sameDevice: boolean, code: string): Oid4vpDirectPostResponse {
-  return sameDevice ? { redirect_uri: buildWalletLoginReturnUri(code) } : {};
+function transportAcknowledgement(
+  request: FastifyRequest,
+  sameDevice: boolean,
+  code: string
+): Oid4vpDirectPostResponse {
+  return sameDevice ? { redirect_uri: buildWalletLoginReturnUri(requestRealm(request), code) } : {};
 }
 
 /**

@@ -210,7 +210,7 @@ export function addressKind(ip: string): AddressKind {
 
 /**
  * True when `ip` is a public unicast address the egress client may dial: not
- * loopback, private, shared, link-local (the cloud metadata address included),
+ * loopback, private, shared, link-local (the cloud metadata endpoints included),
  * unique-local, multicast, unspecified, reserved or documentation, and not an
  * IPv6 form that carries such an IPv4 address (mapped, NAT64, 6to4).
  */
@@ -218,23 +218,44 @@ export function isPublicUnicastAddress(ip: string): boolean {
   return addressKind(ip) === 'public';
 }
 
-/** The cloud metadata address over IPv4, `169.254.169.254`. */
-const METADATA_IPV4 = [169, 254, 169, 254];
-/** The cloud metadata address over IPv6, `fd00:ec2::254`. */
-const METADATA_IPV6 = [0xfd, 0, 0x0e, 0xc2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x54];
+/** A range of cloud metadata endpoints: the address bytes and the prefix length. */
+interface MetadataRange {
+  readonly prefix: readonly number[];
+  readonly bits: number;
+}
 
 /**
- * True when `ip` is the cloud metadata address, `169.254.169.254` or
- * `fd00:ec2::254`, in any text form, an IPv6 form that carries the IPv4 one
- * included. No allowlist entry makes it reachable.
+ * The cloud metadata endpoints over IPv4: `169.254.169.254`, the link-local
+ * `169.254.170.0/24` that container credential endpoints use, and
+ * `100.100.100.200` in the shared address space.
+ */
+const METADATA_IPV4: readonly MetadataRange[] = [
+  { prefix: [169, 254, 169, 254], bits: 32 },
+  { prefix: [169, 254, 170, 0], bits: 24 },
+  { prefix: [100, 100, 100, 200], bits: 32 },
+];
+/** The cloud metadata endpoints over IPv6: `fd00:ec2::/32`, `fd00:ec2::254` among them. */
+const METADATA_IPV6: readonly MetadataRange[] = [{ prefix: [0xfd, 0, 0x0e, 0xc2], bits: 32 }];
+
+/** True when `bytes` falls in one of `ranges`. */
+function inMetadataRange(bytes: readonly number[], ranges: readonly MetadataRange[]): boolean {
+  return ranges.some((range) => inRange(bytes, range.prefix, range.bits));
+}
+
+/**
+ * True when `ip` is a cloud metadata endpoint, in any text form, an IPv6 form
+ * that carries an IPv4 one included: `169.254.169.254`, `169.254.170.0/24`,
+ * `100.100.100.200` and `fd00:ec2::/32`. No allowlist entry makes one
+ * reachable.
  */
 export function isCloudMetadataAddress(ip: string): boolean {
-  const same = (a: readonly number[], b: readonly number[]) =>
-    a.length === b.length && a.every((byte, i) => byte === b[i]);
   const v4 = parseIpv4(ip);
-  if (v4 !== null) return same(v4, METADATA_IPV4);
+  if (v4 !== null) return inMetadataRange(v4, METADATA_IPV4);
   const v6 = parseIpv6(ip);
   if (v6 === null) return false;
   const embedded = embeddedIpv4(v6);
-  return same(v6, METADATA_IPV6) || (embedded !== null && same(embedded, METADATA_IPV4));
+  return (
+    inMetadataRange(v6, METADATA_IPV6) ||
+    (embedded !== null && inMetadataRange(embedded, METADATA_IPV4))
+  );
 }

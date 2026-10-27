@@ -827,6 +827,13 @@ describe('the deployment allowlist', () => {
       get('https://169.254.169.254/', { source: 'operator', realm: 'acme' }, listed())
     );
     expect(literal).toMatchObject({ reason: 'address', outcome: 'blocked' });
+
+    // The container credential range sits inside the listed 169.254.0.0/16 too.
+    const credentials = await refusal(
+      get('https://169.254.170.2/', { source: 'operator', realm: 'acme' }, listed())
+    );
+    expect(credentials).toMatchObject({ reason: 'address', outcome: 'blocked' });
+    expect(net.dialled).toEqual([]);
   });
 
   it('opens loopback through a range that lists it, never through a host entry', async () => {

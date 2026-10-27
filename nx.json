@@ -59,6 +59,8 @@
         "libs/shared/stability/*",
         "libs/shared/testing/*",
         "libs/shared/test-vectors/*",
+        "libs/shared/interaction-contract/*",
+        "libs/shared/interaction-client/*",
         "libs/server/jwt/*",
         "libs/server/pkce/*",
         "libs/server/federation/*",
@@ -78,7 +80,8 @@
         "libs/fastify/plugins/egress/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
-        "libs/keys/aws-kms/*"
+        "libs/keys/aws-kms/*",
+        "libs/keys/vault/*"
       ]
     },
     {
@@ -100,6 +103,8 @@
         "libs/shared/stability/*",
         "libs/shared/testing/*",
         "libs/shared/test-vectors/*",
+        "libs/shared/interaction-contract/*",
+        "libs/shared/interaction-client/*",
         "libs/server/jwt/*",
         "libs/server/pkce/*",
         "libs/server/federation/*",
@@ -119,7 +124,8 @@
         "libs/fastify/plugins/egress/*",
         "libs/core/crypto/*",
         "libs/core/crypto-native/*",
-        "libs/keys/aws-kms/*"
+        "libs/keys/aws-kms/*",
+        "libs/keys/vault/*"
       ],
       "options": {
         "compiler": "tsgo",

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/recovery_code.json",
+  "title": "urn:qauth:ia:recovery_code:v1-rc.0",
+  "description": "A recovery code stands in for a second factor after the first, or for the passkey of a passkey-only account. Only the hosted pages redeem one; the FiPA endpoint answers `redirect_to_web` for that path. It adds no `amr` value and never `mfa`, so a policy that needs a second factor makes the person bind a new one before the transaction completes (ADR-017 Decisions 4 and 8). Works without JavaScript.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:recovery_code:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:recovery_code:v1-rc.0",
+      "params": {},
+      "answer": {
+        "recovery_code": "k7qd-2mvw-x4ra-p6tn"
+      },
+      "personal": {
+        "identifier": "alice@example.com"
+      },
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "recovery_code": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 39,
+          "pattern": "^[A-Za-z0-9 -]+$",
+          "description": "The code as the person typed it. The server ignores case, spaces and dashes before comparing."
+        }
+      },
+      "required": [
+        "recovery_code"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "recovery_code": "k7qd-2mvw-x4ra-p6tn"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "description": "Who the transaction is for, so the screen can show it with a way to switch accounts. Absent until the transaction has an identifier.",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 254,
+          "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+          "x-qauth-display": "account",
+          "description": "The identifier of the account this transaction is for. Before a first factor succeeds it is the identifier exactly as the person gave it, after the one normalisation every input gets, whether or not an account holds it, so it tells nothing about which accounts exist; the form the account holds appears only after authentication. Personal data: only the personal-data read returns it."
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "identifier": "alice@example.com"
+        }
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "invalid_credentials"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

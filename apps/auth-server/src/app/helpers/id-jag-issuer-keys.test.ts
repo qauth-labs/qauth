@@ -581,6 +581,67 @@ describe('createIdJagIssuerKeyResolver — negative cache (#433)', () => {
     expect(redis.keys()).toContain(FAILED_KEY);
   });
 
+  it('remembers a refused discovery fetch for the realm alone, for 60 seconds', async () => {
+    egressGet.mockRejectedValue(blockedEgress('resolves to a private address'));
+    const { fastify, redis } = fastifyStub();
+    const resolve = createIdJagIssuerKeyResolver(fastify, 'other');
+    const refusedKey = REDIS_KEYS.ID_JAG_FETCH_REFUSED(ISSUER, 'other');
+
+    await expect(resolve({ issuer: ISSUER, algorithm: 'EdDSA' })).resolves.toBeUndefined();
+    expect(redis.set).toHaveBeenCalledWith(refusedKey, '1', 'EX', 60);
+    expect(redis.keys()).not.toContain(REDIS_KEYS.ID_JAG_FETCH_REFUSED(ISSUER, REALM));
+
+    // A forced refresh is held back too: the name is not resolved again.
+    redis.advance(59);
+    await expect(
+      resolve({ issuer: ISSUER, algorithm: 'EdDSA', forceRefresh: true })
+    ).resolves.toBeUndefined();
+    expect(egressGet).toHaveBeenCalledTimes(1);
+
+    redis.advance(1);
+    await resolve({ issuer: ISSUER, algorithm: 'EdDSA' });
+    expect(egressGet).toHaveBeenCalledTimes(2);
+  });
+
+  // A document one realm fetched through its allowlist entry must not answer
+  // for a realm the allowlist does not open the issuer's address for.
+  it("never answers one realm's discovery from another realm's cached document", async () => {
+    wireHappyPath([await publicJwk()]);
+    const { fastify } = fastifyStub();
+    await expect(
+      createIdJagIssuerKeyResolver(fastify, REALM)({ issuer: ISSUER, algorithm: 'EdDSA' })
+    ).resolves.toBeDefined();
+
+    egressGet.mockReset();
+    egressGet.mockRejectedValue(blockedEgress('resolves to a private address'));
+    await expect(
+      createIdJagIssuerKeyResolver(fastify, 'other')({ issuer: ISSUER, algorithm: 'EdDSA' })
+    ).resolves.toBeUndefined();
+    expect(egressGet).toHaveBeenCalledTimes(1);
+    expect(egressGet).toHaveBeenCalledWith(
+      fastify,
+      DISCOVERY_URL,
+      expect.objectContaining({ source: 'operator', realm: 'other' })
+    );
+  });
+
+  it("logs the host of a failed document fetch, never the remote document's URL", async () => {
+    const secretPath = 'https://keys.example.net/tenant-7f3a/jwks.json?sig=abc';
+    egressGet.mockImplementation(async (_fastify: unknown, url: string) => {
+      if (url === DISCOVERY_URL) return ok({ issuer: ISSUER, jwks_uri: secretPath });
+      return { status: 503, body: '', headers: {} };
+    });
+    const { fastify } = fastifyStub();
+
+    await createIdJagIssuerKeyResolver(fastify, REALM)({ issuer: ISSUER, algorithm: 'EdDSA' });
+
+    expect(fastify.log.debug).toHaveBeenCalledWith(
+      { host: 'keys.example.net', what: 'jwks', status: 503 },
+      'ID-JAG issuer document not 200'
+    );
+    expect(JSON.stringify(fastify.log.debug.mock.calls)).not.toContain('tenant-7f3a');
+  });
+
   it('shares a discovery fetch in flight within one realm only', async () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));

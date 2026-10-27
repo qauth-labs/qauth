@@ -6,6 +6,19 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SignerPluginOptions } from '../types';
 import { signerPlugin } from './fastify-plugin-signer';
 
+/** The loaded KEK provider, given a `close` the tests can watch. */
+const providerClose = vi.hoisted(() => vi.fn());
+vi.mock('@qauth-labs/server-keys/custody', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@qauth-labs/server-keys/custody')>();
+  return {
+    ...actual,
+    loadKekProvider: async (...args: Parameters<typeof actual.loadKekProvider>) => ({
+      ...(await actual.loadKekProvider(...args)),
+      close: providerClose,
+    }),
+  };
+});
+
 /** Registration never reads the database, so a stand-in is enough here. */
 const NO_DB = {} as DbClient;
 const KEK = Buffer.alloc(32, 0xa1).toString('base64');
@@ -28,6 +41,17 @@ describe('signerPlugin', () => {
 
     expect(Object.keys(app.signer).sort()).toEqual([...SIGNER_OPERATIONS].sort());
     await app.close();
+  });
+
+  it('closes the KEK provider when the server closes, and not before', async () => {
+    providerClose.mockClear();
+    const app = Fastify({ logger: false });
+    await app.register(signerPlugin, options());
+    await app.ready();
+
+    expect(providerClose).not.toHaveBeenCalled();
+    await app.close();
+    expect(providerClose).toHaveBeenCalledTimes(1);
   });
 
   it('refuses to start in production without a KEK', async () => {

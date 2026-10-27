@@ -3,7 +3,7 @@ import {
   type JwsAlgorithm,
   type SigningKey,
 } from '@qauth-labs/core-crypto';
-import { type EgressSource, isEgressError } from '@qauth-labs/fastify-plugin-egress';
+import { type EgressSource, hostForLog, isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -76,13 +76,18 @@ import { egressGet } from './egress-get';
  * private address therefore cannot be used from discovery alone; that needs
  * its endpoints in configuration (the upstream provider work, #432 to #435).
  *
- * The caches below are per issuer, not per realm: a document is the same
- * whichever realm fetched it, and the issuer is trusted deployment-wide. The
- * realm decides only whether one realm's discovery fetch may reach a private
- * address, so a discovery fetch the address check refuses is not a failure of
- * the issuer: it is not written to the negative cache, where it would hold the
- * issuer back for a realm the allowlist does open it for, and concurrent
- * discovery fetches are shared only within one realm.
+ * The discovery cache is per issuer and realm: whether a realm's discovery
+ * fetch may reach a private address depends on the deployment allowlist, so a
+ * document one realm fetched through an allowlist entry never answers for a
+ * realm the allowlist does not open it for. The JWK Set cache and the negative
+ * cache are per issuer: the `jwks_uri` is a destination the allowlist never
+ * opens, and a realm reaches it only past its own discovery document. A
+ * discovery fetch the address check refuses is not a failure of the issuer:
+ * it is not written to the negative cache, where it would hold the issuer
+ * back for a realm the allowlist does open it for, but remembered for that
+ * realm alone for {@link REFUSED_FOR_REALM_TTL_SECONDS}, so the realm's
+ * requests stop resolving the name again. Concurrent discovery fetches are
+ * shared only within one realm.
  *
  * ## How often an issuer is dialled
  *
@@ -382,6 +387,29 @@ const fetchesInFlight = new WeakMap<FastifyInstance, Map<string, Promise<unknown
  */
 const REFUSED_FOR_REALM = Symbol('refused for this realm');
 
+/**
+ * How long, in seconds, a realm's refused discovery fetch is remembered
+ * (`ID_JAG_FETCH_REFUSED`): long enough that a burst of requests resolves the
+ * name once, short enough that an allowlist change (a restart) or a DNS change
+ * is picked up soon.
+ */
+const REFUSED_FOR_REALM_TTL_SECONDS = 60;
+
+/** Whether `realm`'s discovery fetch for `issuer` was refused recently. */
+async function fetchRecentlyRefused(
+  fastify: FastifyInstance,
+  issuer: string,
+  realm: string
+): Promise<boolean> {
+  try {
+    return (await fastify.redis.get(REDIS_KEYS.ID_JAG_FETCH_REFUSED(issuer, realm))) !== null;
+  } catch {
+    // As for the negative cache: an unreachable store reads as nothing on
+    // record, and the fetch still goes through the egress client's checks.
+    return false;
+  }
+}
+
 /** A document, `undefined` when the fetch failed, or {@link REFUSED_FOR_REALM}. */
 type Fetched<T> = T | undefined | typeof REFUSED_FOR_REALM;
 
@@ -508,6 +536,9 @@ async function fetchJsonDocument<T>(
   what: 'discovery' | 'jwks',
   destination: { source: EgressSource; realm: string }
 ): Promise<Fetched<T>> {
+  // The host only: a `jwks_uri` is named by a remote document, and its path
+  // and query string are not the server's to log.
+  const host = hostForLog(url);
   let result;
   try {
     result = await egressGet(fastify, url, {
@@ -519,7 +550,7 @@ async function fetchJsonDocument<T>(
     });
   } catch (err) {
     const blocked = isEgressError(err) && err.outcome === 'blocked';
-    fastify.log.debug({ url, what, blocked }, 'ID-JAG issuer document fetch failed');
+    fastify.log.debug({ host, what, blocked }, 'ID-JAG issuer document fetch failed');
     if (blocked && err.reason === 'address' && destination.source === 'operator') {
       return REFUSED_FOR_REALM;
     }
@@ -527,7 +558,7 @@ async function fetchJsonDocument<T>(
   }
 
   if (result.status !== 200) {
-    fastify.log.debug({ url, what, status: result.status }, 'ID-JAG issuer document not 200');
+    fastify.log.debug({ host, what, status: result.status }, 'ID-JAG issuer document not 200');
     return undefined;
   }
 
@@ -535,13 +566,13 @@ async function fetchJsonDocument<T>(
   try {
     json = JSON.parse(result.body);
   } catch {
-    fastify.log.debug({ url, what }, 'ID-JAG issuer document is not valid JSON');
+    fastify.log.debug({ host, what }, 'ID-JAG issuer document is not valid JSON');
     return undefined;
   }
 
   const parsed = schema.safeParse(json);
   if (!parsed.success) {
-    fastify.log.debug({ url, what }, 'ID-JAG issuer document failed schema validation');
+    fastify.log.debug({ host, what }, 'ID-JAG issuer document failed schema validation');
     return undefined;
   }
   return parsed.data;
@@ -567,10 +598,18 @@ async function resolveIssuerMetadata(
   realm: string,
   forceRefresh: boolean
 ): Promise<IssuerMetadata | undefined> {
-  const cacheKey = REDIS_KEYS.ID_JAG_DISCOVERY(issuer);
+  const cacheKey = REDIS_KEYS.ID_JAG_DISCOVERY(issuer, realm);
   if (!forceRefresh) {
     const cached = await readCache(fastify, cacheKey, issuerMetadataSchema);
     if (cached) return cached;
+  }
+
+  if (await fetchRecentlyRefused(fastify, issuer, realm)) {
+    fastify.log.debug(
+      { issuer, realm },
+      'ID-JAG issuer discovery skipped: the address check refused it recently'
+    );
+    return undefined;
   }
 
   // Shared only within the realm: whether the fetch may reach the issuer
@@ -580,7 +619,22 @@ async function resolveIssuerMetadata(
     issuer,
     'discovery',
     `discovery ${issuer} ${realm}`,
-    () => fetchIssuerMetadata(fastify, issuer, realm)
+    async () => {
+      const fetched = await fetchIssuerMetadata(fastify, issuer, realm);
+      if (fetched === REFUSED_FOR_REALM) {
+        try {
+          await fastify.redis.set(
+            REDIS_KEYS.ID_JAG_FETCH_REFUSED(issuer, realm),
+            '1',
+            'EX',
+            REFUSED_FOR_REALM_TTL_SECONDS
+          );
+        } catch {
+          // Best-effort: an unwritten entry only costs the next request a lookup.
+        }
+      }
+      return fetched;
+    }
   );
   if (!metadata) return undefined;
 

@@ -238,6 +238,47 @@ describe('validateAndNormalize', () => {
     expect(n.scopeString).toBeUndefined();
   });
 
+  // #507: a scope in QAuth's `qauth:` namespace is dropped like any scope
+  // outside the allowlist; the registration goes through with the rest.
+  it.each([
+    'qauth:admin:read',
+    'qauth:admin:write',
+    'qauth:admin:security',
+    'qauth:anything',
+    'QAuth:Admin:Security',
+  ])('drops %s and registers the rest', (reserved) => {
+    const n = validateAndNormalize(
+      { redirect_uris: ['https://app.example/cb'], scope: `openid ${reserved} profile` },
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
+    );
+    expect(n.scopes).toEqual(['openid', 'profile']);
+  });
+
+  it('drops a qauth: scope even when the list it is checked against holds one', () => {
+    // The realm allowlist cannot hold one (CHECK and repository), but the list
+    // may come from elsewhere: the namespace is left out regardless.
+    const n = validateAndNormalize(
+      { redirect_uris: ['https://app.example/cb'], scope: 'openid qauth:admin:read' },
+      [...allowedScopes, 'qauth:admin:read'],
+      NO_CUSTOM_SCHEMES
+    );
+    expect(n.scopes).toEqual(['openid']);
+    expect(n.scopeString).toBe('openid');
+  });
+
+  it("treats other servers' admin: scopes as ordinary scopes, kept when the allowlist lists them", () => {
+    const n = validateAndNormalize(
+      {
+        redirect_uris: ['https://app.example/cb'],
+        scope: 'openid admin:org admin:read example:qauth',
+      },
+      [...allowedScopes, 'admin:org'],
+      NO_CUSTOM_SCHEMES
+    );
+    expect(n.scopes).toEqual(['openid', 'admin:org']);
+  });
+
   it('requires redirect_uris for authorization_code grants', () => {
     expect(() =>
       validateAndNormalize(

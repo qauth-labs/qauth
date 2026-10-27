@@ -376,7 +376,8 @@
       "excludeFiles": [
         "libs/server/keys/**",
         "libs/fastify/plugins/signer/**",
-        "libs/keys/aws-kms/**"
+        "libs/keys/aws-kms/**",
+        "libs/keys/vault/**"
       ],
       "rules": {
         // Import and export declarations, `import x = require()` and a dynamic
@@ -474,15 +475,17 @@
     // addresses unless the deployment allowlist opens one for an operator- or
     // admin-set destination, pinned connections, checked redirects, caps.
     // `qauth/no-direct-network` refuses the ways around it in server code: the
-    // global `fetch`, and `request`/`get` of `node:http` and `node:https`.
+    // global `fetch`, the connecting exports of `node:http`, `node:https`,
+    // `node:http2`, `node:net` and `node:tls`, and `undici`.
     //
     // `excludeFiles`: the egress library itself; tests and their fixtures, which
     // stand up and call local servers; and the wallet status-list fetcher,
     // whose operator URI-prefix allowlist predates the egress client and which
-    // moves onto it separately. The signer's KMS adapters (`libs/keys/*`) talk
-    // to their vendor's SDK and are outside `files`. The operator's OpenTelemetry
-    // export goes through the SDK's exporter, outside the egress client by
-    // ADR-019's amendment of 2026-10-24. apps/auth-server/src/app/egress-rule.test.ts
+    // moves onto it separately. The KEK custody adapters (`libs/keys/*`, loaded
+    // by `KEK_PROVIDER`) are outside `files`: their calls to the key service are
+    // outside the egress client by ADR-019's amendment of 2026-10-27. The
+    // operator's OpenTelemetry export goes through the SDK's exporter, outside
+    // the egress client by ADR-019's amendment of 2026-10-24. apps/auth-server/src/app/egress-rule.test.ts
     // lints samples with this block.
     {
       "files": [
@@ -505,6 +508,31 @@
       ],
       "rules": {
         "qauth/no-direct-network": "error"
+      }
+    },
+
+    // URLs from the realm row (ADR-019 Decision 1, #490). No URL is built from
+    // the request: the issuer, every endpoint URL, the links in mail and the
+    // URLs a wallet is handed come from the realm the request was resolved to
+    // (`realmIssuer`, `buildRealmUrl` in helpers/realm-url.ts). The realm
+    // resolver is the one reader of the request's authority, so
+    // `qauth/no-request-authority` refuses `request.host`, `.hostname`,
+    // `.port`, `.protocol`, the `Host` header and every `X-Forwarded-*` name in
+    // the auth server and the libraries it loads. Tests are left out: they send
+    // spoofed hosts on purpose. A rule no other block sets, since a second block
+    // setting a rule replaces its options for the files both match.
+    // apps/auth-server/src/app/request-authority-rule.test.ts lints samples
+    // with this block.
+    {
+      "files": ["apps/auth-server/**", "libs/fastify/**", "libs/server/**"],
+      "excludeFiles": [
+        "apps/auth-server/src/app/plugins/realm-resolver.ts",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/testing/**"
+      ],
+      "rules": {
+        "qauth/no-request-authority": "error"
       }
     },
 

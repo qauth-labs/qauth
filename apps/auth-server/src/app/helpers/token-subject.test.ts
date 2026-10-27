@@ -66,6 +66,7 @@ const REFUSING_MODULES: Readonly<
   'routes/oauth/userinfo.ts': 'inactiveSubjectError',
   'routes/auth/logout.ts': 'inactiveSubjectError',
   'helpers/management-token.ts': 'inactiveSubjectError',
+  'helpers/family-token.ts': 'inactiveSubjectError',
   'routes/oauth/authorize.ts': 'inactiveSubjectError',
   'routes/oauth/token.ts': 'inactiveSubjectTokenError',
 };

@@ -9,8 +9,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * The egress guard of `.oxlintrc.json` (ADR-019 Decision 8, issue #481):
- * server code makes outbound HTTP calls through the egress client, never
- * through the global `fetch` or `request`/`get` of `node:http(s)`.
+ * server code makes outbound calls through the egress client, never through
+ * the global `fetch`, the connecting exports of `node:http(s)`, `node:http2`,
+ * `node:net` and `node:tls`, or `undici`.
  *
  * Oxlint reads only files on disk, so the samples go to a temporary directory
  * laid out like the workspace, next to a configuration holding the guard's
@@ -62,7 +63,8 @@ const SERVER_CODE = [
 
 /**
  * Where the guard does not apply: the egress library, tests and their
- * fixtures, a KMS adapter, and projects that are not server code.
+ * fixtures, a KEK custody adapter (ADR-019 amendment of 2026-10-27), and
+ * projects that are not server code.
  */
 const EXEMPT = [
   'libs/server/egress/src/lib/sample.ts',
@@ -107,6 +109,34 @@ const FORBIDDEN: readonly (readonly [what: string, code: string])[] = [
   ['a re-export of request', "export { request } from 'node:https';\n"],
   ['export * from the module', "export * from 'node:http';\n"],
   ['a dynamic import', "export const load = () => import('node:https');\n"],
+  [
+    'http2.connect on a namespace import',
+    "import * as http2 from 'node:http2';\nexport const open = (url: string) => http2.connect(url);\n",
+  ],
+  [
+    'a named import of connect from net',
+    "import { connect } from 'node:net';\nexport const open = () => connect(443, 'example.com');\n",
+  ],
+  [
+    'createConnection on a require of net',
+    "const net = require('net');\nexport const open = () => net.createConnection(443);\n",
+  ],
+  ['a net Socket', "import net from 'node:net';\nexport const socket = () => new net.Socket();\n"],
+  [
+    'tls.connect on a default import',
+    "import tls from 'node:tls';\nexport const open = () => tls.connect(443, 'example.com');\n",
+  ],
+  ['a destructured require of tls', "const { connect } = require('tls');\nexport { connect };\n"],
+  [
+    'a named import from undici',
+    "import { request } from 'undici';\nexport const send = (url: string) => request(url);\n",
+  ],
+  [
+    'a namespace import of undici',
+    "import * as undici from 'undici';\nexport const send = (url: string) => undici.fetch(url);\n",
+  ],
+  ['a require of undici', "export const send = (url: string) => require('undici').request(url);\n"],
+  ['a dynamic import of undici', "export const load = () => import('undici');\n"],
 ];
 
 const ALLOWED: readonly (readonly [what: string, code: string])[] = [
@@ -125,6 +155,15 @@ const ALLOWED: readonly (readonly [what: string, code: string])[] = [
     "export const send = (egress: { request(r: object): Promise<unknown> }) =>\n  egress.request({ method: 'GET' });\n",
   ],
   ['a re-export of another node:http export', "export { STATUS_CODES } from 'node:http';\n"],
+  ["node:net's address helpers", "import { isIP } from 'node:net';\nexport const ip = isIP;\n"],
+  [
+    'a type import from node:net',
+    "import type { Socket } from 'node:net';\nexport type Connection = Socket;\n",
+  ],
+  [
+    'a type import from undici',
+    "import type { Dispatcher } from 'undici';\nexport type Handler = Dispatcher;\n",
+  ],
   [
     'fetch in a page script string',
     "export const page = '<script>fetch(statusUrl).then(function () {});</script>';\n",

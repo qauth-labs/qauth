@@ -1,4 +1,5 @@
 import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
+import { isReservedQauthScope } from '@qauth-labs/shared-validation';
 
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
@@ -183,7 +184,8 @@ export interface NormalizedRegistrationRequest {
 /**
  * Validate + normalize an incoming RFC 7591 request against realm policy.
  *
- * - Caps requested scopes to the realm's `dynamic_registration_allowed_scopes`.
+ * - Caps requested scopes to the realm's `dynamic_registration_allowed_scopes`,
+ *   and always drops a scope in the reserved `qauth:` namespace (#507).
  * - Enforces grant_type / response_type consistency (authorization_code
  *   requires the `code` response type).
  * - Requires redirect_uris for any user-involving grant.
@@ -192,8 +194,9 @@ export interface NormalizedRegistrationRequest {
  *   authorization_code (public client posture) when not explicitly
  *   declared as confidential.
  *
- * Throws `BadRequestError` with an RFC 7591 error code in the message on
- * any policy violation. Returns a normalized shape ready to persist.
+ * Throws `InvalidClientMetadataError` or `InvalidRedirectUriError` (the
+ * RFC 7591 §3.2.2 code, via `rejectRegistration`) on any policy violation.
+ * Returns a normalized shape ready to persist.
  */
 export function validateAndNormalize(
   body: DynamicClientRegistrationRequest,
@@ -243,11 +246,22 @@ export function validateAndNormalize(
   // break every standards-compliant MCP client. We drop the disallowed
   // scopes and register the permitted subset (empty allowlist → no scopes).
   // De-dupe while preserving request order.
+  //
+  // A scope in QAuth's reserved `qauth:` namespace (#507, ADR-019 Decision 7),
+  // such as an admin API scope, is dropped like any other scope outside the
+  // allowlist: an MCP client that echoes `scopes_supported` still registers.
+  // The allowlist cannot hold one (`realms_dynamic_registration_scopes_not_qauth`),
+  // and the namespace is left out here too, so no list the realm resolves,
+  // the environment's seed included, grants one through open registration.
   let scopes: string[] = [];
   const scopeString = body.scope;
   if (scopeString && scopeString.trim().length > 0) {
     const requested = scopeString.split(/\s+/).filter((s) => s.length > 0);
-    scopes = [...new Set(requested.filter((s) => realmAllowedScopes.includes(s)))];
+    scopes = [
+      ...new Set(
+        requested.filter((s) => realmAllowedScopes.includes(s) && !isReservedQauthScope(s))
+      ),
+    ];
   }
 
   // Auth method gating.

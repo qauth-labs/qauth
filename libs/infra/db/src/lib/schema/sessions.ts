@@ -143,12 +143,13 @@ export const sessions = pgTable(
 
 /**
  * The clients a browser session has served (issue #468): one row per session
- * and client, written the first time the session authorizes that client.
- * Back-channel logout reads it to learn which clients to notify when the
- * session ends.
+ * and client, written the first time the session authorizes that client, in
+ * the transaction that mints the authorization code (issue #549). Back-channel
+ * logout reads it to learn which clients to notify when the session ends.
  *
- * Both foreign keys cascade: deleting the session or the client deletes the
- * row.
+ * Revoking the session deletes its rows in the same transaction (the sessions
+ * repository's `revoke`). Both foreign keys cascade: deleting the session or
+ * the client deletes the row.
  */
 export const sessionClients = pgTable(
   'session_clients',

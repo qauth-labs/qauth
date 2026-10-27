@@ -148,6 +148,157 @@
     "breaks": []
   },
   {
+    "name": "a new variant of a request body's oneOf passes (a new Interaction API step's answer, #590)",
+    "format": "openapi",
+    "basePatch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema",
+        "value": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "small"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "large"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/oneOf/-",
+        "value": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "medium"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "a new $ref variant of a request body's oneOf, inserted mid-list with its discriminator mapping, passes (#590)",
+    "format": "openapi",
+    "basePatch": [
+      {
+        "op": "add",
+        "path": "/components/schemas",
+        "value": {
+          "Small": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "small"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "Large": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "large"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema",
+        "value": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/Small"
+            },
+            {
+              "$ref": "#/components/schemas/Large"
+            }
+          ],
+          "discriminator": {
+            "propertyName": "kind",
+            "mapping": {
+              "small": "#/components/schemas/Small",
+              "large": "#/components/schemas/Large"
+            }
+          }
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/components/schemas/Medium",
+        "value": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "medium"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/oneOf/1",
+        "value": {
+          "$ref": "#/components/schemas/Medium"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/discriminator/mapping/medium",
+        "value": "#/components/schemas/Medium"
+      }
+    ],
+    "breaks": []
+  },
+  {
     "name": "a changed response field type breaks",
     "format": "openapi",
     "patch": [

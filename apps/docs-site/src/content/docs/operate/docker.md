@@ -485,6 +485,7 @@ A CIMD client starts with no scopes, so it is granted none of the scopes it asks
 
 - Write `client_id` exactly as the client sends it: an `https` URL of at most 255 ASCII characters, with a path beyond `/` and no fragment.
 - An entry sets only `scopes` and `audience`. `audience` is the token audience when the client names no `resource`. An empty `scopes` list withdraws the grant.
+- `audience` cannot hold a value in the reserved `urn:qauth:aud:` namespace, such as the developer API's `urn:qauth:aud:developer:v1-rc.0`: a CIMD client never gets an API family audience ([API conventions](/reference/api-conventions/#issuing-a-family-audience)). A `clients` entry may list one, and the token endpoint then issues it to that client.
 - An entry has no secret, so the seed prints none and `--rotate` does not apply. Every run sets the row to the entry's values and leaves the rest of it alone.
 - Until the client's first authorization, its row has no redirect URI. That authorization reads the document and fills the row in, and later re-resolutions never change the grant.
 - The grant is a ceiling: the user still consents, for each resource.
@@ -605,8 +606,10 @@ the operator or a realm admin, for a realm the entry names. A destination that a
 client, an end user or a fetched document supplies (a CIMD `client_id`, a
 client's `jwks_uri`, the `jwks_uri` of an issuer's discovery document) never
 uses the allowlist. The wallet status-list fetch keeps its own URI-prefix
-allowlist for now, and the OpenTelemetry export and a KMS provider's SDK make
-their own connections.
+allowlist for now, and the OpenTelemetry export and a KEK custody adapter
+(`KEK_PROVIDER`) make their own connections: their destinations are
+deployment-wide configuration, outside the egress client by ADR-019's
+amendments of 2026-10-24 and 2026-10-27.
 
 `EGRESS_ALLOWLIST_PATH` names the allowlist, a JSON file the operator writes:
 
@@ -625,14 +628,22 @@ their own connections.
   `192.168.0.0/16`), shared (`100.64.0.0/10`) and unique-local (`fc00::/7`)
   addresses its name resolves to. Loopback, link-local and other special
   ranges open only through a `cidr` entry that names them.
-- The server reads the file once, at boot. A file that cannot be read or does
-  not validate stops the boot, naming the variable, the file and the mistake; a
-  file that group or others can write gives a warning.
+- A `cidr` entry is not tied to a host: any operator or admin destination of
+  the realms it names that resolves into the range is allowed. It may be no
+  wider than `/8` (IPv4) or `/32` (IPv6), and may not overlap a range that
+  reaches other addresses only through translation (IPv4-mapped
+  `::ffff:0:0/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4
+  `2002::/16`, Teredo `2001::/32`).
+- The server reads the file once, at boot. A file that cannot be read, does
+  not validate or others can write stops the boot, naming the variable, the
+  file and the mistake; a file its group can write, or that neither root nor
+  the server's user owns, gives a warning.
 - The list is not in the database, and no API reads or edits it, so a realm
   admin cannot widen it.
-- No entry opens an unspecified (`0.0.0.0`), multicast or cloud metadata
-  (`169.254.169.254`, `fd00:ec2::254`) address, and a redirect to another host
-  never uses the entry that let the first request through.
+- No entry opens an unspecified (`0.0.0.0`) or multicast address, or a cloud
+  metadata endpoint (`169.254.169.254`, `169.254.170.0/24`, `100.100.100.200`,
+  `fd00:ec2::/32`), and a redirect to another host never uses the entry that
+  let the first request through.
 
 With Compose, mount the file read-only and name its path in `.env`:
 

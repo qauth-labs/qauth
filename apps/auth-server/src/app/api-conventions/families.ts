@@ -26,6 +26,25 @@ export const API_FAMILY_PREFIXES: Readonly<Record<ApiFamily, string>> = {
 };
 
 /**
+ * The audience of each family's access tokens (ADR-019 Decision 7, #509). A
+ * family accepts a token whose `aud` holds exactly its own audience and no
+ * other value, so a token for one family never works on another.
+ *
+ * The version is the path's release candidate (ADR-018 §5): the release that
+ * ships 1.0.0 issues `urn:qauth:aud:admin:v1`, and a breaking change before it
+ * raises both together. The token endpoint issues an audience only to a client
+ * whose `audience` lists it, and the client asks for it with the RFC 8707
+ * `resource` parameter, whose value is the audience itself. Each lies in the
+ * reserved `urn:qauth:aud:` namespace (`isReservedAudience` in
+ * `@qauth-labs/shared-validation`).
+ */
+export const API_FAMILY_AUDIENCES: Readonly<Record<ApiFamily, string>> = {
+  admin: 'urn:qauth:aud:admin:v1-rc.0',
+  account: 'urn:qauth:aud:account:v1-rc.0',
+  developer: 'urn:qauth:aud:developer:v1-rc.0',
+};
+
+/**
  * `/<family>/v<major>` or `/<family>/v<major>-rc.<M>` at the start of a path,
  * followed by `/` or the end.
  */

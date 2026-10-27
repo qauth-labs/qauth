@@ -41,6 +41,10 @@ import {
 import type { IdJagIssuerKeyResolver } from './id-jag-issuer-keys';
 
 const AS_ISSUER = 'https://auth.example.com';
+/** The realm the request was resolved to: its issuer is this server's issuer (#490). */
+const REALM = { issuer: AS_ISSUER };
+/** Another realm of the same server, on its own issuer. */
+const REALM_B = { issuer: 'https://b.example.com' };
 const IDP_ISSUER = 'https://idp.example.com';
 const CLIENT_ID = 'mcp-client-1';
 const MCP_SERVER = 'https://mcp.example.com/';
@@ -107,7 +111,7 @@ async function makeAssertion(overrides: AssertionOverrides = {}): Promise<string
     .sign(overrides.key ?? idpPrivateKey);
 }
 
-/** Minimal `fastify` stand-in: jwtUtils.getIssuer + a SET-NX-capable redis. */
+/** Minimal `fastify` stand-in: a SET-NX-capable redis and a logger. */
 function fastifyStub() {
   const store = new Map<string, string>();
   const redis = {
@@ -123,7 +127,6 @@ function fastifyStub() {
     redis,
     fastify: {
       redis,
-      jwtUtils: { getIssuer: () => AS_ISSUER },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
@@ -158,7 +161,7 @@ describe('validateIdJagAssertion — happy path', () => {
     const { fastify } = fastifyStub();
     const assertion = await makeAssertion({ scope: 'chat.read chat.history chat.read' });
 
-    const validated = await validateIdJagAssertion(fastify, {
+    const validated = await validateIdJagAssertion(fastify, REALM, {
       assertion,
       expectedClientId: CLIENT_ID,
       realm: 'master',
@@ -180,7 +183,7 @@ describe('validateIdJagAssertion — happy path', () => {
     // confirms the canonical allowlist entry.
     const assertion = await makeAssertion({ iss: `${IDP_ISSUER}/` });
 
-    const validated = await validateIdJagAssertion(fastify, {
+    const validated = await validateIdJagAssertion(fastify, REALM, {
       assertion,
       expectedClientId: CLIENT_ID,
       realm: 'master',
@@ -198,7 +201,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -213,7 +216,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -228,7 +231,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ iss: 'https://evil.example.com' });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -258,7 +261,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const resolver = trustedResolver();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion: `${header}.${payload}.`,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -287,7 +290,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const resolver = trustedResolver();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -304,7 +307,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ typ: 'at+jwt' });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -321,7 +324,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ key: otherPrivate });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -336,10 +339,33 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ aud: 'https://someone-else.example.com' });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
+        resolver: trustedResolver(),
+      }),
+      'signature_invalid'
+    );
+  });
+
+  it("expects the request realm's issuer as `aud`, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const { fastify } = fastifyStub();
+
+    const validated = await validateIdJagAssertion(fastify, REALM_B, {
+      assertion: await makeAssertion({ aud: REALM_B.issuer }),
+      expectedClientId: CLIENT_ID,
+      realm: 'b',
+      resolver: trustedResolver(),
+    });
+    expect(validated.audience).toBe(REALM_B.issuer);
+
+    // An assertion for another realm of this server is not one for realm B.
+    await expectRejection(
+      validateIdJagAssertion(fastify, REALM_B, {
+        assertion: await makeAssertion({ aud: AS_ISSUER }),
+        expectedClientId: CLIENT_ID,
+        realm: 'b',
         resolver: trustedResolver(),
       }),
       'signature_invalid'
@@ -351,7 +377,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ aud: [AS_ISSUER, 'https://other-as.example.com'] });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -377,7 +403,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -393,7 +419,7 @@ describe('validateIdJagAssertion — deny paths', () => {
       extraClaims: { some_future_spec_member: 'tolerated' },
     });
 
-    const result = await validateIdJagAssertion(fastify, {
+    const result = await validateIdJagAssertion(fastify, REALM, {
       assertion,
       expectedClientId: CLIENT_ID,
       realm: 'master',
@@ -409,7 +435,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ iat: now - 600, exp: now - 500 });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -426,7 +452,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ iat: now, exp: now + 86400 });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -442,7 +468,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ iat: now + 3600, exp: now + 3660 });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -457,7 +483,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ resource: null });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -472,7 +498,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ resource: [MCP_SERVER] });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -487,7 +513,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ jti: 'j'.repeat(256) });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -503,7 +529,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ clientId: 42 });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -517,7 +543,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const { fastify } = fastifyStub();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion: 'not-a-jwt',
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -535,7 +561,7 @@ describe('validateIdJagAssertion — deny paths', () => {
     const assertion = await makeAssertion({ iss: IDP_ISSUER });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -564,7 +590,7 @@ describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
       const assertion = await makeAssertion({ iss: selfIssuer });
 
       await expectRejection(
-        validateIdJagAssertion(fastify, {
+        validateIdJagAssertion(fastify, REALM, {
           assertion,
           expectedClientId: CLIENT_ID,
           realm: 'master',
@@ -582,7 +608,7 @@ describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
     const { fastify } = fastifyStub();
     const serverPublicKey = await importPublicSigningKey(SERVER_KEYS.publicKeyPem, 'EdDSA');
     const resolver = trustEverything(serverPublicKey);
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-1',
       audience: AS_ISSUER,
       resource: MCP_SERVER,
@@ -590,7 +616,7 @@ describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
     });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion: minted.assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -608,7 +634,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     const resolver = trustedResolver();
 
     await expect(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -616,7 +642,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       })
     ).resolves.toBeDefined();
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -636,7 +662,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     const iat = Math.floor(Date.now() / 1000) + skew;
     const assertion = await makeAssertion({ iat, exp: iat + ENV.ID_JAG_MAX_ASSERTION_LIFETIME });
 
-    await validateIdJagAssertion(fastify, {
+    await validateIdJagAssertion(fastify, REALM, {
       assertion,
       expectedClientId: CLIENT_ID,
       realm: 'master',
@@ -657,7 +683,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     // A second client presenting an assertion it does not own must not be able
     // to destroy it: the binding is checked BEFORE the single-use marker.
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: 'some-other-client',
         realm: 'master',
@@ -669,7 +695,7 @@ describe('validateIdJagAssertion — replay protection', () => {
 
     // The rightful client can still redeem it.
     await expect(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -693,7 +719,7 @@ describe('validateIdJagAssertion — replay protection', () => {
 
     // The SAME jti from two different issuers must both be accepted.
     await expect(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion: await makeAssertion({ jti: 'shared-jti' }),
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -701,7 +727,7 @@ describe('validateIdJagAssertion — replay protection', () => {
       })
     ).resolves.toBeDefined();
     await expect(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion: await makeAssertion({
           jti: 'shared-jti',
           iss: secondIssuer,
@@ -716,7 +742,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     expect(store.size).toBe(2);
     // ...and each is still single-use within its own issuer.
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion: await makeAssertion({ jti: 'shared-jti' }),
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -732,7 +758,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     const assertion = await makeAssertion();
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -747,7 +773,7 @@ describe('validateIdJagAssertion — replay protection', () => {
     const assertion = await makeAssertion({ aud: 'https://elsewhere.example.com' });
 
     await expectRejection(
-      validateIdJagAssertion(fastify, {
+      validateIdJagAssertion(fastify, REALM, {
         assertion,
         expectedClientId: CLIENT_ID,
         realm: 'master',
@@ -761,9 +787,7 @@ describe('validateIdJagAssertion — replay protection', () => {
 
 describe('mintIdJag', () => {
   it('mints an assertion with exactly the ID-JAG claim set', async () => {
-    const { fastify } = fastifyStub();
-
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -788,9 +812,7 @@ describe('mintIdJag', () => {
   });
 
   it('omits `scope` entirely when nothing was granted', async () => {
-    const { fastify } = fastifyStub();
-
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -801,9 +823,7 @@ describe('mintIdJag', () => {
   });
 
   it('releases NO identity claims into the foreign trust domain', async () => {
-    const { fastify } = fastifyStub();
-
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -819,9 +839,7 @@ describe('mintIdJag', () => {
 
   it('honours ID_JAG_ISSUED_LIFETIME', async () => {
     ENV.ID_JAG_ISSUED_LIFETIME = 60;
-    const { fastify } = fastifyStub();
-
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -834,9 +852,7 @@ describe('mintIdJag', () => {
   });
 
   it('never outlives the authority it was minted from (maxLifetimeSeconds)', async () => {
-    const { fastify } = fastifyStub();
-
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -850,9 +866,7 @@ describe('mintIdJag', () => {
   });
 
   it('keeps ID_JAG_ISSUED_LIFETIME when the authority lives longer', async () => {
-    const { fastify } = fastifyStub();
-
-    const minted = await mintIdJag(fastify, {
+    const minted = await mintIdJag(REALM, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
@@ -863,18 +877,15 @@ describe('mintIdJag', () => {
     expect(minted.expiresIn).toBe(300);
   });
 
-  it('canonicalises the `iss` it stamps (trailing slash stripped)', async () => {
-    const { fastify } = fastifyStub();
-    fastify.jwtUtils.getIssuer = () => `${AS_ISSUER}/`;
-
-    const minted = await mintIdJag(fastify, {
+  it("stamps the request realm's issuer as `iss`, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const minted = await mintIdJag(REALM_B, {
       subject: 'user-uuid-1',
       audience: 'https://auth.chat.example',
       resource: 'https://mcp.chat.example/',
       clientId: CLIENT_ID,
     });
 
-    expect(decodeJwt(minted.assertion).iss).toBe(AS_ISSUER);
+    expect(decodeJwt(minted.assertion).iss).toBe(REALM_B.issuer);
   });
 });
 
@@ -897,8 +908,7 @@ describe('a minted ID-JAG is never an access token (ADR-011 §3)', () => {
       });
       await app.ready();
       try {
-        const { fastify } = fastifyStub();
-        const minted = await mintIdJag(fastify, {
+        const minted = await mintIdJag(REALM, {
           subject: 'user-1',
           audience: IDP_ISSUER,
           resource: MCP_SERVER,

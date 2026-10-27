@@ -50,6 +50,21 @@ export const REDIS_KEYS = {
    */
   REVOKED_ACCESS_TOKEN: (jti: string) => `revoked-access-token:${jti}`,
   /**
+   * The access tokens issued by redeeming one authorization code (#627): a
+   * hash of `jti` to `exp`, so a second redemption of the code can put them on
+   * the {@link REDIS_KEYS.REVOKED_ACCESS_TOKEN} denylist (OAuth 2.1 §4.1.3).
+   * Expires with the last token in it. The component is the code row's UUID.
+   */
+  CODE_ACCESS_TOKENS: (authorizationCodeId: string) => `code-access-tokens:${authorizationCodeId}`,
+  /**
+   * The access tokens issued in one refresh-token family, at the redemption
+   * that started it and at every rotation (#627): a hash of `jti` to `exp`, so
+   * a replay of the family's code or of one of its refresh tokens can put the
+   * live ones on the denylist. Expires with the last token in it. The
+   * component is the family's UUID.
+   */
+  REFRESH_FAMILY_ACCESS_TOKENS: (familyId: string) => `refresh-family-access-tokens:${familyId}`,
+  /**
    * Set of the hosted browser session ids (`sid`) of one user, so
    * `/auth/logout` can end every session the user holds, not only one whose
    * cookie happens to accompany the request. Expires with the newest session
@@ -117,12 +132,26 @@ export const REDIS_KEYS = {
   ID_JAG_JTI: (issuer: string, jti: string) => `id-jag:jti:${digest(issuer)}:${digest(jti)}`,
   /**
    * Cached OIDC discovery document of an ALLOWLISTED ID-JAG issuer (ADR-011),
-   * keyed by the canonical issuer identifier. Only the two members key
-   * resolution needs (`issuer`, `jwks_uri`) are stored. Best-effort with a
-   * bounded TTL (`ID_JAG_JWKS_CACHE_TTL`) — a miss re-fetches through the
-   * SSRF-guarded path.
+   * keyed by the canonical issuer identifier and the realm that fetched it:
+   * the deployment egress allowlist may open the discovery URL for one realm
+   * and not another (ADR-019 Decision 8), so one realm's document never
+   * answers for another. Only the two members key resolution needs (`issuer`,
+   * `jwks_uri`) are stored. Best-effort with a bounded TTL
+   * (`ID_JAG_JWKS_CACHE_TTL`) — a miss re-fetches through the SSRF-guarded
+   * path.
    */
-  ID_JAG_DISCOVERY: (issuer: string) => `id-jag:discovery:${digest(issuer)}`,
+  ID_JAG_DISCOVERY: (issuer: string, realm: string) =>
+    `id-jag:discovery:${digest(issuer)}:${digest(realm)}`,
+  /**
+   * A realm's discovery fetch for an ID-JAG issuer that the egress address
+   * check refused (#481): the issuer's discovery URL reaches a non-public
+   * address no allowlist entry opens for the realm. Written for a short,
+   * fixed time; while it exists the realm's requests fetch nothing, so they
+   * stop resolving the name again. Per realm, since another realm's
+   * allowlist entry may open the same address.
+   */
+  ID_JAG_FETCH_REFUSED: (issuer: string, realm: string) =>
+    `id-jag:fetch-refused:${digest(issuer)}:${digest(realm)}`,
   /**
    * Cached JWK Set of an ALLOWLISTED ID-JAG issuer, fetched from the `jwks_uri`
    * that issuer's OWN discovery document names — never a URL taken from an

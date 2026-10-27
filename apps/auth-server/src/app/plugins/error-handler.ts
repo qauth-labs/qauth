@@ -205,6 +205,22 @@ function isOAuthTokenError(error: unknown): error is OAuthTokenError {
   );
 }
 
+/** RFC 6749 §3.3 `scope-token`: what one scope of a `scope` challenge parameter may be. */
+const SCOPE_TOKEN = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
+
+/**
+ * The RFC 6750 §3 `scope` parameter of an `insufficient_scope` challenge: the
+ * scopes the request needs, space-separated (#509). A value outside the
+ * scope-token grammar is left out rather than allowed to break the quoted
+ * string; the scopes come from the route, not the caller, so none should be.
+ */
+function challengeScope(scope: string): string {
+  return scope
+    .split(' ')
+    .filter((token) => SCOPE_TOKEN.test(token))
+    .join(' ');
+}
+
 /**
  * Whether the request presented its access token under the `DPoP` scheme
  * (RFC 9449 §7.1), matched exactly as `requireJwt` reads it.
@@ -401,6 +417,7 @@ export function oauthErrorBody(error: FastifyError | Error, status: number): OAu
  * the scope that would lift it (`ForbiddenError`'s `requiredScope`): a client
  * that reads `insufficient_scope` goes back for a wider token, and a refusal no
  * scope can lift, such as the developer client limit, must not send it there.
+ * The `scope` names every scope the refusal lists, space-separated.
  * A request that used the `DPoP` scheme while DPoP is on is answered in that
  * scheme, with the proof algorithms in `algs`.
  */
@@ -413,9 +430,10 @@ function bearerChallenge(
   const parameters: string[] = [];
   if (status === 403) {
     const scope = error instanceof ForbiddenError ? error.requiredScope : undefined;
-    if (scope) {
+    const challenged = scope === undefined ? '' : challengeScope(scope);
+    if (challenged.length > 0) {
       parameters.push('error="insufficient_scope"');
-      parameters.push(`scope="${sanitizeDescription(scope, MAX_CHALLENGE_DESCRIPTION)}"`);
+      parameters.push(`scope="${challenged}"`);
     }
   } else if (presentedCredentials(request) && !(error instanceof MissingAccessTokenError)) {
     parameters.push('error="invalid_token"');

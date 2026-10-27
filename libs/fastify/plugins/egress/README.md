@@ -19,8 +19,9 @@ const res = await fastify.egress.request({
 ```
 
 `EGRESS_ALLOWLIST_PATH` names a JSON file the operator writes. The plugin reads it once, at boot; a
-file that cannot be read or does not validate fails the boot, naming the variable, the file and the
-mistake, and a file that group or others can write gives a warning. The list is not in the
+file that cannot be read, does not validate or others can write fails the boot, naming the variable,
+the file and the mistake. A file its group can write, or that neither root nor the server's user
+owns, gives a warning; both checks read the descriptor the file is read through. The list is not in the
 database and no route reads or edits it, so a realm admin cannot widen it. The file format is in
 the egress library's README.
 

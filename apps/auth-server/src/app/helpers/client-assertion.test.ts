@@ -29,6 +29,8 @@ import {
 } from './client-assertion';
 
 const ISSUER = 'https://auth.example.com';
+/** The realm the request was resolved to, whose issuer is the only audience (#490). */
+const REALM = { id: 'realm-1', issuer: ISSUER };
 const TOKEN_ENDPOINT = `${ISSUER}/oauth/token`;
 const CLIENT_ID = 'pkjwt-client';
 const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
@@ -86,7 +88,6 @@ function fastifyStub(client: ClientRow | null) {
     redis,
     store,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    jwtUtils: { getIssuer: () => ISSUER },
     repositories: {
       oauthClients: {
         findByClientId: vi.fn(async () => client),
@@ -165,9 +166,30 @@ describe('authenticateClientAssertion — accepted', () => {
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
     const assertion = await makeAssertion();
 
-    const client = await authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion));
+    const client = await authenticateClientAssertion(asFastify(stub), REALM, creds(assertion));
 
     expect(client.clientId).toBe(CLIENT_ID);
+  });
+
+  it("takes the audience from the request realm's issuer, not from JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+    const realmB = { id: 'realm-b', issuer: 'https://b.example.com' };
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        realmB,
+        creds(await makeAssertion({ aud: 'https://b.example.com' }))
+      )
+    ).resolves.toMatchObject({ clientId: CLIENT_ID });
+    // An assertion for another realm's issuer is refused at realm B.
+    await expect(
+      authenticateClientAssertion(asFastify(stub), realmB, creds(await makeAssertion()))
+    ).rejects.toBeInstanceOf(InvalidClientError);
+    expect(stub.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-b',
+      CLIENT_ID
+    );
   });
 
   it('accepts a one-element `aud` array that holds the issuer', async () => {
@@ -175,7 +197,7 @@ describe('authenticateClientAssertion — accepted', () => {
     const assertion = await makeAssertion({ aud: [ISSUER] });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).resolves.toMatchObject({ clientId: CLIENT_ID });
   });
 
@@ -184,11 +206,7 @@ describe('authenticateClientAssertion — accepted', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(
-        asFastify(stub),
-        'realm-1',
-        creds(assertion, { clientId: CLIENT_ID })
-      )
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion, { clientId: CLIENT_ID }))
     ).resolves.toMatchObject({ clientId: CLIENT_ID });
   });
 
@@ -205,7 +223,7 @@ describe('authenticateClientAssertion — accepted', () => {
     });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).resolves.toMatchObject({ clientId: CLIENT_ID });
   });
 
@@ -221,7 +239,7 @@ describe('authenticateClientAssertion — accepted', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).resolves.toMatchObject({ clientId: CLIENT_ID });
 
     // A client-supplied URL: never a deployment allowlist destination.
@@ -243,7 +261,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ aud: TOKEN_ENDPOINT });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -252,7 +270,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ aud: [ISSUER, 'https://other.example.com'] });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -261,7 +279,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ aud: [ISSUER, TOKEN_ENDPOINT] });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -270,7 +288,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ aud: 'https://evil.example.com/oauth/token' });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -279,7 +297,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ aud: `${ISSUER}/oauth/introspect` });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -289,7 +307,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ expOffset: -600, iat: null });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -299,7 +317,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ nbf: now + 600, expOffset: 900 });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -309,7 +327,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ iat: now + 600, expOffset: 660 });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -320,7 +338,7 @@ describe('authenticateClientAssertion — rejected', () => {
     });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/lifetime exceeds/) });
   });
 
@@ -329,7 +347,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ iss: CLIENT_ID, sub: 'someone-else' });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/iss and sub/) });
   });
 
@@ -345,7 +363,7 @@ describe('authenticateClientAssertion — rejected', () => {
       .sign(es256.privateKey);
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/iss and sub/) });
   });
 
@@ -356,7 +374,7 @@ describe('authenticateClientAssertion — rejected', () => {
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(assertion, { clientId: 'a-different-client' })
       )
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/does not match/) });
@@ -367,7 +385,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -376,7 +394,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -385,7 +403,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -394,7 +412,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ key: otherKeys.privateKey });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/signature or claims/) });
   });
 
@@ -412,7 +430,7 @@ describe('authenticateClientAssertion — rejected', () => {
     })}.`;
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(unsigned))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(unsigned))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/alg is not permitted/) });
   });
 
@@ -426,7 +444,7 @@ describe('authenticateClientAssertion — rejected', () => {
     });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/alg is not permitted/) });
   });
 
@@ -439,7 +457,7 @@ describe('authenticateClientAssertion — rejected', () => {
     });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/must not carry its own key material/),
     });
@@ -452,7 +470,7 @@ describe('authenticateClientAssertion — rejected', () => {
     });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/must not carry its own key material/),
     });
@@ -463,10 +481,10 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ jti: 'replay-me' });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).resolves.toBeDefined();
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/already been used/) });
   });
 
@@ -485,7 +503,7 @@ describe('authenticateClientAssertion — rejected', () => {
       expOffset: skew + CLIENT_ASSERTION_MAX_LIFETIME_SECONDS,
     });
 
-    await authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion));
+    await authenticateClientAssertion(asFastify(stub), REALM, creds(assertion));
 
     const [, , , ttlSeconds] = stub.redis.set.mock.calls[0];
     const acceptableFor =
@@ -499,7 +517,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion({ jti: null });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -509,7 +527,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/replay protection is unavailable/),
     });
@@ -522,7 +540,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not registered for private_key_jwt/),
     });
@@ -535,7 +553,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not registered for private_key_jwt/),
     });
@@ -548,7 +566,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/mutually exclusive/) });
   });
 
@@ -557,7 +575,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/no registered jwks/) });
   });
 
@@ -571,7 +589,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/jwks_uri fetch blocked/) });
   });
 
@@ -583,7 +601,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/returned 404/) });
   });
 
@@ -593,7 +611,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not a valid public JWK Set/),
     });
@@ -604,7 +622,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await makeAssertion();
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not a valid public JWK Set/),
     });
@@ -624,7 +642,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     const started = performance.now();
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(assertion))
     ).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not a valid public JWK Set/),
     });
@@ -640,7 +658,7 @@ describe('authenticateClientAssertion — rejected', () => {
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(assertion, { assertionType: 'urn:ietf:params:oauth:grant-type:jwt-bearer' })
       )
     ).rejects.toMatchObject({
@@ -652,7 +670,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds('not-a-jwt'))
+      authenticateClientAssertion(asFastify(stub), REALM, creds('not-a-jwt'))
     ).rejects.toThrow(InvalidClientError);
   });
 
@@ -663,12 +681,12 @@ describe('authenticateClientAssertion — rejected', () => {
     const forged = await makeAssertion({ jti: 'shared-jti', key: otherKeys.privateKey });
 
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(forged))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(forged))
     ).rejects.toThrow(InvalidClientError);
 
     const genuine = await makeAssertion({ jti: 'shared-jti' });
     await expect(
-      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(genuine))
+      authenticateClientAssertion(asFastify(stub), REALM, creds(genuine))
     ).resolves.toBeDefined();
   });
 });
@@ -716,7 +734,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(es256.privateKey))
       )
     ).resolves.toMatchObject({ clientId: CIMD_ID });
@@ -732,7 +750,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(es256.privateKey))
       )
     ).resolves.toMatchObject({ clientId: CIMD_ID });
@@ -745,14 +763,14 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(es256.privateKey))
       )
     ).rejects.toThrow(InvalidClientError);
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(otherKeys.privateKey))
       )
     ).resolves.toMatchObject({ clientId: CIMD_ID });
@@ -765,7 +783,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(es256.privateKey))
       )
     ).rejects.toThrow(InvalidClientError);
@@ -779,7 +797,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(es256.privateKey))
       )
     ).rejects.toThrow(InvalidClientError);
@@ -792,7 +810,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
     await expect(
       authenticateClientAssertion(
         asFastify(stub),
-        'realm-1',
+        REALM,
         creds(await cimdAssertion(es256.privateKey))
       )
     ).rejects.toThrow(InvalidClientError);

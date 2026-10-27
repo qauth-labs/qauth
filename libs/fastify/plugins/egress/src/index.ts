@@ -10,5 +10,6 @@ export {
   type EgressRequest,
   type EgressResponse,
   type EgressSource,
+  hostForLog,
   isEgressError,
 } from '@qauth-labs/server-egress';

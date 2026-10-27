@@ -109,8 +109,10 @@ async function buildServer(): Promise<FastifyInstance> {
     // The Bearer path accepts only a user who is still enabled, of this realm.
     users: { findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })) },
   } as never);
+  // A nested `transaction()` is a savepoint of the same transaction.
+  const tx = { transaction: (cb: (inner: unknown) => Promise<unknown>) => cb(tx) };
   fastify.decorate('db', {
-    transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
+    transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx)),
   } as never);
   fastify.decorate('jwtUtils', {
     extractFromHeader: vi.fn().mockReturnValue(null),

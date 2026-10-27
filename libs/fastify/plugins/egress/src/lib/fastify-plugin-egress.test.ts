@@ -6,7 +6,11 @@ import { createTestEgressClient, type EgressClientOptions } from '@qauth-labs/se
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { egressPlugin, type EgressPluginOptions } from './fastify-plugin-egress';
+import {
+  allowlistFileProblems,
+  egressPlugin,
+  type EgressPluginOptions,
+} from './fastify-plugin-egress';
 
 /*
  * The egress plugin (issue #481): it reads EGRESS_ALLOWLIST_PATH once and
@@ -102,13 +106,20 @@ describe('egressPlugin', () => {
     await expect(build({ allowlistPath: file })).rejects.toThrow(message);
   });
 
-  it('warns when group or others can write the file', async () => {
-    const path = allowlistFile('open.json', { entries: [] }, 0o666);
+  it('fails the boot on a file others can write, naming the variable', async () => {
+    const path = allowlistFile('open.json', { entries: [] }, 0o646);
+    const warn = vi.fn();
+    const boot = build({ allowlistPath: path }, warn);
+    await expect(boot).rejects.toThrow(`EGRESS_ALLOWLIST_PATH (${path}): others can write`);
+  });
+
+  it('warns when the group can write the file', async () => {
+    const path = allowlistFile('group.json', { entries: [] }, 0o664);
     const warn = vi.fn();
     await build({ allowlistPath: path }, warn);
     expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ variable: 'EGRESS_ALLOWLIST_PATH', mode: '666' }),
-      expect.stringContaining('group or others can write')
+      expect.objectContaining({ variable: 'EGRESS_ALLOWLIST_PATH', mode: '664' }),
+      expect.stringContaining('its group can write')
     );
   });
 
@@ -152,4 +163,37 @@ describe('egressPlugin', () => {
       }
     }
   );
+});
+
+describe('allowlistFileProblems', () => {
+  const ME = 1000;
+
+  it.each([
+    ['others can write', { mode: 0o100646, uid: ME }],
+    ['everyone can write', { mode: 0o100666, uid: 0 }],
+  ])('refuses a file %s', (_label, stats) => {
+    expect(allowlistFileProblems(stats, ME).refusal).toContain('others can write the file');
+  });
+
+  it.each([
+    ['its group can write', { mode: 0o100664, uid: ME }, ['its group can write']],
+    ['another user owns', { mode: 0o100644, uid: 4242 }, ["neither root nor the server's user"]],
+    [
+      'its group can write and another user owns',
+      { mode: 0o100660, uid: 4242 },
+      ['its group can write', "neither root nor the server's user"],
+    ],
+  ])('warns about a file %s', (_label, stats, expected) => {
+    const { refusal, warnings } = allowlistFileProblems(stats, ME);
+    expect(refusal).toBeUndefined();
+    expect(warnings).toHaveLength(expected.length);
+    expected.forEach((text, i) => expect(warnings[i]).toContain(text));
+  });
+
+  it.each([
+    ['the server user', { mode: 0o100644, uid: ME }],
+    ['root', { mode: 0o100600, uid: 0 }],
+  ])('passes a file owned by %s that only its owner can write', (_label, stats) => {
+    expect(allowlistFileProblems(stats, ME)).toEqual({ refusal: undefined, warnings: [] });
+  });
 });

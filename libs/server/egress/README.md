@@ -119,11 +119,18 @@ those two made.
 - `cidr` is an IPv4 or IPv6 range in its first-address form (`10.20.0.0/16`, not `10.20.0.7/16`).
   Every address of the URL's host must lie in a listed range or be public. An IPv4-mapped IPv6
   address (`::ffff:10.20.0.7`) is judged by its IPv4 address; a NAT64 or 6to4 address is not.
+  A range is not tied to a host: any operator or admin destination of the realms it names that
+  resolves into it is allowed. It may be no wider than `/8` (IPv4) or `/32` (IPv6), and may not
+  overlap a range that reaches other addresses only through translation (IPv4-mapped
+  `::ffff:0:0/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo
+  `2001::/32`).
 - `realms` lists realm names, compared exactly. `note` is the operator's and is not read.
-- An unknown member, an entry with both or neither of `host` and `cidr`, or an entry without realms
-  refuses the whole file, naming where the mistake is.
-- No entry opens an unspecified (`0.0.0.0/8`, `::`), multicast or cloud metadata
-  (`169.254.169.254`, `fd00:ec2::254`, in any IPv6 form that carries it) address.
+- An unknown member, an entry with both or neither of `host` and `cidr`, a range too wide or over a
+  translation range, or an entry without realms refuses the whole file, naming where the mistake
+  is.
+- No entry opens an unspecified (`0.0.0.0/8`, `::`) or multicast address, or a cloud metadata
+  endpoint (`169.254.169.254`, `169.254.170.0/24`, `100.100.100.200`, `fd00:ec2::/32`, in any
+  IPv6 form that carries one).
 - A redirect to another host never uses the entry that let the first request through: its target is
   the remote side's choice, not the operator's. A redirect on the same host does.
 

@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-26'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -13,10 +13,11 @@ contract ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)), s
 before the families' first route. A test enforces them over the generated OpenAPI document
 ([Enforcement](#enforcement)).
 
-The Interaction API (`/interaction/v1-rc.0`) reuses these rules. The OAuth protocol endpoints do
-not: they keep the shapes their specifications define ([Errors](#errors)). The error format of
-[Errors](#errors) is not limited to the families: every route that is not an OAuth protocol
-endpoint answers it.
+The Interaction API (`/interaction/v1-rc.0`) reuses these rules, with the differences its own
+page lists: its problem documents carry no prose, and its steps keep the names of the step grammar
+([Interaction API](/reference/interaction-api/)). The OAuth protocol endpoints do not: they keep
+the shapes their specifications define ([Errors](#errors)). The error format of [Errors](#errors)
+is not limited to the families: every route that is not an OAuth protocol endpoint answers it.
 
 ## The three families
 
@@ -32,9 +33,83 @@ endpoint answers it.
 - Each token carries one audience, and a family accepts only its own. The audience identifiers
   carry a version, as ADR-018 §5 requires for every QAuth-defined identifier, and it is the same
   release candidate as the path's.
-- The admin API's scopes are `admin:read`, `admin:write` and `admin:security`. The account and
-  developer families define no scopes here: their guards check the audience and the subject. A
-  route that needs a scope adds it in its own change.
+- The admin API's scopes are `qauth:admin:read`, `qauth:admin:write` and `qauth:admin:security`,
+  in QAuth's reserved `qauth:` scope namespace, intersected with the caller's admin roles. The
+  [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
+  built-in roles. The account and developer families define no scopes here: their guards check the
+  token's audience, and that its subject is an active user or client of the request's realm
+  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change.
+
+### Family tokens
+
+Every family route is guarded by `requireFamilyToken(family, options)` in
+`apps/auth-server/src/app/helpers/family-token.ts`. A token passes when:
+
+- its signature verifies and it has not expired or been revoked, as on every bearer-protected
+  route;
+- its protected header carries `typ: at+jwt` (RFC 9068 §2.1), whatever
+  `requireAccessTokenTyp` is set to;
+- its `iss` is one the family accepts. The check is a hook, `IssuerResolver`. By default it
+  accepts only the token issuer of the request's realm (ADR-019 Decision 1): `JWT_ISSUER` as
+  written for the realm whose issuer it is, and the realm's own issuer for any other realm;
+- it carries `sub`, `exp` and `jti`, with `sub` and `jti` non-empty strings;
+- its `aud` holds exactly one value, the family's audience. A token with several audiences is
+  refused even when one of them is the family's;
+- on the developer family, it carries no `act` claim: a delegated token (RFC 8693) never manages a
+  developer's clients;
+- its subject is one the route admits (the required `subjects` option: `user`, `client` or both)
+  and is active in the realm of the request (ADR-019 Decision 1). A `client_credentials` token,
+  whose `sub` is its own `client_id`, must name a client of that realm that is enabled and not
+  suspended; any other token must name a user of that realm who is enabled;
+- it carries every scope the route lists.
+
+A family audience reads the same in every realm. Every token still carries `JWT_ISSUER` until
+tokens are signed per realm (#491), so under the default issuer rule only the realm whose issuer
+that is admits a token, and any other realm refuses every token until then. The subject is checked
+in the request's realm as well, whatever issuer rule a family uses: a user's token is refused in
+every realm but the user's, and a `client_credentials` token in every realm whose client of that
+`client_id` is missing, disabled or suspended.
+
+A request that presents no token is refused with 401 `unauthorized` and a challenge that names no
+error, `WWW-Authenticate: Bearer realm="OAuth"`. A token that fails, its subject included, is
+refused with 401 and `WWW-Authenticate: Bearer error="invalid_token"` (`invalid_access_token`, or
+`access_token_expired`). A token that lacks a scope is refused with 403 `forbidden` and
+`WWW-Authenticate: Bearer error="insufficient_scope"`, whose `scope` names the scopes the route
+needs, as on every route a wider token would let through. All three follow RFC 6750 §3.1, and the
+body is a problem document with the code named in parentheses. A request under the `DPoP` scheme
+gets a `DPoP` challenge instead (RFC 9449 §7.1). A family route therefore lists 401 in its
+`x-qauth-errors`, and 403 when it requires a scope.
+
+What a route does for its subject beyond that, such as reading the user's row again or checking a
+role, is its own.
+
+### Issuing a family audience
+
+- A client gets a family audience only when an operator lists it in the client's `audience`. The
+  client names it with the RFC 8707 `resource` parameter, at `/oauth/authorize` and at
+  `/oauth/token`, and the token's `aud` is that value. A client that does not list it is refused
+  with `invalid_target`, on every grant and before any consent screen. A client resolved from a
+  Client ID Metadata Document or registered at `/oauth/register` lists none, whatever its row
+  holds.
+- On a user's grant (authorization code and refresh token) a family audience is issued only when a
+  `resource` names it, in the request or bound to the code, so the consent the user gave covers
+  it: a client's default audience leaves it out. A `client_credentials` token keeps the client's
+  default.
+- The legacy Bearer path of `/oauth/authorize` never issues one: a request on it that names a
+  family audience, or a client whose default audience holds one, is refused with `access_denied`.
+- A family audience never makes a client authoritative at introspection: QAuth is the only
+  resource server for it, so a client introspects a family token only when the token is its own.
+- `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case, by the rule the
+  reserved `qauth:` scopes follow: self-registration never obtains one. Dynamic registration and a
+  Client ID Metadata Document ignore it in an `audience` or `resource` member, and register or
+  resolve the client with the rest; neither stores those members. The seed manifest refuses it in
+  a `cimd_clients` entry, the one place it would be stored. The rule is `isReservedAudience` in
+  `@qauth-labs/shared-validation`.
+- The developer portal's token keeps the system client's id as its audience in this release.
+  `/api/clients`, `/api/consents`, `/auth/logout` and the Bearer path of `/oauth/authorize`
+  (`assertManagementToken`), and userinfo, accept a system-client token with the developer
+  audience too, and #524 starts minting it. Expand, then contract (ADR-018 §5): every node accepts the
+  token before any node mints it.
 
 No route is served under these prefixes yet. The developer routes at `/api/clients` and
 `/api/consents` and the account routes at `/consents` move under them, and their old paths are then
@@ -203,13 +278,22 @@ answers by design in `x-qauth-errors`, and the document adds 421, 429 and 500, w
 of a realm may answer (`/health` only 429), each referencing `Problem`, or `OAuthError` on an OAuth
 protocol endpoint.
 
-| Extension            | Values                             | Meaning                                                                                                                                                                                                   |
-| -------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API the class names the scope it needs: `admin:read`, `admin:write` or `admin:security`. `security` is used on the admin API only.                                  |
-| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both. |
-| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                           |
-| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                           |
-| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                            |
+| Extension            | Values                             | Meaning                                                                                                                                                                                                                                                              |
+| -------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `x-qauth-class`      | `read`, `write`, `security`        | What the operation does. On the admin API it is the strictest class among the operation's permissions, and each permission needs its own class's scope: `qauth:admin:read`, `qauth:admin:write` or `qauth:admin:security`. `security` is used on the admin API only. |
+| `x-qauth-permission` | a permission id, or a list of them | The permission the caller needs, such as `realms.read`. A list means the request decides which, for example a policy patch whose fields need `realms.policies.write`, `realms.policies.security` or both.                                                            |
+| `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations.                                                                                                                      |
+| `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
+| `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
+
+On the admin API every id in `x-qauth-permission` is a permission of the
+[admin catalog](/reference/admin-permissions/), and not a retired one, and `x-qauth-class` is the
+strictest class among them (`read` < `write` < `security`). With one permission the operation
+needs that class's scope. With a list, the request decides which scopes it needs: a policy patch
+that changes only a write field needs `qauth:admin:write`, one that changes a security field needs
+`qauth:admin:security`, and one that changes both needs both. The class still names the strictest
+case, so a security operation never hides behind a write class and always carries its effects and
+the two-admin marker.
 
 A route declares all of it in its schema, and `@fastify/swagger` copies it onto the operation:
 
@@ -287,9 +371,11 @@ their old paths are listed here.
 ## Enforcement
 
 - `apps/auth-server/src/app/api-conventions/openapi-conventions.ts` checks every operation under a
-  family prefix: the `operationId`, the security requirement, the five extensions, the names, the
-  id and time formats, closed request objects, the problem schema on error responses, cursor
-  paging, Merge Patch bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
+  family prefix: the `operationId`, the security requirement, the five extensions (an admin
+  operation's permissions come from the admin catalog, and its class is the strictest class among
+  them), the names, the id and time formats,
+  closed request objects, the problem schema on error responses, cursor paging, Merge Patch
+  bodies, and `If-Match` with its 412 and 428 answers. Its test runs the check
   over `stable-surface/openapi.json` and `apps/docs-site/public/openapi.json`. CI's stable-surface
   check regenerates both files and fails when they differ from the committed copies, so the check
   reads what the server serves.

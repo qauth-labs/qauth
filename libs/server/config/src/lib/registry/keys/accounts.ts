@@ -185,9 +185,9 @@ export const ACCOUNT_KEYS = defineKeys([
     tier: 'advanced',
     role: 'deployment',
     owner: 'mail',
-    default: { required: true },
+    default: null,
     since: '0.1.0',
-    docs: 'The base URL of the links in mail, such as a verification link.',
+    docs: 'Optional and not read since 0.2.0, because a link in mail, such as a verification link, starts at the issuer of the realm the account belongs to; still accepted, with a boot warning that it is ignored when it names another base than `JWT_ISSUER`.',
   },
   {
     name: 'RESEND_API_KEY',

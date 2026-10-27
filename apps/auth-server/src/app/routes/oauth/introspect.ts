@@ -4,6 +4,7 @@ import {
   JWTInvalidError,
   TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
+import { isReservedAudience } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -12,6 +13,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getPqcSignature } from '../../helpers/hybrid-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { realmTokenIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
@@ -40,6 +42,8 @@ import {
  *      introspection is allowed. This is what lets a single resource server
  *      validate tokens minted by many distinct callers, without giving the
  *      resource server the ability to mint tokens for those audiences itself.
+ *      A QAuth API audience (`urn:qauth:aud:`, #509) never makes a client
+ *      authoritative: QAuth itself is the only resource server for those.
  *   Any other cross-client introspection returns `active: false`.
  */
 
@@ -56,21 +60,26 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * audience: every token-aud value appears in the client's configured audience
  * list. Undefined/null/empty on either side returns false. Accepts both string
  * and string[] shapes for `payload.aud` per RFC 7519.
+ *
+ * A QAuth API audience (`urn:qauth:aud:`) in the client's list is ignored
+ * (#509): a client an operator gave a family audience may hold a token for
+ * that family, but it is not a resource server for it, and introspecting
+ * another client's family token would read that token's claims.
  */
 function isClientAuthoritativeForAudience(
   payloadAud: string | string[] | undefined,
   clientAudience: string[] | null
 ): boolean {
+  const authoritative = (clientAudience ?? []).filter((audience) => !isReservedAudience(audience));
   if (
     !payloadAud ||
     (Array.isArray(payloadAud) && payloadAud.length === 0) ||
-    !clientAudience ||
-    clientAudience.length === 0
+    authoritative.length === 0
   ) {
     return false;
   }
   const tokenAuds = Array.isArray(payloadAud) ? payloadAud : [payloadAud];
-  return tokenAuds.every((a) => clientAudience.includes(a));
+  return tokenAuds.every((a) => authoritative.includes(a));
 }
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
@@ -136,10 +145,11 @@ export default async function (fastify: FastifyInstance) {
         let payload;
         try {
           // RFC 9700 mix-up defence: pin the issuer so a token minted by a
-          // different AS (even one sharing our signing key) is reported
-          // inactive rather than introspected as ours.
+          // different AS (even one sharing our signing key), or for another
+          // realm's issuer (#490), is reported inactive rather than
+          // introspected as ours.
           payload = await fastify.jwtUtils.verifyAccessToken(token, {
-            issuer: fastify.jwtUtils.getIssuer(),
+            issuer: realmTokenIssuer(fastify, realm),
           });
         } catch (error) {
           if (error instanceof JWTExpiredError || error instanceof JWTInvalidError) {

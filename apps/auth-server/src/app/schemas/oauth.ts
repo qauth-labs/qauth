@@ -231,6 +231,19 @@ export const dpopJktParamSchema = z.unknown().optional().meta({
 });
 
 /**
+ * RFC 7636 §4.2 `code_challenge`: `43*128unreserved`. The bound
+ * `mintAuthorizationCode` holds every code to, applied at the edge so a
+ * request it would refuse is a 400, never a server error.
+ *
+ * Shared by `authorizeQuerySchema` and the `/ui/consent` form mirror.
+ */
+export const codeChallengeParamSchema = z
+  .string()
+  .min(43)
+  .max(128)
+  .regex(/^[A-Za-z0-9._~-]+$/);
+
+/**
  * OAuth 2.1 authorize query parameters (GET /oauth/authorize).
  * RFC 6749 4.1.1, RFC 7636 PKCE, RFC 8707 Resource Indicators.
  */
@@ -242,11 +255,7 @@ export const authorizeQuerySchema = z.object({
   // registered redirect URIs, and compared again at /token. Length and
   // character set are checked before the parse.
   redirect_uri: exactUrl(),
-  code_challenge: z
-    .string()
-    .min(43)
-    .max(128)
-    .regex(/^[A-Za-z0-9._~-]+$/),
+  code_challenge: codeChallengeParamSchema,
   code_challenge_method: z.literal('S256'),
   // `state` / `nonce` are opaque, client-owned, round-tripped params. Bound
   // centrally (OAUTH_OPAQUE_PARAM_MAX_LENGTH) so this schema and its
@@ -285,7 +294,14 @@ export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;
 export const tokenExchangeAuthCodeBodySchema = z.object({
   grant_type: z.literal('authorization_code'),
   code: z.string().min(1),
-  redirect_uri: z.string().min(1),
+  // Optional here, required by the code (ADR-017 Decision 10): every code
+  // QAuth issues today came through a browser redirect, so the handler wants
+  // the URI the authorization request named, exactly. A missing or empty value
+  // is a mismatch, `invalid_grant` (RFC 6749 §5.2), not a malformed request:
+  // whether the parameter is needed depends on the code, which the schema
+  // cannot see, and RFC 6749 §3.2 treats a parameter sent without a value as
+  // omitted.
+  redirect_uri: z.string().optional(),
   code_verifier: z
     .string()
     .min(43)

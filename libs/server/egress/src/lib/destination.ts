@@ -48,7 +48,7 @@ export function hostForLog(url: string | URL): string | undefined {
 /**
  * Whether a non-public `address` of `hostname` may be dialled for this call:
  * when `permit` says so, and never when it is unspecified (`0.0.0.0` connects
- * to the local host), multicast or the cloud metadata address, whatever an
+ * to the local host), multicast or a cloud metadata endpoint, whatever an
  * allowlist names.
  */
 function permitted(

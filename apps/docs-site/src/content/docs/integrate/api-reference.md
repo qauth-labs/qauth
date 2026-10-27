@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-26'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -199,6 +199,12 @@ address is at most 254 characters.
 }
 ```
 
+The access token is issued to the system client, and its `aud` is the system
+client's id. The routes that take this token also accept one whose `aud` is the
+developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, which a later
+release mints (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
+
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
 The `401` is the same for an unknown address, a wrong password, a disabled
 account and, with `REQUIRE_VERIFIED_ACCOUNT` on (the default), an account whose
@@ -232,18 +238,58 @@ account's password. The token proves control of the mailbox. The password proves
 the person who registered. Both are required, so someone who registered with
 another person's address cannot get it verified by that person clicking a link.
 This is a POST, so no fetch or prefetch of the emailed link can verify an address
-by itself. The link opens the developer portal's verification page, which asks
-for the password.
+by itself. The emailed link opens [`GET /auth/verify`](#get-authverify), a page
+that asks for the password; the developer portal's verification page calls this
+route the same way.
 
 **Body**: `{ "token": "<64-char hex string>", "password": "<the account's password>" }`
 
 **`200 OK`**: `{ "message": "...", "email": "dev@example.com" }`
 
-Errors: `400` (malformed token), `404`/`400` (unknown or expired token), `401`
-`INVALID_CREDENTIALS` (wrong password; the token is not consumed, so the request
-can be retried), `429` (rate limited, or the account is locked out: wrong
-passwords here count toward the same failed-login lockout as `POST /auth/login`,
-and the `429` carries `Retry-After`).
+Errors: `400` (malformed token, or an unknown, expired or used token: one
+answer for all of them), `401` `INVALID_CREDENTIALS` (wrong password; the token
+is not consumed, so the request can be retried), `409` (the address is already
+verified), `429` (rate limited, or the account is locked out: wrong passwords
+here count toward the same failed-login lockout as `POST /auth/login`, and the
+`429` carries `Retry-After`).
+
+### `GET /auth/verify`
+
+The page the verification email links to: `<EMAIL_BASE_URL>/auth/verify?token=<64-char hex>`.
+A mail client opens the link with GET, so this page is what a person sees. It
+holds the token in a hidden field and asks for the account's password; opening
+it verifies nothing and reads nothing from the database, so a mail gateway's
+link scanner or a browser prefetch cannot verify an address. The form posts to
+`POST /ui/verify` (below), which verifies through the same code as
+[`POST /auth/verify`](#post-authverify).
+
+**Query**: `token` — the 64-character hex token. A missing or malformed token
+gets a `400` page that says the link is incomplete, with no form.
+
+**`200 OK`**: `text/html` page with the form. It sets the signed
+`__Host-qauth_login_csrf` cookie the form's double-submit CSRF check needs, the
+same cookie as [`/ui/login`](/integrate/hosted-ui/#uilogin).
+
+Every answer carries `Cache-Control: no-store` and `Referrer-Policy: no-referrer`,
+and the request log censors the `token` value. A `browser` route: it answers on
+the realm's primary host only (`421` on an endpoint host).
+
+**`POST /ui/verify`** (`application/x-www-form-urlencoded`: `token`, `password`,
+`csrf_token`) answers a page with the status `POST /auth/verify` answers for the
+same outcome:
+
+| Status | Outcome                                                                  |
+| ------ | ------------------------------------------------------------------------ |
+| `200`  | Verified. The account can sign in.                                       |
+| `400`  | Unknown, expired or used token (one page for all), or a malformed body.  |
+| `401`  | Wrong password. The form stays; nothing is consumed.                     |
+| `403`  | CSRF pair missing or mismatched. The form comes back with a fresh token. |
+| `409`  | The address is already verified.                                         |
+| `429`  | Rate limited, or locked out by the failed-login lockout (`Retry-After`). |
+
+It has the rate limit of `POST /auth/verify`, and wrong passwords count toward
+the same failed-login lockout. This page is interim: the email-code step (#638)
+and the hosted account verification UI (#644) replace link verification.
 
 ### `POST /auth/resend-verification`
 
@@ -325,7 +371,10 @@ Key contract facts:
 - Tokens carry `iss`, `aud` (RFC 8707 resource binding), `exp`, `iat`, and `scope`.
 - `client_credentials` tokens set `sub = client_id` and issue **no** refresh token.
 - Scopes are **deny-by-default** (client allowlist; DCR clients capped to the
-  realm's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`).
+  realm's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`). The `qauth:` scope namespace
+  is QAuth's own, the admin API's scopes among them: no realm allowlist holds
+  one, so dynamic registration drops one, a CIMD document's is ignored, and
+  discovery does not list them ([admin permissions](/reference/admin-permissions/)).
 - The `urn:ietf:params:oauth:grant-type:token-exchange` grant (RFC 8693, ADR-007 §2)
   lets an **agent** client delegate on behalf of a user: `sub` stays the user and
   an `act` claim names the agent (nested for chained delegation). Agent-only and
@@ -361,8 +410,9 @@ Key contract facts:
 ```
 
 `id_token` is a separate, client-audienced (`aud` = your `client_id`) EdDSA JWT
-asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `name`
-(only under the `profile` scope, and only when set on the user), and `email` /
+asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `sid`
+(the browser session, when one backs the code), `name` (only under the
+`profile` scope, and only when set on the user), and `email` /
 `email_verified` (only under the `email` scope, same trust-ordered resolution
 as the [UserInfo response](#userinfo-response-getpost-oauthuserinfo-200-ok)
 below). The ID token and UserInfo release the same profile and email claims
@@ -519,6 +569,14 @@ challenge; `404` is `not_found`, for a stream the receiver does not have and, as
 for any path no route serves, for a realm that does not run the transmitter;
 `409` is `conflict`; and `429` is `too_many_requests` with `Retry-After`.
 
+### Interaction API contract
+
+`GET /interaction/v1-rc.0/openapi.json` returns the OpenAPI 3.1 document of the Interaction API,
+the API sign-in pages use to reach the engine, with `Cache-Control: public, max-age=3600`. It is
+the same document the docs site publishes; the [Interaction API](/reference/interaction-api/) page
+describes its operations, steps and versioning rules. The operations it describes are not served
+yet: the document is published ahead of them.
+
 ---
 
 ## Hosted UI
@@ -528,11 +586,12 @@ Server-rendered, cookie-authenticated pages back the browser leg of
 behaviour, including the pending-authorization mechanics behind the login
 bounce.
 
-| Endpoint              | Method    | Purpose                                                                |
-| --------------------- | --------- | ---------------------------------------------------------------------- |
-| `/ui/login`           | GET, POST | Session-cookie login page and form submission                          |
-| `/ui/consent`         | GET, POST | OAuth consent screen and decision submission                           |
-| `/ui/resume/{handle}` | GET       | Resume a pending authorization after login (single-use, 10-minute TTL) |
+| Endpoint              | Method    | Purpose                                                                           |
+| --------------------- | --------- | --------------------------------------------------------------------------------- |
+| `/ui/login`           | GET, POST | Session-cookie login page and form submission                                     |
+| `/ui/consent`         | GET, POST | OAuth consent screen and decision submission                                      |
+| `/ui/resume/{handle}` | GET       | Resume a pending authorization after login (single-use, 10-minute TTL)            |
+| `/ui/verify`          | POST      | The form of the emailed verification link ([`GET /auth/verify`](#get-authverify)) |
 
 The wallet-login screens below are registered **only** when
 `WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path

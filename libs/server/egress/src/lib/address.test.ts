@@ -152,14 +152,29 @@ describe('isCloudMetadataAddress', () => {
     '::ffff:a9fe:a9fe',
     '64:ff9b::a9fe:a9fe',
     '2002:a9fe:a9fe::',
-  ])('%s is the metadata address', (ip) => {
+    '169.254.170.2',
+    '169.254.170.0',
+    '169.254.170.255',
+    '::ffff:169.254.170.2',
+    '100.100.100.200',
+    '::ffff:100.100.100.200',
+    '64:ff9b::6464:64c8',
+    'fd00:ec2::253',
+    'fd00:ec2::1',
+    'fd00:ec2:ffff:ffff:ffff:ffff:ffff:ffff',
+  ])('%s is a metadata endpoint', (ip) => {
     expect(isCloudMetadataAddress(ip)).toBe(true);
   });
 
   it.each([
     '169.254.169.253',
     '169.254.0.1',
-    'fd00:ec2::253',
+    '169.254.171.0',
+    '169.254.169.255',
+    '100.100.100.199',
+    '100.100.100.201',
+    'fd00:ec3::254',
+    'fd00:ec1:ffff::1',
     '10.0.0.1',
     '::1',
     'example.com',

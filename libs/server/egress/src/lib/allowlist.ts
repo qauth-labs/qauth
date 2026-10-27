@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readFileSync, type Stats } from 'node:fs';
 import { isIP } from 'node:net';
 
 import {
@@ -113,6 +113,31 @@ function compiledEntries(allowlist: unknown): readonly CompiledEntry[] | undefin
 }
 
 const MAX_ENTRIES = 1000;
+/** The widest IPv4 range an entry may open. */
+const MIN_IPV4_PREFIX = 8;
+/** The widest IPv6 range an entry may open. */
+const MIN_IPV6_PREFIX = 32;
+
+/**
+ * IPv6 ranges whose addresses reach other addresses only through translation.
+ * An entry may not overlap one: it would open whatever the translator reaches,
+ * and an IPv4-mapped address is judged by its IPv4 address anyway.
+ */
+const TRANSLATION_RANGES: readonly { name: string; prefix: readonly number[]; bits: number }[] = [
+  {
+    name: 'IPv4-mapped ::ffff:0:0/96',
+    prefix: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff],
+    bits: 96,
+  },
+  {
+    name: 'NAT64 64:ff9b::/96',
+    prefix: [0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0],
+    bits: 96,
+  },
+  { name: 'local-use NAT64 64:ff9b:1::/48', prefix: [0, 0x64, 0xff, 0x9b, 0, 1], bits: 48 },
+  { name: '6to4 2002::/16', prefix: [0x20, 0x02], bits: 16 },
+  { name: 'Teredo 2001::/32', prefix: [0x20, 0x01, 0, 0], bits: 32 },
+];
 const MAX_REALMS_PER_ENTRY = 100;
 /** The `realms.name` column's length. */
 const MAX_REALM_NAME_LENGTH = 255;
@@ -187,6 +212,22 @@ function parseCidr(value: unknown, at: string): CompiledRange {
       `${at}.cidr has address bits set below its prefix length; write the range's first address`
     );
   }
+  const minBits = family === 4 ? MIN_IPV4_PREFIX : MIN_IPV6_PREFIX;
+  if (bits < minBits) {
+    throw new EgressAllowlistError(
+      `${at}.cidr is wider than /${minBits}; list the narrower ranges the deployment reaches`
+    );
+  }
+  if (family === 6) {
+    const translated = TRANSLATION_RANGES.find((range) =>
+      inRange(network, range.prefix, Math.min(bits, range.bits))
+    );
+    if (translated !== undefined) {
+      throw new EgressAllowlistError(
+        `${at}.cidr overlaps ${translated.name}, whose addresses reach others only through translation; list the range they reach instead`
+      );
+    }
+  }
   return { family, bytes: network, bits };
 }
 
@@ -216,7 +257,9 @@ function parseRealms(value: unknown, at: string): string[] {
  * Validate an allowlist, as the JSON of its file. Every mistake refuses the
  * whole list, naming where it is: an unknown member, an entry with both or
  * neither of `host` and `cidr`, a wildcard, a range with bits set below its
- * prefix length, an entry without realms.
+ * prefix length, a range wider than /8 (IPv4) or /32 (IPv6), an IPv6 range
+ * that overlaps a translation range (IPv4-mapped, NAT64, 6to4, Teredo), an
+ * entry without realms.
  *
  * @param what - names the list in error messages, such as the variable and the file
  * @throws EgressAllowlistError
@@ -294,16 +337,44 @@ export const EMPTY_EGRESS_ALLOWLIST: EgressAllowlist = parseEgressAllowlist({ en
  * Read the allowlist file at `path` (`EGRESS_ALLOWLIST_PATH`). Called once, at
  * boot; a file that cannot be read or does not validate fails the boot.
  *
+ * The file is opened once: `inspect` gets the status of that open descriptor
+ * before it is read, so a check of the file's owner and mode applies to the
+ * very file read, not to whatever the path names a moment later. An error it
+ * throws fails the load.
+ *
  * @throws EgressAllowlistError naming the variable, the file and the mistake
  */
-export function loadEgressAllowlist(path: string): EgressAllowlist {
+export function loadEgressAllowlist(
+  path: string,
+  inspect?: (stats: Stats, what: string) => void
+): EgressAllowlist {
   const what = `EGRESS_ALLOWLIST_PATH (${path})`;
+  const unreadable = (err: unknown) => {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    return new EgressAllowlistError(`${what}: the file cannot be read${code ? ` (${code})` : ''}`);
+  };
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch (err) {
+    throw unreadable(err);
+  }
   let text: string;
   try {
-    text = readFileSync(path, 'utf8');
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    throw new EgressAllowlistError(`${what}: the file cannot be read${code ? ` (${code})` : ''}`);
+    let stats: Stats;
+    try {
+      stats = fstatSync(fd);
+    } catch (err) {
+      throw unreadable(err);
+    }
+    inspect?.(stats, what);
+    try {
+      text = readFileSync(fd, 'utf8');
+    } catch (err) {
+      throw unreadable(err);
+    }
+  } finally {
+    closeSync(fd);
   }
   let json: unknown;
   try {

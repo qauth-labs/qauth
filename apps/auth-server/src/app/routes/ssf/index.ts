@@ -31,6 +31,7 @@ import { z } from 'zod';
 
 import { JWKS_CACHE_CONTROL } from '../../constants';
 import { REDIS_KEYS } from '../../constants/redis-keys';
+import { realmIssuer } from '../../helpers/realm-url';
 import { answerRouteNotFound } from '../../helpers/request-bounds';
 import { requestRealm } from '../../helpers/request-realm';
 import { SsfNotFoundError, SsfStreamExistsError } from '../../helpers/ssf-errors';
@@ -103,10 +104,12 @@ function transmitterOf(fastify: FastifyInstance): SsfTransmitter {
   return fastify.ssf;
 }
 
-/** The realm's issuer: the SETs' `iss`. The realm resolver lets no realm without one through. */
+/**
+ * The realm's issuer from its row (ADR-019 Decision 1, #490): the SETs' `iss`.
+ * The realm resolver lets no realm without one through.
+ */
 function issuerOf(receiver: SsfReceiver): string {
-  if (receiver.realm.issuer === null) throw new SsfNotFoundError();
-  return receiver.realm.issuer;
+  return realmIssuer(receiver.realm);
 }
 
 export default async function (fastify: FastifyInstance) {

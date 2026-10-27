@@ -210,14 +210,14 @@ absent, malformed or unparseable input rejects; there is no lenient branch.
 side effect: gates 3 to 10 and 15. Gates 12 to 14 run after the burn. A request that
 fails them has spent its assertion, and the client must get a fresh one from the IdP.
 
-**An operator creates the link behind gate 14.** Decided 2026-10-11 (maintainer). It is a
-security operation by effect ([ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 7): `admin:security`, a fresh
-passkey, and the second admin where the realm requires one. It writes the
-`oidc_<issuer>` credential row for a user and an issuer that is on the allowlist, in bulk if
-needed, and is audited with the operator, the user, `iss` and `sub`. Email is never
-consulted. This is the one exception to the rule that an admin never links an upstream
-account. The operator already chose to trust the issuer. The operation is not built yet
-(#432). Until it ships, the consume side cannot succeed in a real deployment.
+**An operator creates the link behind gate 14.** Decided 2026-10-11 (maintainer). It is a security
+operation by effect ([ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 7):
+`qauth:admin:security`, a fresh passkey, and the second admin where the realm requires one. It
+writes the `oidc_<issuer>` credential row for a user and an issuer that is on the allowlist, in bulk
+if needed, and is audited with the operator, the user, `iss` and `sub`. Email is never consulted.
+This is the one exception to the rule that an admin never links an upstream account. The operator
+already chose to trust the issuer. The operation is not built yet (#432). Until it ships, the
+consume side cannot succeed in a real deployment.
 
 **No refresh token is issued** on this path. The client re-presents a fresh
 ID-JAG, which keeps the IdP's policy in the loop on every renewal — the point of

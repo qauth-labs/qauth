@@ -4,6 +4,7 @@ import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
+import { answerRouteNotFound } from '../app/helpers/request-bounds';
 import {
   buildLoggerOptions,
   LOG_REDACT_CENSOR,
@@ -194,6 +195,36 @@ describe('buildLoggerOptions', () => {
     // The name keeps the spelling the client used; only the value goes.
     expect(serialized).toContain(`/ui/wallet-login/return?response%5Fcode=${LOG_REDACT_CENSOR}`);
   });
+
+  it('logs no verification token from the mailed link, on the request line or the unknown-route line', async () => {
+    // The verification mail links to `/auth/verify?token=<64 hex>`. Fastify's
+    // request and response lines carry the URL, and so does the line the
+    // not-found handler writes for a link pasted onto a wrong path.
+    const captured: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        captured.push(chunk.toString());
+        cb();
+      },
+    });
+
+    const loggerOptions = buildLoggerOptions(baseEnv) as LoggerOptions;
+    const app = Fastify({ logger: { ...loggerOptions, stream } });
+    app.get('/auth/verify', async () => 'page');
+    app.setNotFoundHandler(answerRouteNotFound);
+
+    const token = '0123456789abcdef'.repeat(4);
+    const page = await app.inject({ method: 'GET', url: `/auth/verify?token=${token}` });
+    const missing = await app.inject({ method: 'GET', url: `/auth/verifyy?token=${token}` });
+    await app.close();
+
+    expect(page.statusCode).toBe(200);
+    expect(missing.statusCode).toBe(404);
+    const serialized = captured.join('');
+    expect(serialized).not.toContain(token);
+    expect(serialized).toContain(`/auth/verify?token=${LOG_REDACT_CENSOR}`);
+    expect(serialized).toContain(`/auth/verifyy?token=${LOG_REDACT_CENSOR} not found`);
+  });
 });
 
 describe('percentEncodingTolerantPattern', () => {
@@ -223,8 +254,30 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists response_code as the one bearer value that rides in a query string', () => {
-    expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual(['response_code']);
+  it('lists the bearer values that ride in a query string: response_code and token', () => {
+    expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual(['response_code', 'token']);
+  });
+
+  it('censors the verification token of a mailed link, on any path (#490)', () => {
+    const token = 'a1'.repeat(32);
+    expect(redactLoggedUrl(`/auth/verify?token=${token}`)).toBe(
+      `/auth/verify?token=${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl(`/auth/verify?lang=en&%74oken=${token}&x=1`)).toBe(
+      `/auth/verify?lang=en&%74oken=${LOG_REDACT_CENSOR}&x=1`
+    );
+    expect(redactLoggedUrl(`/auth/verify/?a=1&%74oken=${token}&b=2`)).toBe(
+      `/auth/verify/?a=1&%74oken=${LOG_REDACT_CENSOR}&b=2`
+    );
+    // Only the parameter named `token`, not one that ends or starts with it.
+    for (const url of [
+      '/r?id_token_hint=abc',
+      '/r?token_type_hint=refresh_token',
+      '/r?x_token=keep',
+      '/r?state=token',
+    ]) {
+      expect(redactLoggedUrl(url)).toBe(url);
+    }
   });
 
   it('censors the value and keeps the rest of the URL byte-for-byte', () => {

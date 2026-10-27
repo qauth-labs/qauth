@@ -60,8 +60,17 @@ function maximalEnvironment(): Record<string, string> {
   };
 }
 
-/** The routes that read or set the browser session cookie. */
-function isBrowserSessionRoute(url: string): boolean {
+/**
+ * The routes that read or set a browser cookie: the session cookie, or the
+ * login-CSRF cookie of a form that posts to a `/ui/*` route. The page the
+ * verification mail links to, `GET /auth/verify`, is one; `POST /auth/verify`
+ * beside it is the JSON API.
+ */
+function isBrowserSessionRoute(route: RouteOptions): boolean {
+  const { url } = route;
+  if (url === '/auth/verify') {
+    return [route.method].flat().every((method) => method === 'GET' || method === 'HEAD');
+  }
   return (
     url.startsWith('/ui/') ||
     url === '/oauth/authorize' ||
@@ -160,7 +169,7 @@ describe('route surface classes of the assembled app (#486)', () => {
     for (const route of routes) {
       const surface = route.config?.surface;
       const label = `${String(route.method)} ${route.url}`;
-      if (isBrowserSessionRoute(route.url)) {
+      if (isBrowserSessionRoute(route)) {
         expect(surface, label).toBe('browser');
       } else {
         expect(surface, label).not.toBe('browser');
