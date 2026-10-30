@@ -1,4 +1,5 @@
 import {
+  adminApiEnvSchema,
   assuranceEnvSchema,
   authEnvSchema,
   baseEnvSchema,
@@ -51,6 +52,10 @@ export const envSchema = z
     // `all`, and the signer service's address and internal TLS files for a
     // process without the signer. The app checks them at boot.
     ...serviceRolesEnvSchema.shape,
+    // The admin API's internal listener (ADR-019 Decisions 7 and 8, #511):
+    // ADMIN_API_ENABLED (default on), ADMIN_API_HOST (default loopback) and
+    // ADMIN_API_PORT, for a process holding the `admin` role.
+    ...adminApiEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,
@@ -188,6 +193,21 @@ export const envSchema = z
           message: problem.message,
         });
       }
+    }
+
+    // #511 — the admin listener is a second server of the same process: on
+    // the public port it could not bind, and the boot would fail later with
+    // an address in use.
+    if (
+      env.ADMIN_API_ENABLED &&
+      env.SERVICE_ROLES.includes('admin') &&
+      env.ADMIN_API_PORT === env.PORT
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ADMIN_API_PORT'],
+        message: `ADMIN_API_PORT must differ from PORT (${env.PORT}): the admin API runs on its own listener, never on the public one.`,
+      });
     }
 
     // #452 — the job lock takes a pool connection of its own.

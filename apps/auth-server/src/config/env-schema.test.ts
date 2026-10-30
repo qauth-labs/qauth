@@ -63,3 +63,34 @@ describe('the OTLP exporter variables', () => {
     expect(JSON.stringify(result.error?.issues)).not.toContain('s3cr3t');
   });
 });
+
+/**
+ * The admin API's listener (#511) is a second server of the same process, so
+ * it cannot share the public port.
+ */
+describe('the admin listener port', () => {
+  const issuesOf = (extra: Record<string, string>) => {
+    const result = envSchema.safeParse({
+      DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
+      JWT_ISSUER: 'https://auth.example.com',
+      EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
+      EMAIL_BASE_URL: 'https://auth.example.com',
+      ...extra,
+    });
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+  };
+
+  it('refuses ADMIN_API_PORT equal to PORT on a process that runs the admin listener', () => {
+    expect(issuesOf({ PORT: '3001' })).toContain('ADMIN_API_PORT');
+    expect(issuesOf({ PORT: '4000', ADMIN_API_PORT: '4000' })).toContain('ADMIN_API_PORT');
+  });
+
+  it('accepts it where no admin listener runs: switched off, or no admin role', () => {
+    expect(issuesOf({ PORT: '3001', ADMIN_API_ENABLED: 'false' })).not.toContain('ADMIN_API_PORT');
+    expect(issuesOf({ PORT: '3001', SERVICE_ROLES: 'web,api' })).not.toContain('ADMIN_API_PORT');
+  });
+
+  it('accepts the defaults', () => {
+    expect(issuesOf({})).not.toContain('ADMIN_API_PORT');
+  });
+});
