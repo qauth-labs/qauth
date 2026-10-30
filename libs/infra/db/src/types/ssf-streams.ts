@@ -150,6 +150,20 @@ export interface SsfStreamsRepository {
   /** The subjects of a stream, oldest first. */
   listSubjects(streamId: string): Promise<SsfStreamSubject[]>;
   /**
+   * Whether a user of the realm is related to the receiver's client, so that
+   * the receiver may add the user as a subject (#540, decided 2026-10-26): the
+   * user holds an active consent for the client, or a refresh token the client
+   * was issued for the user that is neither revoked nor expired at `now`
+   * (epoch milliseconds). `false` for a user of another realm, a user id that
+   * does not exist, and an id that is not a UUID.
+   */
+  isRelatedUser(
+    realmId: string,
+    receiverClientId: string,
+    userId: string,
+    now: number
+  ): Promise<boolean>;
+  /**
    * Every stream the delivery route serves: `enabled` and `paused` ones of an
    * active receiver (enabled, not suspended, holding `ssf:stream`), in realms
    * whose switch is on.

@@ -347,6 +347,70 @@ describe('SSF streams integration (real Postgres)', () => {
     });
   });
 
+  it('relates a user to a receiver by an active consent or a live refresh token only (#540)', async () => {
+    const realmId = await realm();
+    const receiver = await client(realmId);
+    const other = await client(realmId);
+    const user = async (inRealm = realmId) =>
+      (
+        await pool().query<{ id: string }>(
+          `INSERT INTO users (realm_id) VALUES ($1) RETURNING id::text AS id`,
+          [inRealm]
+        )
+      ).rows[0].id;
+    const consent = (userId: string, clientRowId: string, revokedAt: number | null = null) =>
+      pool().query(
+        `INSERT INTO oauth_consents (realm_id, user_id, oauth_client_id, revoked_at)
+         VALUES ($1, $2, $3, $4)`,
+        [realmId, userId, clientRowId, revokedAt]
+      );
+    const refresh = (
+      userId: string,
+      clientRowId: string,
+      options: { expiresAt?: number; revoked?: boolean } = {}
+    ) =>
+      pool().query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_created_at, expires_at, revoked)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          randomUUID().replaceAll('-', '').padEnd(64, '0'),
+          userId,
+          clientRowId,
+          NOW - 1000,
+          options.expiresAt ?? NOW + 60_000,
+          options.revoked ?? false,
+        ]
+      );
+    const related = (userId: string) => streams.isRelatedUser(realmId, receiver.id, userId, NOW);
+
+    const consented = await user();
+    await consent(consented, receiver.id);
+    const withToken = await user();
+    await refresh(withToken, receiver.id);
+    const withdrawn = await user();
+    await consent(withdrawn, receiver.id, NOW - 1);
+    const revokedToken = await user();
+    await refresh(revokedToken, receiver.id, { revoked: true });
+    const expiredToken = await user();
+    await refresh(expiredToken, receiver.id, { expiresAt: NOW });
+    const otherClients = await user();
+    await consent(otherClients, other.id);
+    await refresh(otherClients, other.id);
+    const stranger = await user();
+
+    expect(await related(consented)).toBe(true);
+    expect(await related(withToken)).toBe(true);
+    for (const userId of [withdrawn, revokedToken, expiredToken, otherClients, stranger]) {
+      expect(await related(userId), userId).toBe(false);
+    }
+    expect(await related(randomUUID())).toBe(false);
+    expect(await related('not-a-uuid')).toBe(false);
+    // The same user asked about from another realm is no user of it.
+    const elsewhere = await realm();
+    expect(await streams.isRelatedUser(elsewhere, receiver.id, consented, NOW)).toBe(false);
+    expect(await streams.isRelatedUser(elsewhere, receiver.id, withToken, NOW)).toBe(false);
+  });
+
   it('reads a type rule: the client as the subject, no subject filter, or one client only (#540)', async () => {
     const realmId = randomUUID();
     const userId = randomUUID();

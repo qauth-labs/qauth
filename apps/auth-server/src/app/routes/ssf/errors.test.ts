@@ -70,6 +70,7 @@ async function buildApp(options: { switchOn?: boolean } = {}) {
     create: vi.fn(async () => null as unknown),
     list: vi.fn(async () => []),
     addSubject: vi.fn(async () => 'added'),
+    isRelatedUser: vi.fn(async () => false),
   };
   app.decorate('ssf', { eventsSupported: [], checkEndpoint } as never);
   app.decorate('signer', { encrypt: vi.fn() } as unknown as never);
@@ -230,6 +231,45 @@ describe('SSF stream management errors (#513)', () => {
       payload: { delivery: { method: PUSH, endpoint_url: 'https://internal.example/events' } },
     });
     expect(problemOf(refused, 400, 'bad_request')['detail']).toBe('endpoint_url is refused');
+  });
+
+  it('answers a user the receiver may not add with 403 forbidden, and no scope challenge (#540)', async () => {
+    const { app, streams } = await buildApp();
+    streams.find.mockResolvedValue({ id: STREAM_ID });
+    const user = '0192a000-0000-7000-8000-0000000000b1';
+    const add = () =>
+      call(app, 'POST', '/ssf/subjects/add', {
+        token: 'receiver',
+        payload: { stream_id: STREAM_ID, subject: { format: 'iss_sub', iss: ISSUER, sub: user } },
+      });
+
+    const refused = await add();
+    problemOf(refused, 403, 'forbidden');
+    // No other token would let this through: the challenge names no scope.
+    expect(refused.headers['www-authenticate']).not.toMatch(/insufficient_scope|scope=/);
+    expect(streams.isRelatedUser).toHaveBeenCalledWith(
+      REALM_ID,
+      'receiver-row',
+      user,
+      expect.any(Number)
+    );
+    expect(streams.addSubject).not.toHaveBeenCalled();
+
+    streams.isRelatedUser.mockResolvedValueOnce(true);
+    const added = await add();
+    expect(added.statusCode, added.body).toBe(200);
+    expect(streams.addSubject).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a receiver add a client without the user check', async () => {
+    const { app, streams } = await buildApp();
+    streams.find.mockResolvedValue({ id: STREAM_ID });
+    const response = await call(app, 'POST', '/ssf/subjects/add', {
+      token: 'receiver',
+      payload: { stream_id: STREAM_ID, subject: { format: 'opaque', id: 'notes-app' } },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(streams.isRelatedUser).not.toHaveBeenCalled();
   });
 
   it('answers a subject whose stored form is too long with 400 bad_request', async () => {

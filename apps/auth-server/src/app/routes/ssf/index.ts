@@ -23,7 +23,7 @@ import {
   SUBJECT_KEY_MAX,
   verificationRequestSchema,
 } from '@qauth-labs/fastify-plugin-ssf';
-import { TooManyRequestsError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import { scanValues, ssfStreamVerificationRequested } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -90,8 +90,9 @@ const streamIdQuerySchema = z.object({ stream_id: z.string().min(1).max(255) });
 /**
  * The error statuses a stream management route answers by design (#513): a
  * request the schema or the protocol refuses, a refused token, a token without
- * `ssf:stream`, and a stream the receiver does not have or a realm that does
- * not run the transmitter. The OpenAPI document adds 421, 429 and 500.
+ * `ssf:stream` or a user the receiver may not add as a subject (#540), and a
+ * stream the receiver does not have or a realm that does not run the
+ * transmitter. The OpenAPI document adds 421, 429 and 500.
  */
 const STREAM_ERRORS = [400, 401, 403, 404] as const;
 
@@ -473,7 +474,7 @@ export default async function (fastify: FastifyInstance) {
       ...common,
       schema: {
         description:
-          'Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event.',
+          'Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event. A user must be related to the receiver’s client: an active consent for it, or a live refresh token it was issued. Any other user, an unknown one included, is refused with 403.',
         ...streamSchema,
         'x-qauth-errors': STREAM_ERRORS,
         body: addSubjectRequestSchema,
@@ -484,6 +485,22 @@ export default async function (fastify: FastifyInstance) {
       const receiver = ssfReceiverOf(request);
       const stream = await ownStream(receiver, request.body.stream_id);
       const { subjectKey, eventSubject } = subjectRow(receiver, request.body.subject);
+      // A receiver learns only of the users related to its own client (#540,
+      // decided 2026-10-26): one who consented to it, or holds a live refresh
+      // token it was issued. Any other user is refused as SSF 1.0 §8.1.3.2
+      // prescribes for a subject the receiver may not add (403), an unknown
+      // id alike, so the answer tells no one which users exist.
+      if (
+        eventSubject?.type === 'user' &&
+        !(await streams.isRelatedUser(
+          receiver.realm.id,
+          receiver.client.id,
+          eventSubject.id,
+          Date.now()
+        ))
+      ) {
+        throw new ForbiddenError('The receiver may not add this subject');
+      }
       const added = await streams.addSubject(
         stream.id,
         {

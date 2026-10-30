@@ -425,9 +425,10 @@ describe('the SSF transmitter (real containers)', () => {
       );
       expect(stored.rows[0].authorization_header).toMatch(/^v1\./);
 
+      // A client subject: a user must be related to the receiver (#540).
       const added = await call(app, who, 'POST', '/ssf/subjects/add', {
         stream_id: streamId,
-        subject: { format: 'iss_sub', iss: ISSUER, sub: randomUUID() },
+        subject: { format: 'opaque', id: who.clientId },
       });
       expect(added.statusCode, added.body).toBe(200);
       expect(added.body).toBe('');

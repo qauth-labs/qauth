@@ -8,9 +8,11 @@ import type {
   SsfStreamKey,
   SsfStreamsRepository,
 } from '../../types';
-import { oauthClients, realms } from '../schema/core';
+import { oauthConsents } from '../schema/consents';
+import { oauthClients, realms, users } from '../schema/core';
 import { eventDeliveries } from '../schema/event-deliveries';
 import { ssfStreams, ssfStreamSubjects } from '../schema/ssf';
+import { refreshTokens } from '../schema/tokens';
 
 /**
  * The delivery route kind of the Shared Signals Framework transmitter: the
@@ -188,6 +190,28 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
         .from(ssfStreamSubjects)
         .where(eq(ssfStreamSubjects.streamId, streamId))
         .orderBy(asc(ssfStreamSubjects.createdAt), asc(ssfStreamSubjects.subjectKey));
+    },
+
+    async isRelatedUser(realmId, receiverClientId, userId, now) {
+      if (![realmId, receiverClientId, userId].every(isUuid)) return false;
+      const { rows } = await db.execute<{ related: boolean }>(sql`
+        select exists (
+          select 1 from ${oauthConsents}
+          where ${oauthConsents.realmId} = ${realmId}
+            and ${oauthConsents.userId} = ${userId}
+            and ${oauthConsents.oauthClientId} = ${receiverClientId}
+            and ${oauthConsents.revokedAt} is null
+        ) or exists (
+          select 1 from ${refreshTokens}
+          join ${users} on ${users.id} = ${refreshTokens.userId}
+            and ${users.realmId} = ${realmId}
+          where ${refreshTokens.userId} = ${userId}
+            and ${refreshTokens.oauthClientId} = ${receiverClientId}
+            and not ${refreshTokens.revoked}
+            and ${refreshTokens.expiresAt} > ${now}
+        ) as "related"
+      `);
+      return rows[0]?.related === true;
     },
 
     async listDestinations() {
