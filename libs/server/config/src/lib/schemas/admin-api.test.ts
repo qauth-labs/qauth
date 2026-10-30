@@ -5,13 +5,13 @@ import { adminApiEnvSchema } from './admin-api';
 /** The admin API's listener (issue #511). */
 
 describe('adminApiEnvSchema', () => {
-  it('runs on loopback port 3002 by default, unset and blank alike', () => {
+  it('is off by default, on loopback port 3002, unset and blank alike', () => {
     for (const env of [
       {},
       { ADMIN_API_ENABLED: '', ADMIN_API_HOST: ' ', ADMIN_API_PORT: '' },
     ] as Record<string, string>[]) {
       expect(adminApiEnvSchema.parse(env)).toEqual({
-        ADMIN_API_ENABLED: true,
+        ADMIN_API_ENABLED: false,
         ADMIN_API_HOST: '127.0.0.1',
         ADMIN_API_PORT: 3002,
       });
@@ -21,11 +21,11 @@ describe('adminApiEnvSchema', () => {
   it('takes a switch, an address and a port', () => {
     expect(
       adminApiEnvSchema.parse({
-        ADMIN_API_ENABLED: 'false',
+        ADMIN_API_ENABLED: 'true',
         ADMIN_API_HOST: '10.0.4.12',
         ADMIN_API_PORT: '9443',
       })
-    ).toEqual({ ADMIN_API_ENABLED: false, ADMIN_API_HOST: '10.0.4.12', ADMIN_API_PORT: 9443 });
+    ).toEqual({ ADMIN_API_ENABLED: true, ADMIN_API_HOST: '10.0.4.12', ADMIN_API_PORT: 9443 });
   });
 
   it('refuses a switch that is not true or false', () => {

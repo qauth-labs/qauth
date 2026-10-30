@@ -10,9 +10,9 @@ export const ADMIN_API_KEYS = defineKeys([
     tier: 'stable',
     role: 'deployment',
     owner: 'server',
-    default: 'true',
+    default: 'false',
     since: '0.2.0',
-    docs: 'Run the admin API on its own internal listener, on a process whose `SERVICE_ROLES` holds `admin`; `false` serves no admin API on this process, and the public listener never serves it.',
+    docs: 'Run the admin API on its own internal listener, on a process whose `SERVICE_ROLES` holds `admin`, off by default until the first admin operations (#517) and DPoP-bound admin tokens (#520) ship; `false` serves no admin API on this process, and the public listener never serves it.',
   },
   {
     name: 'ADMIN_API_HOST',
@@ -21,7 +21,7 @@ export const ADMIN_API_KEYS = defineKeys([
     owner: 'server',
     default: '127.0.0.1',
     since: '0.2.0',
-    docs: "The address the admin API's listener binds to, loopback by default; the listener grants nothing for a caller's network position, so every call needs an admin token.",
+    docs: "The address the admin API's listener binds to, loopback by default, and loopback only in production until admin tokens are DPoP-bound (#520); the listener grants nothing for a caller's network position, so every call needs an admin token.",
   },
   {
     name: 'ADMIN_API_PORT',

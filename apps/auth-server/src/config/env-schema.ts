@@ -1,3 +1,5 @@
+import { BlockList, isIPv4, isIPv6 } from 'node:net';
+
 import {
   adminApiEnvSchema,
   assuranceEnvSchema,
@@ -37,6 +39,19 @@ import { z } from 'zod';
  */
 export const JOBS_MIN_DB_POOL_MAX = 2;
 
+/** The loopback addresses: 127.0.0.0/8 and ::1. */
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK.addAddress('::1', 'ipv6');
+
+/** Whether the admin listener's `host` is a loopback address, or `localhost`. */
+function isLoopbackHost(host: string): boolean {
+  if (host.toLowerCase() === 'localhost') return true;
+  if (isIPv4(host)) return LOOPBACK.check(host, 'ipv4');
+  if (isIPv6(host)) return LOOPBACK.check(host, 'ipv6');
+  return false;
+}
+
 /**
  * Auth server environment schema
  * Composes all required schemas and adds app-specific configuration
@@ -53,8 +68,8 @@ export const envSchema = z
     // process without the signer. The app checks them at boot.
     ...serviceRolesEnvSchema.shape,
     // The admin API's internal listener (ADR-019 Decisions 7 and 8, #511):
-    // ADMIN_API_ENABLED (default on), ADMIN_API_HOST (default loopback) and
-    // ADMIN_API_PORT, for a process holding the `admin` role.
+    // ADMIN_API_ENABLED (default off until #517 and #520), ADMIN_API_HOST
+    // (default loopback) and ADMIN_API_PORT, for a process holding `admin`.
     ...adminApiEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
@@ -207,6 +222,22 @@ export const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['ADMIN_API_PORT'],
         message: `ADMIN_API_PORT must differ from PORT (${env.PORT}): the admin API runs on its own listener, never on the public one.`,
+      });
+    }
+
+    // #511 — until admin tokens are DPoP-bound (#520), an admin token taken in
+    // transit works from anywhere that reaches the listener: in production it
+    // listens on loopback only.
+    if (
+      env.ADMIN_API_ENABLED &&
+      env.SERVICE_ROLES.includes('admin') &&
+      env.NODE_ENV === 'production' &&
+      !isLoopbackHost(env.ADMIN_API_HOST)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ADMIN_API_HOST'],
+        message: `ADMIN_API_HOST must be a loopback address (127.0.0.0/8, ::1 or localhost) in production, not ${env.ADMIN_API_HOST}, until admin tokens are DPoP-bound (#520): a bearer admin token works from anywhere that reaches the listener.`,
       });
     }
 

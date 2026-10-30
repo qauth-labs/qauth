@@ -265,7 +265,8 @@ function bootWithAdminListener(
 ): Promise<BootedAuthServer> {
   if (!infra || !jwt) throw new Error('no infrastructure');
   return bootAuthServer(
-    { ...baseEnvironment(infra, jwt), ...environment },
+    // The listener is off by default until #517 and #520 ship.
+    { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true', ...environment },
     {
       ...(logLines === undefined
         ? {}
@@ -1116,9 +1117,10 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       ctx.skip();
       return;
     }
-    const booted = await bootAuthServer(baseEnvironment(infra, jwt), {
-      adminListener: () => ({}),
-    });
+    const booted = await bootAuthServer(
+      { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true' },
+      { adminListener: () => ({}) }
+    );
     const admin = booted.admin;
     if (admin === undefined) throw new Error('admin listener not booted');
     const address = await admin.listen({ host: '127.0.0.1', port: 0 });

@@ -6,14 +6,14 @@
  * process: a process, not `app()`, because `main.ts` builds the second
  * instance, binds it and stops it on a signal, and those are the properties.
  *
- * - With the defaults, the process listens on the admin port, on loopback,
- *   then on the public port. The admin listener serves the admin OpenAPI
+ * - With ADMIN_API_ENABLED=true, the process listens on the admin port, on
+ *   loopback, then on the public port. The admin listener serves the admin OpenAPI
  *   document; the public listener answers 404 for every admin path; SIGTERM
  *   stops both and the process exits 0.
  * - With the admin port taken, the process exits 1 and never listens on the
  *   public port.
- * - With ADMIN_API_ENABLED=false, or without the admin role, nothing listens
- *   on the admin port.
+ * - With ADMIN_API_ENABLED unset (off by default until #517 and #520) or
+ *   false, or without the admin role, nothing listens on the admin port.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -162,6 +162,9 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
         PORT: String(port),
+        // Off by default until #517 and #520: every case but the last turns
+        // the listener on.
+        ADMIN_API_ENABLED: 'true',
         ADMIN_API_PORT: String(adminPort),
         DATABASE_URL: postgres.connectionString,
         REDIS_URL: redis.connectionUrl,
@@ -253,8 +256,10 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     }
   });
 
-  it('opens no admin port with ADMIN_API_ENABLED=false, or without the admin role', async (ctx) => {
+  it('opens no admin port by default, with ADMIN_API_ENABLED=false, or without the admin role', async (ctx) => {
     const environments: Record<string, string>[] = [
+      // Blank is unset: the default.
+      { ADMIN_API_ENABLED: '' },
       { ADMIN_API_ENABLED: 'false' },
       // A process with the signer, so it needs no signer service.
       { SERVICE_ROLES: 'web,api,signer,delivery' },

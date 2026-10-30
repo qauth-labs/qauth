@@ -15,13 +15,13 @@ key.
 
 ## The roles
 
-| Role       | What the process registers                                                                                                                                                                                           | Jobs                                                    |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `web`      | The browser-session endpoints: authorize, the sign-in, consent and wallet pages, the consent list and wallet linking.                                                                                                | The session purge, when it ships                        |
-| `api`      | Token, introspection, revocation, userinfo, dynamic registration, discovery, JWKS, the OID4VP endpoints a wallet calls, the account and developer APIs, the SSF transmitter and the legacy `/auth` routes.           | `purge-expired`: expired codes, tokens and wallet state |
-| `admin`    | The admin API's internal listener, on `ADMIN_API_HOST` and `ADMIN_API_PORT` (`127.0.0.1`, port `3002`, by default). No admin operation and no key operation has shipped yet, so it serves only its OpenAPI document. | —                                                       |
-| `signer`   | The KEK, every private key and the signer. It runs the default realm's key boot step.                                                                                                                                | Key rotation, when it ships                             |
-| `delivery` | The event delivery reader, which sends the SSF streams.                                                                                                                                                              | `event-retention`                                       |
+| Role       | What the process registers                                                                                                                                                                                                                                            | Jobs                                                    |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `web`      | The browser-session endpoints: authorize, the sign-in, consent and wallet pages, the consent list and wallet linking.                                                                                                                                                 | The session purge, when it ships                        |
+| `api`      | Token, introspection, revocation, userinfo, dynamic registration, discovery, JWKS, the OID4VP endpoints a wallet calls, the account and developer APIs, the SSF transmitter and the legacy `/auth` routes.                                                            | `purge-expired`: expired codes, tokens and wallet state |
+| `admin`    | The admin API's internal listener while `ADMIN_API_ENABLED` is on (off by default), on `ADMIN_API_HOST` and `ADMIN_API_PORT` (`127.0.0.1`, port `3002`, by default). No admin operation and no key operation has shipped yet, so it serves only its OpenAPI document. | —                                                       |
+| `signer`   | The KEK, every private key and the signer. It runs the default realm's key boot step.                                                                                                                                                                                 | Key rotation, when it ships                             |
+| `delivery` | The event delivery reader, which sends the SSF streams.                                                                                                                                                                                                               | `event-retention`                                       |
 
 Every role answers `/health` and `/metrics` for its own process. Write the
 roles as a comma-separated list, such as `SERVICE_ROLES=web` or
@@ -122,9 +122,10 @@ With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.
 
 A process holding `admin` runs the admin API on a second listener, beside the
-public one, while `ADMIN_API_ENABLED` is on: on loopback by default, so a
-single deployment does not expose it. A distributed deployment binds
-`ADMIN_API_HOST` to its internal network. The listener grants nothing for a
+public one, while `ADMIN_API_ENABLED` is on. It is off by default until the
+first admin operations (#517) and DPoP-bound admin tokens (#520) ship. The
+listener binds to loopback, and until #520 a production process refuses an
+`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The listener grants nothing for a
 caller's network position: every admin call needs an admin token
 ([API conventions](/reference/api-conventions/#the-admin-listener)). The public
 listener never serves the admin API. `ADMIN_API_PORT` must differ from `PORT`.

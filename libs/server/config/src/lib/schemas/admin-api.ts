@@ -4,10 +4,12 @@ import { z } from 'zod';
  * The admin API's listener (ADR-019 Decisions 7 and 8, issue #511).
  *
  * The admin API runs on its own internal listener, a second HTTP server beside
- * the public one, on a process that holds the `admin` service role. It binds
- * to loopback by default, so a single deployment does not expose it; a
- * distributed deployment binds it to its internal network. The listener grants
- * nothing for a caller's network position: every call carries an admin token.
+ * the public one, on a process that holds the `admin` service role, once an
+ * operator turns it on: it is off by default until the first admin operations
+ * (#517) and DPoP-bound admin tokens (#520) ship. It binds to loopback by
+ * default; until #520, a production process refuses any other address. The
+ * listener grants nothing for a caller's network position: every call carries
+ * an admin token.
  * A plain `z.object`, so the auth server can spread its `.shape`.
  */
 
@@ -40,10 +42,11 @@ export const DEFAULT_ADMIN_API_PORT = 3002;
  */
 export const adminApiEnvSchema = z.object({
   /**
-   * Run the admin listener on a process that holds the `admin` role. On by
-   * default; off, the process serves no admin API at all.
+   * Run the admin listener on a process that holds the `admin` role. Off by
+   * default until #517 and #520 ship; off, the process serves no admin API at
+   * all.
    */
-  ADMIN_API_ENABLED: strictBoolean(true),
+  ADMIN_API_ENABLED: strictBoolean(false),
   /** The address the admin listener binds to. Loopback by default. */
   ADMIN_API_HOST: blankAsUnset(z.string().trim().min(1).default(DEFAULT_ADMIN_API_HOST)),
   /** The TCP port the admin listener binds to. */

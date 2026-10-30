@@ -946,7 +946,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The admin API's own listener and request pipeline** ([#511], ADR-019
   Decisions 7 and 8). A process that holds the `admin` role runs a second HTTP
   server for the admin API, on `ADMIN_API_HOST` and `ADMIN_API_PORT`
-  (`127.0.0.1`, port `3002`, by default; `ADMIN_API_ENABLED=false` turns it off). It
+  (`127.0.0.1`, port `3002`, by default) once `ADMIN_API_ENABLED=true` turns it
+  on: it is off by default until the first admin operations ([#517]) and
+  DPoP-bound admin tokens ([#520]) ship, and until [#520] a production process
+  refuses an `ADMIN_API_HOST` that is not loopback. It
   binds before the public port and closes with the server. The public listener
   answers 404 for every admin path and refuses to boot an admin route. The
   listener grants nothing for a caller's network position: every admin route
@@ -976,13 +979,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Every process that holds the `admin` role now binds a second port**
-  ([#511]). `SERVICE_ROLES=all`, the default, holds it, so an existing
-  deployment's process now also listens on `127.0.0.1:3002` (`ADMIN_API_HOST`
-  and `ADMIN_API_PORT`), and refuses to start when that port is taken. Two
-  such processes in one network namespace, such as a blue/green pair on one
-  host or containers on the host network, need a distinct `ADMIN_API_PORT`
-  each, or `ADMIN_API_ENABLED=false` on all but one.
+- **A process binds a second port only once the admin listener is turned
+  on** ([#511]). An existing deployment binds nothing new: the listener is off
+  by default. A process with `ADMIN_API_ENABLED=true` and the `admin` role
+  (`SERVICE_ROLES=all`, the default, holds it) also listens on
+  `127.0.0.1:3002` (`ADMIN_API_HOST` and `ADMIN_API_PORT`), and refuses to start
+  when that port is taken: two such processes in one network namespace, such as
+  a blue/green pair on one host or containers on the host network, need a
+  distinct `ADMIN_API_PORT` each.
 - **BREAKING (relying parties and resource servers): tokens are signed and
   verified per realm, through the signer** ([#491], ADR-019 Decisions 1 and 9).
   The JWT plugin holds no key any more. Every access token, ID token, hybrid
