@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import { exportJWK, importPKCS8, importSPKI, SignJWT } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -11,6 +14,7 @@ import {
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
+  provisionRealmKeys,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
@@ -39,6 +43,9 @@ const ALL_ADMIN_SCOPES = ADMIN_SCOPE_LIST.join(' ');
 /** What the fixture handlers saw, for the assertions. */
 const runs: string[] = [];
 const handlerTransactions: unknown[] = [];
+
+/** A request the fixture holds open until the test lets it go. */
+const hold: { entered?: () => void; release?: Promise<void> } = {};
 
 function realmPath(realmId: string, suffix = ''): string {
   return `/admin/v1-rc.0/realms/${realmId}${suffix}`;
@@ -78,7 +85,21 @@ async function fixtureAdminApi() {
     permissions: ['realms.policies.security'],
     description: 'A security operation (fixture).',
   });
-  const registry = operations.createOperationRegistry([read, create, fail, rotate], {
+  const send = operations.defineOperation({
+    id: 'fixtureAccounts.send',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then send the reply itself (fixture).',
+  });
+  const held = operations.defineOperation({
+    id: 'fixtureHolds.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account once the test lets the request go (fixture).',
+  });
+  const registry = operations.createOperationRegistry([read, create, fail, rotate, send, held], {
     reserved: [],
   });
 
@@ -132,6 +153,31 @@ async function fixtureAdminApi() {
           const realmId = requestAdminCaller(request).targetRealm.id;
           await request.server.repositories.users.create({ realmId }, adminTransaction(request));
           throw new Error('the fixture handler failed after its change');
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-sends',
+        { config: { operation: send.id }, schema: schemaOf(send) },
+        async (request, reply) => {
+          runs.push(send.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          return reply.send({ sent: true });
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-holds',
+        { config: { operation: held.id }, schema: schemaOf(held) },
+        async (request) => {
+          runs.push(held.id);
+          hold.entered?.();
+          await hold.release;
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          const account = await request.server.repositories.users.create(
+            { realmId },
+            adminTransaction(request)
+          );
+          return { id: account.id };
         }
       );
       scope.post(
@@ -334,7 +380,9 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         '/admin/v1-rc.0/realms/{realmId}',
         '/admin/v1-rc.0/realms/{realmId}/fixture-accounts',
         '/admin/v1-rc.0/realms/{realmId}/fixture-failures',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-holds',
         '/admin/v1-rc.0/realms/{realmId}/fixture-keys/rotate',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-sends',
       ]);
 
       const onPublic = await app().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' });
@@ -364,18 +412,22 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(runs).toEqual([]);
     });
 
-    it('bounds the request id a caller sends, which the audit row records', async () => {
+    it('makes every request id itself, which the audit row records, whatever the caller sends', async () => {
       const realmId = await tenant('alpha');
       const { token } = await adminWith(realmId, 'viewer');
-      const response = await admin().inject({
-        method: 'GET',
-        url: realmPath(realmId),
-        headers: { authorization: `Bearer ${token}`, 'x-request-id': 'x'.repeat(129) },
-      });
-      expect(response.statusCode).toBe(200);
-      const traceId = response.headers['x-request-id'];
-      expect(traceId).toMatch(/^[0-9a-f-]{36}$/);
-      expect((await auditRows(realmId)).map((row) => row.trace_id)).toEqual([traceId]);
+      const ids: string[] = [];
+      for (const sent of ['trace-chosen-by-caller', 'x'.repeat(129)]) {
+        const response = await admin().inject({
+          method: 'GET',
+          url: realmPath(realmId),
+          headers: { authorization: `Bearer ${token}`, 'x-request-id': sent },
+        });
+        expect(response.statusCode).toBe(200);
+        const id = response.headers['x-request-id'];
+        expect(id).toMatch(/^[0-9a-f-]{36}$/);
+        ids.push(String(id));
+      }
+      expect((await auditRows(realmId)).map((row) => row.trace_id)).toEqual(ids);
     });
 
     it('passes the API conventions check against the registry it was built with', async () => {
@@ -385,7 +437,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' })
       ).json();
       const report = checkApiConventions(document, { operations: registry });
-      expect(report.checkedOperations).toBe(4);
+      expect(report.checkedOperations).toBe(6);
       expect(report.violations).toEqual([]);
     });
   });
@@ -405,8 +457,12 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         };
       };
 
+      const realmReads = vi.spyOn(app().repositories.realms, 'findById');
+      const grantReads = vi.spyOn(app().repositories.adminGrants, 'listLive');
       const existing = await call('GET', realmPath(realmId));
       expect(existing.statusCode).toBe(401);
+      expect(realmReads).not.toHaveBeenCalled();
+      expect(grantReads).not.toHaveBeenCalled();
       expect(existing.json()).toMatchObject({ code: 'unauthorized' });
       expect(existing.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
       expect(comparable(existing)).toEqual(comparable(await call('GET', realmPath(missing))));
@@ -446,6 +502,8 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
           scope: ALL_ADMIN_SCOPES,
           ...claims,
         });
+      const realmReads = vi.spyOn(app().repositories.realms, 'findById');
+      const grantReads = vi.spyOn(app().repositories.adminGrants, 'listLive');
       const refusals = [
         // Another family's audience.
         await sign({ aud: API_FAMILY_AUDIENCES.account }),
@@ -459,8 +517,96 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         expect(response.statusCode).toBe(401);
         expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
       }
+      expect(realmReads).not.toHaveBeenCalled();
+      expect(grantReads).not.toHaveBeenCalled();
       expect(runs).toEqual([]);
       expect(await auditRows(realmId)).toEqual([]);
+    });
+  });
+
+  describe('tokens of other realms', () => {
+    /** A realm with its own issuer and keys, and an enabled account in it. */
+    async function signingTenant(name: string): Promise<{ id: string; issuer: string }> {
+      const id = await tenant(name);
+      await provisionRealmKeys(app(), name);
+      return { id, issuer: `https://${name}.example.com` };
+    }
+
+    /**
+     * An admin access token for `sub` naming `issuer`, signed with the
+     * operator realm's Ed25519 key, the one the key boot step imported from
+     * the suite's JWT_PRIVATE_KEY, under that key's `kid`. The signer itself
+     * refuses claims that set `iss`.
+     */
+    async function signedWithOperatorKey(issuer: string, sub: string): Promise<string> {
+      if (!jwt) throw new Error('no key pair');
+      const operator = await defaultRealm();
+      const publicJwk = await exportJWK(await importSPKI(jwt.publicKey, 'EdDSA'));
+      const { keys } = (await app().jwtUtils.getJwks(operator)) as {
+        keys: { kid?: string; x?: string }[];
+      };
+      const kid = keys.find((key) => key.x === publicJwk.x)?.kid;
+      if (kid === undefined) throw new Error('the imported key is not in the realm JWKS');
+      const now = Math.floor(Date.now() / 1000);
+      return new SignJWT({ client_id: 'admin-console', scope: ALL_ADMIN_SCOPES })
+        .setProtectedHeader({ alg: 'EdDSA', typ: 'at+jwt', kid })
+        .setIssuer(issuer)
+        .setSubject(sub)
+        .setAudience(ADMIN)
+        .setJti(randomUUID())
+        .setIssuedAt(now)
+        .setExpirationTime(now + 300)
+        .sign(await importPKCS8(jwt.privateKey, 'EdDSA'));
+    }
+
+    it("serves a realm-local admin on its own realm, with its own realm's token, and nowhere else", async () => {
+      const alpha = await signingTenant('alpha');
+      const operator = await defaultRealm();
+      const userId = (await app().repositories.users.create({ realmId: alpha.id })).id;
+      await app().repositories.adminGrants.create({
+        userId,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: alpha.id,
+        createdBy: null,
+      });
+      const token = await app().jwtUtils.signAccessToken(
+        { id: alpha.id },
+        { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+      );
+
+      const own = await call('GET', realmPath(alpha.id), token);
+      expect(own.statusCode).toBe(200);
+      expect(own.json()).toEqual({ realm: alpha.id, operator: false, requestRealm: alpha.id });
+      expect(await auditRows(alpha.id)).toMatchObject([
+        { actor_id: userId, actor_realm_id: alpha.id, outcome: 'succeeded' },
+      ]);
+      expect((await call('GET', realmPath(operator.id), token)).statusCode).toBe(404);
+      expect(await auditRows(operator.id)).toEqual([]);
+    });
+
+    it("refuses a token that names one realm's issuer but carries another realm's signature", async () => {
+      const alpha = await signingTenant('alpha');
+      const operator = await defaultRealm();
+      const ofAlpha = (await app().repositories.users.create({ realmId: alpha.id })).id;
+      await app().repositories.adminGrants.create({
+        userId: ofAlpha,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: alpha.id,
+        createdBy: null,
+      });
+      const { userId: ofOperator } = await adminWith(alpha.id, 'viewer');
+
+      // Signed with the operator realm's key, naming realm alpha's issuer.
+      const forged = await signedWithOperatorKey(alpha.issuer, ofAlpha);
+      const refused = await call('GET', realmPath(alpha.id), forged);
+      expect(refused.statusCode).toBe(401);
+      expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
+
+      // The same key and claims naming the operator realm's own issuer pass:
+      // only the realm the issuer names decided which keys verify.
+      const genuine = await signedWithOperatorKey(operator.issuer, ofOperator);
+      expect((await call('GET', realmPath(alpha.id), genuine)).statusCode).toBe(200);
+      expect(runs).toEqual(['realms.get']);
     });
   });
 
@@ -492,10 +638,9 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       const response = await admin().inject({
         method: 'GET',
         url: realmPath(realmId),
-        headers: { authorization: `Bearer ${token}`, 'x-request-id': 'trace-read-1' },
+        headers: { authorization: `Bearer ${token}` },
       });
       expect(response.statusCode).toBe(200);
-      expect(response.headers['x-request-id']).toBe('trace-read-1');
 
       expect(append).toHaveBeenCalledTimes(1);
       expect(append.mock.calls[0][0]).toBe(handlerTransactions[0]);
@@ -510,7 +655,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         effects: [],
         outcome: 'succeeded',
         masked_diff: null,
-        trace_id: 'trace-read-1',
+        trace_id: response.headers['x-request-id'],
       });
     });
 
@@ -660,6 +805,20 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       });
     });
 
+    it('refuses a handler that sends its own reply: no change, a 500, and one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-sends'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureAccounts.send']);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureAccounts.send', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
     it('writes a denied row for a request refused after authorization, before its handler', async () => {
       const realmId = await tenant('alpha');
       const { token } = await adminWith(realmId, 'editor');
@@ -685,8 +844,13 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
 
   beforeAll(async () => {
     if (!dockerUp) return;
-    // Two requests a minute, per address and per token subject.
-    booted = await bootWithAdminListener({ RATE_LIMIT_MAX: '2', RATE_LIMIT_WINDOW: '60' });
+    // Two requests a minute, per address and per token subject. The public
+    // listener trusts a loopback proxy; the admin listener trusts none.
+    booted = await bootWithAdminListener({
+      RATE_LIMIT_MAX: '2',
+      RATE_LIMIT_WINDOW: '60',
+      TRUST_PROXY: 'loopback',
+    });
   }, 240_000);
 
   afterAll(async () => {
@@ -732,6 +896,21 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
     expect(other.statusCode).toBe(401);
   });
 
+  it('counts the TCP peer, whatever X-Forwarded-For says, even from a proxy the public listener trusts', async () => {
+    const { admin } = servers();
+    const statuses: number[] = [];
+    for (const forwardedFor of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) {
+      const response = await admin.inject({
+        method: 'GET',
+        url: realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'),
+        remoteAddress: '127.0.0.1',
+        headers: { 'x-forwarded-for': forwardedFor },
+      });
+      statuses.push(response.statusCode);
+    }
+    expect(statuses).toEqual([401, 401, 429]);
+  });
+
   it('limits calls per token subject from any address, before the realm, writing no row', async () => {
     const { app, admin } = servers();
     const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
@@ -772,6 +951,37 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
   });
 });
 
+describe('the request ceilings with RATE_LIMIT_ENABLED=false (#511, real containers)', () => {
+  let booted: BootedAuthServer | undefined;
+
+  beforeAll(async () => {
+    if (!dockerUp) return;
+    booted = await bootWithAdminListener({ RATE_LIMIT_ENABLED: 'false' });
+  }, 240_000);
+
+  afterAll(async () => {
+    await booted?.close();
+  });
+
+  it('keeps both ceilings, in memory, at the default of 100 calls a minute', async (ctx) => {
+    if (!booted?.admin) {
+      ctx.skip();
+      return;
+    }
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 101; attempt += 1) {
+      const response = await booted.admin.inject({
+        method: 'GET',
+        url: realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'),
+        remoteAddress: '198.51.100.20',
+      });
+      statuses.push(response.statusCode);
+    }
+    expect(statuses.slice(0, 100).every((status) => status === 401)).toBe(true);
+    expect(statuses[100]).toBe(429);
+  });
+});
+
 describe('the admin listener closes with the server (#511, real containers)', () => {
   it('stops listening when the server closes', async (ctx) => {
     if (!dockerUp || !infra || !jwt) {
@@ -790,5 +1000,67 @@ describe('the admin listener closes with the server (#511, real containers)', ()
 
     expect(admin.server.listening).toBe(false);
     await expect(fetch(`${address}/admin/v1-rc.0/openapi.json`)).rejects.toThrow();
+  }, 240_000);
+
+  it('lets a call in flight finish, its change and audit row committed, before the database closes', async (ctx) => {
+    if (!dockerUp) {
+      ctx.skip();
+      return;
+    }
+    const booted = await bootWithAdminListener();
+    const { app, admin } = booted;
+    if (admin === undefined) throw new Error('admin listener not booted');
+    await resetE2eState(app);
+    const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!operator) throw new Error('default realm missing');
+    const { realm } = await app.repositories.realms.createWithPrimaryHost(
+      { name: 'alpha', issuer: 'https://alpha.example.com', enabled: true },
+      'alpha.example.com'
+    );
+    const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+    await app.repositories.adminGrants.create({
+      userId,
+      role: { kind: 'built-in', name: 'editor' },
+      targetRealmId: realm.id,
+      createdBy: null,
+    });
+    const token = await app.jwtUtils.signAccessToken(
+      { id: operator.id },
+      { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+    );
+
+    let release = (): void => undefined;
+    hold.release = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      hold.entered = resolve;
+    });
+    try {
+      const address = await admin.listen({ host: '127.0.0.1', port: 0 });
+      const call = fetch(`${address}${realmPath(realm.id, '/fixture-holds')}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      await entered;
+
+      // The server closes while the call waits inside its handler.
+      const startedClosing = Date.now();
+      const closing = booted.close();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      release();
+
+      // Its account and audit row were written: the pool was still open.
+      const response = await call;
+      expect(response.status).toBe(200);
+      // The client keeps its connection alive; the close does not wait for it.
+      await closing;
+      expect(Date.now() - startedClosing).toBeLessThan(5_000);
+      expect(admin.server.listening).toBe(false);
+    } finally {
+      release();
+      delete hold.entered;
+      delete hold.release;
+    }
   }, 240_000);
 });

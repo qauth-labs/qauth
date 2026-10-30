@@ -10,6 +10,8 @@
  *   then on the public port. The admin listener serves the admin OpenAPI
  *   document; the public listener answers 404 for every admin path; SIGTERM
  *   stops both and the process exits 0.
+ * - With the admin port taken, the process exits 1 and never listens on the
+ *   public port.
  * - With ADMIN_API_ENABLED=false, or without the admin role, nothing listens
  *   on the admin port.
  *
@@ -132,14 +134,15 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
 
   async function startServer(
     ctx: { skip: () => void },
-    environment: Record<string, string> = {}
+    environment: Record<string, string> = {},
+    ports: { adminPort?: number } = {}
   ): Promise<StartedServer> {
     if (!dockerUp || !postgres || !redis || !jwt) {
       ctx.skip();
       throw new Error('unreachable');
     }
     const port = await freePort();
-    const adminPort = await freePort();
+    const adminPort = ports.adminPort ?? (await freePort());
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -215,6 +218,29 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     expect(await server.exited).toBe(0);
     expect(await accepts(server.adminPort)).toBe(false);
     expect(await accepts(server.port)).toBe(false);
+  });
+
+  it('never opens the public port when the admin port is taken, and exits non-zero', async (ctx) => {
+    const squatter = createServer();
+    const adminPort = await new Promise<number>((resolve, reject) => {
+      squatter.once('error', reject);
+      squatter.listen(0, '127.0.0.1', () => {
+        const address = squatter.address();
+        if (typeof address === 'object' && address !== null) resolve(address.port);
+        else reject(new Error('no port'));
+      });
+    });
+    try {
+      const server = await startServer(ctx, {}, { adminPort });
+      expect(await server.exited).toBe(1);
+
+      const failure = server.lines().find((line) => line.msg === 'Failed to start server');
+      expect(JSON.stringify(failure)).toContain('EADDRINUSE');
+      expect(logged(server, 'Server listening on ')()).toBe(false);
+      expect(await accepts(server.port)).toBe(false);
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
   });
 
   it('opens no admin port with ADMIN_API_ENABLED=false, or without the admin role', async (ctx) => {
