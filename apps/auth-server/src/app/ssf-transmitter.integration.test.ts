@@ -411,7 +411,15 @@ describe('the SSF transmitter (real containers)', () => {
         stream_id: streamId,
         iss: ISSUER,
         aud: who.clientId,
-        events_supported: [],
+        // The SSF events the registry maps (#540); the verification event is
+        // never among them.
+        events_supported: [
+          'https://schemas.openid.net/secevent/caep/event-type/credential-change',
+          'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+          'https://schemas.openid.net/secevent/caep/event-type/token-claims-change',
+          'urn:qauth:secevent:key-emergency-retired:v1-rc.0',
+          'urn:qauth:secevent:token-revoked:v1-rc.0',
+        ],
         events_requested: [VERIFICATION],
         events_delivered: [],
         delivery: { method: PUSH, endpoint_url: 'https://receiver.egress.test/events' },
