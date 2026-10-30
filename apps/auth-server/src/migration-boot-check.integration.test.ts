@@ -154,6 +154,8 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
         PORT: String(await freePort()),
+        // The admin listener (#511) binds a port of its own too.
+        ADMIN_API_PORT: String(await freePort()),
         DATABASE_URL: databaseUrl,
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,
