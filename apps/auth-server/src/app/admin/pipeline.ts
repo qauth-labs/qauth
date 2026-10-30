@@ -17,7 +17,7 @@ import {
   type OperationClassification,
   type OperationRegistry,
 } from '../helpers/admin-operations';
-import { PERMISSION_REGISTRY } from '../helpers/admin-permissions';
+import type { PermissionRegistry } from '../helpers/admin-permissions';
 import { ADMIN_SCOPES, tokenScopeSet } from '../helpers/admin-scopes';
 import { ApprovalRequiredError } from '../helpers/approval-required';
 import { requireFamilyToken } from '../helpers/family-token';
@@ -292,24 +292,31 @@ async function adminAuthorityStage(request: FastifyRequest): Promise<void> {
 /**
  * Stage 6's check: the caller holds every permission the classification
  * names. The effective permissions are the grants' roles intersected with the
- * token's scopes, so a permission the roles give but the token's scopes do
- * not reach gets the `insufficient_scope` challenge naming the scope; a
- * permission no role gives gets a 403 no scope can lift.
+ * token's scopes. When the roles hold every missing permission, only the
+ * token's scopes withhold them: the 403 carries the `insufficient_scope`
+ * challenge naming the scopes a wider token needs (RFC 6750 §3.1). When a
+ * role lacks one, no token would pass, and the challenge names no scope.
  */
-function authorizeAdminRequest(request: FastifyRequest, classification: OperationClassification) {
+function authorizeAdminRequest(
+  request: FastifyRequest,
+  classification: OperationClassification,
+  permissions: PermissionRegistry
+) {
   const caller = requestAdminCaller(request);
   const missing = classification.permissions.filter((id) => !caller.permissions.has(id));
   if (missing.length === 0) return;
   const granted = tokenScopeSet(request.jwtPayload?.scope ?? '');
-  const scopes = [
-    ...new Set(
-      missing
-        .map((id) => PERMISSION_REGISTRY.get(id)?.class)
-        .filter((permissionClass) => permissionClass !== undefined)
-        .map((permissionClass) => ADMIN_SCOPES[permissionClass])
-        .filter((scope) => !granted.has(scope))
-    ),
-  ];
+  const scopes = missing.every((id) => caller.rolePermissions.has(id))
+    ? [
+        ...new Set(
+          missing
+            .map((id) => permissions.get(id)?.class)
+            .filter((permissionClass) => permissionClass !== undefined)
+            .map((permissionClass) => ADMIN_SCOPES[permissionClass])
+            .filter((scope) => !granted.has(scope))
+        ),
+      ]
+    : [];
   throw new ForbiddenError(
     'The caller lacks a permission this admin operation needs',
     scopes.length > 0 ? { requiredScope: scopes } : {}
@@ -485,7 +492,8 @@ export async function adminPipeline(
   // Stage 6.
   await fastify.register(adminOperationsPlugin, {
     registry,
-    authorize: authorizeAdminRequest,
+    authorize: (request, classification) =>
+      authorizeAdminRequest(request, classification, registry.permissions),
   });
 
   // Stage 7, after stage 6's `preHandler`.

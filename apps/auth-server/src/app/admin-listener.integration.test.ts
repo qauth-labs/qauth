@@ -606,6 +606,17 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect((await auditRows(realmId)).map((row) => row.outcome)).toEqual(['denied']);
     });
 
+    it('names no scope when the role lacks the permission, whatever the token lacks too', async () => {
+      const realmId = await tenant('alpha');
+      // A viewer's token without the write scope: a wider token would not pass.
+      const { token } = await adminWith(realmId, 'viewer', 'qauth:admin:read');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ code: 'forbidden' });
+      expect(response.headers['www-authenticate']).not.toContain('insufficient_scope');
+    });
+
     it('answers approval_required for a security operation and never runs it', async () => {
       const realmId = await tenant('alpha');
       // A security admin holds the permission and the scope: only the

@@ -38,6 +38,7 @@ import {
   type BuiltInRoleName,
   effectivePermissions,
 } from './admin-roles';
+import { ADMIN_SCOPE_LIST } from './admin-scopes';
 import type { IssuerResolver } from './family-token';
 import { tokenRealm } from './realm-url';
 import type { RealmRow } from './request-realm';
@@ -186,6 +187,13 @@ export type AdminAuthority =
        * operation's own permission check answers 403 then.
        */
       readonly permissions: ReadonlySet<string>;
+      /**
+       * The permission ids the matching grants' roles hold, before the
+       * token's scopes narrow them: what a token with every admin scope would
+       * use. A permission here and not in {@link permissions} is one the
+       * token's scopes withhold, so a wider token would reach it (#511).
+       */
+      readonly rolePermissions: ReadonlySet<string>;
       /** The grants that matched, in the order they were created. */
       readonly grantIds: readonly string[];
     }
@@ -300,17 +308,15 @@ export async function resolveAdminAuthority(
   }
 
   const granted = matching.flatMap((grant) => grantedPermissionIds(grant));
+  const registry = options.registry ?? PERMISSION_REGISTRY;
   return {
     allowed: true,
     issuerRealm,
     operator,
     targetRealm,
     userId: user.id,
-    permissions: effectivePermissions(
-      granted,
-      request.scopes ?? [],
-      options.registry ?? PERMISSION_REGISTRY
-    ),
+    permissions: effectivePermissions(granted, request.scopes ?? [], registry),
+    rolePermissions: effectivePermissions(granted, ADMIN_SCOPE_LIST, registry),
     grantIds: matching.map((grant) => grant.grant.id),
   };
 }
