@@ -936,19 +936,20 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   for (const { entry, plugin } of await routeModules) {
     await fastify.register(async (scope) => {
       scope.addHook('onRoute', (route) => {
-        const problem = publicRouteProblem(route);
-        if (problem !== undefined) throw new Error(problem);
         route.config = { ...route.config, serviceRoles: entry.roles };
       });
       await scope.register(plugin, entry.prefix === undefined ? {} : { prefix: entry.prefix });
     });
   }
 
-  const unassigned = registeredRoutes
-    .map((route) => routeRolesProblem(route, roles))
+  // Over every route of the app, a plugin's as well as a route module's: an
+  // admin route registers only on the admin listener (#511), and every route
+  // names its roles.
+  const unplaced = registeredRoutes
+    .map((route) => publicRouteProblem(route) ?? routeRolesProblem(route, roles))
     .filter((problem) => problem !== undefined);
-  if (unassigned.length > 0) {
-    throw new Error(unassigned.join('\n'));
+  if (unplaced.length > 0) {
+    throw new Error(unplaced.join('\n'));
   }
 
   // The admin API, on its own listener (ADR-019 Decisions 7 and 8, #511),
