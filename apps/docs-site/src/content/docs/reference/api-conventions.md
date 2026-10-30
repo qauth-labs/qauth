@@ -147,7 +147,8 @@ token like any other. It never routes by host either. Every admin path names the
 Every admin route runs behind the same stages, in this order
 (`apps/auth-server/src/app/admin/pipeline.ts`):
 
-1. The request id, echoed in the response and carried as `trace_id`.
+1. The request id, which the server makes for every call, never takes from the caller, echoes in
+   the response and carries as `trace_id`.
 2. The token guard ([Family tokens](#family-tokens)). The realm whose keys verify the token is
    the one its `iss` names. A call without a valid admin token gets 401 here, before any realm
    is read, so the answer says nothing about realms.
@@ -161,13 +162,20 @@ Every admin route runs behind the same stages, in this order
    missing.
 7. The approval gate. A request classified `security` needs a fresh approval bound to it. Until
    approvals ship (#512), every such request answers 403 `approval_required` and never runs.
-8. The handler, inside one database transaction.
+8. The handler, inside one database transaction. It answers by returning its body: a handler
+   that sends or hijacks the reply itself fails, so no answer leaves before its change commits.
 9. The audit row, in the admin audit log of the realm the request acts on.
 10. The error, as a problem document.
 
+A route's own `onRequest`, `preParsing` and `preValidation` hooks would run before stages 6 and
+7, so the listener refuses to boot an admin route that has one.
+
 The listener also limits calls per client address, before the token guard, and per token
-subject, right after it (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW` each), and answers 429
-`too_many_requests` beyond them.
+subject, right after it, and answers 429 `too_many_requests` beyond them: `RATE_LIMIT_MAX` per
+`RATE_LIMIT_WINDOW` each, or 100 a minute, in memory, while `RATE_LIMIT_ENABLED` is off. The
+address is the TCP peer: the listener trusts no proxy, whatever `TRUST_PROXY` names for the
+public listener. When the server shuts down, the listener takes no new call, lets each call in
+flight finish for up to 8 seconds, and closes before the database.
 
 **Audit rows.** Every call that reaches a realm within the caller's grants writes exactly one row
 to that realm's chain, reads included. A call that succeeds writes `succeeded` in the

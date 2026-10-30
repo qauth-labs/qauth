@@ -1,6 +1,6 @@
 import type { RouteOptions } from 'fastify';
 
-import { API_FAMILY_PREFIXES, apiFamilyOf } from '../api-conventions/families';
+import { API_FAMILY_PREFIXES } from '../api-conventions/families';
 
 /**
  * Where an admin route may be served (ADR-019 Decisions 1 and 7, #511): only
@@ -34,14 +34,17 @@ export function adminRealmRouteProblem(
   return `${describeRoute(route)}: every admin route acts on the realm its path names, under ${ADMIN_REALM_ROUTE_PREFIX}`;
 }
 
+/** A path under `/admin`, versioned or not: the admin API's, or one it may take later. */
+const ADMIN_PATH = /^\/admin(?:\/|$)/;
+
 /**
  * Why a route of the public listener's route modules cannot be served there,
- * or `undefined`: an admin API path, whatever its version, registers only on
- * the admin listener (`admin/listener.ts`).
+ * or `undefined`: a path under `/admin`, whatever its version or none,
+ * registers only on the admin listener (`admin/listener.ts`).
  */
 export function publicRouteProblem(
   route: Pick<RouteOptions, 'method' | 'url'>
 ): string | undefined {
-  if (apiFamilyOf(route.url)?.family !== 'admin') return undefined;
+  if (!ADMIN_PATH.test(route.url)) return undefined;
   return `${describeRoute(route)} is an admin API route: it registers only on the admin listener (admin/listener.ts), never on the public one`;
 }

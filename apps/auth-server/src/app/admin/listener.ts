@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
 
 import rateLimit from '@fastify/rate-limit';
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger';
@@ -8,7 +7,6 @@ import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
   type FastifyPluginAsync,
-  type FastifyRequest,
   LogController,
 } from 'fastify';
 import {
@@ -20,7 +18,7 @@ import {
 import { env } from '../../config/env';
 import { API_FAMILY_PREFIXES } from '../api-conventions/families';
 import type { OperationRegistry } from '../helpers/admin-operations';
-import { clientAddressKey } from '../helpers/client-address';
+import { adminAddressRateLimitKey, adminSubjectRateLimitKey } from '../helpers/realm-rate-limit';
 import {
   answerClientError,
   answerFrameworkError,
@@ -29,6 +27,7 @@ import {
   requestDeadlineOptions,
 } from '../helpers/request-bounds';
 import { openapiOptions } from '../openapi-options';
+import { DEFAULT_ADMIN_RATE_LIMIT } from '../plugins/admin-operations';
 import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
@@ -82,18 +81,15 @@ export const adminOpenapiOptions: FastifyDynamicSwaggerOptions = {
   },
 };
 
-/** A request id a caller may set: what the audit log's `trace_id` column holds. */
-const CALLER_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-
 /**
- * The id of an admin request: the caller's own, from REQUEST_ID_HEADER, when
- * it is a short token of safe characters, so a proxy's id still correlates;
- * otherwise a fresh UUID. The audit row records it as its `trace_id`, which
- * holds at most 128 characters, so a longer or stranger value never reaches it.
+ * The id of an admin request: always one the server makes, never the
+ * caller's. The audit row records it as its `trace_id`, in an append-only
+ * log, so a caller cannot choose it, reuse another request's, or make it
+ * longer than the column. It is echoed in REQUEST_ID_HEADER and every problem
+ * document, so a caller still learns it.
  */
-export function adminRequestId(raw: IncomingMessage): string {
-  const given = raw.headers[env.REQUEST_ID_HEADER.toLowerCase()];
-  return typeof given === 'string' && CALLER_REQUEST_ID.test(given) ? given : randomUUID();
+export function adminRequestId(): string {
+  return randomUUID();
 }
 
 /** Options for {@link createAdminServer}. */
@@ -113,7 +109,11 @@ export interface AdminServerOptions {
  * - an unknown path is answered before its body is read, with the
  *   `not_found` problem document, and the router's refusals and unreadable
  *   requests answer problem documents too;
- * - `TRUST_PROXY` decides `request.ip`, which keys the per-address ceiling.
+ * - every request has an id the server made ({@link adminRequestId});
+ * - no proxy is trusted: `request.ip`, which keys the per-address ceiling, is
+ *   the TCP peer. `TRUST_PROXY` names the public listener's proxies, and a
+ *   caller in that range could otherwise pick a new address per request with
+ *   `X-Forwarded-For` and escape the ceiling.
  *
  * No HEAD route is added for a GET route: the admin API serves none.
  */
@@ -125,14 +125,14 @@ export function createAdminServer(options: AdminServerOptions = {}): FastifyInst
     requestIdHeader: false,
     genReqId: adminRequestId,
     logController: new LogController({ requestIdLogLabel: 'reqId' }),
-    trustProxy: env.TRUST_PROXY,
+    trustProxy: false,
     routerOptions: { ignoreTrailingSlash: true },
     exposeHeadRoutes: false,
     ...requestDeadlineOptions(env.REQUEST_TIMEOUT_MS),
     frameworkErrors: answerFrameworkError,
     clientErrorHandler: answerClientError,
   }).withTypeProvider<ZodTypeProvider>();
-  // The listener reads the caller's request id itself (`adminRequestId`), so
+  // The listener makes every request id itself (`adminRequestId`), so
   // Fastify's `requestIdHeader` stays unset: the root's own answers echo the
   // id in this header instead.
   server.decorate('requestIdEchoHeader', env.REQUEST_ID_HEADER);
@@ -149,6 +149,35 @@ export function createAdminServer(options: AdminServerOptions = {}): FastifyInst
   return server;
 }
 
+/**
+ * How long the admin listener waits for its calls in flight when the server
+ * closes, before it closes their connections: under the 10 s Fastify gives a
+ * `preClose` hook, so the server's own close never times out.
+ */
+export const ADMIN_CLOSE_GRACE_MS = 8_000;
+
+/** How often a closing admin listener closes the connections that went idle. */
+const IDLE_SWEEP_MS = 50;
+
+/**
+ * Close the admin listener: it takes no new call, lets each call in flight
+ * finish, and resolves once every connection is closed. A keep-alive
+ * connection would hold the close open once its last answer is sent, until
+ * the client let it go, so each connection is closed as soon as it is idle,
+ * and any still open after {@link ADMIN_CLOSE_GRACE_MS} is closed then.
+ */
+export async function closeAdminServer(admin: FastifyInstance): Promise<void> {
+  const closing = admin.close();
+  const sweep = setInterval(() => admin.server.closeIdleConnections(), IDLE_SWEEP_MS);
+  const deadline = setTimeout(() => admin.server.closeAllConnections(), ADMIN_CLOSE_GRACE_MS);
+  try {
+    await closing;
+  } finally {
+    clearInterval(sweep);
+    clearTimeout(deadline);
+  }
+}
+
 /** Options for {@link installAdminApi}. */
 export interface AdminApiOptions {
   /**
@@ -163,6 +192,9 @@ export interface AdminApiOptions {
   readonly routes?: (scope: FastifyInstance) => void | Promise<void>;
 }
 
+/** The Redis key prefix of the listener's ceilings, apart from the public listener's. */
+const ADMIN_RATE_LIMIT_NAMESPACE = 'qauth-admin-rate-limit-';
+
 /** A request ceiling of the listener, from a `createRateLimit` check. */
 function ceilingStage(check: ReturnType<FastifyInstance['createRateLimit']>): AdminRateLimitStage {
   return async (request, reply) => {
@@ -173,39 +205,38 @@ function ceilingStage(check: ReturnType<FastifyInstance['createRateLimit']>): Ad
   };
 }
 
-/** The account a request's token names, as the admin token guard verified it. */
-function subjectKey(request: FastifyRequest): string {
-  const issuer = request.jwtPayload?.iss;
-  const subject = request.jwtPayload?.sub;
-  if (issuer === undefined || subject === undefined) {
-    throw new Error('The per-subject ceiling runs after the token guard');
-  }
-  return `admin:subject:${issuer}:${subject}`;
-}
-
 /**
- * The listener's two request ceilings (RATE_LIMIT_MAX per RATE_LIMIT_WINDOW
- * each), with the server's rate limiter over its Redis: one per client
- * address, run first on every route of the listener, and one per token
- * subject, which the pipeline runs right after its token guard. Neither when
- * RATE_LIMIT_ENABLED is off; the classification stage then keeps a ceiling of
- * its own on every admin route.
+ * The listener's two request ceilings: one per client address, run first on
+ * every route of the listener, and one per token subject, which the pipeline
+ * runs right after its token guard. Each refuses before the realm is read, so
+ * a refused call writes no audit row.
+ *
+ * With RATE_LIMIT_ENABLED on, each allows RATE_LIMIT_MAX calls per
+ * RATE_LIMIT_WINDOW, counted in the server's Redis under a prefix of their
+ * own. With it off, the listener still keeps both, in memory, at the
+ * classification stage's default ceiling (`DEFAULT_ADMIN_RATE_LIMIT`, #508):
+ * every admin route authorizes, so none runs without one.
  */
 async function registerCeilings(
   admin: FastifyInstance,
   source: FastifyInstance
-): Promise<{ byAddress: AdminRateLimitStage; bySubject: AdminRateLimitStage } | undefined> {
-  if (!env.RATE_LIMIT_ENABLED) return undefined;
-  const limits = { max: env.RATE_LIMIT_MAX, timeWindow: env.RATE_LIMIT_WINDOW * 1000 };
-  await admin.register(rateLimit, { global: false, redis: source.redis, ...limits });
+): Promise<{ byAddress: AdminRateLimitStage; bySubject: AdminRateLimitStage }> {
+  const limits = env.RATE_LIMIT_ENABLED
+    ? { max: env.RATE_LIMIT_MAX, timeWindow: env.RATE_LIMIT_WINDOW * 1000 }
+    : { max: DEFAULT_ADMIN_RATE_LIMIT.max, timeWindow: DEFAULT_ADMIN_RATE_LIMIT.timeWindow };
+  await admin.register(rateLimit, {
+    global: false,
+    ...(env.RATE_LIMIT_ENABLED ? { redis: source.redis } : {}),
+    nameSpace: ADMIN_RATE_LIMIT_NAMESPACE,
+    ...limits,
+  });
   return {
     byAddress: ceilingStage(
-      admin.createRateLimit({
-        ...limits,
-        keyGenerator: (request) => `admin:address:${clientAddressKey(request)}`,
-      })
+      admin.createRateLimit({ ...limits, keyGenerator: adminAddressRateLimitKey })
     ),
-    bySubject: ceilingStage(admin.createRateLimit({ ...limits, keyGenerator: subjectKey })),
+    bySubject: ceilingStage(
+      admin.createRateLimit({ ...limits, keyGenerator: adminSubjectRateLimitKey })
+    ),
   };
 }
 
@@ -221,7 +252,7 @@ async function registerCeilings(
  * behind it; and the OpenAPI document, last, outside the pipeline.
  *
  * `admin` stops accepting requests when `source` begins to close, before the
- * database closes: its `preClose` hook closes it.
+ * database closes: its `preClose` hook closes it ({@link closeAdminServer}).
  */
 export async function installAdminApi(
   admin: FastifyInstance,
@@ -247,11 +278,11 @@ export async function installAdminApi(
   await admin.register(securityHeadersPlugin);
 
   const ceilings = await registerCeilings(admin, source);
-  if (ceilings !== undefined) admin.addHook('onRequest', ceilings.byAddress);
+  admin.addHook('onRequest', ceilings.byAddress);
 
   await admin.register(adminPipeline, {
     ...(options.registry === undefined ? {} : { registry: options.registry }),
-    ...(ceilings === undefined ? {} : { bySubject: ceilings.bySubject }),
+    bySubject: ceilings.bySubject,
     routes: async (scope) => {
       for (const module of ADMIN_ROUTE_MODULES) await scope.register(module);
       await options.routes?.(scope);
@@ -261,6 +292,6 @@ export async function installAdminApi(
   admin.get(ADMIN_OPENAPI_PATH, { schema: { hide: true } }, async () => admin.swagger());
 
   source.addHook('preClose', async () => {
-    await admin.close();
+    await closeAdminServer(admin);
   });
 }

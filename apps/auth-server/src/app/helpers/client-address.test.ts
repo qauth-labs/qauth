@@ -116,8 +116,16 @@ function resolveAppDir(): string {
 
 describe('rate-limit key functions in the app', () => {
   // Every limit keys by realm and address (`realmRateLimitKey`, #487), which
-  // derives the address part from clientAddressKey.
-  it('derive every key from realmRateLimitKey', () => {
+  // derives the address part from clientAddressKey. The admin listener (#511)
+  // has no host realm: its ceilings key by address alone and by the token's
+  // subject, each with a key function of its own.
+  const KEY_FUNCTIONS = new Set([
+    'realmRateLimitKey',
+    'adminAddressRateLimitKey',
+    'adminSubjectRateLimitKey',
+  ]);
+
+  it('derive every key from realmRateLimitKey, or from the admin listener key functions', () => {
     const appDir = resolveAppDir();
     const files = readdirSync(appDir, { recursive: true, encoding: 'utf8' }).filter(
       (file) => file.endsWith('.ts') && !file.endsWith('.test.ts')
@@ -128,7 +136,7 @@ describe('rate-limit key functions in the app', () => {
       const source = readFileSync(join(appDir, file), 'utf8');
       for (const match of source.matchAll(/keyGenerator\s*:\s*([^,\n}]+)/g)) {
         keyGenerators += 1;
-        if (match[1].trim() !== 'realmRateLimitKey') offenders.push(`${file}: ${match[0]}`);
+        if (!KEY_FUNCTIONS.has(match[1].trim())) offenders.push(`${file}: ${match[0]}`);
       }
     }
     expect(keyGenerators).toBeGreaterThan(20);

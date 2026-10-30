@@ -3,7 +3,13 @@ import {
   JWTInvalidError,
   MissingAccessTokenError,
 } from '@qauth-labs/shared-errors';
-import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  RouteHandlerMethod,
+  RouteOptions,
+} from 'fastify';
 
 import {
   type AdminAuthority,
@@ -57,7 +63,9 @@ import { adminRealmRouteProblem } from './route-placement';
  *
  * Beside them, two request ceilings: by client address before the token
  * guard (the listener's root), and by token subject right after it, so a
- * flood is refused before it reaches a realm and writes no audit row.
+ * flood is refused before it reaches a realm and writes no audit row. A
+ * route's own early hooks would run before stages 6 and 7, so a route may
+ * have none (`earlyRouteHookProblem`).
  *
  * Every call that reaches a realm within the caller's grants writes exactly
  * one audit row: a call that succeeds writes `succeeded` in the handler's
@@ -115,8 +123,8 @@ export type AdminRateLimitStage = (request: FastifyRequest, reply: FastifyReply)
 export interface AdminPipelineOptions {
   /** The registry routes name their operations in. Defaults to the server's own. */
   readonly registry?: OperationRegistry;
-  /** The ceiling per token subject, run right after the token guard. None when rate limiting is off. */
-  readonly bySubject?: AdminRateLimitStage;
+  /** The ceiling per token subject, run right after the token guard. */
+  readonly bySubject: AdminRateLimitStage;
   /** Registers the routes behind the pipeline. */
   readonly routes: (scope: FastifyInstance) => void | Promise<void>;
 }
@@ -383,11 +391,20 @@ function auditEntry(
   };
 }
 
+/** What a handler that tries to answer on its own is refused with. */
+const SEND_REFUSAL =
+  'An admin handler answers by returning its body, never by sending or hijacking the reply: the answer would leave before its change and audit row commit';
+
+/** The reply methods that would answer from inside the handler, before the commit. */
+const ANSWERING_METHODS = ['send', 'hijack'] as const;
+
 /**
  * Stages 8 and 9: run `handler` inside one transaction, and append the
  * `succeeded` row in it once the handler returns. The handler answers by
- * returning its body: a reply it sends itself would leave before its change
- * commits, so the pipeline refuses it and rolls the change back.
+ * returning its body. While it runs, `reply.send()` and `reply.hijack()`
+ * throw: an answer sent from inside would leave before its change commits,
+ * and Fastify runs no `onError` hook once a reply is out. The answer is sent
+ * after the commit.
  */
 function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry) {
   const wrapped = async function adminTransactionStage(
@@ -397,25 +414,39 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
   ): Promise<unknown> {
     const state = pipelineState(request);
     const caller = requestAdminCaller(request);
-    const body = await request.server.db.transaction(async (tx) => {
-      state.transaction = tx;
-      state.handlerStarted = true;
-      try {
-        const result: unknown = await handler.call(this, request, reply);
-        if (reply.sent) {
-          throw new Error(
-            'An admin handler answers by returning its body, never by sending the reply: the answer would leave before its change and audit row commit'
-          );
+    let body: unknown;
+    try {
+      body = await request.server.db.transaction(async (tx) => {
+        state.transaction = tx;
+        state.handlerStarted = true;
+        for (const method of ANSWERING_METHODS) {
+          Object.defineProperty(reply, method, {
+            configurable: true,
+            value: () => {
+              throw new Error(SEND_REFUSAL);
+            },
+          });
         }
+        let result: unknown;
+        try {
+          result = await handler.call(this, request, reply);
+        } finally {
+          for (const method of ANSWERING_METHODS) Reflect.deleteProperty(reply, method);
+          state.transaction = undefined;
+        }
+        // Written to the raw response, around the reply: refused all the same.
+        if (reply.sent) throw new Error(SEND_REFUSAL);
         await request.server.repositories.adminAuditLog.appendAdminAudit(
           tx,
           auditEntry(request, registry, caller, 'succeeded', state.change)
         );
         return result;
-      } finally {
-        state.transaction = undefined;
-      }
-    });
+      });
+    } catch (error) {
+      // A reply already out runs no `onError` hook: its row is written here.
+      if (reply.sent) await auditRefusal(request, registry);
+      throw error;
+    }
     state.committed = true;
     if (body === undefined) return reply.send();
     return body;
@@ -450,6 +481,26 @@ async function auditRefusal(request: FastifyRequest, registry: OperationRegistry
 }
 
 /**
+ * The hooks of a route's own that run before the permission check and the
+ * approval gate: a route's `onRequest`, `preParsing` and `preValidation`
+ * hooks run after the scope's hooks of the same kind, but before its
+ * `preHandler` hooks, where those two stages are. An admin route may not have
+ * them: no code of an operation runs before the caller is authorized for it.
+ */
+const EARLY_ROUTE_HOOKS = ['onRequest', 'preParsing', 'preValidation'] as const;
+
+/** Why `route` has a hook of its own that would run before authorization, or `undefined`. */
+function earlyRouteHookProblem(route: RouteOptions): string | undefined {
+  const early = EARLY_ROUTE_HOOKS.filter((name) => {
+    const hooks: unknown = route[name];
+    return Array.isArray(hooks) ? hooks.length > 0 : hooks !== undefined && hooks !== null;
+  });
+  if (early.length === 0) return undefined;
+  const methods = Array.isArray(route.method) ? route.method.join(',') : route.method;
+  return `${methods} ${route.url} has its own ${early.join(', ')} hook, which would run before the admin pipeline authorizes the caller; use a preHandler hook or the handler`;
+}
+
+/**
  * The admin pipeline: its stages as hooks of an encapsulated scope, then the
  * routes `options.routes` registers in it. Register it on the admin listener,
  * after the request id and the per-address ceiling and before any other
@@ -467,7 +518,7 @@ export async function adminPipeline(
   // At boot: every route acts on a realm named in its path, and runs its
   // handler in the pipeline's transaction.
   fastify.addHook('onRoute', (route) => {
-    const problem = adminRealmRouteProblem(route);
+    const problem = adminRealmRouteProblem(route) ?? earlyRouteHookProblem(route);
     if (problem !== undefined) throw new Error(problem);
     const handler = route.handler as RouteHandlerMethod & { [WRAPPED]?: true };
     if (handler[WRAPPED] !== true) {
@@ -477,7 +528,7 @@ export async function adminPipeline(
 
   // Stage 2, then the ceiling per subject, which needs the subject.
   fastify.addHook('onRequest', adminTokenStage);
-  if (options.bySubject !== undefined) fastify.addHook('onRequest', options.bySubject);
+  fastify.addHook('onRequest', options.bySubject);
   // Stage 3.
   fastify.addHook('onRequest', adminDpopStage);
   // Stages 4 and 5. Before the body is read, so a caller with no grant on the

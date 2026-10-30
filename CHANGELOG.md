@@ -962,8 +962,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly one admin audit row, reads included: `succeeded` in the handler's
   transaction, or `denied` or `failed` in a new one with no diff. A realm
   outside the grants answers 404, is logged, and adds no row to that realm's
-  chain. Calls are limited per client address before the token guard and per
-  token subject after it (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW`). The admin
+  chain. Calls are limited per client address (the TCP peer: the listener
+  trusts no proxy) before the token guard and per token subject after it
+  (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW`, or 100 a minute in memory while
+  `RATE_LIMIT_ENABLED` is off). Every request id is the server's own. A handler
+  answers by returning its body, and an admin route may not have hooks that
+  would run before authorization. The admin
   OpenAPI document is served on the listener only, at
   `/admin/v1-rc.0/openapi.json`. No admin operation ships yet ([#517] adds the
   first).

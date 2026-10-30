@@ -37,12 +37,15 @@ describe('adminRealmRouteProblem', () => {
 });
 
 describe('publicRouteProblem', () => {
-  it('refuses an admin API path on the public listener, whatever its version', () => {
+  it('refuses a path under /admin on the public listener, whatever its version or none', () => {
     for (const url of [
       '/admin/v1-rc.0/realms/:realmId',
       '/admin/v1-rc.0',
       '/admin/v1/realms',
       '/admin/v2-rc.3/anything',
+      '/admin',
+      '/admin/*',
+      '/admin/realms/:realmId',
     ]) {
       expect(publicRouteProblem({ method: 'GET', url })).toContain(
         'registers only on the admin listener'
