@@ -151,8 +151,9 @@ Every admin route runs behind the same stages, in this order
    the response and carries as `trace_id`.
 2. The token guard ([Family tokens](#family-tokens)). The realm whose keys verify the token is
    the one its `iss` names. A call without a valid admin token gets 401 here, before any realm
-   is read, so the answer says nothing about realms.
-3. The DPoP check, which requiring DPoP-bound admin tokens will fill (#520).
+   is read, and every such refusal reads the same, so the answer says nothing about realms.
+3. The DPoP check, which requiring DPoP-bound admin tokens will fill (#520). Until then the
+   listener takes only the `Bearer` scheme, and answers the `DPoP` scheme as no credential.
 4. The realm, from the path.
 5. The authority from grants and scopes ([Admin authority](#admin-authority)). A realm outside
    the caller's grants answers 404 `not_found`.
@@ -168,21 +169,25 @@ Every admin route runs behind the same stages, in this order
 10. The error, as a problem document.
 
 A route's own `onRequest`, `preParsing` and `preValidation` hooks would run before stages 6 and
-7, so the listener refuses to boot an admin route that has one.
+7, so the listener refuses to boot an admin route that has one, in its options or added by its
+module.
 
 The listener also limits calls per client address, before the token guard, and per token
 subject, right after it, and answers 429 `too_many_requests` beyond them: `RATE_LIMIT_MAX` per
 `RATE_LIMIT_WINDOW` each, or 100 a minute, in memory, while `RATE_LIMIT_ENABLED` is off. The
 address is the TCP peer: the listener trusts no proxy, whatever `TRUST_PROXY` names for the
 public listener. When the server shuts down, the listener takes no new call, lets each call in
-flight finish for up to 8 seconds, and closes before the database.
+flight finish for up to 8 seconds, closes the connections still open, waits up to 1.5 seconds
+more for the audit rows of their calls, and closes before the database.
 
 **Audit rows.** Every call that reaches a realm within the caller's grants writes exactly one row
 to that realm's chain, reads included. A call that succeeds writes `succeeded` in the
 handler's transaction, with the change the handler recorded, its secret fields masked: the row
 and the change commit together, or neither does. A call refused after that point, such as one
-without the permission or the approval, or whose body does not parse, writes `denied`; one whose
-handler or commit fails writes `failed`. Both are written in a new transaction, with no diff. A
+without the permission or the approval, or whose body does not parse, writes `denied`; one that
+fails on the server, its handler or commit included, writes `failed`. Both are written in a new
+transaction, with no diff. A `denied` or `failed` row that cannot be written is logged, not
+retried, and the call has no row; its answer is the same refusal or failure. A
 call refused before it reaches a realm within its grants writes no row: one without a valid
 token, one over a request limit, and one that names a realm outside its grants, which is logged
 with the caller instead, so a stranger cannot add rows to another realm's chain.

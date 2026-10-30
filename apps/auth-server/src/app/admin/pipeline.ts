@@ -52,7 +52,8 @@ import { adminRealmRouteProblem } from './route-placement';
  *    valid admin token stops here, before any realm is looked up, so an
  *    unauthenticated caller learns nothing about realms. The listener's
  *    address grants nothing: a call from loopback needs a token too.
- * 3. DPoP check: an empty stage that #520 fills.
+ * 3. DPoP check: an empty stage that #520 fills. Until then the token guard
+ *    takes only the Bearer scheme.
  * 4. Realm lookup from the path, `/admin/v1-rc.0/realms/{realmId}/...`. The
  *    listener never routes by host (ADR-019 Decision 1).
  * 5. Authority from grants and scopes (#510, `resolveAdminAuthority`). A
@@ -72,14 +73,17 @@ import { adminRealmRouteProblem } from './route-placement';
  * guard (the listener's root), and by token subject right after it, so a
  * flood is refused before it reaches a realm and writes no audit row. A
  * route's own early hooks would run before stages 6 and 7, so a route may
- * have none (`earlyRouteHookProblem`).
+ * have none, in its options (`earlyRouteHookProblem`) or added by its module
+ * (`refuseEarlyScopeHooks`).
  *
  * Every call that reaches a realm within the caller's grants writes exactly
  * one audit row: a call that succeeds writes `succeeded` in the handler's
  * transaction, with the change the handler recorded; a call refused after
  * that point (a missing permission, a missing approval, a precondition, a
- * request that fails validation) writes `denied`, and one whose handler or
- * commit fails writes `failed`, each in a new transaction and with no diff.
+ * request that fails validation) writes `denied`, and one that fails on the
+ * server, its handler or commit included, writes `failed`, each in a new
+ * transaction and with no diff. A `denied` or `failed` row that cannot be
+ * written is logged, not retried, and the call has no row.
  */
 
 /** The admin audit log, as the database plugin builds it. */

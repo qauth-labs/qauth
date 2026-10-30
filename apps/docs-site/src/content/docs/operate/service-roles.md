@@ -33,8 +33,9 @@ A process registers only what its roles use:
   (`apps/auth-server/src/app/route-manifest.ts`);
 - the plugins those routes and roles call;
 - the database repositories they read and write, and no other: a process
-  without the `api` or `web` role never builds the users or clients
-  repositories;
+  without the `api` or `web` role never builds the clients repository, nor
+  the users repository unless it holds `admin`, whose listener finds the
+  admin's account there;
 - the jobs placed on its roles. Run every role on at least one node, or its
   jobs never run.
 
