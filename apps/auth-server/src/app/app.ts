@@ -72,6 +72,7 @@ import {
   pluginsFor,
   repositoriesFor,
   routeRolesProblem,
+  servesAdminListener,
   ServiceRoleBootError,
 } from './service-roles';
 
@@ -954,9 +955,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // last: it shares the database, cache, signer, DPoP and JWT plugins above,
   // and closes before them.
   if (adminListener !== undefined) {
-    if (!roles.includes('admin') || !plugins.has('jwt')) {
+    if (!servesAdminListener(roles, env.ADMIN_API_ENABLED) || !plugins.has('jwt')) {
       throw new Error(
-        `The admin listener runs only on a process that holds the admin role (SERVICE_ROLES=${describeServiceRoles(roles)})`
+        `The admin listener runs only on a process that holds the admin role while ADMIN_API_ENABLED is on (SERVICE_ROLES=${describeServiceRoles(roles)}, ADMIN_API_ENABLED=${String(env.ADMIN_API_ENABLED)})`
       );
     }
     const { server: adminServer, ...adminOptions } = adminListener;
