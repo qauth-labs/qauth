@@ -1,3 +1,4 @@
+import rateLimit from '@fastify/rate-limit';
 import {
   ForbiddenError,
   JWTInvalidError,
@@ -27,7 +28,11 @@ import type { PermissionRegistry } from '../helpers/admin-permissions';
 import { ADMIN_SCOPES, tokenScopeSet } from '../helpers/admin-scopes';
 import { ApprovalRequiredError } from '../helpers/approval-required';
 import { requireFamilyToken } from '../helpers/family-token';
-import { adminOperationsPlugin, requestClassification } from '../plugins/admin-operations';
+import {
+  adminOperationsPlugin,
+  DEFAULT_ADMIN_RATE_LIMIT,
+  requestClassification,
+} from '../plugins/admin-operations';
 import { adminRealmRouteProblem } from './route-placement';
 
 /**
@@ -525,6 +530,22 @@ export async function adminPipeline(
       route.handler = inTransaction(handler, registry) as RouteHandlerMethod;
     }
   });
+
+  // Every route behind the pipeline authorizes, so none runs without a
+  // request ceiling. The listener registers `@fastify/rate-limit` before the
+  // pipeline, for its ceilings by address and by subject, and keeps it. A
+  // scope without one gets the classification stage's default here, as
+  // `adminOperationsPlugin` would give it, and ahead of the stages, where
+  // CodeQL's `js/missing-rate-limiting` can see it: it cannot follow the
+  // listener's registration into this plugin. After the `onRoute` check
+  // above, so the check sees each route before the limit adds its hook.
+  if (!fastify.hasDecorator('rateLimit')) {
+    await fastify.register(rateLimit, {
+      global: true,
+      max: DEFAULT_ADMIN_RATE_LIMIT.max,
+      timeWindow: DEFAULT_ADMIN_RATE_LIMIT.timeWindow,
+    });
+  }
 
   // Stage 2, then the ceiling per subject, which needs the subject.
   fastify.addHook('onRequest', adminTokenStage);
