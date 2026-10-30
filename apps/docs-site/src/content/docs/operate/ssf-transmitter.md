@@ -73,20 +73,28 @@ A receiver is an OAuth client of the realm. It authenticates with its own access
 
 Give `ssf:stream` only to clients you trust with the realm's security events. A receiver may add
 a user only when the user is related to its own client: the user holds an active consent for it,
-or a live refresh token it was issued (decided on 2026-10-26). It may add any client of the
-realm. Taking the scope away, disabling or suspending the client, or deleting it stops its
-deliveries, and its token stops working on `/ssf/` at once, not when it expires; deleting the
-client deletes its stream.
+or a live refresh token it was issued (decided on 2026-10-26). So the receiver is the client your
+users sign in through, given `client_credentials` and `ssf:stream` as well; a client of its own,
+which no user signs in to, can add no user. The relation is checked when the subject is added:
+the subject then stays on the stream until the receiver removes it, also after the user withdraws
+the consent or the refresh token ends.
 
-Create the client with `client_credentials`, the `ssf:stream` scope and the realm's issuer as its
-audience, for example as an entry of the seed manifest's `clients`:
+A receiver may add any client of the realm, but a client's own credential changes (its secret, its
+API keys) reach only that client's stream. Taking the scope away, disabling or suspending the
+client, or deleting it stops its deliveries, and its token stops working on `/ssf/` at once, not
+when it expires; deleting the client deletes its stream.
+
+Give the relying party's client `client_credentials`, the `ssf:stream` scope and the realm's issuer
+as its audience, beside what its users sign in with, for example as an entry of the seed
+manifest's `clients`:
 
 ```json
 {
-  "client_id": "risk-engine",
-  "name": "Risk engine (SSF receiver)",
-  "grant_types": ["client_credentials"],
-  "scopes": ["ssf:stream"],
+  "client_id": "notes-app",
+  "name": "Notes",
+  "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
+  "redirect_uris": ["https://notes.example.com/callback"],
+  "scopes": ["openid", "ssf:stream"],
   "audience": ["https://auth.example.com"]
 }
 ```
@@ -96,7 +104,7 @@ The receiver then gets a token:
 ```bash
 curl -s https://auth.example.com/oauth/token \
   -d grant_type=client_credentials -d scope=ssf:stream \
-  -d client_id=risk-engine -d client_secret="$SECRET"
+  -d client_id=notes-app -d client_secret="$SECRET"
 ```
 
 ## Create a stream
@@ -151,9 +159,9 @@ A subject in another format, or with another issuer, is kept and matches no even
 at most 1000 subjects.
 
 Some events reach fewer streams than the subject alone would say. A withdrawn consent, an RFC 7009
-revocation and a replay's family revocation tell of the user's dealings with one client, so only
-that client's stream receives them. An API key change is about the key's client, and an emergency
-key retirement reaches every stream of the realm that requested it.
+revocation and a replay's family revocation tell of the user's dealings with one client, and a
+client secret or API key change is about one client's credentials, so only that client's stream
+receives them. An emergency key retirement reaches every stream of the realm that requested it.
 
 ## Run the verification event
 

@@ -165,8 +165,16 @@ describe('security events on SSF streams (real containers)', () => {
     return { app, realmId: rows[0].id };
   }
 
-  /** A receiver client of the realm, and an access token it got with its own credentials. */
-  async function newReceiver(app: FastifyInstance, realmId: string): Promise<Receiver> {
+  /**
+   * A receiver: the client users sign in through, given `client_credentials`
+   * and `ssf:stream` as well, and an access token it got with its own
+   * credentials. Its users' relation to it is seeded by each test.
+   */
+  async function newReceiver(
+    app: FastifyInstance,
+    realmId: string,
+    options: { developerId?: string } = {}
+  ): Promise<Receiver> {
     const clientId = `receiver-${randomUUID()}`;
     const secret = `secret-${randomUUID()}`;
     const client = await app.repositories.oauthClients.create({
@@ -175,12 +183,13 @@ describe('security events on SSF streams (real containers)', () => {
       clientSecretHash: await app.passwordHasher.hashPassword(secret),
       tokenEndpointAuthMethod: 'client_secret_post',
       name: 'SSF receiver',
-      redirectUris: [],
-      scopes: ['ssf:stream'],
-      grantTypes: ['client_credentials'],
+      redirectUris: ['https://receiver.example.com/callback'],
+      scopes: ['openid', 'ssf:stream'],
+      grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
       audience: [ISSUER],
       enabled: true,
-      requirePkce: false,
+      requirePkce: true,
+      ...(options.developerId === undefined ? {} : { developerId: options.developerId }),
     });
     const response = await app.inject({
       method: 'POST',
@@ -372,40 +381,38 @@ describe('security events on SSF streams (real containers)', () => {
     expect(members).toEqual({ event_timestamp: set.claims['iat'], initiating_entity: 'user' });
   });
 
-  it('delivers a revoked API key as credential-change about its client', async () => {
+  it('delivers a revoked API key as credential-change to its own client’s stream, and to no other receiver', async () => {
     const { app, realmId } = await boot();
-    const who = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who);
     const developer = await newUser(app, realmId);
-    const owned = await app.repositories.oauthClients.create({
-      realmId,
-      clientId: `notes-${randomUUID()}`,
-      clientSecretHash: 'unused',
-      tokenEndpointAuthMethod: 'client_secret_post',
-      name: 'Notes',
-      redirectUris: [],
-      scopes: [],
-      grantTypes: ['client_credentials'],
-      enabled: true,
-      requirePkce: false,
-      developerId: developer.userId,
-    });
+    const who = await newReceiver(app, realmId, { developerId: developer.userId });
+    const other = await newReceiver(app, realmId);
+    const streamId = await createStream(app, who);
+    const otherStream = await createStream(app, other, 'https://other.egress.test/events');
     const key = await app.repositories.apiKeys.create({
       realmId,
-      clientId: owned.id,
+      clientId: who.id,
       developerId: developer.userId,
       name: 'ci',
       keyHash: createHash('sha256').update(randomUUID()).digest('hex'),
       prefix: `qk_${randomUUID().slice(0, 8)}`,
       last4: 'abcd',
     });
-    const added = await addSubject(app, who, streamId, { format: 'opaque', id: owned.clientId });
-    expect(added.statusCode, added.body).toBe(200);
+    // Both add the key's client; only its own stream may learn of its keys.
+    for (const [receiverOf, stream] of [
+      [who, streamId],
+      [other, otherStream],
+    ] as const) {
+      const added = await addSubject(app, receiverOf, stream, {
+        format: 'opaque',
+        id: who.clientId,
+      });
+      expect(added.statusCode, added.body).toBe(200);
+    }
     await fanOutStarted(app, realmId);
 
     const revoked = await app.inject({
       method: 'DELETE',
-      url: `/api/clients/${owned.id}/api-keys/${key.id}`,
+      url: `/api/clients/${who.id}/api-keys/${key.id}`,
       headers: { authorization: `Bearer ${developer.token}` },
     });
     expect(revoked.statusCode, revoked.body).toBe(200);
@@ -414,16 +421,23 @@ describe('security events on SSF streams (real containers)', () => {
     expectRfc8417Claims(set);
     expect(set.claims).toMatchObject({
       jti: await eventIdOf(app, 'urn:qauth:event:api_key.revoked:v1-rc.0', key.id),
-      sub_id: { format: 'opaque', id: owned.clientId },
+      sub_id: { format: 'opaque', id: who.clientId },
       events: {
         [CREDENTIAL_CHANGE]: {
           credential_type: 'api-key',
           change_type: 'revoke',
           event_timestamp: expect.any(Number),
-          initiating_entity: 'user',
+          initiating_entity: 'admin',
         },
       },
     });
+    const rows = await app.dbPool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM event_deliveries
+         WHERE destination_kind = 'ssf' AND destination_id = $1`,
+      [otherStream]
+    );
+    expect(rows.rows[0].count).toBe(0);
+    expect(otherReceiver.requests).toHaveLength(0);
   });
 
   it('delivers a withdrawn consent as token-claims-change to that client’s stream only', async () => {

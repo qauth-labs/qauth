@@ -16,7 +16,7 @@
       "section": "2.2",
       "level": "REQUIRED",
       "quote": "As defined by Section 4.1.6 of [RFC7519], this claim contains a value representing when the SET was issued. This claim is REQUIRED.",
-      "applies": "libs/server/ssf/src/lib/set.ts (setClaims) — `iat` is the event's time in whole seconds, so a retry repeats it.",
+      "applies": "libs/server/ssf/src/lib/set.ts (setClaims) — `iat` is the time QAuth recorded the event, in whole seconds: the SET's content is issued then, and every retry and redelivery repeats it, so a receiver drops a duplicate by `jti` with the claims unchanged. A SET held while its stream is paused or retried for hours therefore carries an `iat` that old; a receiver that enforces a freshness window on `iat` must allow for it.",
       "status": "covered",
       "evidenceMatch": "carries iat, jti and one event object"
     },
