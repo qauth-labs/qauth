@@ -130,6 +130,55 @@ admin route accepts: `RealmIssuerDirectory` maps an issuer to its realm, and `Is
 verifies a token with that realm's keys, and both know only the deployment's issuer and today's
 signing key.
 
+### The admin listener
+
+The admin API runs on its own internal listener, never on the public one
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decisions 7 and
+8). A process that holds the `admin` service role serves it on `ADMIN_API_HOST` and
+`ADMIN_API_PORT`, `127.0.0.1`, port `3001`, by default, while `ADMIN_API_ENABLED` is on
+([Configuration](/operate/configuration/)). The public listener answers 404 `not_found` for every
+admin path. The admin OpenAPI document is served on the admin listener only, at
+`/admin/v1-rc.0/openapi.json`.
+
+The listener grants nothing for a caller's network position: a call from loopback needs an admin
+token like any other. It never routes by host either. Every admin path names the realm it acts on,
+`/admin/v1-rc.0/realms/{realmId}/...`, and the listener refuses to boot a route that does not.
+
+Every admin route runs behind the same stages, in this order
+(`apps/auth-server/src/app/admin/pipeline.ts`):
+
+1. The request id, echoed in the response and carried as `trace_id`.
+2. The token guard ([Family tokens](#family-tokens)). The realm whose keys verify the token is
+   the one its `iss` names. A call without a valid admin token gets 401 here, before any realm
+   is read, so the answer says nothing about realms.
+3. The DPoP check, which requiring DPoP-bound admin tokens will fill (#520).
+4. The realm, from the path.
+5. The authority from grants and scopes ([Admin authority](#admin-authority)). A realm outside
+   the caller's grants answers 404 `not_found`.
+6. The classification and the permission check ([Security operations](/reference/security-operations/)).
+   A caller without a permission the request needs gets 403 `forbidden`, with an
+   `insufficient_scope` challenge when the token's scopes, not the caller's roles, are what is
+   missing.
+7. The approval gate. A request classified `security` needs a fresh approval bound to it. Until
+   approvals ship (#512), every such request answers 403 `approval_required` and never runs.
+8. The handler, inside one database transaction.
+9. The audit row, in the admin audit log of the realm the request acts on.
+10. The error, as a problem document.
+
+The listener also limits calls per client address, before the token guard, and per token
+subject, right after it (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW` each), and answers 429
+`too_many_requests` beyond them.
+
+**Audit rows.** Every call that reaches a realm within the caller's grants writes exactly one row
+to that realm's chain, reads included. A call that succeeds writes `succeeded` in the
+handler's transaction, with the change the handler recorded, its secret fields masked: the row
+and the change commit together, or neither does. A call refused after that point, such as one
+without the permission or the approval, or whose body does not parse, writes `denied`; one whose
+handler or commit fails writes `failed`. Both are written in a new transaction, with no diff. A
+call refused before it reaches a realm within its grants writes no row: one without a valid
+token, one over a request limit, and one that names a realm outside its grants, which is logged
+with the caller instead, so a stranger cannot add rows to another realm's chain.
+
 ### Issuing a family audience
 
 - A client gets a family audience only when an operator lists it in the client's `audience`. The
