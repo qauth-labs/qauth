@@ -81,13 +81,13 @@ describe('the admin listener port', () => {
   };
 
   it('refuses ADMIN_API_PORT equal to PORT on a process that runs the admin listener', () => {
-    expect(issuesOf({ PORT: '3001' })).toContain('ADMIN_API_PORT');
+    expect(issuesOf({ PORT: '3002' })).toContain('ADMIN_API_PORT');
     expect(issuesOf({ PORT: '4000', ADMIN_API_PORT: '4000' })).toContain('ADMIN_API_PORT');
   });
 
   it('accepts it where no admin listener runs: switched off, or no admin role', () => {
-    expect(issuesOf({ PORT: '3001', ADMIN_API_ENABLED: 'false' })).not.toContain('ADMIN_API_PORT');
-    expect(issuesOf({ PORT: '3001', SERVICE_ROLES: 'web,api' })).not.toContain('ADMIN_API_PORT');
+    expect(issuesOf({ PORT: '3002', ADMIN_API_ENABLED: 'false' })).not.toContain('ADMIN_API_PORT');
+    expect(issuesOf({ PORT: '3002', SERVICE_ROLES: 'web,api' })).not.toContain('ADMIN_API_PORT');
   });
 
   it('accepts the defaults', () => {

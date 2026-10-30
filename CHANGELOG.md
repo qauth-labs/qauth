@@ -946,7 +946,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The admin API's own listener and request pipeline** ([#511], ADR-019
   Decisions 7 and 8). A process that holds the `admin` role runs a second HTTP
   server for the admin API, on `ADMIN_API_HOST` and `ADMIN_API_PORT`
-  (`127.0.0.1`, port `3001`, by default; `ADMIN_API_ENABLED=false` turns it off). It
+  (`127.0.0.1`, port `3002`, by default; `ADMIN_API_ENABLED=false` turns it off). It
   binds before the public port and closes with the server. The public listener
   answers 404 for every admin path and refuses to boot an admin route. The
   listener grants nothing for a caller's network position: every admin route

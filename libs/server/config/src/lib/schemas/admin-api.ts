@@ -33,7 +33,7 @@ function blankAsUnset<T extends z.ZodType>(schema: T) {
 export const DEFAULT_ADMIN_API_HOST = '127.0.0.1';
 
 /** The port the admin listener binds to when `ADMIN_API_PORT` is unset. */
-export const DEFAULT_ADMIN_API_PORT = 3001;
+export const DEFAULT_ADMIN_API_PORT = 3002;
 
 /**
  * Admin API listener environment configuration schema.

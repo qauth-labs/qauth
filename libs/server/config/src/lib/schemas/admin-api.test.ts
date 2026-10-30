@@ -5,7 +5,7 @@ import { adminApiEnvSchema } from './admin-api';
 /** The admin API's listener (issue #511). */
 
 describe('adminApiEnvSchema', () => {
-  it('runs on loopback port 3001 by default, unset and blank alike', () => {
+  it('runs on loopback port 3002 by default, unset and blank alike', () => {
     for (const env of [
       {},
       { ADMIN_API_ENABLED: '', ADMIN_API_HOST: ' ', ADMIN_API_PORT: '' },
@@ -13,7 +13,7 @@ describe('adminApiEnvSchema', () => {
       expect(adminApiEnvSchema.parse(env)).toEqual({
         ADMIN_API_ENABLED: true,
         ADMIN_API_HOST: '127.0.0.1',
-        ADMIN_API_PORT: 3001,
+        ADMIN_API_PORT: 3002,
       });
     }
   });

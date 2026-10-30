@@ -135,7 +135,7 @@ signing key.
 The admin API runs on its own internal listener, never on the public one
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decisions 7 and
 8). A process that holds the `admin` service role serves it on `ADMIN_API_HOST` and
-`ADMIN_API_PORT`, `127.0.0.1`, port `3001`, by default, while `ADMIN_API_ENABLED` is on
+`ADMIN_API_PORT`, `127.0.0.1`, port `3002`, by default, while `ADMIN_API_ENABLED` is on
 ([Configuration](/operate/configuration/)). The public listener answers 404 `not_found` for every
 admin path. The admin OpenAPI document is served on the admin listener only, at
 `/admin/v1-rc.0/openapi.json`.

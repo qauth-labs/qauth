@@ -28,7 +28,7 @@ export const ADMIN_API_KEYS = defineKeys([
     tier: 'stable',
     role: 'deployment',
     owner: 'server',
-    default: '3001',
+    default: '3002',
     since: '0.2.0',
     docs: "The TCP port the admin API's listener binds to; it must differ from `PORT`.",
   },

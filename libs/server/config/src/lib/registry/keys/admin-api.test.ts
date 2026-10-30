@@ -25,13 +25,13 @@ describe('the admin listener keys', () => {
     );
   });
 
-  it('gives each the default its schema falls back to: on, loopback, 3001', () => {
+  it('gives each the default its schema falls back to: on, loopback, 3002', () => {
     const parsed = adminApiEnvSchema.parse({});
     expect(entries.map((entry) => entry?.default)).toEqual([
       String(parsed.ADMIN_API_ENABLED),
       parsed.ADMIN_API_HOST,
       String(parsed.ADMIN_API_PORT),
     ]);
-    expect(entries.map((entry) => entry?.default)).toEqual(['true', '127.0.0.1', '3001']);
+    expect(entries.map((entry) => entry?.default)).toEqual(['true', '127.0.0.1', '3002']);
   });
 });
