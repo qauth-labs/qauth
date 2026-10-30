@@ -698,11 +698,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says what they are. Each SET carries the event's members with
   `event_timestamp` and `initiating_entity`, and a `sub_id` naming a user as
   `iss_sub` under the realm's issuer and a client by #410's rules. A withdrawn
-  consent, a revocation and a replay's family revocation reach only the stream
-  of the client concerned. Two types are new: `token.family_revoked`, recorded
+  consent, a revocation, a replay's family revocation and a client's own
+  credential change reach only the stream of the client concerned. Two types are new: `token.family_revoked`, recorded
   beside `token.request_failed` when a code or refresh-token replay revokes
   refresh tokens, and `key.emergency_retired`, which emergency retirement will
-  emit. `token.revoked` now names the user whose token was revoked. A receiver
+  emit for a published key only. `token.revoked` now names the user whose token was revoked. A receiver
   may add a user as a subject only when the user holds an active consent for
   its client or a live refresh token it was issued; any other user is refused
   with `403`. The delivery role now reads `realms.issuer`, for the `iss_sub`
