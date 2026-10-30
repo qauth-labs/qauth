@@ -28,5 +28,9 @@ share. It holds no key and opens no connection of its own.
   receiver reads on its stream status.
 
 Which QAuth event types a stream can receive comes from the registry's `ssf` slot
-(`ssfEventsSupported`, `eventTypesFor`). EVT-11 (#540) fills it; until then a stream receives its
-verification events only.
+(`ssfEventsSupported`, `eventTypesFor`), and so does each SET (#540): the CAEP, RISC or
+QAuth-defined event a type is sent as, its subject (`ssfSubjectOf`) and its members
+(`ssfEventMembers` of `@qauth-labs/shared-events`). The route gives the fan-out a rule per type
+where a mapping needs one: a client's credential event is matched on the client, an event about a
+key reaches every stream that requested it, and a type sent to its own client reaches only that
+client's stream. The docs page `reference/ssf-events` lists the mapping.

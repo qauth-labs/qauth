@@ -247,10 +247,22 @@ describe('SET claims (RFC 8417, SSF 1.0 §4)', () => {
 });
 
 describe('event types offered to streams', () => {
-  it('offers nothing until a registered type has an SSF mapping (EVT-11)', () => {
-    expect(ssfEventsSupported()).toEqual([]);
+  it('offers the SSF events the registry maps, and never the verification event (#540)', () => {
+    expect(ssfEventsSupported()).toEqual([
+      'https://schemas.openid.net/secevent/caep/event-type/credential-change',
+      'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+      'https://schemas.openid.net/secevent/caep/event-type/token-claims-change',
+      'urn:qauth:secevent:key-emergency-retired:v1-rc.0',
+      'urn:qauth:secevent:token-revoked:v1-rc.0',
+    ]);
     expect(eventTypesFor([SSF_VERIFICATION_EVENT])).toEqual([]);
-    expect(EVENT_TYPES.some((definition) => typeof definition.ssf === 'object')).toBe(false);
+    expect(
+      eventTypesFor(['https://schemas.openid.net/secevent/caep/event-type/session-revoked'])
+    ).toEqual([
+      'urn:qauth:event:user.signed_out:v1-rc.0',
+      'urn:qauth:event:token.family_revoked:v1-rc.0',
+    ]);
+    expect(EVENT_TYPES.some((definition) => typeof definition.ssf === 'object')).toBe(true);
   });
 
   it('offers a mapped type to a stream that requested its SSF event', () => {

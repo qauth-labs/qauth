@@ -64,6 +64,8 @@ export interface SsfStreamDestination {
   readonly id: string;
   readonly realmId: string;
   readonly status: Extract<SsfStreamStatus, 'enabled' | 'paused'>;
+  /** The SETs' `aud`: the receiver's `client_id`. */
+  readonly audience: string;
   readonly eventsRequested: readonly string[];
   /** The event store subjects of its subjects; a subject QAuth cannot place is left out. */
   readonly subjects: ReadonlyArray<{ readonly type: string; readonly id: string }>;
@@ -77,6 +79,12 @@ export interface SsfStreamForDelivery extends SsfStream {
    * scope. Its own `status` comes on top.
    */
   readonly active: boolean;
+  /**
+   * The realm's issuer: the `iss` of a user's `iss_sub` subject identifier in
+   * the stream's SETs (#540). `null` for a realm that has none, whose events
+   * name no user.
+   */
+  readonly issuer: string | null;
 }
 
 /** The deliveries of one stream, as its status endpoint reports them. */

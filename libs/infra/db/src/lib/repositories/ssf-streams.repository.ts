@@ -195,12 +195,14 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
         id: string;
         realm_id: string;
         status: 'enabled' | 'paused';
+        audience: string;
         events_requested: string[];
         subject_type: string | null;
         subject_id: string | null;
       }>(sql`
         select ${ssfStreams.id} as "id", ${ssfStreams.realmId} as "realm_id",
-          ${ssfStreams.status} as "status", ${ssfStreams.eventsRequested} as "events_requested",
+          ${ssfStreams.status} as "status", ${ssfStreams.audience} as "audience",
+          ${ssfStreams.eventsRequested} as "events_requested",
           ${ssfStreamSubjects.eventSubjectType} as "subject_type",
           ${ssfStreamSubjects.eventSubjectId} as "subject_id"
         from ${ssfStreams}
@@ -225,6 +227,7 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
             id: row.id,
             realmId: row.realm_id,
             status: row.status,
+            audience: row.audience,
             eventsRequested: row.events_requested,
             subjects: [],
           };
@@ -243,12 +246,15 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
         .select({
           stream: ssfStreams,
           active: sql<boolean>`(${realms.ssfTransmitterEnabled} and ${oauthClients.enabled} and not ${oauthClients.suspended} and ${oauthClients.scopes} ? ${SSF_RECEIVER_SCOPE})`,
+          issuer: realms.issuer,
         })
         .from(ssfStreams)
         .innerJoin(realms, eq(realms.id, ssfStreams.realmId))
         .innerJoin(oauthClients, eq(oauthClients.id, ssfStreams.receiverClientId))
         .where(eq(ssfStreams.id, streamId));
-      return row === undefined ? undefined : { ...row.stream, active: row.active };
+      return row === undefined
+        ? undefined
+        : { ...row.stream, active: row.active, issuer: row.issuer };
     },
 
     async deliveryStatus(streamId, now): Promise<SsfStreamDeliveryStatus> {

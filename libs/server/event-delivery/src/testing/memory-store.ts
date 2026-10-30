@@ -39,12 +39,25 @@ export interface MemoryStore extends DeliveryStore {
 }
 
 function matches(destination: DeliveryDestination, event: EventEnvelope): boolean {
+  const rule =
+    destination.typeRules !== undefined && Object.hasOwn(destination.typeRules, event.type)
+      ? destination.typeRules[event.type]
+      : undefined;
+  if (rule?.clientId !== undefined && event.client?.id !== rule.clientId) return false;
+  const from = rule?.subjectFrom ?? 'subject';
+  const about =
+    from === 'client'
+      ? event.client === undefined
+        ? undefined
+        : { type: 'client', id: event.client.id }
+      : event.subject;
   return (
     (destination.types === undefined || destination.types.includes(event.type)) &&
     (destination.categories === undefined || destination.categories.includes(event.category)) &&
     (destination.subjects === undefined ||
+      from === 'none' ||
       destination.subjects.some(
-        (subject) => subject.type === event.subject?.type && subject.id === event.subject.id
+        (subject) => subject.type === about?.type && subject.id === about.id
       ))
   );
 }

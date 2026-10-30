@@ -1,5 +1,5 @@
 import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
-import { SsfRequestError } from '@qauth-labs/server-ssf';
+import { ssfEventsSupported, SsfRequestError } from '@qauth-labs/server-ssf';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -39,10 +39,13 @@ describe('ssfPlugin', () => {
     expect(app.ssf).toBeNull();
   });
 
-  it('builds the push route and offers no event before EVT-11 maps one', async () => {
+  it('builds the push route and offers the SSF events the registry maps', async () => {
     const app = await build({ enabled: true });
     expect(app.ssf?.deliveryRoute.kind).toBe('ssf');
-    expect(app.ssf?.eventsSupported).toEqual([]);
+    expect(app.ssf?.eventsSupported).toEqual(ssfEventsSupported());
+    expect(app.ssf?.eventsSupported).toContain(
+      'https://schemas.openid.net/secevent/caep/event-type/session-revoked'
+    );
     expect(await app.ssf?.deliveryRoute.destinations()).toEqual([]);
   });
 

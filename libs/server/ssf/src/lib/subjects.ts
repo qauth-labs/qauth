@@ -4,7 +4,7 @@ import { z } from 'zod';
  * Subject identifiers (RFC 9493, SSF 1.0 §3) and how QAuth's event subjects
  * map onto them (issue #410).
  *
- * The mapping, which EVT-11 (#540) uses for every SET's `sub_id`:
+ * The mapping, which every SET's `sub_id` follows (#540):
  *
  * - a user is `iss_sub`: the realm's issuer and the user's id;
  * - a client is `uri` when its `client_id` is an absolute URI (a Client ID

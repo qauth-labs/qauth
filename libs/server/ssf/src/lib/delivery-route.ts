@@ -2,12 +2,16 @@ import { type EgressClient, type EgressLimits, isEgressError } from '@qauth-labs
 import type {
   DeliveryOutcome,
   DeliveryRoute,
+  DestinationTypeRule,
   RouteDestination,
 } from '@qauth-labs/server-event-delivery';
 import {
   EVENT_TYPES,
   type EventEnvelope,
   type EventTypeDefinition,
+  type SsfEventMapping,
+  ssfEventMembers,
+  ssfMappingOf,
   ssfStreamVerificationRequested,
 } from '@qauth-labs/shared-events';
 
@@ -19,12 +23,15 @@ import {
   SSF_EGRESS_PURPOSE,
 } from './constants';
 import { eventTypesFor } from './event-types';
-import { type SetClaims, verificationSetClaims } from './set';
+import { type SetClaims, setClaims, verificationSetClaims } from './set';
+import { ssfSubjectOf, type SubjectIdentifier } from './subjects';
 
 /** A stream as the route lists it for the fan-out. */
 export interface SsfRouteStream {
   readonly id: string;
   readonly realmId: string;
+  /** The receiver's `client_id`: the SETs' `aud`. */
+  readonly audience: string;
   readonly eventsRequested: readonly string[];
   /** The event store subjects of the subjects its receiver added. */
   readonly subjects: ReadonlyArray<{ readonly type: string; readonly id: string }>;
@@ -42,6 +49,8 @@ export interface SsfDeliveryStream {
   readonly status: 'enabled' | 'paused' | 'disabled';
   /** Its realm's switch is on, and its receiver is enabled and not suspended. */
   readonly active: boolean;
+  /** The realm's issuer: the `iss` of a user's `iss_sub`; `null` when the realm has none. */
+  readonly issuer: string | null;
 }
 
 /** Where the route reads its streams: the `ssfStreams` repository of `@qauth-labs/infra-db`. */
@@ -106,6 +115,46 @@ export function receiverErrorClass(errorClass: string): string {
   return UNREACHABLE_ERROR_CLASSES.has(errorClass) ? 'destination_unreachable' : errorClass;
 }
 
+/**
+ * How the fan-out reads a mapped type for one stream: an event about a key
+ * passes the subject filter whatever subjects the receiver added; a client's
+ * credential event is matched on its client; a type sent only to its own
+ * client reaches only the stream whose receiver that client is.
+ */
+function typeRuleOf(mapping: SsfEventMapping, audience: string): DestinationTypeRule | undefined {
+  const rule: { subjectFrom?: 'client' | 'none'; clientId?: string } = {};
+  if (mapping.subject === 'client') rule.subjectFrom = 'client';
+  if (mapping.subject === 'key') rule.subjectFrom = 'none';
+  if (mapping.clientOnly) rule.clientId = audience;
+  return Object.keys(rule).length > 0 ? rule : undefined;
+}
+
+/**
+ * The SET subject of a mapped event, by the mapping's `subject` (RFC 9493, SSF
+ * 1.0 §3), or `undefined` when the event does not carry what it names.
+ */
+function subjectOf(
+  mapping: SsfEventMapping,
+  event: EventEnvelope,
+  issuer: string | null
+): SubjectIdentifier | undefined {
+  switch (mapping.subject ?? 'subject') {
+    case 'client':
+      return event.client === undefined
+        ? undefined
+        : ssfSubjectOf({ type: 'client', id: event.client.id }, issuer ?? '');
+    case 'key': {
+      const keyId = event.data['keyId'];
+      return typeof keyId === 'string' ? { format: 'opaque', id: keyId } : undefined;
+    }
+    default:
+      if (event.subject === undefined) return undefined;
+      // A user is named under the realm's issuer; a realm with none names no user.
+      if (event.subject.type === 'user' && issuer === null) return undefined;
+      return ssfSubjectOf(event.subject, issuer ?? '');
+  }
+}
+
 /** A refusal no retry changes: the delivery ends `failed` at once. */
 const refused = (errorClass: string): DeliveryOutcome => ({ ok: false, errorClass, retry: false });
 
@@ -128,10 +177,18 @@ function setErrorCode(body: Buffer): string | undefined {
  *
  * - **Destinations.** Every stream of an active receiver in a realm whose
  *   switch is on, `enabled` or `paused`. A stream receives the QAuth event
- *   types whose SSF events it requested (none until EVT-11 maps them), and
- *   only about the subjects its receiver added (`default_subjects: NONE`).
- *   Its verification events do not come through the fan-out: the
- *   verification endpoint writes their delivery row for that stream alone.
+ *   types whose SSF events it requested, and only about the subjects its
+ *   receiver added (`default_subjects: NONE`). Its verification events do
+ *   not come through the fan-out: the verification endpoint writes their
+ *   delivery row for that stream alone. A type's mapping can change that per
+ *   type (#540): an event about a key reaches every stream that requested
+ *   it, a client's credential event is matched on the client, and a type
+ *   sent to its own client reaches only that client's stream.
+ * - **The SET of a mapped type** (#540). The event the type's mapping names,
+ *   with its members, `event_timestamp` and `initiating_entity`; `sub_id` is
+ *   the subject the mapping names, a user as `iss_sub` under the realm's
+ *   issuer. An event that cannot fill it, such as one without a subject, is
+ *   not sent (`event_not_offered`).
  * - **The SET.** `jti` is the event id and `iat` the event's time, so every
  *   retry sends the same claims; `aud` is the receiver's `client_id`. The
  *   signer signs it with the realm's `event_signing` key and adds `iss`; the
@@ -153,6 +210,11 @@ function setErrorCode(body: Buffer): string | undefined {
 export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): DeliveryRoute {
   const definitions = options.eventTypes ?? EVENT_TYPES;
   const limits = { ...DEFAULT_PUSH_LIMITS, ...options.limits };
+  const mappings = new Map<string, SsfEventMapping>();
+  for (const definition of definitions) {
+    const mapping = ssfMappingOf(definition);
+    if (mapping !== undefined) mappings.set(definition.type, mapping);
+  }
 
   /** The SET claims for `event` on `stream`, or `undefined` when the stream cannot get it. */
   function claimsFor(event: EventEnvelope, stream: SsfDeliveryStream): SetClaims | undefined {
@@ -163,8 +225,15 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
       const state = typeof event.data['state'] === 'string' ? event.data['state'] : undefined;
       return verificationSetClaims(event, stream.audience, stream.id, state);
     }
-    // EVT-11 (#540) builds the SET of each mapped event type.
-    return undefined;
+    const mapping = mappings.get(event.type);
+    if (mapping === undefined) return undefined;
+    // The fan-out wrote this row only for the event's own client; checked
+    // again, so a row written under other rules never reaches another one.
+    if (mapping.clientOnly && event.client?.id !== stream.audience) return undefined;
+    const subject = subjectOf(mapping, event, stream.issuer);
+    const members = ssfEventMembers(mapping, event);
+    if (subject === undefined || members === undefined) return undefined;
+    return setClaims(event, stream.audience, subject, { [mapping.event]: members });
   }
 
   return {
@@ -172,12 +241,22 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
 
     async destinations(): Promise<RouteDestination[]> {
       const streams = await options.streams.listDestinations();
-      return streams.map((stream) => ({
-        id: stream.id,
-        realmId: stream.realmId,
-        types: eventTypesFor(stream.eventsRequested, definitions),
-        subjects: stream.subjects.map((subject) => ({ type: subject.type, id: subject.id })),
-      }));
+      return streams.map((stream) => {
+        const types = eventTypesFor(stream.eventsRequested, definitions);
+        const typeRules: Record<string, DestinationTypeRule> = {};
+        for (const type of types) {
+          const mapping = mappings.get(type);
+          const rule = mapping === undefined ? undefined : typeRuleOf(mapping, stream.audience);
+          if (rule !== undefined) typeRules[type] = rule;
+        }
+        return {
+          id: stream.id,
+          realmId: stream.realmId,
+          types,
+          subjects: stream.subjects.map((subject) => ({ type: subject.type, id: subject.id })),
+          ...(Object.keys(typeRules).length > 0 ? { typeRules } : {}),
+        };
+      });
     },
 
     async deliver(delivery, event, context): Promise<DeliveryOutcome> {

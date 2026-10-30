@@ -24,6 +24,7 @@ import type {
   Database,
   EmitEvent,
   EventDeliveriesRepository,
+  EventDeliveryDestination,
   EventsRepository,
   NewSsfStream,
   SsfStreamsRepository,
@@ -78,9 +79,10 @@ describe('SSF streams integration (real Postgres)', () => {
   }
 
   async function realm(options: { ssf?: boolean } = {}): Promise<string> {
+    const name = `realm-${randomUUID()}`;
     const { rows } = await pool().query<{ id: string }>(
-      `INSERT INTO realms (name, ssf_transmitter_enabled) VALUES ($1, $2) RETURNING id`,
-      [`realm-${randomUUID()}`, options.ssf ?? true]
+      `INSERT INTO realms (name, ssf_transmitter_enabled, issuer) VALUES ($1, $2, $3) RETURNING id`,
+      [name, options.ssf ?? true, `https://${name}.example.com`]
     );
     return rows[0].id;
   }
@@ -248,6 +250,7 @@ describe('SSF streams integration (real Postgres)', () => {
       id: enabled.stream.id,
       realmId: enabled.realmId,
       status: 'enabled',
+      audience: enabled.stream.audience,
       eventsRequested: [],
       subjects: [{ type: 'user', id: 'u1' }],
     });
@@ -344,6 +347,77 @@ describe('SSF streams integration (real Postgres)', () => {
     });
   });
 
+  it('reads a type rule: the client as the subject, no subject filter, or one client only (#540)', async () => {
+    const realmId = randomUUID();
+    const userId = randomUUID();
+    const API_KEY_REVOKED = 'urn:qauth:event:api_key.revoked:v1-rc.0';
+    const CONSENT_REVOKED = 'urn:qauth:event:consent.revoked:v1-rc.0';
+    const KEY_RETIRED = 'urn:qauth:event:key.emergency_retired:v1-rc.0';
+    const destinations: EventDeliveryDestination[] = [
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'client-a',
+        realmId,
+        subjects: [{ type: 'client', id: 'cli-a' }],
+        typeRules: { [API_KEY_REVOKED]: { subjectFrom: 'client' } },
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'client-a-no-rule',
+        realmId,
+        subjects: [{ type: 'client', id: 'cli-a' }],
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'own-client-a',
+        realmId,
+        subjects: [{ type: 'user', id: userId }],
+        typeRules: { [CONSENT_REVOKED]: { clientId: 'cli-a' } },
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'realm-wide',
+        realmId,
+        subjects: [],
+        typeRules: { [KEY_RETIRED]: { subjectFrom: 'none' } },
+      },
+    ];
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    const keyRevoked = await store.emitInOwnTransaction({
+      type: API_KEY_REVOKED,
+      realm: realmId,
+      actor: { type: 'user', id: userId },
+      subject: { type: 'api_key', id: randomUUID() },
+      client: { id: 'cli-a' },
+      data: {},
+    });
+    const consentRevoked = (clientId: string) =>
+      store.emitInOwnTransaction({
+        type: CONSENT_REVOKED,
+        realm: realmId,
+        actor: { type: 'user', id: userId },
+        subject: { type: 'user', id: userId },
+        client: { id: clientId },
+        data: { consentId: randomUUID() },
+      });
+    const viaA = await consentRevoked('cli-a');
+    const viaB = await consentRevoked('cli-b');
+    const retired = await store.emitInOwnTransaction({
+      type: KEY_RETIRED,
+      realm: realmId,
+      actor: { type: 'operator_cli', id: 'root' },
+      data: { keyId: 'kid-1', purpose: 'token_signing' },
+    });
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+
+    const to = async (eventId: string) =>
+      (await queue.listForEvent(eventId)).map((row) => row.destinationId).sort();
+    expect(await to(keyRevoked)).toEqual(['client-a']);
+    expect(await to(viaA)).toEqual(['own-client-a']);
+    expect(await to(viaB)).toEqual([]);
+    expect(await to(retired)).toEqual(['realm-wide']);
+  });
+
   it('fans out to a destination only the events about its subjects', async () => {
     const realmId = randomUUID();
     const userA = randomUUID();
@@ -416,6 +490,7 @@ describe('SSF streams integration (real Postgres)', () => {
       expect(await deliveryStreams.findForDelivery(stream.id)).toMatchObject({
         id: stream.id,
         active: true,
+        issuer: expect.stringMatching(/^https:\/\/realm-.*\.example\.com$/),
       });
       await expect(deliveryStreams.setStatus(key, 'disabled', null, NOW)).rejects.toMatchObject({
         cause: { code: '42501' },
