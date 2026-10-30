@@ -84,6 +84,13 @@ RUN sed -i 's/\r$//' ./docker-entrypoint.sh && \
 
 USER nodejs
 
+# The QAuth release this image is built from: the OpenAPI document's
+# `info.version` (`openapiVersion()` in src/app/openapi-options.ts).
+# release-images.yml passes the tag's version; any other build is 0.0.0-dev.
+# Declared after every heavy layer, so a release build reuses them all.
+ARG QAUTH_VERSION=0.0.0-dev
+ENV QAUTH_VERSION=${QAUTH_VERSION}
+
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

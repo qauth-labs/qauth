@@ -201,6 +201,25 @@ const transformRoute: SwaggerPlugin.SwaggerTransform = (input) => {
   };
 };
 
+/** `info.version` of every build that is not a release. */
+export const UNRELEASED_VERSION = '0.0.0-dev';
+
+/** A release version as `release-images.yml` reads it from the tag: `X.Y.Z` or `X.Y.Z-rc.N`. */
+const RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\.(0|[1-9]\d*))?$/;
+
+/**
+ * The OpenAPI document's `info.version`: the QAuth release the server was
+ * built from. The release workflow passes the tag's version into the image as
+ * `QAUTH_VERSION`; every other build, the offline export and the committed
+ * documents among them, says {@link UNRELEASED_VERSION}. It was a fixed
+ * `1.0.0` until 2026-10-31, which read as the 1.0 stability promise QAuth has
+ * not made. The stable-surface check never reads it: it compares release
+ * tags (`scripts/stable-surface/lib.mjs`).
+ */
+export function openapiVersion(value: string | undefined = process.env['QAUTH_VERSION']): string {
+  return value !== undefined && RELEASE_VERSION.test(value) ? value : UNRELEASED_VERSION;
+}
+
 /**
  * `@fastify/swagger` registration options — the `openapi` object plus the
  * `transform` — shared verbatim by `main.ts` (the running server, `/docs`),
@@ -236,7 +255,7 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
       title: 'QAuth Auth Server API',
       description:
         'OAuth 2.1 / OIDC 1.0 authorization server for MCP servers and AI agents: authorization_code + PKCE and client_credentials grants, RFC 8693 on-behalf-of agent delegation, and environment-aware authorization policy. Wallet federation (OID4VP) transport ships behind a default-off flag.',
-      version: '1.0.0',
+      version: openapiVersion(),
     },
     servers: [{ url: '/', description: 'Default' }],
     components: {

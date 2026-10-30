@@ -10,7 +10,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
-import { openapiOptions } from './openapi-options';
+import { openapiOptions, openapiVersion, UNRELEASED_VERSION } from './openapi-options';
 import {
   introspectRequestSchema,
   introspectResponseSchema,
@@ -198,5 +198,19 @@ describe('OpenAPI / Swagger', () => {
     expect(isResponseSerializationError(captured['/response-default'])).toBe(true);
 
     await app.close();
+  });
+});
+
+describe('openapiVersion', () => {
+  it('is the release version the image was built with', () => {
+    expect(openapiVersion('0.1.4')).toBe('0.1.4');
+    expect(openapiVersion('0.1.4-rc.0')).toBe('0.1.4-rc.0');
+  });
+
+  it('is 0.0.0-dev for any build that is not a release, never 1.0.0', () => {
+    for (const value of [undefined, '', 'v0.1.4', '0.0.0-dryrun', '0.1', '01.2.3', '0.1.4-beta.1']) {
+      expect(openapiVersion(value)).toBe(UNRELEASED_VERSION);
+    }
+    expect(UNRELEASED_VERSION).toBe('0.0.0-dev');
   });
 });

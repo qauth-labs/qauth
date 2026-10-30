@@ -170,6 +170,8 @@ jobs:
           file: apps/${{ matrix.image }}/Dockerfile
           platforms: linux/amd64
           push: true
+          # The auth server's OpenAPI `info.version`; the migration runner has no use for it.
+          build-args: QAUTH_VERSION=${{ env.VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.labels }}
