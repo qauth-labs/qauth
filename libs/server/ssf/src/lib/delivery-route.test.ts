@@ -303,17 +303,19 @@ describe('the SETs of mapped event types (#540)', () => {
       client: { id: 'receiver' },
       data: { typeHint: 'refresh_token' },
     }),
+    // A client's credential events reach the client's own stream only: the
+    // receiver here.
     [clientSecretRotated.type]: event(clientSecretRotated.type, {
-      subject: { type: 'client', id: 'notes-app' },
-      client: { id: 'notes-app' },
+      subject: { type: 'client', id: 'receiver' },
+      client: { id: 'receiver' },
     }),
     [apiKeyCreated.type]: event(apiKeyCreated.type, {
       subject: { type: 'api_key', id: '0192a000-0000-7000-8000-0000000000a1' },
-      client: { id: 'notes-app' },
+      client: { id: 'receiver' },
     }),
     [apiKeyRevoked.type]: event(apiKeyRevoked.type, {
       subject: { type: 'api_key', id: '0192a000-0000-7000-8000-0000000000a1' },
-      client: { id: 'notes-app' },
+      client: { id: 'receiver' },
     }),
     [walletLinked.type]: event(walletLinked.type, {
       data: {
@@ -358,25 +360,59 @@ describe('the SETs of mapped event types (#540)', () => {
     });
   });
 
-  it('sends an API key change as CAEP credential-change about the key’s client', async () => {
+  it('sends an API key change as CAEP credential-change about the key’s client, by its administrator', async () => {
     const { claims } = await signed(SAMPLES[apiKeyRevoked.type]);
     expect(claims).toMatchObject({
-      sub_id: { format: 'opaque', id: 'notes-app' },
+      sub_id: { format: 'opaque', id: 'receiver' },
       events: {
         [CAEP_CREDENTIAL_CHANGE]: {
           credential_type: 'api-key',
           change_type: 'revoke',
           event_timestamp: SECONDS,
-          initiating_entity: 'user',
+          initiating_entity: 'admin',
         },
       },
     });
   });
 
+  it('sends a client’s credential change to that client’s own stream only', async () => {
+    for (const type of [clientSecretRotated.type, apiKeyRevoked.type]) {
+      const other = await signed(
+        event(type, {
+          subject:
+            type === clientSecretRotated.type
+              ? { type: 'client', id: 'notes-app' }
+              : { type: 'api_key', id: '0192a000-0000-7000-8000-0000000000a1' },
+          client: { id: 'notes-app' },
+        })
+      );
+      expect(other.outcome, type).toEqual({
+        ok: false,
+        errorClass: 'event_not_offered',
+        retry: false,
+      });
+      expect(other.requests).toHaveLength(0);
+    }
+  });
+
+  it('sends nothing for a client-subject event without a client', async () => {
+    const { outcome, requests } = await signed(
+      event(apiKeyRevoked.type, {
+        subject: { type: 'api_key', id: '0192a000-0000-7000-8000-0000000000a1' },
+      })
+    );
+    expect(outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
+    expect(requests).toHaveLength(0);
+  });
+
   it('names a client whose client_id is a URL by uri', async () => {
     const url = 'https://agent.example.com/client.json';
     const { claims } = await signed(
-      event(clientSecretRotated.type, { subject: { type: 'client', id: url }, client: { id: url } })
+      event(clientSecretRotated.type, {
+        subject: { type: 'client', id: url },
+        client: { id: url },
+      }),
+      { audience: url }
     );
     expect(claims?.['sub_id']).toEqual({ format: 'uri', uri: url });
   });
@@ -472,8 +508,9 @@ describe('the SETs of mapped event types (#540)', () => {
     );
     expect(listed.typeRules).toEqual({
       [tokenFamilyRevoked.type]: { clientId: 'receiver' },
-      [apiKeyCreated.type]: { subjectFrom: 'client' },
-      [apiKeyRevoked.type]: { subjectFrom: 'client' },
+      [clientSecretRotated.type]: { clientId: 'receiver' },
+      [apiKeyCreated.type]: { subjectFrom: 'client', clientId: 'receiver' },
+      [apiKeyRevoked.type]: { subjectFrom: 'client', clientId: 'receiver' },
       [keyEmergencyRetired.type]: { subjectFrom: 'none' },
     });
   });

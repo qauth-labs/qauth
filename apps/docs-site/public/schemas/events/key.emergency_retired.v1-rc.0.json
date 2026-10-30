@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/key.emergency_retired.v1-rc.0.json",
   "title": "urn:qauth:event:key.emergency_retired:v1-rc.0",
-  "description": "The key.emergency_retired event, v1-rc.0. An operator retired a key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place.",
+  "description": "The key.emergency_retired event, v1-rc.0. An operator retired a published key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place. A key QAuth does not publish, such as the data-at-rest key, is not recorded as this type.",
   "type": "object",
   "properties": {
     "id": {
@@ -153,10 +153,16 @@
         },
         "purpose": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64,
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "description": "What the key was for, such as `token_signing` or `event_signing`."
+          "description": "What the key was for, one of the purposes whose keys QAuth publishes, such as `token_signing` or `event_signing`. The set may grow in a minor release.",
+          "x-extensible-enum": [
+            "token_signing",
+            "event_signing",
+            "federation_entity",
+            "trust_anchor",
+            "oid4vp_request_signing",
+            "oid4vp_response_encryption",
+            "upstream_client_assertion"
+          ]
         }
       },
       "required": [

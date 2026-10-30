@@ -745,7 +745,7 @@ A receiver asked for a verification event on one of its Shared Signals Framework
 
 ### key.emergency_retired v1-rc.0
 
-An operator retired a key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place.
+An operator retired a published key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place. A key QAuth does not publish, such as the data-at-rest key, is not recorded as this type.
 
 - Identifier: `urn:qauth:event:key.emergency_retired:v1-rc.0`
 - Category: `admin` · Severity: `critical` · Since: v0.2.0
@@ -753,10 +753,10 @@ An operator retired a key of the realm that may be compromised (ADR-019 Decision
 - Schema: [key.emergency_retired.v1-rc.0.json](/schemas/events/key.emergency_retired.v1-rc.0.json)
 - Security type · SSF: `urn:qauth:secevent:key-emergency-retired:v1-rc.0` ([SSF events](/reference/ssf-events/))
 
-| Member    | Type   | Required | Meaning                                                           |
-| --------- | ------ | -------- | ----------------------------------------------------------------- |
-| `keyId`   | string | yes      | The `kid` of the retired key. Never the key itself.               |
-| `purpose` | string | yes      | What the key was for, such as `token_signing` or `event_signing`. |
+| Member    | Type                                                                                                                                                                                | Required | Meaning                                                                                                                                                |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `keyId`   | string                                                                                                                                                                              | yes      | The `kid` of the retired key. Never the key itself.                                                                                                    |
+| `purpose` | one of `token_signing`, `event_signing`, `federation_entity`, `trust_anchor`, `oid4vp_request_signing`, `oid4vp_response_encryption`, `upstream_client_assertion`, or a later value | yes      | What the key was for, one of the purposes whose keys QAuth publishes, such as `token_signing` or `event_signing`. The set may grow in a minor release. |
 
 ### admin.change_applied v1-rc.0
 

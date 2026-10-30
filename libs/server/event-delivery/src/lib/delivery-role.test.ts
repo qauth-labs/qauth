@@ -575,6 +575,12 @@ describe('startDeliveryRole', () => {
           typeRules: { [SIGNED_IN]: { subjectFrom: 'actor' } } as never,
         },
         { id: 'bad-rules', realmId: REALM, typeRules: [] as never },
+        { id: 'empty-client', realmId: REALM, typeRules: { [SIGNED_IN]: { clientId: '' } } },
+        {
+          id: 'long-client',
+          realmId: REALM,
+          typeRules: { [SIGNED_IN]: { clientId: 'c'.repeat(256) } },
+        },
       ]),
     ]);
     store.append(envelope());
@@ -585,7 +591,7 @@ describe('startDeliveryRole', () => {
       ([, message]) =>
         message === 'a delivery route listed a malformed destination; it receives nothing'
     );
-    expect(malformed).toHaveLength(5);
+    expect(malformed).toHaveLength(7);
   });
 
   it('fails an event the store cannot read, without calling the route', async () => {

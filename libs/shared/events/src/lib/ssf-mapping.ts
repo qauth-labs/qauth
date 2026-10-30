@@ -47,6 +47,8 @@ export const SSF_COMPUTED_MEMBERS = ['event_timestamp', 'initiating_entity'] as 
 export interface SsfEventMember {
   /** What it holds. */
   readonly description: string;
+  /** The JSON type its value has: a string, or an object. */
+  readonly kind: 'string' | 'object';
   /** Whether the event requires it. */
   readonly required?: true;
   /** The only values it may take, when its definition lists them. */
@@ -68,6 +70,7 @@ export interface SsfEventDefinition {
 }
 
 const REASON_ADMIN: SsfEventMember = {
+  kind: 'object',
   description:
     'A message for logging and auditing, as an object keyed by BCP 47 language tag (CAEP 1.0 §2). QAuth sends `en`.',
 };
@@ -89,7 +92,11 @@ export const STANDARD_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<
     definedIn: 'CAEP 1.0 §3.2',
     description: 'A claim in a token identified by the subject has changed.',
     members: {
-      claims: { description: 'The claims that changed, with their new values.', required: true },
+      claims: {
+        kind: 'object',
+        description: 'The claims that changed, with their new values.',
+        required: true,
+      },
       reason_admin: REASON_ADMIN,
     },
   },
@@ -100,16 +107,18 @@ export const STANDARD_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<
     description: 'A credential was created, changed, revoked or deleted.',
     members: {
       credential_type: {
+        kind: 'string',
         description:
           'The kind of credential: one CAEP 1.0 lists, or one the transmitter and the receiver agree on.',
         required: true,
       },
       change_type: {
+        kind: 'string',
         description: 'What happened to it.',
         required: true,
         values: ['create', 'revoke', 'update', 'delete'],
       },
-      friendly_name: { description: 'The credential’s friendly name.' },
+      friendly_name: { kind: 'string', description: 'The credential’s friendly name.' },
       reason_admin: REASON_ADMIN,
     },
   },
@@ -119,10 +128,15 @@ export const STANDARD_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<
     definedIn: 'CAEP 1.0 §3.4',
     description: 'The authentication method changed since the user signed in.',
     members: {
-      namespace: { description: 'The namespace of the levels.', required: true },
-      current_level: { description: 'The current assurance level.', required: true },
-      previous_level: { description: 'The previous assurance level.' },
+      namespace: { kind: 'string', description: 'The namespace of the levels.', required: true },
+      current_level: {
+        kind: 'string',
+        description: 'The current assurance level.',
+        required: true,
+      },
+      previous_level: { kind: 'string', description: 'The previous assurance level.' },
       change_direction: {
+        kind: 'string',
         description: 'Whether the level went up or down.',
         values: ['increase', 'decrease'],
       },
@@ -135,7 +149,11 @@ export const STANDARD_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<
     definedIn: 'RISC 1.0 §2.3',
     description: 'The account identified by the subject has been disabled.',
     members: {
-      reason: { description: 'Why it was disabled.', values: ['hijacking', 'bulk-account'] },
+      reason: {
+        kind: 'string',
+        description: 'Why it was disabled.',
+        values: ['hijacking', 'bulk-account'],
+      },
     },
   },
   {
@@ -167,6 +185,7 @@ export const QAUTH_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<Ssf
       'A client revoked a token of the subject at the RFC 7009 revocation endpoint. The SET goes to the stream of that client only. QAuth defines it because no CAEP event matches: `session-revoked` would say the whole session ended, and `credential-change` is about a credential the subject authenticates with.',
     members: {
       token_type_hint: {
+        kind: 'string',
         description:
           'The `token_type_hint` the client sent, such as `refresh_token`. Absent when it sent none.',
       },
@@ -179,8 +198,9 @@ export const QAUTH_SSF_EVENTS: readonly SsfEventDefinition[] = Object.freeze<Ssf
     description:
       'An operator retired a key of the realm that may be compromised (ADR-019 Decision 9). It left the JWKS at once and no verifier in the auth server accepts it. A verifier drops the key the SET names. The subject is the key, as an `opaque` identifier holding its `kid`, and every stream of the realm that requested the event receives it.',
     members: {
-      kid: { description: 'The `kid` of the retired key.', required: true },
+      kid: { kind: 'string', description: 'The `kid` of the retired key.', required: true },
       purpose: {
+        kind: 'string',
         description: 'What the key was for, such as `token_signing`.',
       },
     },
@@ -227,6 +247,27 @@ function dataMember(
   return { schema, optional };
 }
 
+/** The JSON type of a data member's values, when it is a string or an object. */
+function dataKind(schema: z.ZodType): 'string' | 'object' | undefined {
+  if (schema instanceof z.ZodString || schema instanceof z.ZodEnum) return 'string';
+  if (schema instanceof z.ZodLiteral) {
+    return [...schema.values].every((value) => typeof value === 'string') ? 'string' : undefined;
+  }
+  if (schema instanceof z.ZodObject) return 'object';
+  return undefined;
+}
+
+/** A member kind with its article, for a problem line. */
+const kindName = (kind: 'string' | 'object') => (kind === 'object' ? 'an object' : 'a string');
+
+/** The JSON type of a value, as an SSF member's `kind` names it. */
+const valueKind = (value: unknown): 'string' | 'object' | undefined =>
+  typeof value === 'string'
+    ? 'string'
+    : value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? 'object'
+      : undefined;
+
 /** The values a data member can take, as `map` keys, when they form a closed set. */
 function closedValues(schema: z.ZodType): string[] | undefined {
   if (schema instanceof z.ZodBoolean) return ['true', 'false'];
@@ -246,6 +287,9 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
     problems.push('ssfNote explains a mapping, so it needs ssf');
   }
   const mapping = definition.ssf;
+  if (mapping === 'none' && (definition.ssfNote ?? '').trim() === '') {
+    problems.push("ssf: 'none' needs an ssfNote saying why the type has no SSF event");
+  }
   if (mapping === undefined || mapping === 'none') return problems;
   if (typeof mapping !== 'object' || mapping === null) {
     return [...problems, "ssf must be a mapping or 'none'"];
@@ -269,6 +313,11 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
     const keyId = dataMember(definition, 'keyId');
     if (keyId === undefined || keyId.optional) {
       problems.push('ssf.subject "key" needs a required data.keyId');
+    }
+    // A key event reaches every stream of the realm: a type about a user or a
+    // client must never widen its delivery that way.
+    if (definition.subject !== undefined) {
+      problems.push('ssf.subject "key" is for a type with no subject, as a realm key is');
     }
   } else if (subject !== 'subject' && subject !== 'client' && subject !== 'key') {
     problems.push('ssf.subject must be subject, client or key');
@@ -304,7 +353,28 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
       const data = dataMember(definition, source.data);
       if (data === undefined) {
         problems.push(`${at}: data.${source.data} is not a member of the type's data`);
-      } else if (member?.required) {
+      } else if (source.map === undefined && member !== undefined) {
+        // Taken as it is: the data member's own values must fit the SSF
+        // member, its JSON type and, when it lists them, its values.
+        if (dataKind(data.schema) !== member.kind) {
+          problems.push(
+            `${at}: data.${source.data} is not ${kindName(member.kind)}, as ${name} is`
+          );
+        }
+        if (member.values) {
+          const closed = closedValues(data.schema);
+          const outside =
+            closed === undefined
+              ? ['(an open set of values)']
+              : closed.filter((value) => !member.values?.includes(value));
+          if (outside.length > 0) {
+            problems.push(
+              `${at}: data.${source.data} may hold ${outside.join(', ')}, not one of ${member.values.join(', ')}; map it`
+            );
+          }
+        }
+      }
+      if (data !== undefined && member?.required) {
         // A required member must be there on every event: from a required
         // data member, and through a map that lists every value it can take.
         if (data.optional) {
@@ -332,7 +402,11 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
     }
     for (const value of values) {
       if (!isJson(value)) problems.push(`${at}: a value must be plain JSON`);
-      else if (member?.values && !(typeof value === 'string' && member.values.includes(value))) {
+      else if (member !== undefined && valueKind(value) !== member.kind) {
+        problems.push(
+          `${at}: ${JSON.stringify(value)} is not ${kindName(member.kind)}, as ${name} is`
+        );
+      } else if (member?.values && !(typeof value === 'string' && member.values.includes(value))) {
         problems.push(`${at}: ${JSON.stringify(value)} is not one of ${member.values.join(', ')}`);
       }
     }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
+import { extensibleEnum } from '../envelope';
 import { QAUTH_KEY_EMERGENCY_RETIRED } from '../ssf-mapping';
 import { FIRST_RELEASE } from './fields';
 
@@ -12,12 +13,29 @@ import { FIRST_RELEASE } from './fields';
  * and its SSF event first, so the event exists before the operation does.
  */
 
+/**
+ * The key purposes whose public keys QAuth publishes (`published` in
+ * `@qauth-labs/server-keys`' purpose table): the keys a verifier outside
+ * QAuth may hold. Retiring a key nobody outside sees, such as the
+ * data-at-rest key, is no event a receiver can act on, and naming it would
+ * tell every receiver of the realm about QAuth's internal keys.
+ */
+export const PUBLISHED_KEY_PURPOSES = [
+  'token_signing',
+  'event_signing',
+  'federation_entity',
+  'trust_anchor',
+  'oid4vp_request_signing',
+  'oid4vp_response_encryption',
+  'upstream_client_assertion',
+] as const;
+
 export const keyEmergencyRetired = defineEventType({
   name: 'key.emergency_retired',
   version: 1,
   rc: 0,
   description:
-    'An operator retired a key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place.',
+    'An operator retired a published key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place. A key QAuth does not publish, such as the data-at-rest key, is not recorded as this type.',
   category: 'admin',
   severity: 'critical',
   since: FIRST_RELEASE,
@@ -27,12 +45,9 @@ export const keyEmergencyRetired = defineEventType({
       .min(1)
       .max(255)
       .describe('The `kid` of the retired key. Never the key itself.'),
-    purpose: z
-      .string()
-      .min(1)
-      .max(64)
-      .regex(/^[a-z][a-z0-9_]*$/)
-      .describe('What the key was for, such as `token_signing` or `event_signing`.'),
+    purpose: extensibleEnum(PUBLISHED_KEY_PURPOSES).describe(
+      'What the key was for, one of the purposes whose keys QAuth publishes, such as `token_signing` or `event_signing`. The set may grow in a minor release.'
+    ),
   }),
   security: true,
   ssf: {

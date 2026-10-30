@@ -34,6 +34,8 @@ const securityType = (overrides: Partial<EventTypeDefinition> = {}): EventTypeDe
     data: z.strictObject({
       rebound: z.boolean().describe('A flag.'),
       note: z.string().optional().describe('An optional code.'),
+      outcome: z.enum(['code_replay', 'refresh_replay']).describe('A closed set.'),
+      label: z.string().describe('An open string.'),
     }),
     security: true,
     ssf: { event: CAEP_SESSION_REVOKED },
@@ -54,7 +56,27 @@ describe('the SSF rule of the registry (#540)', () => {
 
   it("accepts a security type with a mapping, and one with ssf: 'none'", () => {
     expect(validate([securityType()])).toEqual([]);
-    expect(validate([securityType({ ssf: 'none' })])).toEqual([]);
+    expect(
+      validate([securityType({ ssf: 'none', ssfNote: 'No standard event says it.' })])
+    ).toEqual([]);
+  });
+
+  it("fails ssf: 'none' with no ssfNote saying why", () => {
+    expect(validate([securityType({ ssf: 'none' })]).join('\n')).toContain(
+      "ssf: 'none' needs an ssfNote"
+    );
+  });
+
+  it('fails a security flag that is not true', () => {
+    expect(validate([securityType({ security: false as never })]).join('\n')).toContain(
+      'security is true or absent'
+    );
+  });
+
+  it('fails an ssf that is neither a mapping nor none', () => {
+    expect(validate([securityType({ ssf: 'all' as never })]).join('\n')).toContain(
+      "ssf must be a mapping or 'none'"
+    );
   });
 
   it('fails a type that declares ssf without being a security type', () => {
@@ -137,8 +159,90 @@ describe('the SSF rule of the registry (#540)', () => {
       { event: CAEP_SESSION_REVOKED, initiatingEntity: 'robot' },
       'ssf.initiatingEntity must be one of admin, user, policy, system',
     ],
+    [
+      'a closed member taken from data whose values fall outside it',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: { credential_type: { value: 'password' }, change_type: { data: 'outcome' } },
+      },
+      'data.outcome may hold code_replay, refresh_replay, not one of create, revoke, update, delete',
+    ],
+    [
+      'a closed member taken from an open string',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: { credential_type: { value: 'password' }, change_type: { data: 'label' } },
+      },
+      'data.label may hold (an open set of values)',
+    ],
+    [
+      'an object member taken from a string',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { data: 'label' } } },
+      'data.label is not an object, as reason_admin is',
+    ],
+    [
+      'an object member given a string',
+      { event: CAEP_TOKEN_CLAIMS_CHANGE, members: { claims: { value: 'scope' } } },
+      '"scope" is not an object, as claims is',
+    ],
+    [
+      'a string member mapped to an object',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: {
+          credential_type: { value: 'password' },
+          change_type: { data: 'rebound', map: { true: { x: 1 }, false: 'create' } },
+        },
+      },
+      '{"x":1} is not a string, as change_type is',
+    ],
+    [
+      'a value that is not plain JSON',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { value: new Date(0) as never } } },
+      'a value must be plain JSON',
+    ],
+    [
+      'a member source of neither form',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { from: 'x' } as never } },
+      'a member source is { value } or { data, map? }',
+    ],
+    [
+      'an unknown subject source',
+      { event: CAEP_SESSION_REVOKED, subject: 'actor' as never },
+      'ssf.subject must be subject, client or key',
+    ],
+    [
+      'a clientOnly that is not true',
+      { event: CAEP_SESSION_REVOKED, clientOnly: false as never },
+      'ssf.clientOnly is true or absent',
+    ],
   ])('fails %s', (_label, mapping, message) => {
     expect(validate([withMapping(mapping as SsfEventMapping)]).join('\n')).toContain(message);
+  });
+
+  it('keeps a key subject to a type with no subject, and never to one client', () => {
+    const keyType = (ssf: SsfEventMapping) =>
+      securityType({
+        subject: undefined,
+        data: z.strictObject({ keyId: z.string().describe('A kid.') }),
+        ssf,
+      });
+    expect(validate([keyType({ event: CAEP_SESSION_REVOKED, subject: 'key' })])).toEqual([]);
+    expect(
+      validate([keyType({ event: CAEP_SESSION_REVOKED, subject: 'key', clientOnly: true })]).join(
+        '\n'
+      )
+    ).toContain('an event about a key goes to every stream of the realm');
+    // A user's type with a keyId member, such as a passkey's, cannot reach
+    // the whole realm by calling itself a key event.
+    expect(
+      validate([
+        securityType({
+          data: z.strictObject({ keyId: z.string().describe('A credential id.') }),
+          ssf: { event: CAEP_SESSION_REVOKED, subject: 'key' },
+        }),
+      ]).join('\n')
+    ).toContain('ssf.subject "key" is for a type with no subject');
   });
 
   it('fails a subject mapping for a type whose subject is not a user or a client', () => {

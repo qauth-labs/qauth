@@ -17,7 +17,7 @@ import {
  */
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const SSF_EVENTS_PAGE_LAST_VERIFIED = '2026-10-30';
+export const SSF_EVENTS_PAGE_LAST_VERIFIED = '2026-10-31';
 
 const code = (value: string) => `\`${value}\``;
 
@@ -192,9 +192,13 @@ reaches only the stream whose receiver is that client: it tells of the user's de
 one client, which another receiver has no need to see.
 
 A receiver may add a user only when the user is related to the receiver's client: the user has an
-active consent for it, or holds a live refresh token it issued. Any other user, and a user id that
-does not exist, is refused with \`403\`, as SSF 1.0 §8.1.3.2 prescribes for a subject the receiver
-may not add.`,
+active consent for it, or holds a live refresh token it was issued. Any other user, and a user id
+that does not exist, is refused with \`403\`, as SSF 1.0 §8.1.3.2 prescribes for a subject the
+receiver may not add. So the receiver is the client the users sign in through, given the
+\`client_credentials\` grant and the \`ssf:stream\` scope as well: a client of its own, which no
+user signs in to, can add no user. The relation is checked when the subject is added; the subject
+then stays on the stream until the receiver removes it, also after the user withdraws the consent
+or the refresh token ends.`,
     `## Mapping`,
     mappingTable(definitions),
     notesList(definitions),
