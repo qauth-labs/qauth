@@ -35,6 +35,8 @@ import type { FastifyInstance, RouteOptions } from 'fastify';
 
 import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
+import { type AdminApiOptions, installAdminApi } from './admin/listener';
+import { publicRouteProblem } from './admin/route-placement';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { ADMIN_ROLE_CATALOG } from './helpers/admin-roles';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
@@ -169,6 +171,15 @@ export interface AppOptions {
    * `main.ts` never sets it.
    */
   egressClientFactory?: EgressPluginOptions['createClient'];
+  /**
+   * The admin listener (ADR-019 Decision 7, #511): the Fastify instance
+   * `createAdminServer` built, on which the app installs the admin API once
+   * its own plugins are registered (`admin/listener.ts`), and which it closes
+   * when it closes. `main.ts` passes one when the process holds the `admin`
+   * role and ADMIN_API_ENABLED is on; the app refuses one otherwise. Its
+   * other members are test support.
+   */
+  adminListener?: AdminApiOptions & { readonly server: FastifyInstance };
 }
 
 declare module 'fastify' {
@@ -492,6 +503,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     eventTelemetryLimits,
     eventDeliveryRoutes,
     egressClientFactory,
+    adminListener,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -923,6 +935,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   for (const { entry, plugin } of await routeModules) {
     await fastify.register(async (scope) => {
       scope.addHook('onRoute', (route) => {
+        const problem = publicRouteProblem(route);
+        if (problem !== undefined) throw new Error(problem);
         route.config = { ...route.config, serviceRoles: entry.roles };
       });
       await scope.register(plugin, entry.prefix === undefined ? {} : { prefix: entry.prefix });
@@ -934,5 +948,18 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     .filter((problem) => problem !== undefined);
   if (unassigned.length > 0) {
     throw new Error(unassigned.join('\n'));
+  }
+
+  // The admin API, on its own listener (ADR-019 Decisions 7 and 8, #511),
+  // last: it shares the database, cache, signer, DPoP and JWT plugins above,
+  // and closes before them.
+  if (adminListener !== undefined) {
+    if (!roles.includes('admin') || !plugins.has('jwt')) {
+      throw new Error(
+        `The admin listener runs only on a process that holds the admin role (SERVICE_ROLES=${describeServiceRoles(roles)})`
+      );
+    }
+    const { server: adminServer, ...adminOptions } = adminListener;
+    await installAdminApi(adminServer, fastify, adminOptions);
   }
 }

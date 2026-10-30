@@ -94,11 +94,21 @@ describe('what each role loads (the boot-time list)', () => {
     );
   });
 
-  it('gives signer and admin only the realms the resolver reads and their published keys', () => {
+  it('gives signer only the realms the resolver reads and their published keys', () => {
     expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys']);
-    expect(repositoriesFor(['admin'])).toEqual(['realms', 'realmPublicKeys']);
     expect([...pluginsFor(['signer'])]).toEqual([]);
-    expect([...pluginsFor(['admin'])]).toEqual([]);
+  });
+
+  it("gives admin what the admin listener's pipeline reads and writes (#511)", () => {
+    expect(repositoriesFor(['admin'])).toEqual([
+      'users',
+      'realms',
+      'adminGrants',
+      'adminAuditLog',
+      'realmPublicKeys',
+    ]);
+    // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.
+    expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt']);
   });
 
   it('gives delivery the event store and the SSF streams, and no identity data', () => {

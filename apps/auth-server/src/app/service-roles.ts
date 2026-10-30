@@ -109,11 +109,13 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     repositories: [],
   },
   admin: {
-    // The admin API (#511) and the key operations arrive on the internal
-    // listener (#496); until then the role serves /health and /metrics.
+    // The admin API's internal listener (#511): its token guard verifies with
+    // the JWT plugin, finds the account in `users` and its grants in
+    // `adminGrants`, and writes `adminAuditLog`. The key operations arrive on
+    // the same listener (#496).
     summary: 'the admin API and key operations, on the internal listener',
-    plugins: [],
-    repositories: [],
+    plugins: ['jwt'],
+    repositories: ['users', 'adminGrants', 'adminAuditLog'],
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role
@@ -168,6 +170,17 @@ export function servesApiDocs(
   enableSwagger: boolean | undefined
 ): boolean {
   return enableSwagger === true && roles.includes('api');
+}
+
+/**
+ * Whether a process with `roles` runs the admin API's internal listener
+ * (#511): only one holding `admin`, and only while ADMIN_API_ENABLED is on.
+ */
+export function servesAdminListener(
+  roles: readonly ServiceRole[],
+  adminApiEnabled: boolean
+): boolean {
+  return adminApiEnabled && roles.includes('admin');
 }
 
 /**

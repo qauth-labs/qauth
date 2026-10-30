@@ -1,8 +1,10 @@
 import {
+  type AdminAuditLogRepository,
   type AdminGrantsRepository,
   type AdminRolesRepository,
   type ApiKeysRepository,
   type AuthorizationCodesRepository,
+  createAdminAuditLogRepository,
   createAdminGrantsRepository,
   createAdminRolesRepository,
   createApiKeysRepository,
@@ -116,6 +118,12 @@ declare module 'fastify' {
        */
       adminGrants: AdminGrantsRepository;
       /**
+       * The admin audit log (ADR-019 Decision 7, #448): one hash chain per
+       * target realm. The admin pipeline (#511) appends one row for every
+       * call it lets reach a realm, in the transaction of the change.
+       */
+      adminAuditLog: AdminAuditLogRepository;
+      /**
        * The published keys of each realm (`realm_public_keys`, #491): public
        * material every service role reads. A process without the signer
        * verifies a realm's tokens and serves its JWKS with them (#495).
@@ -153,6 +161,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   ssfStreams: true,
   adminRoles: true,
   adminGrants: true,
+  adminAuditLog: true,
   realmPublicKeys: true,
 };
 
@@ -244,6 +253,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
         createAdminRolesRepository(database.db, { catalog: options.adminRoleCatalog }),
       adminGrants: () =>
         createAdminGrantsRepository(database.db, { catalog: options.adminRoleCatalog }),
+      adminAuditLog: () => createAdminAuditLogRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
