@@ -146,6 +146,11 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
 
   async function startServer(databaseUrl: string, waitMs: number): Promise<StartedServer> {
     if (!redis || !jwt) throw new Error('no infrastructure');
+    const port = await freePort();
+    // The admin listener (#511) binds a port of its own too, which must
+    // differ from PORT: two probes in a row may be handed the same port.
+    let adminPort = await freePort();
+    while (adminPort === port) adminPort = await freePort();
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -153,9 +158,8 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
         ...REQUIRED_TEST_ENVIRONMENT,
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
-        PORT: String(await freePort()),
-        // The admin listener (#511) binds a port of its own too.
-        ADMIN_API_PORT: String(await freePort()),
+        PORT: String(port),
+        ADMIN_API_PORT: String(adminPort),
         DATABASE_URL: databaseUrl,
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,

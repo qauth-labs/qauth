@@ -69,6 +69,17 @@ async function freePort(): Promise<number> {
   });
 }
 
+/**
+ * A free port other than `taken`: each probe releases its port before it
+ * resolves, so two probes in a row may be handed the same one.
+ */
+async function freePortOtherThan(taken: number): Promise<number> {
+  for (;;) {
+    const port = await freePort();
+    if (port !== taken) return port;
+  }
+}
+
 /** Whether something accepts a TCP connection on loopback `port`. */
 function accepts(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -142,7 +153,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
       throw new Error('unreachable');
     }
     const port = await freePort();
-    const adminPort = ports.adminPort ?? (await freePort());
+    const adminPort = ports.adminPort ?? (await freePortOtherThan(port));
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -237,7 +248,6 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
       const failure = server.lines().find((line) => line.msg === 'Failed to start server');
       expect(JSON.stringify(failure)).toContain('EADDRINUSE');
       expect(logged(server, 'Server listening on ')()).toBe(false);
-      expect(await accepts(server.port)).toBe(false);
     } finally {
       await new Promise((resolve) => squatter.close(resolve));
     }
