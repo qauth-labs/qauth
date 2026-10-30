@@ -3,7 +3,7 @@ title: SSF transmitter
 description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
 sidebar:
   order: 11
-lastVerified: '2026-10-26'
+lastVerified: '2026-10-31'
 ---
 
 QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
@@ -12,8 +12,12 @@ pushes Security Event Tokens (SETs, RFC 8417) to the receiver's endpoint (RFC 89
 out of QAuth's event store and are sent by the delivery role, with its retries and its delivery
 history.
 
-The transmitter is experimental and off by default. Today it sends the verification event only:
-the mapping of QAuth's security events to CAEP and RISC events comes with #540.
+The transmitter is experimental and off by default. It sends QAuth's security events as CAEP 1.0,
+RISC 1.0 or QAuth-defined events: a sign-out as `session-revoked`, a withdrawn consent as
+`token-claims-change`, a client secret, API key or wallet credential change as
+`credential-change`, an RFC 7009 revocation as QAuth's `token-revoked`, and so on.
+[SSF events](/reference/ssf-events/) lists every mapping, its subject and its members, generated
+from the event registry.
 
 ## Turn it on
 
@@ -67,11 +71,12 @@ A receiver is an OAuth client of the realm. It authenticates with its own access
 - name no other realm's issuer in `aud`. A `client_id` is unique only within a realm, so such a
   token may come from a client of the same name in that realm. It gets `401`.
 
-Give `ssf:stream` only to clients you trust with the realm's security events: today a receiver may
-add any user or client of the realm as a subject. #540 limits a receiver to the users related to its
-own client (decided on 2026-10-26). Taking the scope away, disabling or suspending the
-client, or deleting it stops its deliveries, and its token stops working on `/ssf/` at once, not
-when it expires; deleting the client deletes its stream.
+Give `ssf:stream` only to clients you trust with the realm's security events. A receiver may add
+a user only when the user is related to its own client: the user holds an active consent for it,
+or a live refresh token it was issued (decided on 2026-10-26). It may add any client of the
+realm. Taking the scope away, disabling or suspending the client, or deleting it stops its
+deliveries, and its token stops working on `/ssf/` at once, not when it expires; deleting the
+client deletes its stream.
 
 Create the client with `client_credentials`, the `ssf:stream` scope and the realm's issuer as its
 audience, for example as an entry of the seed manifest's `clients`:
@@ -103,7 +108,10 @@ A receiver has one stream per realm; a second create answers `409`. Delivery is 
 curl -s https://auth.example.com/ssf/stream \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{
-    "events_requested": ["https://schemas.openid.net/secevent/caep/event-type/session-revoked"],
+    "events_requested": [
+      "https://schemas.openid.net/secevent/caep/event-type/session-revoked",
+      "https://schemas.openid.net/secevent/caep/event-type/credential-change"
+    ],
     "delivery": {
       "method": "urn:ietf:rfc:8935",
       "endpoint_url": "https://risk.example.com/ssf/events",
@@ -123,12 +131,15 @@ curl -s https://auth.example.com/ssf/stream \
   same `endpoint_url` keeps the stored header, so sending back what a read returned changes
   nothing; a new `endpoint_url` never gets the old header, and a `PUT` replaces it.
 - `events_delivered` in the answer is what QAuth will send: the requested events it supports.
+  `events_supported` lists them all.
 
 ## Add subjects
 
 The transmitter's `default_subjects` is `NONE`: a stream receives events only about the subjects
 its receiver adds. Name a user of the realm as `iss_sub` with the realm's issuer, and a client by
-its `client_id`, as `uri` when that is a URL and `opaque` otherwise:
+its `client_id`, as `uri` when that is a URL and `opaque` otherwise. A user must be related to the
+receiver's client, as above; any other user, and a user id that does not exist, is refused with
+`403` (`forbidden`), as SSF 1.0 §8.1.3.2 prescribes for a subject the receiver may not add:
 
 ```bash
 curl -s https://auth.example.com/ssf/subjects/add \
@@ -138,6 +149,11 @@ curl -s https://auth.example.com/ssf/subjects/add \
 
 A subject in another format, or with another issuer, is kept and matches no event. A stream holds
 at most 1000 subjects.
+
+Some events reach fewer streams than the subject alone would say. A withdrawn consent, an RFC 7009
+revocation and a replay's family revocation tell of the user's dealings with one client, so only
+that client's stream receives them. An API key change is about the key's client, and an emergency
+key retirement reaches every stream of the realm that requested it.
 
 ## Run the verification event
 
@@ -183,16 +199,18 @@ Branch on the status and `code`, never on `detail`:
 | `401`  | `unauthorized`         | The request carries no access token.                                                            |
 | `401`  | `invalid_access_token` | The token is not valid, not the receiver's own, or for another audience or realm.               |
 | `401`  | `access_token_expired` | The token has expired.                                                                          |
-| `403`  | `forbidden`            | The token lacks `ssf:stream`.                                                                   |
+| `403`  | `forbidden`            | The token lacks `ssf:stream`, or the receiver may not add the user it named as a subject.       |
 | `404`  | `not_found`            | No such stream for this receiver, or a realm that does not run the transmitter.                 |
 | `409`  | `conflict`             | The receiver already has a stream in the realm.                                                 |
 | `429`  | `too_many_requests`    | A verification within `min_verification_interval`; `Retry-After` says when to try again.        |
 
 A `401` for a token that was presented carries
 `WWW-Authenticate: Bearer realm="OAuth", error="invalid_token"`; one for a request with no token
-carries `Bearer realm="OAuth"` alone (RFC 6750 §3.1). A `403` carries
-`error="insufficient_scope", scope="ssf:stream"` (RFC 6750 §3). A realm that does not run the
-transmitter answers exactly what a path no route serves answers.
+carries `Bearer realm="OAuth"` alone (RFC 6750 §3.1). A `403` for a token without the scope
+carries `error="insufficient_scope", scope="ssf:stream"` (RFC 6750 §3); one for a user the
+receiver may not add carries `Bearer realm="OAuth"` alone, since no other token would let it
+through. A realm that does not run the transmitter answers exactly what a path no route serves
+answers.
 
 ## Watch deliveries
 

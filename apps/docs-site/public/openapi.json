@@ -6760,7 +6760,7 @@
         "tags": [
           "Shared Signals"
         ],
-        "description": "Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event.",
+        "description": "Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event. A user must be related to the receiver’s client: an active consent for it, or a live refresh token it was issued. Any other user, an unknown one included, is refused with 403.",
         "requestBody": {
           "required": true,
           "content": {

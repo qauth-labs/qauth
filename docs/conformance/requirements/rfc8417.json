@@ -1,0 +1,69 @@
+{
+  "specId": "rfc8417",
+  "note": "Hand-authored. `quote` is verbatim from https://www.rfc-editor.org/rfc/rfc8417 with line wrapping removed and nothing else changed.",
+  "requirements": [
+    {
+      "id": "rfc8417-2_2-iss-required",
+      "section": "2.2",
+      "level": "REQUIRED",
+      "quote": "As defined by Section 4.1.1 of [RFC7519], this claim contains a string identifying the service provider publishing the SET (the issuer). In some cases, the issuer of the SET will not be the issuer associated with the security subject of the SET. Therefore, implementers cannot assume that the issuers are the same unless the profiling specification specifies that they are for SETs conforming to that profile. This claim is REQUIRED.",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — the signer adds the realm's issuer as `iss` to every SET the delivery role asks it to sign; the SSF route's claims carry none.",
+      "status": "covered",
+      "evidenceMatch": "adds the realm issuer as iss to a SET"
+    },
+    {
+      "id": "rfc8417-2_2-iat-required",
+      "section": "2.2",
+      "level": "REQUIRED",
+      "quote": "As defined by Section 4.1.6 of [RFC7519], this claim contains a value representing when the SET was issued. This claim is REQUIRED.",
+      "applies": "libs/server/ssf/src/lib/set.ts (setClaims) — `iat` is the event's time in whole seconds, so a retry repeats it.",
+      "status": "covered",
+      "evidenceMatch": "carries iat, jti and one event object"
+    },
+    {
+      "id": "rfc8417-2_2-jti-required-unique",
+      "section": "2.2",
+      "level": "REQUIRED",
+      "quote": "As defined by Section 4.1.7 of [RFC7519], this claim contains a unique identifier for the SET. The identifier MUST be unique within a particular event feed and MAY be used by clients to track whether a particular SET has already been received. This claim is REQUIRED.",
+      "applies": "libs/server/ssf/src/lib/set.ts (setClaims) — `jti` is the event's id, a UUIDv7, one per event on every route and retry.",
+      "status": "covered",
+      "evidenceMatch": "carries iat, jti and one event object"
+    },
+    {
+      "id": "rfc8417-2_2-events-one-logical-event",
+      "section": "2.2",
+      "level": "MUST",
+      "quote": "Multiple event identifiers with the same value MUST NOT be used. The \"events\" claim MUST NOT be used to express multiple independent logical events.",
+      "applies": "libs/server/ssf/src/lib/delivery-route.ts — each SET carries one event, keyed by the SSF event the type's mapping names.",
+      "status": "covered",
+      "evidenceMatch": "carries iat, jti and one event object"
+    },
+    {
+      "id": "rfc8417-2_2-events-value-object",
+      "section": "2.2",
+      "level": "MUST",
+      "quote": "For each name present, the corresponding value MUST be a JSON object.",
+      "applies": "libs/shared/events/src/lib/ssf-mapping.ts (ssfEventMembers) — the event's members, an object.",
+      "status": "covered",
+      "evidenceMatch": "one event object"
+    },
+    {
+      "id": "rfc8417-2_2-exp-not-recommended",
+      "section": "2.2",
+      "level": "NOT RECOMMENDED",
+      "quote": "Therefore, its use is NOT RECOMMENDED.",
+      "applies": "libs/server/ssf/src/lib/set.ts — no SET carries `exp` (SSF 1.0 §4.1.7 forbids it).",
+      "status": "covered",
+      "evidenceMatch": "no sub or exp"
+    },
+    {
+      "id": "rfc8417-2_3-typ-secevent-jwt",
+      "section": "2.3",
+      "level": "SHOULD",
+      "quote": "Therefore, the \"typ\" value used SHOULD be \"secevent+jwt\".",
+      "applies": "libs/server/ssf/src/lib/delivery-route.ts — every SET is signed with `typ: secevent+jwt` (SSF 1.0 §4.1.1 makes it a MUST).",
+      "status": "covered",
+      "evidenceMatch": "carries iat, jti and one event object"
+    }
+  ]
+}

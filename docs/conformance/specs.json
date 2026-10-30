@@ -114,6 +114,15 @@
       "increment": 3,
       "sealed": false,
       "scopeNote": "the same-device bullets of §5.1 and its §14.3 pointer only"
+    },
+    {
+      "id": "rfc8417",
+      "name": "RFC 8417 — Security Event Token (SET)",
+      "url": "https://www.rfc-editor.org/rfc/rfc8417",
+      "aliases": ["RFC 8417"],
+      "increment": 5,
+      "sealed": false,
+      "scopeNote": "Rows cover the SET claims QAuth's SSF transmitter sends (§2.2) and their explicit typing (§2.3), registered with the security-event mapping of #540. Other sections are unwritten, so the spec stays unsealed."
     }
   ]
 }
