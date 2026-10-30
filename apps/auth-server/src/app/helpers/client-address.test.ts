@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
@@ -116,16 +116,14 @@ function resolveAppDir(): string {
 
 describe('rate-limit key functions in the app', () => {
   // Every limit keys by realm and address (`realmRateLimitKey`, #487), which
-  // derives the address part from clientAddressKey. The admin listener (#511)
-  // has no host realm: its ceilings key by address alone and by the token's
-  // subject, each with a key function of its own.
-  const KEY_FUNCTIONS = new Set([
-    'realmRateLimitKey',
-    'adminAddressRateLimitKey',
-    'adminSubjectRateLimitKey',
-  ]);
+  // derives the address part from clientAddressKey. The admin listener (#511,
+  // `admin/`) has no host realm: its ceilings key by address alone and by the
+  // token's subject, each with a key function of its own, which reads admin
+  // claims a public route's request does not carry.
+  const PUBLIC_KEY_FUNCTIONS = new Set(['realmRateLimitKey']);
+  const ADMIN_KEY_FUNCTIONS = new Set(['adminAddressRateLimitKey', 'adminSubjectRateLimitKey']);
 
-  it('derive every key from realmRateLimitKey, or from the admin listener key functions', () => {
+  it('derive every key from realmRateLimitKey, or on the admin listener from its own key functions', () => {
     const appDir = resolveAppDir();
     const files = readdirSync(appDir, { recursive: true, encoding: 'utf8' }).filter(
       (file) => file.endsWith('.ts') && !file.endsWith('.test.ts')
@@ -134,9 +132,10 @@ describe('rate-limit key functions in the app', () => {
     let keyGenerators = 0;
     for (const file of files) {
       const source = readFileSync(join(appDir, file), 'utf8');
+      const allowed = file.startsWith(`admin${sep}`) ? ADMIN_KEY_FUNCTIONS : PUBLIC_KEY_FUNCTIONS;
       for (const match of source.matchAll(/keyGenerator\s*:\s*([^,\n}]+)/g)) {
         keyGenerators += 1;
-        if (!KEY_FUNCTIONS.has(match[1].trim())) offenders.push(`${file}: ${match[0]}`);
+        if (!allowed.has(match[1].trim())) offenders.push(`${file}: ${match[0]}`);
       }
     }
     expect(keyGenerators).toBeGreaterThan(20);
