@@ -540,10 +540,12 @@ describe('security events on SSF streams (real containers)', () => {
     // An unknown user and an unrelated one get the same answer.
     const unknown = await addSubject(app, who, streamId, userSubject(randomUUID()));
     const unrelated = await addSubject(app, who, streamId, userSubject(stranger.userId));
-    const comparable = (response: LightMyRequestResponse) => {
-      const { trace_id: _traceId, ...body } = response.json<Record<string, unknown>>();
-      return body;
-    };
+    const comparable = (response: LightMyRequestResponse) =>
+      Object.fromEntries(
+        Object.entries(response.json<Record<string, unknown>>()).filter(
+          ([member]) => member !== 'trace_id'
+        )
+      );
     expect(comparable(unknown)).toEqual(comparable(unrelated));
 
     const added = await addSubject(app, who, streamId, userSubject(consented.userId));
