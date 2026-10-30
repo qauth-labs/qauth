@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import type { FastifyInstance, FastifyRequest, LightMyRequestResponse } from 'fastify';
 import { exportJWK, importPKCS8, importSPKI, SignJWT } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -99,9 +99,17 @@ async function fixtureAdminApi() {
     permissions: ['realms.policies.write'],
     description: 'Create an account once the test lets the request go (fixture).',
   });
-  const registry = operations.createOperationRegistry([read, create, fail, rotate, send, held], {
-    reserved: [],
+  const unwrapped = operations.defineOperation({
+    id: 'fixtureUnwrapped.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account outside the pipeline transaction (fixture).',
   });
+  const registry = operations.createOperationRegistry(
+    [read, create, fail, rotate, send, held, unwrapped],
+    { reserved: [] }
+  );
 
   const params = z.object({ realmId: z.uuid() });
   const schemaOf = (operation: typeof read) => ({
@@ -180,6 +188,24 @@ async function fixtureAdminApi() {
           return { id: account.id };
         }
       );
+      // A module whose own `onRoute` hook, which runs after the pipeline's,
+      // puts the handler the pipeline wrapped back to its own.
+      const unwrappedHandler = async (request: FastifyRequest) => {
+        runs.push(unwrapped.id);
+        const realmId = requestAdminCaller(request).targetRealm.id;
+        await request.server.repositories.users.create({ realmId });
+        return { unwrapped: true };
+      };
+      void scope.register(async (module) => {
+        module.addHook('onRoute', (route) => {
+          route.handler = unwrappedHandler;
+        });
+        module.post(
+          '/admin/v1-rc.0/realms/:realmId/fixture-unwrapped',
+          { config: { operation: unwrapped.id }, schema: schemaOf(unwrapped) },
+          unwrappedHandler
+        );
+      });
       scope.post(
         '/admin/v1-rc.0/realms/:realmId/fixture-keys/rotate',
         { config: { operation: rotate.id }, schema: schemaOf(rotate) },
@@ -383,6 +409,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         '/admin/v1-rc.0/realms/{realmId}/fixture-holds',
         '/admin/v1-rc.0/realms/{realmId}/fixture-keys/rotate',
         '/admin/v1-rc.0/realms/{realmId}/fixture-sends',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-unwrapped',
       ]);
 
       const onPublic = await app().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' });
@@ -437,7 +464,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' })
       ).json();
       const report = checkApiConventions(document, { operations: registry });
-      expect(report.checkedOperations).toBe(6);
+      expect(report.checkedOperations).toBe(7);
       expect(report.violations).toEqual([]);
     });
   });
@@ -601,6 +628,24 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       const refused = await call('GET', realmPath(alpha.id), forged);
       expect(refused.statusCode).toBe(401);
       expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
+
+      // An issuer no realm has is refused in the same words: the answer does
+      // not tell which issuers name a realm.
+      const nowhere = await call(
+        'GET',
+        realmPath(alpha.id),
+        await signedWithOperatorKey('https://nowhere.example.com', ofAlpha)
+      );
+      const comparable = (response: LightMyRequestResponse) => {
+        const body = { ...response.json<Record<string, unknown>>() };
+        delete body['trace_id'];
+        return {
+          status: response.statusCode,
+          challenge: response.headers['www-authenticate'],
+          body,
+        };
+      };
+      expect(comparable(nowhere)).toEqual(comparable(refused));
 
       // The same key and claims naming the operator realm's own issuer pass:
       // only the realm the issuer names decided which keys verify.
@@ -816,6 +861,35 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(await accountsIn(realmId)).toBe(0);
       expect(await auditRows(realmId)).toMatchObject([
         { operation_id: 'fixtureAccounts.send', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('fails a route whose handler a later onRoute hook put back, before it runs, with one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-unwrapped'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureUnwrapped.create', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('writes a failed row when the server fails after authorization, before the handler runs', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+      // The handler's transaction cannot open; the row's own, after it, can.
+      vi.spyOn(app().db, 'transaction').mockRejectedValueOnce(new Error('the pool is exhausted'));
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(500);
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureAccounts.create', outcome: 'failed', masked_diff: null },
       ]);
     });
 

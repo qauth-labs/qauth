@@ -1,6 +1,7 @@
 import rateLimit from '@fastify/rate-limit';
 import {
   ForbiddenError,
+  JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
 } from '@qauth-labs/shared-errors';
@@ -33,6 +34,7 @@ import {
   DEFAULT_ADMIN_RATE_LIMIT,
   requestClassification,
 } from '../plugins/admin-operations';
+import { intendedStatusCode } from '../plugins/error-handler';
 import { adminRealmRouteProblem } from './route-placement';
 
 /**
@@ -103,10 +105,55 @@ export interface AdminPipelineState {
   transaction?: AdminTransaction;
   /** The change the handler recorded, for the `succeeded` row. */
   change?: AdminChange;
-  /** Whether the handler started: a later failure is `failed`, an earlier one `denied`. */
+  /**
+   * Whether stage 8 started, from the opening of the handler's transaction:
+   * a later failure is `failed`, an earlier refusal `denied`.
+   */
   handlerStarted: boolean;
   /** Whether the handler's transaction, and with it the `succeeded` row, committed. */
   committed: boolean;
+  /**
+   * Set once the call owes an audit row: tells {@link AdminCallsInFlight}
+   * that it owes none any more, its row written or past writing.
+   */
+  rowSettled?: () => void;
+}
+
+/** How often {@link AdminCallsInFlight.drained} looks again. */
+const DRAIN_POLL_MS = 25;
+
+/**
+ * The admin calls that owe an audit row (#511): from the authority stage on,
+ * until the row is written, in the handler's transaction or after a refusal
+ * or failure, or the answer is out. When the server closes, the listener
+ * waits for them before the database closes, so a call whose connection it
+ * had to close still writes its row.
+ */
+export class AdminCallsInFlight {
+  private readonly calls = new Set<FastifyRequest>();
+
+  /** `request` owes a row from now on, until its state's `rowSettled` runs. */
+  open(request: FastifyRequest): void {
+    this.calls.add(request);
+    pipelineState(request).rowSettled = () => {
+      this.calls.delete(request);
+    };
+  }
+
+  /** How many calls owe a row. */
+  get size(): number {
+    return this.calls.size;
+  }
+
+  /** Resolves `true` once no call owes a row, or `false` after `timeoutMs`. */
+  async drained(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.calls.size > 0) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+    }
+    return true;
+  }
 }
 
 declare module 'fastify' {
@@ -130,12 +177,18 @@ export interface AdminPipelineOptions {
   readonly registry?: OperationRegistry;
   /** The ceiling per token subject, run right after the token guard. */
   readonly bySubject: AdminRateLimitStage;
+  /** Where the pipeline counts the calls that owe an audit row. Its own when unset. */
+  readonly calls?: AdminCallsInFlight;
   /** Registers the routes behind the pipeline. */
   readonly routes: (scope: FastifyInstance) => void | Promise<void>;
 }
 
-/** Marks a handler the pipeline already wrapped, so a route is never wrapped twice. */
-const WRAPPED = Symbol.for('qauth.adminPipeline.wrappedHandler');
+/**
+ * The handlers the pipeline made, each running a route's own in the
+ * pipeline's transaction ({@link inTransaction}): a route is never wrapped
+ * twice, and no module can mark a handler of its own as one.
+ */
+const wrappedHandlers = new WeakSet<object>();
 
 /** The pipeline state of `request`, which the first stage created. */
 function pipelineState(request: FastifyRequest): AdminPipelineState {
@@ -195,9 +248,25 @@ export function recordAdminChange(request: FastifyRequest, change: AdminChange):
 }
 
 /**
+ * The description of every refusal of the token guard. Whether a token names
+ * no realm's issuer, fails the keys of the realm it names, or fails a later
+ * check, the answer reads the same, so it says nothing about realms. Each
+ * refusal keeps its kind: no credential, an expired token, an invalid one.
+ */
+const ADMIN_TOKEN_REFUSAL = 'The request carries no admin access token this listener accepts';
+
+/** The longest issuer the guard looks up: far longer than any realm's URL. */
+const MAX_ISSUER_LENGTH = 2048;
+
+/** C0 controls and DEL: no realm's issuer holds one, and Postgres refuses `\u0000`. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the entire purpose of this pattern
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+
+/**
  * The issuer a token names, read before its signature is checked: only to
  * find the realm whose keys then verify it. A token that does not decode, or
- * names no issuer, is refused as any invalid token is.
+ * names no issuer, or one no realm could have, is refused as any invalid
+ * token is, before the lookup.
  */
 function unverifiedIssuer(request: FastifyRequest, token: string): string {
   let issuer: unknown;
@@ -209,7 +278,23 @@ function unverifiedIssuer(request: FastifyRequest, token: string): string {
   if (typeof issuer !== 'string' || issuer.length === 0) {
     throw new JWTInvalidError('Access token lacks an issuer');
   }
+  if (issuer.length > MAX_ISSUER_LENGTH || CONTROL_CHARACTERS.test(issuer)) {
+    throw new JWTInvalidError('Access token issuer is not one a realm could have');
+  }
   return issuer;
+}
+
+/**
+ * `error` with {@link ADMIN_TOKEN_REFUSAL} as its description, when it is a
+ * refusal of the token; any other error, such as a database failure, as it is.
+ */
+function uniformTokenRefusal(error: unknown): unknown {
+  if (error instanceof MissingAccessTokenError) {
+    return new MissingAccessTokenError(ADMIN_TOKEN_REFUSAL);
+  }
+  if (error instanceof JWTExpiredError) return new JWTExpiredError(ADMIN_TOKEN_REFUSAL);
+  if (error instanceof JWTInvalidError) return new JWTInvalidError(ADMIN_TOKEN_REFUSAL);
+  return error;
 }
 
 /** The admin family's guard: an admin acts as itself, so its token names a user. */
@@ -225,29 +310,37 @@ const adminFamilyGuard = requireFamilyToken('admin', { subjects: ['user'] });
  * alone, no `act`, and an enabled account of that realm as the subject.
  *
  * A call with no token, or a token that fails any of these, gets 401 here,
- * whatever its network position, and before any realm of the path is read.
+ * whatever its network position, and before any realm of the path is read,
+ * with one description ({@link ADMIN_TOKEN_REFUSAL}). The `DPoP` scheme is
+ * not taken until #520 checks its proof against the listener's own URL: it is
+ * answered as a request with no credential, as with DPOP_ENABLED off.
  */
 async function adminTokenStage(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   request.adminPipeline = { handlerStarted: false, committed: false };
-  const credential = request.server.jwtUtils.extractCredentialFromHeader(
-    request.headers.authorization
-  );
-  if (credential === null) {
-    throw new MissingAccessTokenError('Missing or malformed Authorization header');
+  try {
+    const credential = request.server.jwtUtils.extractCredentialFromHeader(
+      request.headers.authorization
+    );
+    if (credential === null || credential.scheme !== 'Bearer') {
+      throw new MissingAccessTokenError('Missing or malformed Authorization header');
+    }
+    const issuer = unverifiedIssuer(request, credential.token);
+    const issuerRealm = await deploymentRealmIssuerDirectory(request.server).realmForIssuer(issuer);
+    if (issuerRealm === undefined || !issuerRealm.enabled || issuerRealm.issuer === null) {
+      throw new JWTInvalidError('Access token issuer is not accepted here');
+    }
+    request.realm = issuerRealm;
+    await adminFamilyGuard(request, reply);
+  } catch (error) {
+    throw uniformTokenRefusal(error);
   }
-  const issuer = unverifiedIssuer(request, credential.token);
-  const issuerRealm = await deploymentRealmIssuerDirectory(request.server).realmForIssuer(issuer);
-  if (issuerRealm === undefined || !issuerRealm.enabled || issuerRealm.issuer === null) {
-    throw new JWTInvalidError('Access token issuer is not accepted here');
-  }
-  request.realm = issuerRealm;
-  await adminFamilyGuard(request, reply);
 }
 
 /**
  * Stage 3, the DPoP check. Empty: requiring a DPoP-bound admin token, and
  * checking its proof against the listener's own URL, is #520's. Until then
- * the token guard refuses a DPoP-bound token sent as a Bearer token.
+ * the token guard takes only the Bearer scheme, and refuses a DPoP-bound
+ * token sent under it.
  */
 async function adminDpopStage(): Promise<void> {
   // Filled by #520.
@@ -347,6 +440,21 @@ async function adminApprovalGate(request: FastifyRequest): Promise<void> {
   }
 }
 
+/**
+ * Stage 8's guard, the last of the pipeline's hooks: the handler the route
+ * runs is the one the pipeline made. An `onRoute` hook of a scope registered
+ * behind the pipeline runs after the pipeline's, and could put the route's
+ * own handler back, which would run outside the transaction and write no
+ * audit row: such a call fails before its handler runs.
+ */
+async function adminHandlerGuard(request: FastifyRequest): Promise<void> {
+  if (!wrappedHandlers.has(request.routeOptions.handler)) {
+    throw new Error(
+      `${request.method} ${request.routeOptions.url ?? ''} runs a handler the admin pipeline did not wrap`
+    );
+  }
+}
+
 /** The operation a row records: the request's classification, or the route's operation as declared. */
 function auditedOperation(
   request: FastifyRequest,
@@ -419,11 +527,13 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
   ): Promise<unknown> {
     const state = pipelineState(request);
     const caller = requestAdminCaller(request);
+    // From here on a failure is the server's, the transaction's opening
+    // included: the call was authorized and approved.
+    state.handlerStarted = true;
     let body: unknown;
     try {
       body = await request.server.db.transaction(async (tx) => {
         state.transaction = tx;
-        state.handlerStarted = true;
         for (const method of ANSWERING_METHODS) {
           Object.defineProperty(reply, method, {
             configurable: true,
@@ -439,8 +549,9 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
           for (const method of ANSWERING_METHODS) Reflect.deleteProperty(reply, method);
           state.transaction = undefined;
         }
-        // Written to the raw response, around the reply: refused all the same.
-        if (reply.sent) throw new Error(SEND_REFUSAL);
+        // Written to the raw response, around the reply, even only its head:
+        // refused all the same.
+        if (reply.sent || reply.raw.headersSent) throw new Error(SEND_REFUSAL);
         await request.server.repositories.adminAuditLog.appendAdminAudit(
           tx,
           auditEntry(request, registry, caller, 'succeeded', state.change)
@@ -449,29 +560,36 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
       });
     } catch (error) {
       // A reply already out runs no `onError` hook: its row is written here.
-      if (reply.sent) await auditRefusal(request, registry);
+      // One whose head alone went out still runs it, and is written there.
+      if (reply.sent) await auditRefusal(request, registry, true);
       throw error;
     }
     state.committed = true;
+    state.rowSettled?.();
     if (body === undefined) return reply.send();
     return body;
   };
-  Object.defineProperty(wrapped, WRAPPED, { value: true });
+  wrappedHandlers.add(wrapped);
   return wrapped;
 }
 
 /**
  * The audit row of a call refused or failed after the authority stage:
- * `denied` before the handler started, `failed` once it did. Written in a new
+ * `failed` once stage 8 started or when the server failed (`serverFailure`,
+ * a 5xx answer), `denied` for a refusal before. Written in a new
  * transaction, with no diff: the handler's own rolled back. A call that never
  * reached a realm within the caller's grants writes nothing; a call whose
  * transaction already committed has its row.
  */
-async function auditRefusal(request: FastifyRequest, registry: OperationRegistry): Promise<void> {
+async function auditRefusal(
+  request: FastifyRequest,
+  registry: OperationRegistry,
+  serverFailure: boolean
+): Promise<void> {
   const state = request.adminPipeline;
   if (state === null || state.authority === undefined || state.committed) return;
   const caller = state.authority;
-  const outcome = state.handlerStarted ? 'failed' : 'denied';
+  const outcome = state.handlerStarted || serverFailure ? 'failed' : 'denied';
   try {
     const entry = auditEntry(request, registry, caller, outcome, undefined);
     await request.server.db.transaction(async (tx) => {
@@ -482,6 +600,8 @@ async function auditRefusal(request: FastifyRequest, registry: OperationRegistry
       { err: error, outcome, realmId: caller.targetRealm.id },
       'The audit row of a refused or failed admin call could not be written'
     );
+  } finally {
+    state.rowSettled?.();
   }
 }
 
@@ -506,6 +626,28 @@ function earlyRouteHookProblem(route: RouteOptions): string | undefined {
 }
 
 /**
+ * Refuse, from now on, every {@link EARLY_ROUTE_HOOKS} hook added to `scope`
+ * with `addHook`: a scope's hooks of those kinds run before its `preHandler`
+ * hooks, where stages 6 and 7 are, whoever adds them. A scope registered in
+ * `scope` inherits its `addHook` (Fastify makes it with `Object.create`), and
+ * a plugin wrapped in `fastify-plugin` adds to the scope it is registered in,
+ * so the refusal reaches every route module behind the pipeline.
+ */
+function refuseEarlyScopeHooks(scope: FastifyInstance): void {
+  const addHook = scope.addHook;
+  Object.defineProperty(scope, 'addHook', {
+    value: function addAdminScopeHook(this: FastifyInstance, name: unknown, ...rest: unknown[]) {
+      if ((EARLY_ROUTE_HOOKS as readonly unknown[]).includes(name)) {
+        throw new Error(
+          `An admin route module adds an ${String(name)} hook, which would run before the admin pipeline authorizes the caller; use a preHandler hook or the handler`
+        );
+      }
+      return Reflect.apply(addHook, this, [name, ...rest]);
+    },
+  });
+}
+
+/**
  * The admin pipeline: its stages as hooks of an encapsulated scope, then the
  * routes `options.routes` registers in it. Register it on the admin listener,
  * after the request id and the per-address ceiling and before any other
@@ -517,6 +659,7 @@ export async function adminPipeline(
   options: AdminPipelineOptions
 ): Promise<void> {
   const registry = options.registry ?? OPERATION_REGISTRY;
+  const calls = options.calls ?? new AdminCallsInFlight();
 
   fastify.decorateRequest('adminPipeline', null);
 
@@ -525,9 +668,8 @@ export async function adminPipeline(
   fastify.addHook('onRoute', (route) => {
     const problem = adminRealmRouteProblem(route) ?? earlyRouteHookProblem(route);
     if (problem !== undefined) throw new Error(problem);
-    const handler = route.handler as RouteHandlerMethod & { [WRAPPED]?: true };
-    if (handler[WRAPPED] !== true) {
-      route.handler = inTransaction(handler, registry) as RouteHandlerMethod;
+    if (!wrappedHandlers.has(route.handler)) {
+      route.handler = inTransaction(route.handler, registry) as RouteHandlerMethod;
     }
   });
 
@@ -555,10 +697,19 @@ export async function adminPipeline(
   // Stages 4 and 5. Before the body is read, so a caller with no grant on the
   // realm never has its body parsed.
   fastify.addHook('onRequest', adminAuthorityStage);
+  // From here on the call owes its audit row.
+  fastify.addHook('onRequest', async (request) => {
+    calls.open(request);
+  });
 
-  // Stage 9's other half: a call refused or failed after stage 5.
-  fastify.addHook('onError', async (request) => {
-    await auditRefusal(request, registry);
+  // Stage 9's other half: a call refused or failed after stage 5, recorded
+  // `failed` when it answers a 5xx, as the error handler will answer it.
+  fastify.addHook('onError', async (request, _reply, error) => {
+    await auditRefusal(request, registry, intendedStatusCode(error) >= 500);
+  });
+  // An answer out: its row is written, or the call wrote none.
+  fastify.addHook('onResponse', async (request) => {
+    request.adminPipeline?.rowSettled?.();
   });
 
   // Stage 6.
@@ -568,8 +719,13 @@ export async function adminPipeline(
       authorizeAdminRequest(request, classification, registry.permissions),
   });
 
-  // Stage 7, after stage 6's `preHandler`.
+  // Stage 7, after stage 6's `preHandler`, then stage 8's guard.
   fastify.addHook('preHandler', adminApprovalGate);
+  fastify.addHook('preHandler', adminHandlerGuard);
+
+  // The stages are in place: no route module may add a hook that would run
+  // before stages 6 and 7.
+  refuseEarlyScopeHooks(fastify);
 
   await options.routes(fastify);
 }

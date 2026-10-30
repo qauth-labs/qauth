@@ -31,7 +31,7 @@ import { DEFAULT_ADMIN_RATE_LIMIT } from '../plugins/admin-operations';
 import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
-import { adminPipeline, type AdminRateLimitStage } from './pipeline';
+import { AdminCallsInFlight, adminPipeline, type AdminRateLimitStage } from './pipeline';
 
 /**
  * THE ADMIN LISTENER (ADR-019 Decisions 7 and 8, issue #511).
@@ -156,6 +156,13 @@ export function createAdminServer(options: AdminServerOptions = {}): FastifyInst
  */
 export const ADMIN_CLOSE_GRACE_MS = 8_000;
 
+/**
+ * How long a closing admin listener may take in all: after the grace, it
+ * waits for the audit rows of the calls whose connections it closed, until
+ * then and no longer, still under the 10 s of the `preClose` hook.
+ */
+export const ADMIN_CLOSE_BUDGET_MS = 9_500;
+
 /** How often a closing admin listener closes the connections that went idle. */
 const IDLE_SWEEP_MS = 50;
 
@@ -165,8 +172,17 @@ const IDLE_SWEEP_MS = 50;
  * connection would hold the close open once its last answer is sent, until
  * the client let it go, so each connection is closed as soon as it is idle,
  * and any still open after {@link ADMIN_CLOSE_GRACE_MS} is closed then.
+ *
+ * Closing a connection does not stop its call: the handler runs on, and its
+ * audit row still needs the database. So the close then waits, up to
+ * {@link ADMIN_CLOSE_BUDGET_MS} from its start, until no call owes a row
+ * (`calls`), and logs the calls that still do.
  */
-export async function closeAdminServer(admin: FastifyInstance): Promise<void> {
+export async function closeAdminServer(
+  admin: FastifyInstance,
+  calls?: AdminCallsInFlight
+): Promise<void> {
+  const started = Date.now();
   const closing = admin.close();
   const sweep = setInterval(() => admin.server.closeIdleConnections(), IDLE_SWEEP_MS);
   const deadline = setTimeout(() => admin.server.closeAllConnections(), ADMIN_CLOSE_GRACE_MS);
@@ -175,6 +191,13 @@ export async function closeAdminServer(admin: FastifyInstance): Promise<void> {
   } finally {
     clearInterval(sweep);
     clearTimeout(deadline);
+  }
+  if (calls === undefined) return;
+  if (!(await calls.drained(Math.max(0, started + ADMIN_CLOSE_BUDGET_MS - Date.now())))) {
+    admin.log.warn(
+      { calls: calls.size },
+      'The admin listener closed while calls still owed their audit rows: rows not written yet are lost'
+    );
   }
 }
 
@@ -280,9 +303,11 @@ export async function installAdminApi(
   const ceilings = await registerCeilings(admin, source);
   admin.addHook('onRequest', ceilings.byAddress);
 
+  const calls = new AdminCallsInFlight();
   await admin.register(adminPipeline, {
     ...(options.registry === undefined ? {} : { registry: options.registry }),
     bySubject: ceilings.bySubject,
+    calls,
     routes: async (scope) => {
       for (const module of ADMIN_ROUTE_MODULES) await scope.register(module);
       await options.routes?.(scope);
@@ -292,6 +317,6 @@ export async function installAdminApi(
   admin.get(ADMIN_OPENAPI_PATH, { schema: { hide: true } }, async () => admin.swagger());
 
   source.addHook('preClose', async () => {
-    await closeAdminServer(admin);
+    await closeAdminServer(admin, calls);
   });
 }

@@ -1,7 +1,8 @@
 import rateLimit from '@fastify/rate-limit';
-import Fastify, { type FastifyInstance } from 'fastify';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type AdminOperation,
@@ -9,7 +10,7 @@ import {
   defineOperation,
   operationSchemaExtensions,
 } from '../helpers/admin-operations';
-import { adminPipeline } from './pipeline';
+import { AdminCallsInFlight, adminPipeline } from './pipeline';
 
 /**
  * What the admin pipeline refuses at boot (#511): a route that names no realm
@@ -101,6 +102,176 @@ describe('the admin pipeline at boot', () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  /** `scope.addHook(hook, …)`, for a hook name the overloads cannot take as a union. */
+  const addEarlyHook = (scope: FastifyInstance, hook: string) =>
+    (scope.addHook as (name: string, fn: () => Promise<void>) => unknown)(
+      hook,
+      async () => undefined
+    );
+
+  it.each(['onRequest', 'preParsing', 'preValidation'] as const)(
+    'refuses a route module that adds an %s hook to its scope, or to a scope of its own',
+    async (hook) => {
+      await expect(
+        boot((scope) => {
+          addEarlyHook(scope, hook);
+          scope.get('/admin/v1-rc.0/realms/:realmId', options, async () => ({}));
+        })
+      ).rejects.toThrow(`adds an ${hook} hook`);
+      await instance?.close();
+      await expect(
+        boot((scope) => {
+          void scope.register(async (module) => {
+            addEarlyHook(module, hook);
+            module.get('/admin/v1-rc.0/realms/:realmId', options, async () => ({}));
+          });
+        })
+      ).rejects.toThrow(`adds an ${hook} hook`);
+    }
+  );
+
+  it('lets a route module add its own preHandler and onRoute hooks', async () => {
+    await expect(
+      boot((scope) => {
+        void scope.register(async (module) => {
+          module.addHook('onRoute', () => undefined);
+          module.addHook('preHandler', async () => undefined);
+          module.get('/admin/v1-rc.0/realms/:realmId', options, async () => ({}));
+        });
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('wraps every handler, whatever mark it carries', async () => {
+    const own = Object.assign(async () => ({}), {
+      [Symbol.for('qauth.adminPipeline.wrappedHandler')]: true,
+    });
+    let handler: unknown;
+    await boot((scope) => {
+      scope.addHook('onRoute', (route) => {
+        handler = route.handler;
+      });
+      scope.get('/admin/v1-rc.0/realms/:realmId', options, own);
+    });
+    expect(handler).toBeTypeOf('function');
+    expect(handler).not.toBe(own);
+  });
+});
+
+describe('the token guard', () => {
+  const ISSUER = 'https://alpha.example.com';
+  const REALM = { id: '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f', issuer: ISSUER, enabled: true };
+
+  /** A request's credential, its claims before verification, and what verification does. */
+  interface Presented {
+    readonly scheme?: 'Bearer' | 'DPoP';
+    readonly iss: unknown;
+    readonly verify?: () => Promise<never>;
+  }
+
+  /**
+   * Send one request through a bare listener whose token guard reads the
+   * stubs: one realm, `alpha`, and a token that claims `iss`.
+   */
+  async function present(presented: Presented) {
+    const findByIssuer = vi.fn(async (issuer: string) => (issuer === ISSUER ? REALM : undefined));
+    const decodeTokenUnsafe = vi.fn(() => ({ iss: presented.iss }));
+    await boot(
+      (scope) => {
+        scope.get('/admin/v1-rc.0/realms/:realmId', options, async () => ({}));
+      },
+      async (app) => {
+        app.decorate('jwtUtils', {
+          extractCredentialFromHeader: () => ({
+            scheme: presented.scheme ?? 'Bearer',
+            token: 'token',
+          }),
+          decodeTokenUnsafe,
+        } as never);
+        app.decorate('repositories', { realms: { findByIssuer } } as never);
+        app.decorate(
+          'verifyRequestAccessToken',
+          (presented.verify ??
+            (async () => {
+              throw new Error('no verification expected');
+            })) as never
+        );
+      }
+    );
+    const app = instance;
+    if (app === undefined) throw new Error('not booted');
+    const response = await app.inject({
+      method: 'GET',
+      url: `/admin/v1-rc.0/realms/${REALM.id}`,
+      headers: { authorization: 'Bearer token' },
+    });
+    await app.close();
+    instance = undefined;
+    return { response, findByIssuer, decodeTokenUnsafe };
+  }
+
+  const REFUSAL = 'The request carries no admin access token this listener accepts';
+
+  it('answers every refusal alike, whether the issuer names a realm or not', async () => {
+    const unknown = await present({ iss: 'https://unknown.example.com' });
+    const wrongKey = await present({
+      iss: ISSUER,
+      verify: async () => {
+        throw new JWTInvalidError('Invalid JWT token: no key of this realm verifies it');
+      },
+    });
+    const expired = await present({
+      iss: ISSUER,
+      verify: async () => {
+        throw new JWTExpiredError();
+      },
+    });
+
+    expect(unknown.response.statusCode).toBe(401);
+    expect(unknown.response.json()).toEqual(wrongKey.response.json());
+    expect(unknown.response.json()).toMatchObject({
+      code: 'INVALID_ACCESS_TOKEN',
+      message: REFUSAL,
+    });
+    expect(expired.response.statusCode).toBe(401);
+    expect(expired.response.json()).toMatchObject({
+      code: 'ACCESS_TOKEN_EXPIRED',
+      message: REFUSAL,
+    });
+  });
+
+  it('answers the DPoP scheme as no credential until #520, before it reads the token', async () => {
+    const { response, decodeTokenUnsafe, findByIssuer } = await present({
+      scheme: 'DPoP',
+      iss: ISSUER,
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'UNAUTHORIZED', message: REFUSAL });
+    expect(decodeTokenUnsafe).not.toHaveBeenCalled();
+    expect(findByIssuer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a NUL character', '\u0000'],
+    ['a control character', `${ISSUER}\n`],
+    ['more than 2048 characters', `${ISSUER}/${'a'.repeat(2048)}`],
+  ])('refuses an issuer with %s before it looks the issuer up', async (_what, iss) => {
+    const { response, findByIssuer } = await present({ iss });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN', message: REFUSAL });
+    expect(findByIssuer).not.toHaveBeenCalled();
+  });
+
+  it('leaves a failure that is no refusal of the token as it is', async () => {
+    const { response } = await present({
+      iss: ISSUER,
+      verify: async () => {
+        throw new Error('the database is down');
+      },
+    });
+    expect(response.statusCode).toBe(500);
+  });
 });
 
 describe('the request ceiling of the routes behind the pipeline', () => {
@@ -129,5 +300,24 @@ describe('the request ceiling of the routes behind the pipeline', () => {
         await app.register(rateLimit, { global: false, max: 1, timeWindow: 60_000 });
       })
     ).toEqual([]);
+  });
+});
+
+describe('the calls that owe an audit row', () => {
+  it('drains once every call has settled its row, and gives up at its deadline', async () => {
+    const calls = new AdminCallsInFlight();
+    const request = {
+      adminPipeline: { handlerStarted: false, committed: false },
+    } as unknown as FastifyRequest;
+    calls.open(request);
+    expect(calls.size).toBe(1);
+    expect(await calls.drained(30)).toBe(false);
+
+    setTimeout(() => request.adminPipeline?.rowSettled?.(), 20);
+    expect(await calls.drained(1_000)).toBe(true);
+    expect(calls.size).toBe(0);
+    // Settling again changes nothing.
+    request.adminPipeline?.rowSettled?.();
+    expect(calls.size).toBe(0);
   });
 });
