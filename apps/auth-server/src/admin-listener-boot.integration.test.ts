@@ -218,11 +218,12 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
   });
 
   it('opens no admin port with ADMIN_API_ENABLED=false, or without the admin role', async (ctx) => {
-    for (const environment of [
+    const environments: Record<string, string>[] = [
       { ADMIN_API_ENABLED: 'false' },
       // A process with the signer, so it needs no signer service.
       { SERVICE_ROLES: 'web,api,signer,delivery' },
-    ]) {
+    ];
+    for (const environment of environments) {
       const server = await startServer(ctx, environment);
       await until(logged(server, 'Server listening on '), 'the server to listen', server);
 
