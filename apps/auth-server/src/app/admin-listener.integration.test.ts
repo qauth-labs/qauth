@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import type { FastifyInstance, FastifyRequest, LightMyRequestResponse } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type LightMyRequestResponse,
+} from 'fastify';
 import { exportJWK, importPKCS8, importSPKI, SignJWT } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -414,9 +421,14 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
 
       const onPublic = await app().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' });
       expect(onPublic.statusCode).toBe(404);
-      const publicDocument = await app().inject({ method: 'GET', url: '/docs/json' });
-      if (publicDocument.statusCode === 200) {
-        expect(JSON.stringify(publicDocument.json())).not.toContain('/admin/');
+      // The public documents, as published: the harness serves no /docs.
+      for (const file of ['stable-surface/openapi.json', 'apps/docs-site/public/openapi.json']) {
+        const document = JSON.parse(readFileSync(join(__dirname, '../../../..', file), 'utf8')) as {
+          paths: Record<string, unknown>;
+        };
+        const paths = Object.keys(document.paths);
+        expect(paths.length).toBeGreaterThan(0);
+        expect(paths.filter((path) => /^\/admin(?:\/|$)/.test(path))).toEqual([]);
       }
     });
 
@@ -1037,7 +1049,7 @@ describe('the request ceilings with RATE_LIMIT_ENABLED=false (#511, real contain
     await booted?.close();
   });
 
-  it('keeps both ceilings, in memory, at the default of 100 calls a minute', async (ctx) => {
+  it('keeps the ceiling per address, in memory, at the default of 100 calls a minute', async (ctx) => {
     if (!booted?.admin) {
       ctx.skip();
       return;
@@ -1053,6 +1065,48 @@ describe('the request ceilings with RATE_LIMIT_ENABLED=false (#511, real contain
     }
     expect(statuses.slice(0, 100).every((status) => status === 401)).toBe(true);
     expect(statuses[100]).toBe(429);
+  });
+
+  it('keeps the ceiling per token subject, in memory, at the default, from any address', async (ctx) => {
+    if (!booted?.admin) {
+      ctx.skip();
+      return;
+    }
+    const app = booted.app;
+    const admin = booted.admin;
+    const { DEFAULT_ADMIN_RATE_LIMIT } = await import('./plugins/admin-operations');
+    const limit = DEFAULT_ADMIN_RATE_LIMIT.max;
+    const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!operator) throw new Error('default realm missing');
+    const { realm } = await app.repositories.realms.createWithPrimaryHost(
+      { name: 'gamma', issuer: 'https://gamma.example.com', enabled: true },
+      'gamma.example.com'
+    );
+    const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+    await app.repositories.adminGrants.create({
+      userId,
+      role: { kind: 'built-in', name: 'viewer' },
+      targetRealmId: realm.id,
+      createdBy: null,
+    });
+    const token = await app.jwtUtils.signAccessToken(
+      { id: operator.id },
+      { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+    );
+
+    // A new address for every call, so only the subject's count can refuse.
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt <= limit; attempt += 1) {
+      const response = await admin.inject({
+        method: 'GET',
+        url: realmPath(realm.id),
+        headers: { authorization: `Bearer ${token}` },
+        remoteAddress: `198.18.${Math.floor(attempt / 250)}.${(attempt % 250) + 1}`,
+      });
+      statuses.push(response.statusCode);
+    }
+    expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
+    expect(statuses[limit]).toBe(429);
   });
 });
 
@@ -1077,10 +1131,27 @@ describe('the admin listener closes with the server (#511, real containers)', ()
   }, 240_000);
 
   it('lets a call in flight finish, its change and audit row committed, before the database closes', async (ctx) => {
-    if (!dockerUp) {
+    if (!dockerUp || !infra) {
       ctx.skip();
       return;
     }
+    // A pool of its own, which the server's close leaves open, and which
+    // reads only committed rows.
+    const observer = Fastify({ logger: false });
+    await observer.register(databasePlugin, {
+      config: { connectionString: infra.postgres.connectionString, pool: { max: 1, min: 0 } },
+    });
+    await observer.ready();
+    const committed = async (realmId: string) => {
+      const {
+        rows: [counts],
+      } = await observer.dbPool.query<{ accounts: string; rows: string }>(
+        `SELECT (SELECT count(*) FROM users WHERE realm_id = $1)::text AS accounts,
+                (SELECT count(*) FROM admin_audit_log WHERE realm_id = $1)::text AS rows`,
+        [realmId]
+      );
+      return { accounts: Number(counts.accounts), rows: Number(counts.rows) };
+    };
     const booted = await bootWithAdminListener();
     const { app, admin } = booted;
     if (admin === undefined) throw new Error('admin listener not booted');
@@ -1117,6 +1188,7 @@ describe('the admin listener closes with the server (#511, real containers)', ()
         headers: { authorization: `Bearer ${token}` },
       });
       await entered;
+      const before = await committed(realm.id);
 
       // The server closes while the call waits inside its handler.
       const startedClosing = Date.now();
@@ -1127,6 +1199,10 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       // Its account and audit row were written: the pool was still open.
       const response = await call;
       expect(response.status).toBe(200);
+      expect(await committed(realm.id)).toEqual({
+        accounts: before.accounts + 1,
+        rows: before.rows + 1,
+      });
       // The client keeps its connection alive; the close does not wait for it.
       await closing;
       expect(Date.now() - startedClosing).toBeLessThan(5_000);
@@ -1135,6 +1211,7 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       release();
       delete hold.entered;
       delete hold.release;
+      await observer.close();
     }
   }, 240_000);
 });
