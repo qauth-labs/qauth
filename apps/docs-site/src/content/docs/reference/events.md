@@ -224,6 +224,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                          | user     | info     | v0.2.0 |
 | [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:token.family_revoked:v1-rc.0`](#tokenfamily_revoked-v1-rc0)                          | user     | critical | v0.2.0 |
 | [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                                        | user     | info     | v0.2.0 |
 | [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)                    | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                              | user     | info     | v0.2.0 |
@@ -243,6 +244,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)          | user     | info     | v0.2.0 |
 | [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                        | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0) | user     | info     | v0.2.0 |
+| [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                        | admin    | critical | v0.2.0 |
 | [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                          | admin    | info     | v0.2.0 |
 
 ### user.signed_in v1-rc.0
@@ -283,6 +285,7 @@ A person signed out, and QAuth ended their sessions.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [user.signed_out.v1-rc.0.json](/schemas/events/user.signed_out.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -377,6 +380,7 @@ After a fresh sign-in, a user granted a client dangerous scopes (ADR-007 §2).
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [step_up.elevated.v1-rc.0.json](/schemas/events/step_up.elevated.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 | Member            | Type                                                 | Required | Meaning                                                                                   |
 | ----------------- | ---------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
@@ -422,6 +426,7 @@ A user withdrew a client's consent. QAuth revoked the refresh tokens the consent
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [consent.revoked.v1-rc.0.json](/schemas/events/consent.revoked.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/token-claims-change` ([SSF events](/reference/ssf-events/))
 
 | Member                | Type    | Required | Meaning                                       |
 | --------------------- | ------- | -------- | --------------------------------------------- |
@@ -468,6 +473,22 @@ The token endpoint refused a request: failed client authentication, an invalid o
 | `refreshFamilyId`     | UUID    | no       | The refresh family a replayed grant (reason `code_replay` or `refresh_replay`) had issued, which the refusal revoked. Absent when the grant issued none.  |
 | `revokedRefreshCount` | integer | no       | How many refresh tokens of that family the refusal revoked; 0 when they were revoked already. Present for the reasons `code_replay` and `refresh_replay`. |
 
+### token.family_revoked v1-rc.0
+
+A replayed grant made QAuth revoke the refresh family it had issued: an authorization code redeemed a second time, or a refresh token presented after it was rotated or revoked. Emitted only when the replay revoked refresh tokens, beside the `token.request_failed` that refused it.
+
+- Identifier: `urn:qauth:event:token.family_revoked:v1-rc.0`
+- Category: `user` · Severity: `critical` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [token.family_revoked.v1-rc.0.json](/schemas/events/token.family_revoked.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
+
+| Member                | Type                                                     | Required | Meaning                                                                                                                                                                        |
+| --------------------- | -------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reason`              | one of `code_replay`, `refresh_replay`, or a later value | yes      | `code_replay`: an authorization code redeemed a second time. `refresh_replay`: a refresh token presented after it was rotated or revoked. The set may grow in a minor release. |
+| `refreshFamilyId`     | UUID                                                     | yes      | The refresh family that was revoked.                                                                                                                                           |
+| `revokedRefreshCount` | integer                                                  | yes      | How many refresh tokens of the family were revoked, at least 1.                                                                                                                |
+
 ### token.revoked v1-rc.0
 
 A client revoked a token at the RFC 7009 revocation endpoint.
@@ -476,6 +497,7 @@ A client revoked a token at the RFC 7009 revocation endpoint.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [token.revoked.v1-rc.0.json](/schemas/events/token.revoked.v1-rc.0.json)
+- Security type · SSF: `urn:qauth:secevent:token-revoked:v1-rc.0` ([SSF events](/reference/ssf-events/))
 
 | Member     | Type   | Required | Meaning                                                         |
 | ---------- | ------ | -------- | --------------------------------------------------------------- |
@@ -586,6 +608,7 @@ A developer deleted a client.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `client`, when known
 - Schema: [client.deleted.v1-rc.0.json](/schemas/events/client.deleted.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -597,6 +620,7 @@ A developer replaced a client's secret. The old secret stopped working.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `client`, when known
 - Schema: [client.secret_rotated.v1-rc.0.json](/schemas/events/client.secret_rotated.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -608,6 +632,7 @@ An operator suspended a client: it can no longer obtain tokens until the suspens
 - Category: `admin` · Severity: `warning` · Since: v0.2.0
 - Subject: `client`, when known
 - Schema: [client.suspended.v1-rc.0.json](/schemas/events/client.suspended.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -619,6 +644,7 @@ An operator lifted a client's suspension.
 - Category: `admin` · Severity: `info` · Since: v0.2.0
 - Subject: `client`, when known
 - Schema: [client.suspension_lifted.v1-rc.0.json](/schemas/events/client.suspension_lifted.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -630,6 +656,7 @@ A developer created an API key for a client.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `api_key`, when known
 - Schema: [api_key.created.v1-rc.0.json](/schemas/events/api_key.created.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -641,6 +668,7 @@ A developer revoked an API key. It stopped working.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `api_key`, when known
 - Schema: [api_key.revoked.v1-rc.0.json](/schemas/events/api_key.revoked.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -652,6 +680,7 @@ A signed-in user linked a wallet credential to their account.
 - Category: `user` · Severity: `info` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [wallet.linked.v1-rc.0.json](/schemas/events/wallet.linked.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
 
 | Member            | Type    | Required | Meaning                                                                             |
 | ----------------- | ------- | -------- | ----------------------------------------------------------------------------------- |
@@ -713,6 +742,21 @@ A receiver asked for a verification event on one of its Shared Signals Framework
 | Member  | Type   | Required | Meaning                                                                                                 |
 | ------- | ------ | -------- | ------------------------------------------------------------------------------------------------------- |
 | `state` | string | no       | The opaque value the receiver sent, returned to it in the verification event. Absent when it sent none. |
+
+### key.emergency_retired v1-rc.0
+
+An operator retired a key of the realm that may be compromised (ADR-019 Decision 9): it left the JWKS at once, no verifier in the auth server accepts it, and a new key took its place.
+
+- Identifier: `urn:qauth:event:key.emergency_retired:v1-rc.0`
+- Category: `admin` · Severity: `critical` · Since: v0.2.0
+- Subject: none: the event never carries one
+- Schema: [key.emergency_retired.v1-rc.0.json](/schemas/events/key.emergency_retired.v1-rc.0.json)
+- Security type · SSF: `urn:qauth:secevent:key-emergency-retired:v1-rc.0` ([SSF events](/reference/ssf-events/))
+
+| Member    | Type   | Required | Meaning                                                           |
+| --------- | ------ | -------- | ----------------------------------------------------------------- |
+| `keyId`   | string | yes      | The `kid` of the retired key. Never the key itself.               |
+| `purpose` | string | yes      | What the key was for, such as `token_signing` or `event_signing`. |
 
 ### admin.change_applied v1-rc.0
 

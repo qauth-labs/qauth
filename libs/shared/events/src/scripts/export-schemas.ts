@@ -1,11 +1,12 @@
 /**
  * Write the event contract's generated files (#456): the JSON Schema of the
- * envelope and of every registered type, and the docs page that lists them.
+ * envelope and of every registered type, the docs page that lists them, and
+ * the page of their Shared Signals mapping (#540).
  * Run through `pnpm exec nx run shared-events:schema-export`; the
  * stable-surface check runs it too and fails when a committed schema differs.
  *
  * A schema file whose type left the registry is deleted, so the directory
- * holds exactly what the registry publishes. The page then goes through
+ * holds exactly what the registry publishes. The pages then go through
  * Oxfmt, like the configuration page, so the pre-commit hook never
  * rewrites it; the schema files stay plain `JSON.stringify` output, which
  * `.oxfmtrc.json` leaves alone, like `openapi.json`. This script is the
@@ -15,7 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
-import { eventArtifacts, EVENTS_PAGE_PATH, SCHEMA_DIR } from '../lib/artifacts';
+import { eventArtifacts, GENERATED_PAGE_PATHS, SCHEMA_DIR } from '../lib/artifacts';
 
 const repoRoot = resolve(__dirname, '..', '..', '..', '..', '..');
 const artifacts = eventArtifacts();
@@ -31,7 +32,7 @@ for (const artifact of artifacts) {
   mkdirSync(dirname(join(repoRoot, artifact.path)), { recursive: true });
   writeFileSync(join(repoRoot, artifact.path), artifact.content);
 }
-execFileSync('pnpm', ['exec', 'oxfmt', EVENTS_PAGE_PATH], {
+execFileSync('pnpm', ['exec', 'oxfmt', ...GENERATED_PAGE_PATHS], {
   cwd: repoRoot,
   stdio: 'inherit',
 });

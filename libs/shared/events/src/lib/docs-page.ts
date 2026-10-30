@@ -155,6 +155,12 @@ function typeSection(definition: EventTypeDefinition): string {
     `- Subject: ${definition.subject ? `${code(definition.subject)}, when known` : 'none: the event never carries one'}`,
     `- Schema: [${eventSchemaFile(definition)}](${SCHEMA_PATH}${eventSchemaFile(definition)})`,
   ];
+  if (definition.security) {
+    const mapping = definition.ssf;
+    facts.push(
+      `- Security type · SSF: ${typeof mapping === 'object' ? code(mapping.event) : 'none'} ([SSF events](/reference/ssf-events/))`
+    );
+  }
   if (definition.diff) {
     facts.push(
       `- Diff: ${code(`data.${definition.diff}`)} lists what changed, with every secret value masked ([Admin events](#admin-events))`

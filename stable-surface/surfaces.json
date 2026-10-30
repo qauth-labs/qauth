@@ -177,6 +177,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-key-emergency-retired-v1",
+      "description": "The urn:qauth:event:key.emergency_retired:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #540).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/key.emergency_retired.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-request-csrf-rejected-v1",
       "description": "The urn:qauth:event:request.csrf_rejected:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",
@@ -255,6 +264,15 @@
       "role": "both",
       "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
       "path": "apps/docs-site/public/schemas/events/token.revocation_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-token-family-revoked-v1",
+      "description": "The urn:qauth:event:token.family_revoked:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #540).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/token.family_revoked.v1-rc.0.json",
       "stability": "stable"
     },
     {

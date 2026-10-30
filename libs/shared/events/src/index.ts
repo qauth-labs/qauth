@@ -10,5 +10,7 @@ export * from './lib/json-schema';
 export * from './lib/legacy';
 export * from './lib/payload-rules';
 export * from './lib/registry';
+export * from './lib/ssf-docs-page';
+export * from './lib/ssf-mapping';
 export * from './lib/types/admin';
 export * from './lib/types/ssf';

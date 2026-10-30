@@ -7,6 +7,7 @@ import {
   eventSchemaFile,
 } from './json-schema';
 import { EVENT_TYPES } from './registry';
+import { renderSsfEventsPage } from './ssf-docs-page';
 
 /**
  * Every file the event contract publishes, with its content, keyed by its
@@ -19,6 +20,15 @@ export const SCHEMA_DIR = 'apps/docs-site/public/schemas/events';
 
 /** The generated docs page. */
 export const EVENTS_PAGE_PATH = 'apps/docs-site/src/content/docs/reference/events.md';
+
+/** The generated page of the SSF mapping (#540). */
+export const SSF_EVENTS_PAGE_PATH = 'apps/docs-site/src/content/docs/reference/ssf-events.md';
+
+/** The generated docs pages, which the export script formats with Oxfmt. */
+export const GENERATED_PAGE_PATHS: readonly string[] = Object.freeze([
+  EVENTS_PAGE_PATH,
+  SSF_EVENTS_PAGE_PATH,
+]);
 
 /** The command that writes the artifacts; the stable-surface registry names it. */
 export const EXPORT_COMMAND = 'pnpm exec nx run shared-events:schema-export --skip-nx-cache';
@@ -44,12 +54,13 @@ export function schemaArtifacts(
   ];
 }
 
-/** Every generated file: the schemas and the docs page. */
+/** Every generated file: the schemas and the docs pages. */
 export function eventArtifacts(
   definitions: readonly EventTypeDefinition[] = EVENT_TYPES
 ): Artifact[] {
   return [
     ...schemaArtifacts(definitions),
     { path: EVENTS_PAGE_PATH, content: renderEventsPage(definitions) },
+    { path: SSF_EVENTS_PAGE_PATH, content: renderSsfEventsPage(definitions) },
   ];
 }

@@ -27,6 +27,7 @@
         "{workspaceRoot}/libs/infra/db/src/scripts/**/*.ts",
         "{workspaceRoot}/apps/docs-site/public/schemas/events/**/*",
         "{workspaceRoot}/apps/docs-site/src/content/docs/reference/events.md",
+        "{workspaceRoot}/apps/docs-site/src/content/docs/reference/ssf-events.md",
         "{workspaceRoot}/stable-surface/surfaces.json",
         "{workspaceRoot}/.oxfmtrc.json"
       ],
@@ -40,7 +41,7 @@
         "command": "tsx src/scripts/export-schemas.ts",
         "cwd": "libs/shared/events"
       },
-      "description": "Write the event contract's generated files from the registry: one JSON Schema per event type and the envelope's schema under apps/docs-site/public/schemas/events/, and the docs page apps/docs-site/src/content/docs/reference/events.md. The stable-surface check runs it and fails on drift."
+      "description": "Write the event contract's generated files from the registry: one JSON Schema per event type and the envelope's schema under apps/docs-site/public/schemas/events/, the docs page apps/docs-site/src/content/docs/reference/events.md, and the SSF mapping page reference/ssf-events.md. The stable-surface check runs it and fails on drift."
     }
   },
   "// targets": "to see all targets run: nx show project shared-events --web"
