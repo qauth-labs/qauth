@@ -67,6 +67,12 @@ function createFastifyStub() {
         findByTokenHashIncludingRevoked: vi.fn(),
         revokeFamily: vi.fn().mockResolvedValue(1),
       },
+      users: {
+        // The realm's users: `user-1` only.
+        findById: vi.fn(async (_realmId: string, id: string) =>
+          id === 'user-1' ? { id: 'user-1' } : undefined
+        ),
+      },
     },
     passwordHasher: {
       verifyPassword: vi.fn().mockResolvedValue(true),
@@ -124,6 +130,7 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
       id: 'rt-1',
       oauthClientId: client.id,
       familyId: 'fam-1',
+      userId: 'user-1',
     });
 
     const { reply } = makeReply();
@@ -141,12 +148,18 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
       'fam-1',
       'client_revocation'
     );
-    // No hint was sent, so the event carries none.
+    // No hint was sent, so the event carries none. The token's user is the
+    // subject, which an SSF stream matches on (#540).
     expect(emitUserEventMock).toHaveBeenCalledWith(
       expect.anything(),
       'urn:qauth:event:token.revoked:v1-rc.0',
       {},
-      expect.objectContaining({ realmId: 'realm-1', clientId: client.clientId, actor: 'client' })
+      expect.objectContaining({
+        realmId: 'realm-1',
+        userId: 'user-1',
+        clientId: client.clientId,
+        actor: 'client',
+      })
     );
   });
 
@@ -363,6 +376,57 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
     expect(key).toBe('revoked-access-token:jti-123');
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(600);
+    // The token's `sub` is one of the realm's users: the event's subject.
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('realm-1', 'user-1');
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.revoked:v1-rc.0',
+      { typeHint: 'access_token' },
+      expect.objectContaining({ userId: 'user-1' })
+    );
+  });
+
+  it.each([
+    ['a client’s own token, whose sub is its client_id', () => client.clientId],
+    ['a token whose sub names no user of the realm', () => 'someone-else'],
+  ])('names no user for %s (#540)', async (_label, sub) => {
+    const { fastify, ctx } = createFastifyStub();
+    await revokeRoute(fastify);
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(undefined);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: sub(),
+      clientId: client.clientId,
+      jti: 'jti-own',
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+
+    const { reply } = makeReply();
+    await ctx.handler!(
+      {
+        body: {
+          token: 'access-token',
+          token_type_hint: 'access_token',
+          client_id: client.clientId,
+          client_secret: 'secret',
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      reply
+    );
+
+    expect(reply.statusCode).toBe(200);
+    expect(fastify.redis.setex).toHaveBeenCalledTimes(1);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:token.revoked:v1-rc.0',
+      { typeHint: 'access_token' },
+      expect.objectContaining({ userId: null })
+    );
   });
 
   it('does NOT denylist an access token issued to a different client', async () => {

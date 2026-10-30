@@ -95,24 +95,31 @@ export default async function (fastify: FastifyInstance) {
       // RFC 7009 §2.1: the hint is advisory. It only picks which type is tried
       // first (refresh token by default); if the token is not found as that type
       // we still attempt the other. Either way the response is an empty 200.
+      let revoked: Revoked | null;
       if (token_type_hint === 'access_token') {
-        const revoked = await tryRevokeAccessToken(fastify, realm, client.clientId, token);
-        if (!revoked) {
-          await tryRevokeRefreshToken(fastify, realm, client.id, token);
-        }
+        revoked =
+          (await tryRevokeAccessToken(fastify, realm, client.clientId, token)) ??
+          (await tryRevokeRefreshToken(fastify, realm, client.id, token));
       } else {
-        const revoked = await tryRevokeRefreshToken(fastify, realm, client.id, token);
-        if (!revoked) {
-          await tryRevokeAccessToken(fastify, realm, client.clientId, token);
-        }
+        revoked =
+          (await tryRevokeRefreshToken(fastify, realm, client.id, token)) ??
+          (await tryRevokeAccessToken(fastify, realm, client.clientId, token));
       }
 
-      // No token material is recorded; only the (advisory) hint.
+      // No token material is recorded; only the (advisory) hint. The user
+      // whose token it was is the subject, so the SSF stream of this client
+      // that added the user learns of it (#540); a revocation that matched no
+      // token of the client, or a client's own token, names no one.
       await emitUserEvent(
         request,
         'urn:qauth:event:token.revoked:v1-rc.0',
         token_type_hint === undefined ? {} : { typeHint: token_type_hint },
-        { realmId: realm.id, clientId: client.clientId, actor: 'client' }
+        {
+          realmId: realm.id,
+          userId: revoked?.userId ?? null,
+          clientId: client.clientId,
+          actor: 'client',
+        }
       );
 
       await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
@@ -123,46 +130,51 @@ export default async function (fastify: FastifyInstance) {
   );
 }
 
+/** What a revocation found: the user whose token it was, or `null` for a client's own. */
+interface Revoked {
+  readonly userId: string | null;
+}
+
 /**
  * Revoke a refresh token (and its whole family) IFF it hashes to a stored row
- * owned by the authenticated client. Returns true when a matching, owned token
- * was found (regardless of prior revoked state — re-revocation is idempotent),
- * false otherwise. A token owned by a DIFFERENT client is a no-op (returns
- * false) so cross-client revocation is impossible; so is a token of another
- * realm, which the realm-scoped lookup does not find (#489).
+ * owned by the authenticated client. Returns the token's user when a matching,
+ * owned token was found (regardless of prior revoked state — re-revocation is
+ * idempotent), `null` otherwise. A token owned by a DIFFERENT client is a
+ * no-op (returns `null`) so cross-client revocation is impossible; so is a
+ * token of another realm, which the realm-scoped lookup does not find (#489).
  */
 async function tryRevokeRefreshToken(
   fastify: FastifyInstance,
   realm: RealmRow,
   clientRowId: string,
   token: string
-): Promise<boolean> {
+): Promise<Revoked | null> {
   const hash = fastify.jwtUtils.hashRefreshToken(token);
   const stored = await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(
     realm.id,
     hash
   );
-  if (!stored) return false;
+  if (!stored) return null;
   // Ownership: only the owning client may revoke. A mismatch is a silent no-op.
-  if (stored.oauthClientId !== clientRowId) return false;
+  if (stored.oauthClientId !== clientRowId) return null;
   // Revoke the entire family so no rotated descendant remains exchangeable
   // (consistent with the replay-revocation model in the token endpoint).
   await fastify.repositories.refreshTokens.revokeFamily(stored.familyId, 'client_revocation');
-  return true;
+  return { userId: stored.userId };
 }
 
 /**
  * Revoke an access token by denylisting its `jti` IFF it is a valid JWT issued
- * to the authenticated client. Returns true when such a token was denylisted,
- * false otherwise. A token belonging to another client, an invalid token, or one
- * already expired is a silent no-op (RFC 7009 §2.2).
+ * to the authenticated client. Returns the token's user when such a token was
+ * denylisted, `null` otherwise. A token belonging to another client, an
+ * invalid token, or one already expired is a silent no-op (RFC 7009 §2.2).
  */
 async function tryRevokeAccessToken(
   fastify: FastifyInstance,
   realm: RealmRow,
   clientId: string,
   token: string
-): Promise<boolean> {
+): Promise<Revoked | null> {
   let payload;
   try {
     // RFC 9700 mix-up defence: only a token this realm issued, under its
@@ -172,13 +184,17 @@ async function tryRevokeAccessToken(
     // Invalid/expired/foreign-issuer token — nothing to revoke. Any other
     // failure (the key store unreachable) is the server's: it propagates, so
     // a token is never reported revoked when it was not checked (#491).
-    if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) return false;
+    if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) return null;
     throw error;
   }
   // Ownership: only the client the token was issued for may revoke it.
-  if (payload.clientId !== clientId) return false;
-  if (!payload.jti || payload.exp === undefined) return false;
+  if (payload.clientId !== clientId) return null;
+  if (!payload.jti || payload.exp === undefined) return null;
   const remainingSeconds = payload.exp - Math.floor(Date.now() / 1000);
   await revokeJti(fastify, payload.jti, remainingSeconds);
-  return true;
+  // A client's own token (client_credentials) has the client as `sub`; any
+  // other `sub` names a user, recorded only when it is one of the realm's.
+  if (!payload.sub || payload.sub === payload.clientId) return { userId: null };
+  const user = await fastify.repositories.users.findById(realm.id, payload.sub);
+  return { userId: user?.id ?? null };
 }

@@ -126,6 +126,7 @@ const IN_REQUEST_REALM = expect.objectContaining({ id: REALM.id });
 
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
+const TOKEN_FAMILY_REVOKED = 'urn:qauth:event:token.family_revoked:v1-rc.0';
 
 /** A live admin grant of a built-in role on every realm, as `adminGrants.listLive` lists it (#510). */
 function liveBuiltInGrant(role: string) {
@@ -2377,6 +2378,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
         },
         expect.objectContaining({ tx, userId: 'user-uuid-1', clientId: 'test-client-1' })
       );
+      // The security event of the revocation, in the same transaction (#540).
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        TOKEN_FAMILY_REVOKED,
+        { reason: 'code_replay', refreshFamilyId: CODE_FAMILY_ID, revokedRefreshCount: 2 },
+        expect.objectContaining({ tx, userId: 'user-uuid-1', clientId: 'test-client-1' })
+      );
       expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
         authorizationCodeId: authCode.id,
         refreshFamilyId: CODE_FAMILY_ID,
@@ -2404,6 +2412,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
           revokedRefreshCount: 0,
         },
       ]);
+      // Nothing was revoked, so no security event (#540).
+      expect(emittedData(TOKEN_FAMILY_REVOKED)).toEqual([]);
     });
 
     it('still answers invalid_grant when the access tokens cannot be revoked', async () => {
@@ -3563,6 +3573,12 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       },
       expect.objectContaining({ tx })
     );
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_FAMILY_REVOKED,
+      { reason: 'refresh_replay', refreshFamilyId: storedToken.familyId, revokedRefreshCount: 3 },
+      expect.objectContaining({ tx, userId: storedToken.userId })
+    );
     // Every access token issued in the family goes on the denylist too.
     expect(revokeGrantAccessTokensMock).toHaveBeenCalledWith(fastify, {
       refreshFamilyId: storedToken.familyId,
@@ -3776,6 +3792,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
           revokedRefreshCount: 0,
         },
       ]);
+      expect(emittedData(TOKEN_FAMILY_REVOKED)).toEqual([]);
     });
 
     it('never lets a party without the DPoP key revoke a bound family past its end', async () => {
