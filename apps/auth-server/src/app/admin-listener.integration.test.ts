@@ -926,13 +926,67 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
   });
 });
 
+/** The admin listener's own ceiling: each of its counts allows this many calls a minute. */
+async function adminLimit(): Promise<number> {
+  const { DEFAULT_ADMIN_RATE_LIMIT } = await import('./plugins/admin-operations');
+  return DEFAULT_ADMIN_RATE_LIMIT.max;
+}
+
+/** A realm of its own named `name`, and the token of an operator-realm viewer on it. */
+async function viewerOn(
+  app: FastifyInstance,
+  name: string
+): Promise<{ realmId: string; token: string }> {
+  const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
+  if (!operator) throw new Error('default realm missing');
+  const { realm } = await app.repositories.realms.createWithPrimaryHost(
+    { name, issuer: `https://${name}.example.com`, enabled: true },
+    `${name}.example.com`
+  );
+  const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+  await app.repositories.adminGrants.create({
+    userId,
+    role: { kind: 'built-in', name: 'viewer' },
+    targetRealmId: realm.id,
+    createdBy: null,
+  });
+  const token = await app.jwtUtils.signAccessToken(
+    { id: operator.id },
+    { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+  );
+  return { realmId: realm.id, token };
+}
+
+/** A realm id no realm has: a token-less call to it is refused at the token guard. */
+const NO_REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
+
+/** `count` calls to `url` on `admin`, and their statuses. */
+async function statusesOf(
+  admin: FastifyInstance,
+  count: number,
+  request: (attempt: number) => {
+    url: string;
+    remoteAddress: string;
+    headers?: Record<string, string>;
+  }
+): Promise<number[]> {
+  const statuses: number[] = [];
+  for (let attempt = 0; attempt < count; attempt += 1) {
+    statuses.push((await admin.inject({ method: 'GET', ...request(attempt) })).statusCode);
+  }
+  return statuses;
+}
+
+/** A new address per attempt, from 198.18.0.0/15. */
+const addressOf = (attempt: number) => `198.18.${Math.floor(attempt / 250)}.${(attempt % 250) + 1}`;
+
 describe('the request ceilings of the admin listener (#511, real containers)', () => {
   let booted: BootedAuthServer | undefined;
 
   beforeAll(async () => {
     if (!dockerUp) return;
-    // Two requests a minute, per address and per token subject. The public
-    // listener trusts a loopback proxy; the admin listener trusts none.
+    // The public listener allows two calls a minute and trusts a loopback
+    // proxy; the admin listener keeps its own ceiling and trusts no proxy.
     booted = await bootWithAdminListener({
       RATE_LIMIT_MAX: '2',
       RATE_LIMIT_WINDOW: '60',
@@ -958,83 +1012,104 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
     return { app: booted.app, admin: booted.admin };
   }
 
-  it('limits calls per client address, before the token guard', async () => {
+  it('refuses an address past its own count of refusals before the token guard, whatever RATE_LIMIT_MAX says', async () => {
     const { admin } = servers();
-    const statuses: number[] = [];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await admin.inject({
-        method: 'GET',
-        url: realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'),
-        remoteAddress: '198.51.100.7',
-      });
-      statuses.push(response.statusCode);
-      if (response.statusCode === 429) {
-        expect(response.json()).toMatchObject({ code: 'too_many_requests' });
-        expect(Number(response.headers['retry-after'])).toBeGreaterThan(0);
-      }
-    }
-    expect(statuses).toEqual([401, 401, 429]);
+    const limit = await adminLimit();
+    const statuses = await statusesOf(admin, limit, () => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.7',
+    }));
+    expect(statuses.every((status) => status === 401)).toBe(true);
+
+    const refused = await admin.inject({
+      method: 'GET',
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.7',
+    });
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json()).toMatchObject({ code: 'too_many_requests' });
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
     // Another address has its own count.
     const other = await admin.inject({
       method: 'GET',
-      url: realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'),
+      url: realmPath(NO_REALM),
       remoteAddress: '198.51.100.8',
     });
     expect(other.statusCode).toBe(401);
   });
 
+  it('never holds back a valid token at an address past its count, but refuses a bad one', async () => {
+    const { app, admin } = servers();
+    const limit = await adminLimit();
+    const { realmId, token } = await viewerOn(app, 'alpha');
+    await statusesOf(admin, limit, () => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.9',
+    }));
+
+    const call = (headers: Record<string, string> = {}) =>
+      admin.inject({
+        method: 'GET',
+        url: realmPath(realmId),
+        remoteAddress: '198.51.100.9',
+        headers,
+      });
+    expect((await call()).statusCode).toBe(429);
+    expect((await call({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
+    // A token the guard refuses goes on to the guard, and is answered 429.
+    expect((await call({ authorization: 'Bearer not-a-token' })).statusCode).toBe(429);
+    expect(runs).toEqual(['realms.get']);
+  });
+
   it('counts the TCP peer, whatever X-Forwarded-For says, even from a proxy the public listener trusts', async () => {
     const { admin } = servers();
-    const statuses: number[] = [];
-    for (const forwardedFor of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) {
-      const response = await admin.inject({
-        method: 'GET',
-        url: realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'),
-        remoteAddress: '127.0.0.1',
-        headers: { 'x-forwarded-for': forwardedFor },
-      });
-      statuses.push(response.statusCode);
-    }
-    expect(statuses).toEqual([401, 401, 429]);
+    const limit = await adminLimit();
+    const statuses = await statusesOf(admin, limit + 1, (attempt) => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': addressOf(attempt) },
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 401)).toBe(true);
+    expect(statuses[limit]).toBe(429);
   });
 
   it('limits calls per token subject from any address, before the realm, writing no row', async () => {
     const { app, admin } = servers();
-    const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
-    if (!operator?.issuer) throw new Error('default realm missing');
-    const { realm } = await app.repositories.realms.createWithPrimaryHost(
-      { name: 'alpha', issuer: 'https://alpha.example.com', enabled: true },
-      'alpha.example.com'
-    );
-    const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
-    await app.repositories.adminGrants.create({
-      userId,
-      role: { kind: 'built-in', name: 'viewer' },
-      targetRealmId: realm.id,
-      createdBy: null,
-    });
-    const token = await app.jwtUtils.signAccessToken(
-      { id: operator.id },
-      { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
-    );
+    const limit = await adminLimit();
+    const { realmId, token } = await viewerOn(app, 'alpha');
 
-    const statuses: number[] = [];
-    for (const remoteAddress of ['198.51.100.10', '198.51.100.11', '198.51.100.12']) {
-      const response = await admin.inject({
-        method: 'GET',
-        url: realmPath(realm.id),
-        headers: { authorization: `Bearer ${token}` },
-        remoteAddress,
-      });
-      statuses.push(response.statusCode);
-    }
-    expect(statuses).toEqual([200, 200, 429]);
-    expect(runs).toEqual(['realms.get', 'realms.get']);
-    const { rows } = await app.dbPool.query<{ outcome: string }>(
-      'SELECT outcome FROM admin_audit_log WHERE realm_id = $1 ORDER BY admin_audit_log.seq',
-      [realm.id]
+    // A new address for every call, so only the subject's count can refuse.
+    const statuses = await statusesOf(admin, limit + 1, (attempt) => ({
+      url: realmPath(realmId),
+      remoteAddress: addressOf(attempt),
+      headers: { authorization: `Bearer ${token}` },
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+    expect(runs).toHaveLength(limit);
+    const { rows } = await app.dbPool.query<{ count: string }>(
+      'SELECT count(*) FROM admin_audit_log WHERE realm_id = $1',
+      [realmId]
     );
-    expect(rows.map((row) => row.outcome)).toEqual(['succeeded', 'succeeded']);
+    expect(Number(rows[0].count)).toBe(limit);
+  });
+
+  it('limits every call to the OpenAPI document per address, in a count of its own', async () => {
+    const { admin } = servers();
+    const limit = await adminLimit();
+    const statuses = await statusesOf(admin, limit + 1, () => ({
+      url: '/admin/v1-rc.0/openapi.json',
+      remoteAddress: '198.51.100.30',
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+    // The document's calls are not refusals of the token guard.
+    const call = await admin.inject({
+      method: 'GET',
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.30',
+    });
+    expect(call.statusCode).toBe(401);
   });
 });
 
@@ -1050,62 +1125,34 @@ describe('the request ceilings with RATE_LIMIT_ENABLED=false (#511, real contain
     await booted?.close();
   });
 
-  it('keeps the ceiling per address, in memory, at the default of 100 calls a minute', async (ctx) => {
+  it('keeps the count of refusals per address, in memory, at the same ceiling', async (ctx) => {
     if (!booted?.admin) {
       ctx.skip();
       return;
     }
-    const statuses: number[] = [];
-    for (let attempt = 0; attempt < 101; attempt += 1) {
-      const response = await booted.admin.inject({
-        method: 'GET',
-        url: realmPath('018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f'),
-        remoteAddress: '198.51.100.20',
-      });
-      statuses.push(response.statusCode);
-    }
-    expect(statuses.slice(0, 100).every((status) => status === 401)).toBe(true);
-    expect(statuses[100]).toBe(429);
+    const limit = await adminLimit();
+    const statuses = await statusesOf(booted.admin, limit + 1, () => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.20',
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 401)).toBe(true);
+    expect(statuses[limit]).toBe(429);
   });
 
-  it('keeps the ceiling per token subject, in memory, at the default, from any address', async (ctx) => {
+  it('keeps the ceiling per token subject, in memory, at the same ceiling, from any address', async (ctx) => {
     if (!booted?.admin) {
       ctx.skip();
       return;
     }
-    const app = booted.app;
-    const admin = booted.admin;
-    const { DEFAULT_ADMIN_RATE_LIMIT } = await import('./plugins/admin-operations');
-    const limit = DEFAULT_ADMIN_RATE_LIMIT.max;
-    const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
-    if (!operator) throw new Error('default realm missing');
-    const { realm } = await app.repositories.realms.createWithPrimaryHost(
-      { name: 'gamma', issuer: 'https://gamma.example.com', enabled: true },
-      'gamma.example.com'
-    );
-    const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
-    await app.repositories.adminGrants.create({
-      userId,
-      role: { kind: 'built-in', name: 'viewer' },
-      targetRealmId: realm.id,
-      createdBy: null,
-    });
-    const token = await app.jwtUtils.signAccessToken(
-      { id: operator.id },
-      { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
-    );
+    const limit = await adminLimit();
+    const { realmId, token } = await viewerOn(booted.app, 'gamma');
 
     // A new address for every call, so only the subject's count can refuse.
-    const statuses: number[] = [];
-    for (let attempt = 0; attempt <= limit; attempt += 1) {
-      const response = await admin.inject({
-        method: 'GET',
-        url: realmPath(realm.id),
-        headers: { authorization: `Bearer ${token}` },
-        remoteAddress: `198.18.${Math.floor(attempt / 250)}.${(attempt % 250) + 1}`,
-      });
-      statuses.push(response.statusCode);
-    }
+    const statuses = await statusesOf(booted.admin, limit + 1, (attempt) => ({
+      url: realmPath(realmId),
+      remoteAddress: addressOf(attempt),
+      headers: { authorization: `Bearer ${token}` },
+    }));
     expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
     expect(statuses[limit]).toBe(429);
   });

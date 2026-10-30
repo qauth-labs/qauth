@@ -10,7 +10,7 @@ import {
   defineOperation,
   operationSchemaExtensions,
 } from '../helpers/admin-operations';
-import { AdminCallsInFlight, adminPipeline } from './pipeline';
+import { AdminCallsInFlight, adminPipeline, type AdminRateLimitCheck } from './pipeline';
 
 /**
  * What the admin pipeline refuses at boot (#511): a route that names no realm
@@ -36,13 +36,17 @@ afterEach(async () => {
   instance = undefined;
 });
 
+/** A count that never holds a call back. */
+const UNCOUNTED: AdminRateLimitCheck = async () => ({ isAllowed: true, key: 'uncounted' });
+
 /**
  * Boot a bare listener with the pipeline in front of `route`, after what
  * `listener` registers on it.
  */
 async function boot(
   route: (scope: FastifyInstance) => void,
-  listener?: (app: FastifyInstance) => Promise<void>
+  listener?: (app: FastifyInstance) => Promise<void>,
+  refusalsByAddress: AdminRateLimitCheck = UNCOUNTED
 ): Promise<void> {
   const app = Fastify({ logger: false });
   instance = app;
@@ -51,7 +55,8 @@ async function boot(
   await listener?.(app);
   await app.register(adminPipeline, {
     registry: REGISTRY,
-    bySubject: async () => undefined,
+    refusalsByAddress,
+    callsBySubject: UNCOUNTED,
     routes: route,
   });
   await app.ready();
@@ -163,11 +168,15 @@ describe('the token guard', () => {
   const ISSUER = 'https://alpha.example.com';
   const REALM = { id: '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f', issuer: ISSUER, enabled: true };
 
-  /** A request's credential, its claims before verification, and what verification does. */
+  /**
+   * A request's credential (`none` for none), its claims before
+   * verification, what verification does, and its address's count of refusals.
+   */
   interface Presented {
-    readonly scheme?: 'Bearer' | 'DPoP';
+    readonly scheme?: 'Bearer' | 'DPoP' | 'none';
     readonly iss: unknown;
     readonly verify?: () => Promise<never>;
+    readonly refusals?: AdminRateLimitCheck;
   }
 
   /**
@@ -183,10 +192,10 @@ describe('the token guard', () => {
       },
       async (app) => {
         app.decorate('jwtUtils', {
-          extractCredentialFromHeader: () => ({
-            scheme: presented.scheme ?? 'Bearer',
-            token: 'token',
-          }),
+          extractCredentialFromHeader: () =>
+            presented.scheme === 'none'
+              ? null
+              : { scheme: presented.scheme ?? 'Bearer', token: 'token' },
           decodeTokenUnsafe,
         } as never);
         app.decorate('repositories', { realms: { findByIssuer } } as never);
@@ -197,7 +206,8 @@ describe('the token guard', () => {
               throw new Error('no verification expected');
             })) as never
         );
-      }
+      },
+      presented.refusals
     );
     const app = instance;
     if (app === undefined) throw new Error('not booted');
@@ -210,6 +220,24 @@ describe('the token guard', () => {
     instance = undefined;
     return { response, findByIssuer, decodeTokenUnsafe };
   }
+
+  /** An address's count of refusals: `count` when read, `counted` once a refusal is added. */
+  const refusalCount = (count: 'under' | 'over', counted: 'under' | 'over') => {
+    const of = (where: 'under' | 'over') => ({
+      isAllowed: false as const,
+      key: 'admin:address:203.0.113.9',
+      max: 100,
+      timeWindow: 60_000,
+      remaining: where === 'over' ? 0 : 50,
+      ttl: 30_000,
+      ttlInSeconds: 30,
+      isExceeded: where === 'over',
+      isBanned: false,
+    });
+    return vi.fn<AdminRateLimitCheck>(async (_request, callOptions) =>
+      callOptions?.increment === false ? of(count) : of(counted)
+    );
+  };
 
   const REFUSAL = 'The request carries no admin access token this listener accepts';
 
@@ -271,6 +299,52 @@ describe('the token guard', () => {
       },
     });
     expect(response.statusCode).toBe(500);
+  });
+
+  it('counts each refusal against the address, and answers 401 below its count', async () => {
+    const refusals = refusalCount('under', 'under');
+    const { response } = await present({ scheme: 'none', iss: ISSUER, refusals });
+    expect(response.statusCode).toBe(401);
+    expect(refusals.mock.calls.map(([, callOptions]) => callOptions)).toEqual([
+      { increment: false },
+      undefined,
+    ]);
+  });
+
+  it('refuses a call with no token from an address past its count, before the guard', async () => {
+    const refusals = refusalCount('over', 'over');
+    const { response, decodeTokenUnsafe } = await present({
+      scheme: 'none',
+      iss: ISSUER,
+      refusals,
+    });
+    expect(response.statusCode).toBe(429);
+    expect(response.headers['retry-after']).toBe('30');
+    expect(decodeTokenUnsafe).not.toHaveBeenCalled();
+    // Read, not counted: only a refusal of the guard counts.
+    expect(refusals.mock.calls.map(([, callOptions]) => callOptions)).toEqual([
+      { increment: false },
+    ]);
+  });
+
+  it("lets a call with a token on to the guard, whatever its address's count", async () => {
+    const refusals = refusalCount('over', 'under');
+    const verify = vi.fn(async () => {
+      throw new JWTInvalidError('Invalid JWT token: no key of this realm verifies it');
+    });
+    const { response } = await present({ iss: ISSUER, verify, refusals });
+    expect(verify).toHaveBeenCalledOnce();
+    expect(response.statusCode).toBe(401);
+    expect(refusals.mock.calls.map(([, callOptions]) => callOptions)).toEqual([undefined]);
+  });
+
+  it("answers 429 for a refusal of the guard past its address's count", async () => {
+    const { response } = await present({
+      iss: 'https://unknown.example.com',
+      refusals: refusalCount('over', 'over'),
+    });
+    expect(response.statusCode).toBe(429);
+    expect(response.headers['retry-after']).toBe('30');
   });
 });
 

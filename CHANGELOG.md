@@ -967,10 +967,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transaction, or `denied` or `failed` in a new one with no diff (a `denied`
   or `failed` row that cannot be written is logged instead). A realm
   outside the grants answers 404, is logged, and adds no row to that realm's
-  chain. Calls are limited per client address (the TCP peer: the listener
-  trusts no proxy) before the token guard and per token subject after it
-  (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW`, or 100 a minute in memory while
-  `RATE_LIMIT_ENABLED` is off). Every request id is the server's own. A handler
+  chain. The listener has request ceilings of its own, 100 calls a minute each,
+  whatever `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW` say (`RATE_LIMIT_ENABLED`
+  only chooses Redis or memory for the counts): per client address (the TCP
+  peer: the listener trusts no proxy), the calls the token guard refuses, past
+  which a call without a token is refused before the guard and a refused token
+  answers 429, while a valid token is never held back; per token subject, every
+  call after the guard; and per address, every call to the OpenAPI document.
+  Every request id is the server's own. A handler
   answers by returning its body, and an admin route may not have hooks that
   would run before authorization. The admin
   OpenAPI document is served on the listener only, at

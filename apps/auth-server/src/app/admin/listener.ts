@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 
 import rateLimit from '@fastify/rate-limit';
 import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger';
-import { TooManyRequestsError } from '@qauth-labs/shared-errors';
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
@@ -31,7 +30,7 @@ import { DEFAULT_ADMIN_RATE_LIMIT } from '../plugins/admin-operations';
 import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
-import { AdminCallsInFlight, adminPipeline, type AdminRateLimitStage } from './pipeline';
+import { AdminCallsInFlight, adminPipeline } from './pipeline';
 
 /**
  * THE ADMIN LISTENER (ADR-019 Decisions 7 and 8, issue #511).
@@ -218,35 +217,28 @@ export interface AdminApiOptions {
 /** The Redis key prefix of the listener's ceilings, apart from the public listener's. */
 const ADMIN_RATE_LIMIT_NAMESPACE = 'qauth-admin-rate-limit-';
 
-/** A request ceiling of the listener, from a `createRateLimit` check. */
-function ceilingStage(check: ReturnType<FastifyInstance['createRateLimit']>): AdminRateLimitStage {
-  return async (request, reply) => {
-    const result = await check(request);
-    if (result.isAllowed || !result.isExceeded) return;
-    reply.header('retry-after', String(result.ttlInSeconds));
-    throw new TooManyRequestsError();
-  };
-}
-
 /**
- * The listener's two request ceilings: one per client address, run first on
- * every route of the listener, and one per token subject, which the pipeline
- * runs right after its token guard. Each refuses before the realm is read, so
- * a refused call writes no audit row.
+ * The listener's request ceilings (#511), its own, whatever the public
+ * listener's RATE_LIMIT_MAX and RATE_LIMIT_WINDOW say: each allows
+ * `DEFAULT_ADMIN_RATE_LIMIT` (100 a minute). RATE_LIMIT_ENABLED only chooses
+ * where the counts live: in the server's Redis, under a prefix of their own,
+ * or in memory.
  *
- * With RATE_LIMIT_ENABLED on, each allows RATE_LIMIT_MAX calls per
- * RATE_LIMIT_WINDOW, counted in the server's Redis under a prefix of their
- * own. With it off, the listener still keeps both, in memory, at the
- * classification stage's default ceiling (`DEFAULT_ADMIN_RATE_LIMIT`, #508):
- * every admin route authorizes, so none runs without one.
+ * - Per client address, the calls the token guard refuses: past that count,
+ *   the pipeline refuses a call that presents no token before the guard
+ *   (`refusalsByAddress`).
+ * - Per token subject, every call, right after the guard (`callsBySubject`).
+ * - Per client address, every call to the OpenAPI document, which needs no
+ *   token (`openapiDocument`, a route's own `config.rateLimit`).
+ *
+ * Each refuses before the realm is read, so a refused call writes no audit
+ * row.
  */
-async function registerCeilings(
-  admin: FastifyInstance,
-  source: FastifyInstance
-): Promise<{ byAddress: AdminRateLimitStage; bySubject: AdminRateLimitStage }> {
-  const limits = env.RATE_LIMIT_ENABLED
-    ? { max: env.RATE_LIMIT_MAX, timeWindow: env.RATE_LIMIT_WINDOW * 1000 }
-    : { max: DEFAULT_ADMIN_RATE_LIMIT.max, timeWindow: DEFAULT_ADMIN_RATE_LIMIT.timeWindow };
+async function registerCeilings(admin: FastifyInstance, source: FastifyInstance) {
+  const limits = {
+    max: DEFAULT_ADMIN_RATE_LIMIT.max,
+    timeWindow: DEFAULT_ADMIN_RATE_LIMIT.timeWindow,
+  };
   await admin.register(rateLimit, {
     global: false,
     ...(env.RATE_LIMIT_ENABLED ? { redis: source.redis } : {}),
@@ -254,12 +246,9 @@ async function registerCeilings(
     ...limits,
   });
   return {
-    byAddress: ceilingStage(
-      admin.createRateLimit({ ...limits, keyGenerator: adminAddressRateLimitKey })
-    ),
-    bySubject: ceilingStage(
-      admin.createRateLimit({ ...limits, keyGenerator: adminSubjectRateLimitKey })
-    ),
+    refusalsByAddress: admin.createRateLimit({ ...limits, keyGenerator: adminAddressRateLimitKey }),
+    callsBySubject: admin.createRateLimit({ ...limits, keyGenerator: adminSubjectRateLimitKey }),
+    openapiDocument: { ...limits, keyGenerator: adminAddressRateLimitKey },
   };
 }
 
@@ -271,8 +260,9 @@ async function registerCeilings(
  *
  * In order: the shared decorators; the error handler of the app, so every
  * error is a problem document; the request id; the OpenAPI collector; the
- * security headers; the per-address ceiling; the pipeline with the routes
- * behind it; and the OpenAPI document, last, outside the pipeline.
+ * security headers; the request ceilings; the pipeline with the routes
+ * behind it; and the OpenAPI document, last, outside the pipeline, with a
+ * ceiling of its own.
  *
  * `admin` stops accepting requests when `source` begins to close, before the
  * database closes: its `preClose` hook closes it ({@link closeAdminServer}).
@@ -301,12 +291,12 @@ export async function installAdminApi(
   await admin.register(securityHeadersPlugin);
 
   const ceilings = await registerCeilings(admin, source);
-  admin.addHook('onRequest', ceilings.byAddress);
 
   const calls = new AdminCallsInFlight();
   await admin.register(adminPipeline, {
     ...(options.registry === undefined ? {} : { registry: options.registry }),
-    bySubject: ceilings.bySubject,
+    refusalsByAddress: ceilings.refusalsByAddress,
+    callsBySubject: ceilings.callsBySubject,
     calls,
     routes: async (scope) => {
       for (const module of ADMIN_ROUTE_MODULES) await scope.register(module);
@@ -314,7 +304,12 @@ export async function installAdminApi(
     },
   });
 
-  admin.get(ADMIN_OPENAPI_PATH, { schema: { hide: true } }, async () => admin.swagger());
+  // The one route no token guards: every call counts against its address.
+  admin.get(
+    ADMIN_OPENAPI_PATH,
+    { schema: { hide: true }, config: { rateLimit: ceilings.openapiDocument } },
+    async () => admin.swagger()
+  );
 
   source.addHook('preClose', async () => {
     await closeAdminServer(admin, calls);

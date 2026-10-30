@@ -4,6 +4,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
+  TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
 import type {
   FastifyInstance,
@@ -69,9 +70,10 @@ import { adminRealmRouteProblem } from './route-placement';
  *    handler's transaction, reads included.
  * 10. Error mapping to problem+json: the listener's error handler.
  *
- * Beside them, two request ceilings: by client address before the token
- * guard (the listener's root), and by token subject right after it, so a
- * flood is refused before it reaches a realm and writes no audit row. A
+ * Beside them, two request ceilings, each refused before the realm is read,
+ * so a refused call writes no audit row: by client address, which counts the
+ * calls the token guard refuses and, past its count, refuses a call with no
+ * token before the guard; and by token subject, right after the guard. A
  * route's own early hooks would run before stages 6 and 7, so a route may
  * have none, in its options (`earlyRouteHookProblem`) or added by its module
  * (`refuseEarlyScopeHooks`).
@@ -172,15 +174,24 @@ declare module 'fastify' {
   }
 }
 
-/** A request ceiling of the listener: refuses with 429 when exceeded. */
-export type AdminRateLimitStage = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+/**
+ * A count of the listener's, made with `createRateLimit`: counts the request
+ * against its key, or with `{ increment: false }` only reads the count.
+ */
+export type AdminRateLimitCheck = ReturnType<FastifyInstance['createRateLimit']>;
 
 /** Options for {@link adminPipeline}. */
 export interface AdminPipelineOptions {
   /** The registry routes name their operations in. Defaults to the server's own. */
   readonly registry?: OperationRegistry;
-  /** The ceiling per token subject, run right after the token guard. */
-  readonly bySubject: AdminRateLimitStage;
+  /**
+   * The count, per client address, of the calls the token guard refuses.
+   * An address past it has a call that presents no token refused before the
+   * guard, and a call the guard refuses answered 429.
+   */
+  readonly refusalsByAddress: AdminRateLimitCheck;
+  /** The count of calls per token subject, checked right after the token guard. */
+  readonly callsBySubject: AdminRateLimitCheck;
   /** Where the pipeline counts the calls that owe an audit row. Its own when unset. */
   readonly calls?: AdminCallsInFlight;
   /** Registers the routes behind the pipeline. */
@@ -338,6 +349,29 @@ async function adminTokenStage(request: FastifyRequest, reply: FastifyReply): Pr
   } catch (error) {
     throw uniformTokenRefusal(error);
   }
+}
+
+/** Whether `error` is a refusal of the token guard: no credential, or a token refused. */
+function isTokenRefusal(error: unknown): boolean {
+  return (
+    error instanceof MissingAccessTokenError ||
+    error instanceof JWTInvalidError ||
+    error instanceof JWTExpiredError
+  );
+}
+
+/** Whether `request` presents a token under the one scheme the token guard takes. */
+function presentsBearerToken(request: FastifyRequest): boolean {
+  const credential = request.server.jwtUtils.extractCredentialFromHeader(
+    request.headers.authorization
+  );
+  return credential?.scheme === 'Bearer';
+}
+
+/** Answer 429, with `Retry-After`, for a ceiling's count. */
+function tooManyRequests(reply: FastifyReply, count: { ttlInSeconds: number }): never {
+  reply.header('retry-after', String(count.ttlInSeconds));
+  throw new TooManyRequestsError();
 }
 
 /**
@@ -654,9 +688,9 @@ function refuseEarlyScopeHooks(scope: FastifyInstance): void {
 /**
  * The admin pipeline: its stages as hooks of an encapsulated scope, then the
  * routes `options.routes` registers in it. Register it on the admin listener,
- * after the request id and the per-address ceiling and before any other
- * route: the classification stage refuses to load on an instance that
- * already has one.
+ * after the request id and the listener's `@fastify/rate-limit`, whose
+ * counts it takes, and before any other route: the classification stage
+ * refuses to load on an instance that already has one.
  */
 export async function adminPipeline(
   fastify: FastifyInstance,
@@ -679,7 +713,7 @@ export async function adminPipeline(
 
   // Every route behind the pipeline authorizes, so none runs without a
   // request ceiling. The listener registers `@fastify/rate-limit` before the
-  // pipeline, for its ceilings by address and by subject, and keeps it. A
+  // pipeline, for its counts by address and by subject, and keeps it. A
   // scope without one gets the classification stage's default here, as
   // `adminOperationsPlugin` would give it, and ahead of the stages, where
   // CodeQL's `js/missing-rate-limiting` can see it: it cannot follow the
@@ -693,9 +727,35 @@ export async function adminPipeline(
     });
   }
 
-  // Stage 2, then the ceiling per subject, which needs the subject.
-  fastify.addHook('onRequest', adminTokenStage);
-  fastify.addHook('onRequest', options.bySubject);
+  const { refusalsByAddress, callsBySubject } = options;
+  // The ceiling per address, before stage 2. It counts only the calls the
+  // token guard refuses: an address past its count has a call that presents
+  // no token refused here. A call with a token goes on to the guard, so a
+  // caller with a valid token is never held back by the refusals of others
+  // at its address.
+  fastify.addHook('onRequest', async (request, reply) => {
+    if (presentsBearerToken(request)) return;
+    const count = await refusalsByAddress(request, { increment: false });
+    if (!count.isAllowed && count.remaining === 0) tooManyRequests(reply, count);
+  });
+  // Stage 2. Each refusal counts against the address, and past its count
+  // the answer is 429.
+  fastify.addHook('onRequest', async (request, reply) => {
+    try {
+      await adminTokenStage(request, reply);
+    } catch (error) {
+      if (isTokenRefusal(error)) {
+        const count = await refusalsByAddress(request);
+        if (!count.isAllowed && count.isExceeded) tooManyRequests(reply, count);
+      }
+      throw error;
+    }
+  });
+  // The ceiling per subject, which needs the subject.
+  fastify.addHook('onRequest', async (request, reply) => {
+    const count = await callsBySubject(request);
+    if (!count.isAllowed && count.isExceeded) tooManyRequests(reply, count);
+  });
   // Stage 3.
   fastify.addHook('onRequest', adminDpopStage);
   // Stages 4 and 5. Before the body is read, so a caller with no grant on the

@@ -174,10 +174,20 @@ A route's own `onRequest`, `preParsing` and `preValidation` hooks would run befo
 7, so the listener refuses to boot an admin route that has one, in its options or added by its
 module.
 
-The listener also limits calls per client address, before the token guard, and per token
-subject, right after it, and answers 429 `too_many_requests` beyond them: `RATE_LIMIT_MAX` per
-`RATE_LIMIT_WINDOW` each, or 100 a minute, in memory, while `RATE_LIMIT_ENABLED` is off. The
-address is the TCP peer: the listener trusts no proxy, whatever `TRUST_PROXY` names for the
+The listener also has request ceilings of its own, 100 calls a minute each, whatever
+`RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW` say for the public listener, and answers 429
+`too_many_requests` beyond them. `RATE_LIMIT_ENABLED` only chooses where the counts live: in
+Redis, or in memory while it is off.
+
+- Per client address, the calls the token guard refuses. Past that count, a call from the address
+  that presents no token is refused before the token guard, and one whose token the guard refuses
+  answers 429. A call with a valid token is never held back by the refusals of others at its
+  address.
+- Per token subject, every call, right after the token guard.
+- Per client address, every call to the OpenAPI document, which needs no token, in a count of its
+  own.
+
+The address is the TCP peer: the listener trusts no proxy, whatever `TRUST_PROXY` names for the
 public listener. When the server shuts down, the listener takes no new call, lets each call in
 flight finish for up to 8 seconds, closes the connections still open, waits up to 1.5 seconds
 more for the audit rows of their calls, and closes before the database.
