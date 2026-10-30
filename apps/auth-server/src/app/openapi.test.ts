@@ -208,7 +208,15 @@ describe('openapiVersion', () => {
   });
 
   it('is 0.0.0-dev for any build that is not a release, never 1.0.0', () => {
-    for (const value of [undefined, '', 'v0.1.4', '0.0.0-dryrun', '0.1', '01.2.3', '0.1.4-beta.1']) {
+    for (const value of [
+      undefined,
+      '',
+      'v0.1.4',
+      '0.0.0-dryrun',
+      '0.1',
+      '01.2.3',
+      '0.1.4-beta.1',
+    ]) {
       expect(openapiVersion(value)).toBe(UNRELEASED_VERSION);
     }
     expect(UNRELEASED_VERSION).toBe('0.0.0-dev');
