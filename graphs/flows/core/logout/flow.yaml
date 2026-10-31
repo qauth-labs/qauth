@@ -285,7 +285,7 @@ states:
         target: invalidatingCodes
         effect: [endSessions]
         say: 'the sessions are ended'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:169
+        source: apps/auth-server/src/app/helpers/browser-session.ts:177
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'

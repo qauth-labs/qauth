@@ -153,9 +153,230 @@ export interface SessionQuery {
   sid: string;
 }
 
+/**
+ * The kinds of actor that end sessions: the actor types of QAuth's events
+ * (`ACTOR_TYPES` in `@qauth-labs/shared-events`), so a listener that emits an
+ * event passes the actor on as it is. An admin is a `user`.
+ */
+export const SESSION_ACTOR_TYPES = ['user', 'client', 'system', 'operator_cli'] as const;
+
+export type SessionActorType = (typeof SESSION_ACTOR_TYPES)[number];
+
+/**
+ * Who or what ended a session, in the shape of an event's actor. It is not
+ * stored: the listeners of {@link SessionService.onSessionsEnded} receive it.
+ */
+export interface SessionActor {
+  type: SessionActorType;
+  /**
+   * A user id, a client's `client_id`, or the operating-system user for
+   * `operator_cli`: required for those, at most 255 characters. Absent for
+   * `system`.
+   */
+  id?: string;
+}
+
+/** A client a session served, from its `session_clients` row (#549). */
+export interface SessionClientRecord {
+  /** The client's row id (`oauth_clients.id`). */
+  oauthClientId: string;
+  /** The client's public `client_id`. */
+  clientId: string;
+  /** The client's display name. */
+  name: string;
+  /** When the session first authorized the client, in epoch milliseconds. */
+  firstSeenAt: number;
+}
+
+/**
+ * A session a revocation ended, with the clients it had served: whom
+ * back-channel logout notifies. The registry rows are deleted with the
+ * revocation, so this is the one complete list.
+ */
+export interface EndedSession {
+  /** The row as it ended: `revokedAt` and `revokedReason` are set. */
+  session: SessionRecord;
+  /** Oldest first. */
+  clients: readonly SessionClientRecord[];
+}
+
+/**
+ * What a listener of {@link SessionService.onSessionsEnded} receives: sessions
+ * of one realm, ended for one reason by one actor. Each ended session reaches
+ * the listeners once, in one notice.
+ */
+export interface SessionsEndedNotice {
+  realmId: string;
+  reason: SessionRevokedReason;
+  actor: SessionActor;
+  /** Never empty. */
+  sessions: readonly EndedSession[];
+}
+
+/** A listener of {@link SessionService.onSessionsEnded}. */
+export type SessionsEndedListener = (notice: SessionsEndedNotice) => void | Promise<void>;
+
+/**
+ * Where a listed session stands: `live`, past the realm's idle limit
+ * (`idle`), past its absolute end (`expired`), or ended by a revocation
+ * (`revoked`). A session the purge job marked as idle or expired keeps that
+ * state.
+ */
+export type SessionState = 'live' | 'idle' | 'expired' | 'revoked';
+
+/** A session as a list shows it. */
+export interface ListedSession {
+  sid: string;
+  realmId: string;
+  userId: string;
+  /** When the user authenticated (the ID token's `auth_time`), in epoch milliseconds. */
+  authTime: number;
+  amr: readonly string[];
+  assuranceLevel: SessionAssuranceLevel | null;
+  /** The client address of the sign-in. */
+  ipAddress: string | null;
+  /** The `User-Agent` of the sign-in. */
+  userAgent: string | null;
+  createdAt: number;
+  /** The last stored use. */
+  lastSeenAt: number;
+  /** The absolute end, as {@link BrowserSession.expiresAt}. */
+  expiresAt: number;
+  /** The idle end, as {@link BrowserSession.idleExpiresAt}. */
+  idleExpiresAt: number | null;
+  state: SessionState;
+  revokedAt: number | null;
+  revokedReason: SessionRevokedReason | null;
+  /**
+   * The clients the session served, oldest first. Empty once it ended: the
+   * revocation took them.
+   */
+  clients: readonly SessionClientRecord[];
+}
+
+/**
+ * Which page of a list to read: the paging of the admin, account and
+ * developer APIs, `limit` and an opaque `cursor`.
+ */
+export interface SessionPageRequest {
+  /** 1 to {@link MAX_SESSION_PAGE_LIMIT}; {@link DEFAULT_SESSION_PAGE_LIMIT} by default. */
+  limit?: number;
+  /** The `nextCursor` of the previous page of the same list. */
+  cursor?: string;
+}
+
+/** One page of a session list, newest first. */
+export interface SessionPage {
+  items: ListedSession[];
+  /** The cursor of the next page; `null` on the last one. */
+  nextCursor: string | null;
+}
+
+/** Input of {@link SessionService.listForUser}. */
+export interface ListUserSessionsInput {
+  realmId: string;
+  userId: string;
+  page?: SessionPageRequest;
+}
+
+/** Input of {@link SessionService.listForClient}. */
+export interface ListClientSessionsInput {
+  realmId: string;
+  /** The client's row id (`oauth_clients.id`), as the API paths of this repository name a client. */
+  oauthClientId: string;
+  page?: SessionPageRequest;
+}
+
 /** Input of {@link SessionService.revoke}. */
 export interface RevokeSessionInput extends SessionQuery {
   reason: SessionRevokedReason;
+  actor: SessionActor;
+}
+
+/**
+ * What {@link SessionService.revoke} did: ended the session, found it ended
+ * already (by this reason or another; the first one stays), or found no such
+ * session in the realm.
+ */
+export type RevokeSessionResult =
+  | { outcome: 'ended'; session: SessionRecord; clients: readonly SessionClientRecord[] }
+  | { outcome: 'already_ended'; session: SessionRecord }
+  | { outcome: 'not_found' };
+
+/** Input of {@link SessionService.revokeAllForUser}. */
+export interface RevokeUserSessionsInput {
+  realmId: string;
+  userId: string;
+  /** Keep this session: "sign out everywhere else". */
+  exceptSid?: string;
+  /**
+   * End only the sessions created before this time, in epoch milliseconds: a
+   * password reset ends the sessions older than the new password, which is
+   * how #550 covers ADR-017's session epoch.
+   *
+   * It ends the sessions Postgres holds when the call runs. A sign-in that
+   * checked the old password before the reset committed, and stores its
+   * session only after this call, is not ended. A caller that must refuse
+   * that one too also checks the reset time when the session is read, as
+   * `not_valid_before` does for a disabled account (#748).
+   */
+  createdBefore?: number;
+  reason: SessionRevokedReason;
+  actor: SessionActor;
+}
+
+/** What {@link SessionService.revokeAllForUser} ended. */
+export interface RevokedSessions {
+  /** The sessions this call ended, in id order (oldest first). */
+  sessions: readonly EndedSession[];
+}
+
+/** Input of {@link SessionService.revokeAllForRealm}. */
+export interface RevokeRealmSessionsInput {
+  realmId: string;
+  /**
+   * End only the sessions used at or after this time, in epoch milliseconds.
+   * `last_seen_at` lags use by up to `SESSION_LAST_SEEN_INTERVAL`, so a
+   * session stored as seen up to that long before this time is ended too.
+   * Every session of the realm when absent.
+   */
+  activeSince?: number;
+  reason: SessionRevokedReason;
+  actor: SessionActor;
+  /**
+   * Sessions per transaction; {@link DEFAULT_SESSION_REVOCATION_BATCH_SIZE}
+   * by default, at most {@link MAX_SESSION_BATCH_SIZE}.
+   */
+  batchSize?: number;
+}
+
+/** What {@link SessionService.revokeAllForRealm} did. */
+export interface RealmSessionsRevocation {
+  /** How many sessions it ended. */
+  ended: number;
+  /** In how many transactions. */
+  batches: number;
+}
+
+/** Input of {@link SessionService.endLapsed}. */
+export interface EndLapsedSessionsInput {
+  /** Sessions per transaction; {@link DEFAULT_SESSION_REVOCATION_BATCH_SIZE} by default. */
+  batchSize?: number;
+  /** Checked between batches: the job runner's signal. */
+  signal?: AbortSignal;
+}
+
+/** Input of {@link SessionService.purge}. */
+export interface PurgeSessionsInput {
+  /**
+   * Delete the rows revoked, or past their stored `expires_at`, before this
+   * time, in epoch milliseconds.
+   */
+  endedBefore: number;
+  /** Rows per statement; {@link DEFAULT_SESSION_PURGE_BATCH_SIZE} by default. */
+  batchSize?: number;
+  /** Checked between batches: the job runner's signal. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -179,9 +400,73 @@ export interface SessionService {
    */
   get(query: SessionQuery): Promise<BrowserSession | null>;
   /**
-   * End a session: Postgres first, then the cache entry is replaced by a
-   * short tombstone. Returns the ended row, or `null` when the realm holds no
-   * live session with that id. Throws when Postgres cannot store the end.
+   * End one session: Postgres first, then the cache entry is replaced by a
+   * short tombstone, then the listeners of {@link onSessionsEnded} hear of
+   * it. Safe to call twice: the second call changes nothing and answers
+   * `already_ended`. Throws when Postgres cannot store the end.
+   *
+   * Refresh-token families, Authority Trees and consents are not touched:
+   * the caller decides about them (ADR-014: trees survive sign-out).
    */
-  revoke(input: RevokeSessionInput): Promise<SessionRecord | null>;
+  revoke(input: RevokeSessionInput): Promise<RevokeSessionResult>;
+  /**
+   * End a user's sessions in the realm, but `exceptSid` and those created at
+   * or after `createdBefore`, in one transaction, as {@link revoke} ends one.
+   * Returns the sessions this call ended; a second call ends nothing more.
+   */
+  revokeAllForUser(input: RevokeUserSessionsInput): Promise<RevokedSessions>;
+  /**
+   * End the realm's sessions in batches, each its own short transaction, in
+   * id order: key retirement and bulk revocation. A session created after the
+   * call began is left alone. Each batch's sessions reach the listeners as the
+   * batch commits; the call returns only counts, so a realm of any size fits
+   * in memory. Safe to repeat.
+   */
+  revokeAllForRealm(input: RevokeRealmSessionsInput): Promise<RealmSessionsRevocation>;
+  /**
+   * Mark every session, of every realm, past its absolute end or its realm's
+   * idle limit as `expired` or `idle`, as {@link get} already treats it, so
+   * its registry rows go and the listeners hear of it, with the `system`
+   * actor. `revokedAt` is the time of the mark. The `session-expiry` job runs
+   * it every five minutes.
+   */
+  endLapsed(input?: EndLapsedSessionsInput): Promise<{ ended: number }>;
+  /**
+   * Delete the rows of sessions, of every realm, that ended (or passed their
+   * stored `expires_at`) before `endedBefore`. A live session is never
+   * deleted. The session purge job runs it with `SESSION_RETENTION_DAYS`.
+   */
+  purge(input: PurgeSessionsInput): Promise<{ deleted: number }>;
+  /**
+   * One page of a user's sessions in the realm, newest first, whatever their
+   * state, until {@link purge} deletes them; never another realm's. Throws
+   * {@link InvalidSessionCursorError} for a cursor of another list and a
+   * `RangeError` for a limit out of range.
+   */
+  listForUser(input: ListUserSessionsInput): Promise<SessionPage>;
+  /**
+   * One page of the realm's sessions that served a client, newest first, for
+   * an admin: each with ALL the clients the session served, its address and
+   * its user agent. A caller that answers the client's own developer must
+   * not pass those on. A revoked session no longer holds its clients, so
+   * only sessions not yet revoked are listed. Throws as {@link listForUser}.
+   */
+  listForClient(input: ListClientSessionsInput): Promise<SessionPage>;
+  /**
+   * Call `listener` after every revocation this process makes that ends
+   * sessions, once per ended session: after Postgres committed the end and
+   * the cache tombstones were written. Listeners run in the order they
+   * registered, one at a time, and the revocation waits for them. A listener
+   * that throws is logged and the others still run; the revocation stands.
+   *
+   * At most once, and in this process only: a process that stops between
+   * the commit and a listener loses that notice, and nothing repeats it (a
+   * second revocation of the session ends nothing). Work that must not be
+   * lost, such as the session events of the transactional outbox (ADR-019
+   * Decision 8) or the queued back-channel logout of #624, belongs in the
+   * revocation's transaction, not only here.
+   *
+   * @returns a function that removes the listener
+   */
+  onSessionsEnded(listener: SessionsEndedListener): () => void;
 }

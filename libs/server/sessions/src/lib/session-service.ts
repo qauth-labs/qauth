@@ -8,20 +8,34 @@ import {
 import type {
   SessionCache,
   SessionCacheLookup,
+  SessionListOwner,
   SessionLogger,
   SessionMetrics,
   SessionStore,
+  StoredSessionList,
 } from './ports';
-import type {
-  BrowserSession,
-  CachedSession,
-  CachedSessionRecord,
-  CreateSessionInput,
-  RealmSessionLifetimes,
-  RevokeSessionInput,
-  SessionQuery,
-  SessionRecord,
-  SessionService,
+import { decodeSessionCursor, encodeSessionCursor, type SessionList } from './session-cursor';
+import {
+  type BrowserSession,
+  type CachedSession,
+  type CachedSessionRecord,
+  type CreateSessionInput,
+  type EndedSession,
+  type ListedSession,
+  type RealmSessionLifetimes,
+  type RevokeSessionInput,
+  type RevokeSessionResult,
+  SESSION_ACTOR_TYPES,
+  SESSION_REVOKED_REASONS,
+  type SessionActor,
+  type SessionPage,
+  type SessionPageRequest,
+  type SessionQuery,
+  type SessionRecord,
+  type SessionRevokedReason,
+  type SessionsEndedListener,
+  type SessionService,
+  type SessionState,
 } from './types';
 
 /** `SESSION_LAST_SEEN_INTERVAL`'s default: one minute (ADR-019, answers). */
@@ -32,6 +46,27 @@ export const DEFAULT_SESSION_CACHE_TTL_SECONDS = 60;
 
 /** How long a cache call may take before the service goes on without it, by default. */
 export const DEFAULT_SESSION_CACHE_TIMEOUT_MS = 250;
+
+/** Sessions per page when the caller asks for no limit: the APIs' `PAGE_LIMIT_DEFAULT`. */
+export const DEFAULT_SESSION_PAGE_LIMIT = 50;
+
+/** The largest page: the APIs' `PAGE_LIMIT_MAX`. A larger limit is refused, not clamped. */
+export const MAX_SESSION_PAGE_LIMIT = 200;
+
+/**
+ * Sessions a bulk revocation ends per transaction, by default: short enough
+ * that no transaction holds a realm's rows for long.
+ */
+export const DEFAULT_SESSION_REVOCATION_BATCH_SIZE = 500;
+
+/** Rows the purge deletes per statement, by default. */
+export const DEFAULT_SESSION_PURGE_BATCH_SIZE = 1000;
+
+/**
+ * The largest batch a caller may ask for: one transaction never locks or
+ * deletes more rows than this.
+ */
+export const MAX_SESSION_BATCH_SIZE = 5000;
 
 /** The settings of {@link createSessionService}. */
 export interface SessionServiceSettings {
@@ -82,6 +117,73 @@ export class UnknownSessionRealmError extends Error {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The system actor: what the service's own sweeps end sessions as. */
+const SYSTEM_ACTOR: SessionActor = Object.freeze({ type: 'system' });
+
+const EMPTY_PAGE: SessionPage = Object.freeze({ items: [], nextCursor: null }) as SessionPage;
+
+/** An id as the service compares it, or `undefined` when it names nothing. */
+function idOf(value: string): string | undefined {
+  const id = value.toLowerCase();
+  return UUID.test(id) ? id : undefined;
+}
+
+function checkedReason(reason: SessionRevokedReason): SessionRevokedReason {
+  if (!(SESSION_REVOKED_REASONS as readonly string[]).includes(reason)) {
+    throw new RangeError(`Unknown session revocation reason: ${String(reason)}`);
+  }
+  return reason;
+}
+
+/**
+ * The actor as given, checked: a known type, and an id for every type but
+ * `system`, as an event's actor carries one, up to the 255 characters an
+ * event's actor id may have.
+ */
+function checkedActor(actor: SessionActor): SessionActor {
+  const valid =
+    typeof actor === 'object' &&
+    actor !== null &&
+    (SESSION_ACTOR_TYPES as readonly string[]).includes(actor.type) &&
+    (actor.type === 'system'
+      ? actor.id === undefined
+      : typeof actor.id === 'string' && actor.id.length > 0 && actor.id.length <= 255);
+  if (!valid) {
+    throw new RangeError(
+      'A session revocation needs an actor: a known type, with an id unless it is the system'
+    );
+  }
+  return actor.id === undefined ? { type: actor.type } : { type: actor.type, id: actor.id };
+}
+
+function checkedTime(name: string, value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) {
+    throw new RangeError(`${name} must be epoch milliseconds, got ${value}`);
+  }
+  return value;
+}
+
+function checkedBatchSize(value: number | undefined, fallback: number): number {
+  const size = value ?? fallback;
+  if (!Number.isInteger(size) || size < 1 || size > MAX_SESSION_BATCH_SIZE) {
+    throw new RangeError(
+      `A batch size must be an integer from 1 to ${MAX_SESSION_BATCH_SIZE}, got ${size}`
+    );
+  }
+  return size;
+}
+
+function checkedLimit(page: SessionPageRequest | undefined): number {
+  const limit = page?.limit ?? DEFAULT_SESSION_PAGE_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SESSION_PAGE_LIMIT) {
+    throw new RangeError(
+      `A page limit must be an integer from 1 to ${MAX_SESSION_PAGE_LIMIT}, got ${limit}`
+    );
+  }
+  return limit;
+}
 
 const NO_METRICS: SessionMetrics = {
   cacheLookups: { inc: () => undefined },
@@ -145,7 +247,13 @@ function cachedRecordOf(session: SessionRecord): CachedSessionRecord {
  * - `last_seen_at` is written at most once per interval per session, by one
  *   conditional `UPDATE`, so several nodes do not all write. Concurrent reads
  *   of one session on one node share one Postgres round trip.
- * - `revoke` writes Postgres, then a tombstone over the cache entry.
+ * - `revoke`, `revokeAllForUser` and `revokeAllForRealm` write Postgres,
+ *   then a tombstone over each ended session's cache entry, then tell the
+ *   `onSessionsEnded` listeners. The realm-wide one works in batches.
+ * - `endLapsed` marks the sessions past an end, which `get` already treats as
+ *   absent, so their registry rows go too; `purge` deletes old ended rows.
+ * - `listForUser` and `listForClient` page through sessions, newest first,
+ *   with their state and clients.
  *
  * Volatile per-flow values (the CSRF values, the consent scopes) are not part
  * of a session here and never reach Postgres: the caller keeps them in a
@@ -177,6 +285,9 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
 
   /** One Postgres round trip per session at a time on this node. */
   const inFlight = new Map<string, Promise<LiveSession | null>>();
+
+  /** The listeners of `onSessionsEnded`, in registration order. */
+  const listeners = new Set<SessionsEndedListener>();
 
   /**
    * A cache call, given up after {@link cacheTimeoutMs}. The call itself is
@@ -334,6 +445,145 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     return readThrough(live.record.realmId, live.record.id, true);
   }
 
+  /**
+   * Replace the cache entries of `ended` (sessions of any realm) with
+   * tombstones, all at once: reads already waiting on Postgres on this node
+   * no longer answer for them, and a read anywhere that sees a tombstone
+   * answers "absent".
+   *
+   * Each tombstone lasts twice the cache time, so it outlives any entry
+   * filled from a read before the end, even one whose write reached the cache
+   * late, read by a node whose clock lags. A tombstone the cache does not
+   * take leaves another node serving the session until its entry lapses,
+   * within the cache time.
+   */
+  async function tombstone(ended: readonly EndedSession[]): Promise<void> {
+    for (const { session } of ended) inFlight.delete(`${session.realmId}:${session.id}`);
+    const written = await Promise.all(
+      ended.map(({ session }) =>
+        bounded(cache.markRevoked(session.realmId, session.id, 2 * cacheTtlMs)).then(
+          () => true,
+          () => false
+        )
+      )
+    );
+    const failed = written.filter((ok) => !ok).length;
+    if (failed > 0) {
+      logger.warn(
+        { realmId: ended[0]?.session.realmId, sessions: failed },
+        'Session cache tombstone write failed; another node may serve the session until its cache entry lapses'
+      );
+    }
+  }
+
+  /** What follows the end of `ended` in Postgres: the tombstones, then the listeners. */
+  async function afterEnded(
+    realmId: string,
+    reason: SessionRevokedReason,
+    actor: SessionActor,
+    ended: readonly EndedSession[]
+  ): Promise<void> {
+    if (ended.length === 0) return;
+    await tombstone(ended);
+    await notify({ realmId, reason, actor, sessions: ended });
+  }
+
+  /** Hand a notice to each listener in turn. A listener's failure is logged and stops nothing. */
+  async function notify(notice: {
+    realmId: string;
+    reason: SessionRevokedReason;
+    actor: SessionActor;
+    sessions: readonly EndedSession[];
+  }): Promise<void> {
+    for (const listener of [...listeners]) {
+      try {
+        await listener(Object.freeze({ ...notice, sessions: Object.freeze([...notice.sessions]) }));
+      } catch (error) {
+        logger.warn(
+          {
+            err: error,
+            realmId: notice.realmId,
+            reason: notice.reason,
+            sessions: notice.sessions.length,
+          },
+          'A sessions-ended listener failed; the sessions stay ended'
+        );
+      }
+    }
+  }
+
+  /** A listed row as the caller sees it, judged at `at`. */
+  function listedSessionOf(
+    row: StoredSessionList['sessions'][number],
+    lifetimes: RealmSessionLifetimes,
+    at: number
+  ): ListedSession {
+    const { session } = row;
+    const ends = sessionEnds(session, lifetimes, defaultMaxLifespanSeconds);
+    let state: SessionState;
+    if (session.revokedAt !== null) {
+      // The purge job marks a lapsed session with the end it passed.
+      state =
+        session.revokedReason === 'idle'
+          ? 'idle'
+          : session.revokedReason === 'expired'
+            ? 'expired'
+            : 'revoked';
+    } else {
+      const verdict = sessionVerdict(ends, at);
+      state = verdict === 'ended' ? 'expired' : verdict;
+    }
+    return {
+      sid: session.id,
+      realmId: session.realmId,
+      userId: session.userId,
+      authTime: session.authTime,
+      amr: Object.freeze([...session.amr]),
+      assuranceLevel: session.assuranceLevel,
+      ipAddress: session.ipAddress,
+      userAgent: session.userAgent,
+      createdAt: session.createdAt,
+      lastSeenAt: session.lastSeenAt,
+      expiresAt: ends.absolute,
+      idleExpiresAt: ends.idle,
+      state,
+      revokedAt: session.revokedAt,
+      revokedReason: session.revokedReason,
+      clients: Object.freeze(row.clients.map((client) => ({ ...client }))),
+    };
+  }
+
+  /** One page of `list`: `limit` rows and, when there are more, the next page's cursor. */
+  async function listPage(
+    realmId: string | undefined,
+    owner: SessionListOwner | undefined,
+    page: SessionPageRequest | undefined
+  ): Promise<SessionPage> {
+    const limit = checkedLimit(page);
+    // A malformed id names no realm, user or client: an empty list, and no
+    // query error that would read as an outage.
+    if (realmId === undefined || owner === undefined) return EMPTY_PAGE;
+    const list: SessionList = { realmId, owner };
+    const after = page?.cursor === undefined ? undefined : decodeSessionCursor(list, page.cursor);
+    const stored = await store.list(realmId, owner, {
+      limit: limit + 1,
+      ...(after === undefined ? {} : { after }),
+    });
+    if (stored === undefined) return EMPTY_PAGE;
+    const at = now();
+    const items = stored.sessions
+      .slice(0, limit)
+      .map((row) => listedSessionOf(row, stored.lifetimes, at));
+    const last = items[items.length - 1];
+    return {
+      items,
+      nextCursor:
+        stored.sessions.length > limit && last !== undefined
+          ? encodeSessionCursor(list, { createdAt: last.createdAt, sid: last.sid })
+          : null,
+    };
+  }
+
   function shared(key: string, work: () => Promise<LiveSession | null>) {
     const running = inFlight.get(key);
     if (running !== undefined) return running;
@@ -426,19 +676,21 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       return read === null ? null : browserSessionOf(read);
     },
 
-    async revoke(input: RevokeSessionInput): Promise<SessionRecord | null> {
-      const realmId = input.realmId.toLowerCase();
-      const sid = input.sid.toLowerCase();
-      if (!UUID.test(realmId) || !UUID.test(sid)) return null;
-      const ended = await store.revoke(realmId, sid, input.reason);
-      // A read started on this node before the end must not answer the reads
-      // that come after it.
+    async revoke(input: RevokeSessionInput): Promise<RevokeSessionResult> {
+      const reason = checkedReason(input.reason);
+      const actor = checkedActor(input.actor);
+      const realmId = idOf(input.realmId);
+      const sid = idOf(input.sid);
+      if (realmId === undefined || sid === undefined) return { outcome: 'not_found' };
+      const ended = await store.revoke(realmId, sid, reason);
+      if (ended !== undefined) {
+        await afterEnded(realmId, reason, actor, [ended]);
+        return { outcome: 'ended', session: ended.session, clients: ended.clients };
+      }
+      // Nothing ended here. A read started on this node before an earlier
+      // end must still not answer the reads after it, and a stale entry of a
+      // session that was already ended goes too.
       inFlight.delete(`${realmId}:${sid}`);
-      // Written whether or not this call ended the row: a stale entry of a
-      // session that was already ended goes too. It lasts twice the cache
-      // time, so it outlives any entry filled from a read before the end,
-      // even one whose write reached the cache late, read by a node whose
-      // clock lags.
       try {
         await bounded(cache.markRevoked(realmId, sid, 2 * cacheTtlMs));
       } catch (error) {
@@ -447,7 +699,147 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
           'Session cache tombstone write failed; another node may serve the session until its cache entry lapses'
         );
       }
-      return ended ?? null;
+      const stored = await store.find(realmId, sid);
+      return stored !== undefined && stored.session.revokedAt !== null
+        ? { outcome: 'already_ended', session: stored.session }
+        : { outcome: 'not_found' };
+    },
+
+    async revokeAllForUser(input) {
+      const reason = checkedReason(input.reason);
+      const actor = checkedActor(input.actor);
+      const createdBefore = checkedTime('createdBefore', input.createdBefore);
+      let exceptSid: string | undefined;
+      if (input.exceptSid !== undefined) {
+        exceptSid = idOf(input.exceptSid);
+        // Ending the one session the caller meant to keep is not a fallback.
+        if (exceptSid === undefined) throw new RangeError('exceptSid is not a session id');
+      }
+      const realmId = idOf(input.realmId);
+      const userId = idOf(input.userId);
+      if (realmId === undefined || userId === undefined) return { sessions: [] };
+      const ended = await store.revokeForUser(realmId, userId, reason, {
+        ...(exceptSid === undefined ? {} : { exceptSid }),
+        ...(createdBefore === undefined ? {} : { createdBefore }),
+      });
+      await afterEnded(realmId, reason, actor, ended);
+      return { sessions: ended };
+    },
+
+    async revokeAllForRealm(input) {
+      const reason = checkedReason(input.reason);
+      const actor = checkedActor(input.actor);
+      const since = checkedTime('activeSince', input.activeSince);
+      // `last_seen_at` is written at most once per interval, so a session
+      // used at `activeSince` may be stored as seen up to one interval
+      // earlier: those count as used since then too.
+      const activeSince = since === undefined ? undefined : since - lastSeenIntervalSeconds * 1000;
+      const limit = checkedBatchSize(input.batchSize, DEFAULT_SESSION_REVOCATION_BATCH_SIZE);
+      const realmId = idOf(input.realmId);
+      if (realmId === undefined) return { ended: 0, batches: 0 };
+      // Sessions created after the call began are not ended: a sign-in after
+      // a key retirement or a bulk revocation was decided stands.
+      const createdThrough = now();
+      let after: string | null = null;
+      let ended = 0;
+      let batches = 0;
+      for (;;) {
+        const batch = await store.revokeRealmBatch(realmId, reason, {
+          after,
+          createdThrough,
+          ...(activeSince === undefined ? {} : { activeSince }),
+          limit,
+        });
+        if (batch.selected === 0) break;
+        batches += 1;
+        ended += batch.ended.length;
+        await afterEnded(realmId, reason, actor, batch.ended);
+        if (batch.selected < limit || batch.last === null) break;
+        after = batch.last;
+      }
+      return { ended, batches };
+    },
+
+    async endLapsed(input = {}) {
+      const limit = checkedBatchSize(input.batchSize, DEFAULT_SESSION_REVOCATION_BATCH_SIZE);
+      // One moment for the whole run, so the id order moves forward through
+      // a fixed set; what lapses during the run is the next run's.
+      const at = now();
+      let after: string | null = null;
+      let ended = 0;
+      for (;;) {
+        input.signal?.throwIfAborted();
+        const batch = await store.revokeLapsedBatch({
+          now: at,
+          defaultMaxLifespanSeconds,
+          after,
+          limit,
+        });
+        if (batch.selected === 0) break;
+        ended += batch.ended.length;
+        // Every tombstone of the batch at once, however many realms it
+        // spans; then one notice per realm and reason.
+        await tombstone(batch.ended);
+        const groups = new Map<string, EndedSession[]>();
+        for (const item of batch.ended) {
+          const key = `${item.session.realmId} ${String(item.session.revokedReason)}`;
+          groups.set(key, [...(groups.get(key) ?? []), item]);
+        }
+        for (const group of groups.values()) {
+          const { realmId, revokedReason } = group[0].session;
+          await notify({
+            realmId,
+            reason: revokedReason ?? 'expired',
+            actor: SYSTEM_ACTOR,
+            sessions: group,
+          });
+        }
+        if (batch.selected < limit || batch.last === null) break;
+        after = batch.last;
+      }
+      return { ended };
+    },
+
+    async purge(input) {
+      const before = checkedTime('endedBefore', input.endedBefore);
+      if (before === undefined) throw new RangeError('endedBefore is required');
+      const limit = checkedBatchSize(input.batchSize, DEFAULT_SESSION_PURGE_BATCH_SIZE);
+      let after: string | null = null;
+      let deleted = 0;
+      for (;;) {
+        input.signal?.throwIfAborted();
+        const batch = await store.deleteEnded({ before, after, limit });
+        deleted += batch.deleted;
+        if (batch.selected < limit || batch.last === null) break;
+        after = batch.last;
+      }
+      return { deleted };
+    },
+
+    listForUser(input) {
+      const userId = idOf(input.userId);
+      return listPage(
+        idOf(input.realmId),
+        userId === undefined ? undefined : { userId },
+        input.page
+      );
+    },
+
+    listForClient(input) {
+      const oauthClientId = idOf(input.oauthClientId);
+      return listPage(
+        idOf(input.realmId),
+        oauthClientId === undefined ? undefined : { oauthClientId },
+        input.page
+      );
+    },
+
+    onSessionsEnded(listener) {
+      if (typeof listener !== 'function') throw new TypeError('A listener must be a function');
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
 }

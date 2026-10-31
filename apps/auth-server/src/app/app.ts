@@ -804,9 +804,30 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     ...(eventDeliveryRoutes ?? []),
   ];
 
+  // The browser session service (ADR-019 Decision 3, #469): Postgres as the
+  // source of truth, Redis as a cache. It needs the database, cache and
+  // metrics plugins above it and only decorates the instance; the browser
+  // sign-in and the session lookup use it (#488), and so do the session
+  // expiry and purge jobs (#550), which the jobs plugin below builds.
+  if (plugins.has('sessions')) {
+    await fastify.register(sessionServicePlugin, {
+      settings: {
+        defaultMaxLifespanSeconds: env.SESSION_COOKIE_TTL,
+        lastSeenIntervalSeconds: env.SESSION_LAST_SEEN_INTERVAL,
+      },
+      metrics: {
+        cacheLookups: fastify.metrics.sessionCacheLookups,
+        storeReads: fastify.metrics.sessionPostgresReads,
+        lastSeenWrites: fastify.metrics.sessionLastSeenWrites,
+      },
+    });
+  }
+
   // Background jobs (ADR-019 Decision 8): purge-expired and the SSF subject
-  // sweep (#540) on `api`, and event retention (#536) on `delivery`, which
-  // reads the delivery routes' enabled
+  // sweep (#540) on `api`, the session expiry and purge (#550) on `web`,
+  // which mark lapsed sessions and keep ended ones for
+  // SESSION_RETENTION_DAYS, and event retention (#536) on
+  // `delivery`, which reads the delivery routes' enabled
   // destinations and falls back to the retention seeds for a realm whose row
   // is gone. A process builds and runs only the jobs of its roles (#495).
   // With the SSF transmitter off no node serves `ssf`, so an SSF position or
@@ -822,6 +843,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
     },
+    sessionRetentionDays: env.SESSION_RETENTION_DAYS,
   });
 
   // The delivery role (ADR-019 Decision 8, #460), in-process like the signer:
@@ -847,24 +869,6 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
           initialDelayMs: env.EVENT_DELIVERY_RETRY_INITIAL_DELAY * 1000,
           maxDelayMs: env.EVENT_DELIVERY_RETRY_MAX_DELAY * 1000,
         },
-      },
-    });
-  }
-
-  // The browser session service (ADR-019 Decision 3, #469): Postgres as the
-  // source of truth, Redis as a cache. It needs the database, cache and
-  // metrics plugins above it and only decorates the instance; the browser
-  // sign-in and the session lookup use it (#488).
-  if (plugins.has('sessions')) {
-    await fastify.register(sessionServicePlugin, {
-      settings: {
-        defaultMaxLifespanSeconds: env.SESSION_COOKIE_TTL,
-        lastSeenIntervalSeconds: env.SESSION_LAST_SEEN_INTERVAL,
-      },
-      metrics: {
-        cacheLookups: fastify.metrics.sessionCacheLookups,
-        storeReads: fastify.metrics.sessionPostgresReads,
-        lastSeenWrites: fastify.metrics.sessionLastSeenWrites,
       },
     });
   }

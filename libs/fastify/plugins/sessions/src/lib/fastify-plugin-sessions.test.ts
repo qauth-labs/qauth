@@ -27,6 +27,18 @@ const ROW = {
   lastSeenAt: 1,
 };
 
+/** A registry row as the repository returns it, with its client's identity. */
+const CLIENT_ROW = {
+  sessionId: SID,
+  oauthClientId: 'client-row',
+  firstSeenAt: 1,
+  clientId: 'app',
+  clientName: 'App',
+};
+
+/** The same client as the service sees it. */
+const CLIENT = { oauthClientId: 'client-row', clientId: 'app', name: 'App', firstSeenAt: 1 };
+
 /** Stand-in repositories: only the methods the store calls. */
 function repositories(
   realm: { ssoMaxLifespan: number | null; ssoIdleTimeout: number | null } | undefined
@@ -35,10 +47,17 @@ function repositories(
     create: vi.fn(async () => ROW),
     findById: vi.fn(async () => ROW),
     updateLastSeen: vi.fn(async () => true),
-    revoke: vi.fn(async () => ({
-      session: ROW,
-      clients: [{ sessionId: SID, oauthClientId: 'client-row', firstSeenAt: 1 }],
+    revoke: vi.fn(async () => ({ session: ROW, clients: [CLIENT_ROW] })),
+    revokeForUser: vi.fn(async () => [{ session: ROW, clients: [CLIENT_ROW] }]),
+    revokeRealmBatch: vi.fn(async () => ({
+      ended: [{ session: ROW, clients: [CLIENT_ROW] }],
+      last: SID,
+      selected: 1,
     })),
+    revokeLapsedBatch: vi.fn(async () => ({ ended: [], last: null, selected: 0 })),
+    listForUser: vi.fn(async () => [{ session: ROW, clients: [CLIENT_ROW] }]),
+    listForClient: vi.fn(async () => [{ session: ROW, clients: [] }]),
+    deleteEnded: vi.fn(async () => ({ deleted: 2, last: SID, selected: 2 })),
   };
   const realms = { findById: vi.fn(async () => realm) };
   return { sessions, realms, repos: { sessions, realms } as unknown as Repositories };
@@ -93,10 +112,111 @@ describe('repositorySessionStore', () => {
     expect(await store.touchLastSeen(REALM, SID, 60_000)).toBe(true);
     expect(sessions.updateLastSeen).toHaveBeenCalledWith(REALM, SID, { minIntervalMs: 60_000 });
 
-    expect(await store.revoke(REALM, SID, 'sign_out')).toEqual(ROW);
+    expect(await store.revoke(REALM, SID, 'sign_out')).toEqual({ session: ROW, clients: [CLIENT] });
     expect(sessions.revoke).toHaveBeenCalledWith(REALM, SID, 'sign_out');
     sessions.revoke.mockResolvedValueOnce(undefined as never);
     expect(await store.revoke(REALM, SID, 'sign_out')).toBeUndefined();
+  });
+
+  it('passes a user revocation’s filter to the repository and keeps the clients each session served', async () => {
+    const { repos, sessions } = repositories({ ssoMaxLifespan: null, ssoIdleTimeout: null });
+    const store = repositorySessionStore(repos);
+
+    expect(
+      await store.revokeForUser(REALM, ROW.userId, 'reset', { exceptSid: SID, createdBefore: 5 })
+    ).toEqual([{ session: ROW, clients: [CLIENT] }]);
+    expect(sessions.revokeForUser).toHaveBeenCalledWith(REALM, ROW.userId, 'reset', {
+      exceptId: SID,
+      createdBefore: 5,
+    });
+    await store.revokeForUser(REALM, ROW.userId, 'sign_out_everywhere', {});
+    expect(sessions.revokeForUser).toHaveBeenLastCalledWith(
+      REALM,
+      ROW.userId,
+      'sign_out_everywhere',
+      {}
+    );
+  });
+
+  it('passes a batch’s place and bounds to the repository', async () => {
+    const { repos, sessions } = repositories({ ssoMaxLifespan: null, ssoIdleTimeout: null });
+    const store = repositorySessionStore(repos);
+
+    expect(
+      await store.revokeRealmBatch(REALM, 'key_retired', {
+        after: null,
+        createdThrough: 9,
+        limit: 500,
+      })
+    ).toEqual({ ended: [{ session: ROW, clients: [CLIENT] }], last: SID, selected: 1 });
+    expect(sessions.revokeRealmBatch).toHaveBeenCalledWith(REALM, 'key_retired', {
+      createdThrough: 9,
+      limit: 500,
+    });
+    await store.revokeRealmBatch(REALM, 'admin', {
+      after: SID,
+      createdThrough: 9,
+      activeSince: 3,
+      limit: 2,
+    });
+    expect(sessions.revokeRealmBatch).toHaveBeenLastCalledWith(REALM, 'admin', {
+      after: SID,
+      createdThrough: 9,
+      activeSince: 3,
+      limit: 2,
+    });
+
+    await store.revokeLapsedBatch({
+      now: 7,
+      defaultMaxLifespanSeconds: 86_400,
+      after: SID,
+      limit: 10,
+    });
+    // SESSION_COOKIE_TTL in seconds becomes milliseconds.
+    expect(sessions.revokeLapsedBatch).toHaveBeenCalledWith({
+      now: 7,
+      defaultMaxLifespanMs: 86_400_000,
+      after: SID,
+      limit: 10,
+    });
+
+    expect(await store.deleteEnded({ before: 4, after: null, limit: 1000 })).toEqual({
+      deleted: 2,
+      last: SID,
+      selected: 2,
+    });
+    expect(sessions.deleteEnded).toHaveBeenCalledWith({ before: 4, limit: 1000 });
+  });
+
+  it('lists a user’s or a client’s sessions with the realm’s lifetimes', async () => {
+    const { repos, sessions } = repositories({ ssoMaxLifespan: 3600, ssoIdleTimeout: null });
+    const store = repositorySessionStore(repos);
+
+    expect(
+      await store.list(
+        REALM,
+        { userId: ROW.userId },
+        { limit: 3, after: { createdAt: 2, sid: SID } }
+      )
+    ).toEqual({
+      lifetimes: { maxLifespanSeconds: 3600, idleTimeoutSeconds: null },
+      sessions: [{ session: ROW, clients: [CLIENT] }],
+    });
+    expect(sessions.listForUser).toHaveBeenCalledWith(REALM, ROW.userId, {
+      limit: 3,
+      after: { createdAt: 2, id: SID },
+    });
+
+    await store.list(REALM, { oauthClientId: 'client-row' }, { limit: 3 });
+    expect(sessions.listForClient).toHaveBeenCalledWith(REALM, 'client-row', { limit: 3 });
+
+    expect(
+      await repositorySessionStore(repositories(undefined).repos).list(
+        REALM,
+        { userId: ROW.userId },
+        { limit: 3 }
+      )
+    ).toBeUndefined();
   });
 });
 
