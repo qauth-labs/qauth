@@ -8,6 +8,7 @@ import { redactLoggedUrl } from '../../config/logger';
 import { describeProblem } from '../api-conventions/error-classes';
 import {
   codeForStatus,
+  isBareProblem,
   PROBLEM_MEDIA_TYPE,
   type ProblemDocument,
 } from '../api-conventions/problem';
@@ -97,15 +98,19 @@ export function answerRouteNotFound(request: FastifyRequest, reply: FastifyReply
   const queryAt = url.indexOf('?');
   const path = queryAt === -1 ? url : url.slice(0, queryAt);
   const { code, type, title } = describeProblem('not_found');
-  const document: ProblemDocument = {
-    type,
-    title,
-    status: 404,
-    detail: `No route serves ${method} ${path}.`,
-    instance: path,
-    code,
-    trace_id: request.id,
-  };
+  // On the Interaction API's paths, which hold the interaction id, the
+  // document echoes nothing of the path (`isBareProblem`).
+  const document: ProblemDocument = isBareProblem(code, path)
+    ? { type, title, status: 404, code, trace_id: request.id }
+    : {
+        type,
+        title,
+        status: 404,
+        detail: `No route serves ${method} ${path}.`,
+        instance: path,
+        code,
+        trace_id: request.id,
+      };
   return reply.code(404).type(PROBLEM_MEDIA_TYPE).send(document);
 }
 

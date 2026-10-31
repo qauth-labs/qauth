@@ -23,6 +23,7 @@ import {
 } from '../api-conventions/oauth-error';
 import {
   codeForStatus,
+  isBareProblem,
   PROBLEM_CODES,
   PROBLEM_MEDIA_TYPE,
   type ProblemCode,
@@ -310,21 +311,6 @@ function instanceOf(request: FastifyRequest): string {
 }
 
 /**
- * The codes whose document says nothing about the request beyond the code
- * itself: no `instance` and no `detail`.
- *
- * `interaction_expired` (#592): the Interaction API answers an unknown
- * interaction id, an expired one, a finished one and a flow cookie that does
- * not bind it with the same bytes, so a caller cannot tell them apart. Its
- * path holds the interaction id, so an `instance` would differ per id and
- * echo a secret, and the contract's problem documents carry no prose
- * (`libs/shared/interaction-contract`, `problems.ts`). Keyed by the code
- * rather than the class, so a second copy of the class loaded by a test's
- * module registry answers the same.
- */
-const BARE_PROBLEM_CODES: ReadonlySet<string> = new Set(['interaction_expired']);
-
-/**
  * Build the RFC 9457 document for `error` (#506, #513).
  *
  * `type`, `title` and `code` come from the registry: a class's entry, or the
@@ -340,7 +326,9 @@ export function problemDocument(
   status: number
 ): ProblemDocument {
   const { code, type, title } = describeProblem(problemCodeOf(error, status));
-  if (BARE_PROBLEM_CODES.has(code)) return { type, title, status, code, trace_id: request.id };
+  // The Interaction API's documents, and `interaction_expired` anywhere, name
+  // nothing about the request: see `isBareProblem`.
+  if (isBareProblem(code, request.url)) return { type, title, status, code, trace_id: request.id };
   const document: ProblemDocument = {
     type,
     title,

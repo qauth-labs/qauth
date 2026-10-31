@@ -161,12 +161,22 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
  * 6): the segment after `/interaction/<version>/`, as in
  * `/interaction/v1-rc.0/<id>/answer`. The id is a secret: with it the
  * ceremony app's server reads the current step, so it never reaches a log.
- * The document path (`openapi.json`) and the reserved wallet prefix
- * (`wallet/`) are not ids and stay readable. Matched anywhere in the URL, so a
- * path quoted inside a query value is censored too.
+ *
+ * - Matched anywhere in the URL, so a path quoted inside a query value is
+ *   censored too, and with each `/` plain or percent-encoded (`%2F`), as a
+ *   `return_to` value carries one.
+ * - Empty and `.` segments after the version (`//<id>`, `/./<id>`) are
+ *   skipped, so the id behind them is censored.
+ * - The document path (`openapi.json`) and the reserved wallet prefix
+ *   (`wallet/`) are not ids and stay readable.
  */
-const INTERACTION_ID_IN_PATH_PATTERN =
-  /(\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?\/)(?!(?:openapi\.json|wallet)(?:[/?#&]|$))[^/?#&]+/g;
+const SLASH = '(?:/|%2[Ff])';
+const INTERACTION_ID_IN_PATH_PATTERN = new RegExp(
+  `(${SLASH}interaction${SLASH}v[1-9][0-9]*(?:-rc\\.(?:0|[1-9][0-9]*))?${SLASH}(?:\\.?${SLASH})*)` +
+    `(?!(?:openapi\\.json|wallet)(?:${SLASH}|[?#&]|$))` +
+    `(?:(?!%2[Ff])[^/?#&])+`,
+  'g'
+);
 
 /**
  * Censor the value of every {@link LOG_REDACTED_QUERY_PARAMETERS} entry in a

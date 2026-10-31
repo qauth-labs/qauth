@@ -28,6 +28,31 @@ export const PROBLEM_MEDIA_TYPE = 'application/problem+json';
 export const PROBLEM_TYPE_BASE = 'https://docs.qauth.dev/reference/problem-types/#';
 
 /**
+ * The Interaction API's paths (ADR-019 Decision 6, #592): `/interaction/v<N>`
+ * or a release candidate of it, and everything under it.
+ */
+const INTERACTION_API_PATH = /^\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?(?:\/|$)/;
+
+/**
+ * Whether a problem document says nothing about the request beyond its code:
+ * no `instance`, no `detail` and no `errors`.
+ *
+ * - Every document on the Interaction API's paths. Its contract allows no
+ *   prose in an error (`libs/shared/interaction-contract`, `problems.ts`), and
+ *   its paths hold the interaction id, a secret an `instance` or a "no route
+ *   serves" `detail` would echo.
+ * - `interaction_expired` wherever it is sent: an unknown, expired or finished
+ *   interaction and a flow cookie that does not bind it get the same bytes.
+ *
+ * @param url - the raw request-target; its query is ignored
+ */
+export function isBareProblem(code: string, url: string): boolean {
+  if (code === 'interaction_expired') return true;
+  const queryAt = url.indexOf('?');
+  return INTERACTION_API_PATH.test(queryAt === -1 ? url : url.slice(0, queryAt));
+}
+
+/**
  * One published `code`: the status it is sent with, its problem type's slug
  * and title, and what it means.
  *

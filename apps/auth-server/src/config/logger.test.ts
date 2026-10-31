@@ -392,11 +392,26 @@ describe('redactLoggedUrl', () => {
     expect(redactLoggedUrl('/interaction/v1-rc.0/not-an-id/cancel')).toBe(
       `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/cancel`
     );
+    // Percent-encoded, as a `return_to` value carries it, in either case.
+    expect(redactLoggedUrl(`/ui/x?return_to=%2Finteraction%2Fv1-rc.0%2F${id}%2Fanswer&y=2`)).toBe(
+      `/ui/x?return_to=%2Finteraction%2Fv1-rc.0%2F${LOG_REDACT_CENSOR}%2Fanswer&y=2`
+    );
+    expect(redactLoggedUrl(`/x?r=%2finteraction%2fv1-rc.0%2f${id}`)).toBe(
+      `/x?r=%2finteraction%2fv1-rc.0%2f${LOG_REDACT_CENSOR}`
+    );
+    // Empty and dot segments before the id.
+    for (const spacer of ['/', './', '/./', '././/']) {
+      const redacted = redactLoggedUrl(`/interaction/v1-rc.0/${spacer}${id}/personal`);
+      expect(redacted, spacer).not.toContain(id);
+      expect(redacted, spacer).toContain(LOG_REDACT_CENSOR);
+    }
     // The document and the reserved wallet prefix are not ids.
     for (const url of [
       '/interaction/v1-rc.0/openapi.json',
+      '/interaction/v1-rc.0/openapi.json?x=1',
       '/interaction/v1-rc.0/wallet/return',
       '/interaction/v1-rc.0/',
+      '/x?r=%2Finteraction%2Fv1-rc.0%2Fopenapi.json',
     ]) {
       expect(redactLoggedUrl(url)).toBe(url);
     }
