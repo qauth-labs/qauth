@@ -99,12 +99,13 @@ describe('what each role loads (the boot-time list)', () => {
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
 
-  it("gives admin what the admin listener's pipeline reads and writes (#511)", () => {
+  it("gives admin what the admin listener's pipeline reads and writes (#511, #512)", () => {
     expect(repositoriesFor(['admin'])).toEqual([
       'users',
       'realms',
       'adminGrants',
       'adminAuditLog',
+      'adminApprovals',
       'realmPublicKeys',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.

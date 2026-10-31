@@ -1,0 +1,243 @@
+import { and, eq, gt, inArray, type InferSelectModel, sql } from 'drizzle-orm';
+
+import type { DbClient } from '../../types';
+import {
+  type AdminApprovalClassification,
+  type AdminApprovalEntry,
+  type AdminApprovalRequesterKind,
+  adminApprovals,
+  type AdminApprovalStatus,
+} from '../schema/admin-approvals';
+import { isAdminRecordId } from './admin-roles.repository';
+
+/** A stored approval request (issue #512). */
+export type AdminApproval = InferSelectModel<typeof adminApprovals>;
+
+/** A new approval request, as the approval engine files it. */
+export interface NewAdminApproval {
+  readonly realmId: string;
+  readonly requesterKind: AdminApprovalRequesterKind;
+  readonly requesterRealmId: string;
+  readonly requesterId: string;
+  readonly operationId: string;
+  /** The canonical request without the nonce. */
+  readonly canonicalRequest: Record<string, unknown>;
+  readonly requestHash: Buffer;
+  readonly opHash: Buffer;
+  readonly nonce: Buffer;
+  readonly reason: string | null;
+  readonly classification: AdminApprovalClassification;
+  readonly approvalsRequired: number;
+  /** Epoch milliseconds. */
+  readonly createdAt: number;
+  /** Epoch milliseconds, after `createdAt`. */
+  readonly expiresAt: number;
+}
+
+/** The state a write expects to find, as the approval's version names it. */
+export interface AdminApprovalExpectedState {
+  readonly status: AdminApprovalStatus;
+  /** How many approvals it holds. */
+  readonly approvalCount: number;
+}
+
+/**
+ * Approval requests for security operations (ADR-019 Decision 7, issue
+ * #512). Every write is one conditional `UPDATE … RETURNING` that names the
+ * state it moves from and the time it is made at: it returns the row it
+ * changed, or `undefined` when the approval is not in that state any more,
+ * has expired, or is not the one named. So two writers that race cannot both
+ * move one approval, and a write that rolls back moves nothing.
+ *
+ * Who may make each write is the approval engine's to decide
+ * (`apps/auth-server/src/app/admin/approvals`); the repository only keeps
+ * the moves consistent.
+ */
+export interface AdminApprovalsRepository {
+  /** File an approval request, `pending`, with no approval yet. */
+  create(approval: NewAdminApproval, tx?: DbClient): Promise<AdminApproval>;
+
+  /** The approval with this id in the realm; `undefined` for another realm's, or an id that is not a UUID. */
+  findById(realmId: string, id: string, tx?: DbClient): Promise<AdminApproval | undefined>;
+
+  /**
+   * Add one approval to a `pending`, unexpired approval that holds exactly
+   * `expectedCount` approvals and none from the same approver. It becomes
+   * `approved` when the approval was the last one it needed.
+   */
+  addApproval(
+    realmId: string,
+    id: string,
+    change: {
+      readonly expectedCount: number;
+      readonly entry: AdminApprovalEntry;
+      readonly now: number;
+    },
+    tx?: DbClient
+  ): Promise<AdminApproval | undefined>;
+
+  /** Deny a `pending`, unexpired approval that holds exactly `expectedCount` approvals. */
+  deny(
+    realmId: string,
+    id: string,
+    change: { readonly expectedCount: number; readonly now: number },
+    tx?: DbClient
+  ): Promise<AdminApproval | undefined>;
+
+  /**
+   * Cancel an unexpired approval of this requester that is still in the
+   * `expected` state, `pending` or `approved`.
+   */
+  cancel(
+    realmId: string,
+    id: string,
+    change: {
+      readonly requesterRealmId: string;
+      readonly requesterId: string;
+      readonly expected: AdminApprovalExpectedState;
+      readonly now: number;
+    },
+    tx?: DbClient
+  ): Promise<AdminApproval | undefined>;
+
+  /**
+   * Use an `approved`, unexpired approval for the request whose
+   * `request_hash` is `requestHash`: it becomes `consumed`, with `used_at`.
+   * Run it in the transaction of the operation, so the operation's rollback
+   * takes the consumption back with it.
+   */
+  consume(
+    realmId: string,
+    id: string,
+    change: { readonly requestHash: Buffer; readonly now: number },
+    tx: DbClient
+  ): Promise<AdminApproval | undefined>;
+}
+
+/** The rows of one approval of the realm, and only while it is unexpired at `now`. */
+function openApproval(realmId: string, id: string, now: number) {
+  return and(
+    eq(adminApprovals.realmId, realmId),
+    eq(adminApprovals.id, id),
+    gt(adminApprovals.expiresAt, now)
+  );
+}
+
+/** The approval holds exactly `count` approvals. */
+const holds = (count: number) => sql`jsonb_array_length(${adminApprovals.approvals}) = ${count}`;
+
+/**
+ * Factory for the approval request repository (issue #512).
+ *
+ * @param defaultDb - The database a call without a transaction runs on.
+ */
+export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprovalsRepository {
+  return {
+    async create(approval, tx) {
+      const [record] = await (tx ?? defaultDb)
+        .insert(adminApprovals)
+        .values({
+          ...approval,
+          classification: {
+            class: approval.classification.class,
+            effects: [...approval.classification.effects],
+            permissions: [...approval.classification.permissions],
+          },
+        })
+        .returning();
+      return record;
+    },
+
+    async findById(realmId, id, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
+      const [record] = await (tx ?? defaultDb)
+        .select()
+        .from(adminApprovals)
+        .where(and(eq(adminApprovals.realmId, realmId), eq(adminApprovals.id, id)))
+        .limit(1);
+      return record;
+    },
+
+    async addApproval(realmId, id, { expectedCount, entry, now }, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
+      const stored: AdminApprovalEntry = {
+        approverRealmId: entry.approverRealmId,
+        approverId: entry.approverId,
+        credentialId: entry.credentialId,
+        factor: entry.factor,
+        approvedAt: entry.approvedAt,
+      };
+      const sameApprover = JSON.stringify([
+        { approverRealmId: entry.approverRealmId, approverId: entry.approverId },
+      ]);
+      const [record] = await (tx ?? defaultDb)
+        .update(adminApprovals)
+        .set({
+          approvals: sql`${adminApprovals.approvals} || ${JSON.stringify([stored])}::jsonb`,
+          status: sql`case when jsonb_array_length(${adminApprovals.approvals}) + 1 >= ${adminApprovals.approvalsRequired} then 'approved' else 'pending' end`,
+        })
+        .where(
+          and(
+            openApproval(realmId, id, now),
+            eq(adminApprovals.status, 'pending'),
+            holds(expectedCount),
+            sql`not (${adminApprovals.approvals} @> ${sameApprover}::jsonb)`
+          )
+        )
+        .returning();
+      return record;
+    },
+
+    async deny(realmId, id, { expectedCount, now }, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
+      const [record] = await (tx ?? defaultDb)
+        .update(adminApprovals)
+        .set({ status: 'denied' })
+        .where(
+          and(
+            openApproval(realmId, id, now),
+            eq(adminApprovals.status, 'pending'),
+            holds(expectedCount)
+          )
+        )
+        .returning();
+      return record;
+    },
+
+    async cancel(realmId, id, { requesterRealmId, requesterId, expected, now }, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
+      if (expected.status !== 'pending' && expected.status !== 'approved') return undefined;
+      const [record] = await (tx ?? defaultDb)
+        .update(adminApprovals)
+        .set({ status: 'cancelled' })
+        .where(
+          and(
+            openApproval(realmId, id, now),
+            inArray(adminApprovals.status, ['pending', 'approved']),
+            eq(adminApprovals.status, expected.status),
+            holds(expected.approvalCount),
+            eq(adminApprovals.requesterRealmId, requesterRealmId),
+            eq(adminApprovals.requesterId, requesterId)
+          )
+        )
+        .returning();
+      return record;
+    },
+
+    async consume(realmId, id, { requestHash, now }, tx) {
+      if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
+      const [record] = await tx
+        .update(adminApprovals)
+        .set({ status: 'consumed', usedAt: now })
+        .where(
+          and(
+            openApproval(realmId, id, now),
+            eq(adminApprovals.status, 'approved'),
+            eq(adminApprovals.requestHash, requestHash)
+          )
+        )
+        .returning();
+      return record;
+    },
+  };
+}
