@@ -45,8 +45,11 @@ import {
  * `token-claims-change`, to the consent's own client only; an RFC 7009
  * revocation delivers the QAuth-defined event, whose identifier is a
  * versioned `urn:qauth:` one; a receiver cannot add a user with no consent
- * for and no token from its client, and can add one who has either. Every
- * delivered SET is checked for the claims RFC 8417 §2.2 requires.
+ * for and no token from its client, and can add one who has either; a
+ * resource server can add a user who holds a live token for it; and a user
+ * subject ends by the sweep once the consent is withdrawn and its SET is
+ * delivered, not before. Every delivered SET is checked for the claims
+ * RFC 8417 §2.2 requires.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -83,6 +86,7 @@ const ALL_EVENTS = [SESSION_REVOKED, CREDENTIAL_CHANGE, TOKEN_CLAIMS_CHANGE, TOK
 /** Public addresses the fixture DNS hands out; each is served by a local server. */
 const RECEIVER_ADDRESS = '93.184.215.14';
 const OTHER_RECEIVER_ADDRESS = '151.101.1.140';
+const FLAKY_RECEIVER_ADDRESS = '104.16.132.229';
 
 interface Receiver {
   readonly clientId: string;
@@ -104,6 +108,9 @@ describe('security events on SSF streams (real containers)', () => {
   let net: FixtureNetwork | undefined;
   let receiver: FixtureServer;
   let otherReceiver: FixtureServer;
+  /** A receiver that answers `flakyStatus`: a test makes it fail, then accept. */
+  let flakyReceiver: FixtureServer;
+  let flakyStatus = 202;
   let dockerUp = false;
   const booted: BootedAuthServer[] = [];
 
@@ -119,6 +126,10 @@ describe('security events on SSF streams (real containers)', () => {
     };
     receiver = await net.serve(RECEIVER_ADDRESS, accept);
     otherReceiver = await net.serve(OTHER_RECEIVER_ADDRESS, accept);
+    flakyReceiver = await net.serve(FLAKY_RECEIVER_ADDRESS, (_req, _body, res) => {
+      res.writeHead(flakyStatus);
+      res.end();
+    });
   }, 240_000);
 
   afterAll(async () => {
@@ -134,7 +145,9 @@ describe('security events on SSF streams (real containers)', () => {
     net.dns.clear();
     net.dns.set('receiver.egress.test', [RECEIVER_ADDRESS]);
     net.dns.set('other.egress.test', [OTHER_RECEIVER_ADDRESS]);
-    for (const server of [receiver, otherReceiver]) server.requests.length = 0;
+    net.dns.set('flaky.egress.test', [FLAKY_RECEIVER_ADDRESS]);
+    for (const server of [receiver, otherReceiver, flakyReceiver]) server.requests.length = 0;
+    flakyStatus = 202;
     network.current = net.transport;
   });
 
@@ -173,7 +186,7 @@ describe('security events on SSF streams (real containers)', () => {
   async function newReceiver(
     app: FastifyInstance,
     realmId: string,
-    options: { developerId?: string } = {}
+    options: { developerId?: string; audience?: string[] } = {}
   ): Promise<Receiver> {
     const clientId = `receiver-${randomUUID()}`;
     const secret = `secret-${randomUUID()}`;
@@ -186,7 +199,7 @@ describe('security events on SSF streams (real containers)', () => {
       redirectUris: ['https://receiver.example.com/callback'],
       scopes: ['openid', 'ssf:stream'],
       grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
-      audience: [ISSUER],
+      audience: options.audience ?? [ISSUER],
       enabled: true,
       requirePkce: true,
       ...(options.developerId === undefined ? {} : { developerId: options.developerId }),
@@ -569,5 +582,131 @@ describe('security events on SSF streams (real containers)', () => {
       [streamId]
     );
     expect(rows.map((row) => row.event_subject_id)).toEqual([consented.userId]);
+  });
+  /** The event subjects of a stream's subjects. */
+  async function subjectsOf(app: FastifyInstance, streamId: string): Promise<string[]> {
+    const { rows } = await app.dbPool.query<{ event_subject_id: string }>(
+      'SELECT event_subject_id FROM ssf_stream_subjects WHERE stream_id = $1 ORDER BY 1',
+      [streamId]
+    );
+    return rows.map((row) => row.event_subject_id);
+  }
+
+  /** The delivery of `eventId` to `streamId`, as the queue holds it. */
+  async function deliveryOf(app: FastifyInstance, streamId: string, eventId: string) {
+    const { rows } = await app.dbPool.query<{
+      status: string;
+      attempt_count: number;
+      last_status_code: number | null;
+    }>(
+      `SELECT status, attempt_count, last_status_code FROM event_deliveries
+         WHERE destination_kind = 'ssf' AND destination_id = $1 AND event_id = $2`,
+      [streamId, eventId]
+    );
+    return rows[0];
+  }
+
+  // Decided 2026-10-31: a user subject ends when its relation ends, by a
+  // sweep, and never before the event that ended it reached the stream.
+  it('ends a user subject by the sweep once the consent is withdrawn and its SET delivered (#540)', async () => {
+    const { app, realmId } = await boot();
+    const who = await newReceiver(app, realmId);
+    const streamId = await createStream(app, who, 'https://flaky.egress.test/events');
+    const user = await newUser(app, realmId, who.id);
+    const added = await addSubject(app, who, streamId, userSubject(user.userId));
+    expect(added.statusCode, added.body).toBe(200);
+    await fanOutStarted(app, realmId);
+    const sweep = () => app.repositories.ssfStreams.sweepUserSubjects(Date.now());
+
+    // Related through the consent: the sweep keeps the subject.
+    await sweep();
+    expect(await subjectsOf(app, streamId)).toEqual([user.userId]);
+
+    // The receiver fails for now, so the withdrawal's SET waits, retried.
+    flakyStatus = 503;
+    const withdrawn = await app.inject({
+      method: 'DELETE',
+      url: `/api/consents/${user.consent?.id}`,
+      headers: { authorization: `Bearer ${user.token}` },
+    });
+    expect(withdrawn.statusCode, withdrawn.body).toBeLessThan(300);
+    const eventId = await eventIdOf(app, 'urn:qauth:event:consent.revoked:v1-rc.0', user.userId);
+    expect(eventId).toBeDefined();
+    await vi.waitFor(
+      async () => {
+        expect(await deliveryOf(app, streamId, eventId as string)).toMatchObject({
+          status: 'pending',
+          last_status_code: 503,
+        });
+      },
+      { timeout: 20_000, interval: 200 }
+    );
+
+    // The relation has ended, but the SET about it has not gone out: the
+    // sweep keeps the subject.
+    expect(
+      await app.repositories.ssfStreams.isRelatedUser(realmId, who.id, user.userId, Date.now())
+    ).toBe(false);
+    await sweep();
+    expect(await subjectsOf(app, streamId)).toEqual([user.userId]);
+
+    // The receiver accepts it now: the SET is delivered, and the next sweep
+    // ends the subject.
+    flakyStatus = 202;
+    const set = await waitForSet(app, flakyReceiver, who.clientId, TOKEN_CLAIMS_CHANGE);
+    expect(set.claims).toMatchObject({
+      jti: eventId,
+      sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+    });
+    await vi.waitFor(
+      async () => {
+        expect(await deliveryOf(app, streamId, eventId as string)).toMatchObject({
+          status: 'delivered',
+        });
+      },
+      { timeout: 20_000, interval: 200 }
+    );
+    await sweep();
+    expect(await subjectsOf(app, streamId)).toEqual([]);
+  });
+
+  // Decided 2026-10-31: a resource server relates to the users who hold a
+  // live token for it, beside the users of its own client.
+  it('lets a resource server add a user holding a live token for it, and refuses one who does not (#540)', async () => {
+    const { app, realmId } = await boot();
+    const API = `https://api-${randomUUID()}.example.com`;
+    // The resource server: it manages its stream under the issuer, and serves
+    // the API.
+    const server = await newReceiver(app, realmId, { audience: [ISSUER, API] });
+    const streamId = await createStream(app, server);
+    // The client users sign in through, a client of its own.
+    const signIn = await newReceiver(app, realmId);
+    const tokenFor = (userId: string, resource: string[]) =>
+      app.repositories.refreshTokens.create({
+        userId,
+        oauthClientId: signIn.id,
+        tokenHash: app.jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        expiresAt: Date.now() + 3_600_000,
+        resource,
+      });
+
+    const holder = await newUser(app, realmId);
+    await tokenFor(holder.userId, [API]);
+    const elsewhere = await newUser(app, realmId);
+    await tokenFor(elsewhere.userId, ['https://api.other.example.com']);
+    // The sign-in client's default audience is the issuer: QAuth itself, which
+    // makes no receiver its resource server.
+    const issuerOnly = await newUser(app, realmId);
+    await tokenFor(issuerOnly.userId, []);
+
+    for (const userId of [elsewhere.userId, issuerOnly.userId]) {
+      const refused = await addSubject(app, server, streamId, userSubject(userId));
+      expect(refused.statusCode, refused.body).toBe(403);
+    }
+    const added = await addSubject(app, server, streamId, userSubject(holder.userId));
+    expect(added.statusCode, added.body).toBe(200);
+    expect(await subjectsOf(app, streamId)).toEqual([holder.userId]);
   });
 });

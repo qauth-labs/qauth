@@ -72,15 +72,36 @@ A receiver is an OAuth client of the realm. It authenticates with its own access
   token may come from a client of the same name in that realm. It gets `401`.
 
 Give `ssf:stream` only to clients you trust with the realm's security events. A receiver may add
-a user only when the user is related to its own client: the user holds an active consent for it,
-or a live refresh token it was issued (decided on 2026-10-26). A refresh token is live as the token
-endpoint reads it: not revoked, not expired, and its family not past the realm's
-`sso_max_lifespan` or the browser session that started it. A disabled user is related to no
-client. So the receiver is the client your
-users sign in through, given `client_credentials` and `ssf:stream` as well; a client of its own,
-which no user signs in to, can add no user. The relation is checked when the subject is added:
-the subject then stays on the stream until the receiver removes it, also after the user withdraws
-the consent or the refresh token ends.
+a user only when the user is related to it, in one of two ways:
+
+- **Its users.** The user holds an active consent for the receiver's client, or a live refresh
+  token the client was issued (decided on 2026-10-26). Such a receiver is the client your users
+  sign in through, given `client_credentials` and `ssf:stream` as well.
+- **A resource server's users.** The user holds a live refresh token whose audience names the
+  receiver as a resource server (decided on 2026-10-31). A receiver is the resource server of the
+  values its `audience` lists, the column introspection reads the same way, except a
+  `urn:qauth:aud:` value and the realm's issuer: every receiver lists the issuer to manage its
+  stream, and the issuer names QAuth itself. A refresh token's audience is what the refresh grant
+  gives its access tokens: its RFC 8707 `resource` when it has one, else its client's `audience`,
+  else its client's `client_id`.
+
+A refresh token is live as the token endpoint reads it: not revoked, not expired, and its family
+not past the realm's `sso_max_lifespan` or the browser session that started it. A disabled user is
+related to no receiver, and a client that no user signs in to and that serves no audience can add
+no user.
+
+Two grants relate no one. QAuth stores no access token, so a user who holds only access tokens for
+a resource server, issued without a refresh token (the user approved without remembering the
+decision, so no consent was stored), is not related to it. And a consent's per-resource scopes
+(`resource_scopes`) record a grant, not a token: they relate no user to a resource server.
+
+A user subject lasts as long as its relation. The relation is checked when the subject is added,
+and again by the `ssf-subject-sweep` job every hour: once the relation has ended (the user
+withdrew the consent, the refresh tokens were revoked or ran out, or the user was disabled or
+deleted) and every event about the user has reached the stream (delivered, or given up after its
+attempts), the job deletes the subject. So the SET that tells of the end, a withdrawn consent's
+`token-claims-change` say, still reaches the receiver, and none after it does. The receiver adds
+the user again once they are related again.
 
 A receiver may add any client of the realm, but a client's own credential changes (its secret, its
 API keys) reach only that client's stream. Taking the scope away, disabling or suspending the
@@ -162,7 +183,7 @@ curl -s https://auth.example.com/ssf/stream \
 The transmitter's `default_subjects` is `NONE`: a stream receives events only about the subjects
 its receiver adds. Name a user of the realm as `iss_sub` with the realm's issuer, and a client by
 its `client_id`, as `uri` when that is a URL and `opaque` otherwise. A user must be related to the
-receiver's client, as above; any other user, and a user id that does not exist, is refused with
+receiver, as above; any other user, and a user id that does not exist, is refused with
 `403` (`forbidden`), as SSF 1.0 §8.1.3.2 prescribes for a subject the receiver may not add:
 
 ```bash

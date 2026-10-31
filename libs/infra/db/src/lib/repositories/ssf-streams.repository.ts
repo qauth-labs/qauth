@@ -1,4 +1,5 @@
-import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { RESERVED_AUDIENCE_PREFIX } from '@qauth-labs/shared-validation';
+import { and, asc, eq, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 
 import type {
   Database,
@@ -10,7 +11,8 @@ import type {
 } from '../../types';
 import { oauthConsents } from '../schema/consents';
 import { oauthClients, realms, users } from '../schema/core';
-import { eventDeliveries } from '../schema/event-deliveries';
+import { eventDeliveries, eventDeliveryPositions } from '../schema/event-deliveries';
+import { events } from '../schema/events';
 import { ssfStreams, ssfStreamSubjects } from '../schema/ssf';
 import { refreshTokens } from '../schema/tokens';
 
@@ -43,6 +45,124 @@ function ownedBy(key: SsfStreamKey) {
 
 const isKeyValid = (key: SsfStreamKey) =>
   isUuid(key.streamId) && isUuid(key.realmId) && isUuid(key.receiverClientId);
+
+/**
+ * An audience in QAuth's reserved `urn:qauth:aud:` namespace, as
+ * `isReservedAudience` matches it: after any leading white space, in any case
+ * (Postgres `~*`).
+ */
+const RESERVED_AUDIENCE_SQL_PATTERN = `^\\s*${RESERVED_AUDIENCE_PREFIX}`;
+
+/** The text of a UUID, in either case: what a `uuid` cast accepts. */
+const UUID_TEXT_SQL_PATTERN = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+
+/** What {@link relatedUserCondition} relates: SQL expressions of the statement it is put in. */
+interface RelatedUserTarget {
+  /** The realm, a `uuid`. */
+  readonly realmId: SQL;
+  /** The receiver's `oauth_clients.id`, a `uuid`. */
+  readonly receiverClientId: SQL;
+  /** The user's id, a `uuid`; `null` names no user. */
+  readonly userId: SQL;
+}
+
+/**
+ * Whether a user is related to a receiver at `now` (#540): the condition
+ * `isRelatedUser` answers and the subject sweep deletes on, as one SQL
+ * condition over the expressions of the statement it is put in.
+ *
+ * The user is an enabled user of the realm, and either:
+ *
+ * - holds an active consent for the receiver's client (decided 2026-10-26);
+ * - holds a live refresh token the receiver's client was issued (idem); or
+ * - holds a live refresh token whose audience names the receiver as a
+ *   resource server (decided 2026-10-31). A receiver is the resource server
+ *   of the values its `oauth_clients.audience` lists, as the introspection
+ *   endpoint reads that operator-set column, but never of a QAuth API
+ *   audience (`urn:qauth:aud:`) nor of the realm's issuer, which names QAuth
+ *   itself: an SSF receiver lists the issuer to manage its stream. A refresh
+ *   token's audience is what the refresh grant gives its access tokens: its
+ *   RFC 8707 `resource` when it has one, else its client's audience without
+ *   the reserved values, else its client's `client_id`.
+ *
+ * A refresh token is live as the token endpoint reads it: neither revoked nor
+ * expired, and its family not ended. The family ends at its start plus the
+ * realm's `sso_max_lifespan`, and no later than the browser session that
+ * started it; a realm that sets no limit (`null`; the realm refuses 0) bounds
+ * neither (`refreshFamilyEnd` in the auth server).
+ *
+ * Access tokens are not stored, so one issued without a refresh token (no
+ * stored consent) relates no one; nor does a consent's `resource_scopes`,
+ * which records a grant, not a token.
+ */
+function relatedUserCondition(target: RelatedUserTarget, now: number): SQL {
+  const { realmId, receiverClientId, userId } = target;
+  return sql`(
+    exists (
+      select 1 from ${users}
+      where ${users.id} = ${userId}
+        and ${users.realmId} = ${realmId}
+        and ${users.enabled}
+    ) and (
+      exists (
+        select 1 from ${oauthConsents}
+        where ${oauthConsents.realmId} = ${realmId}
+          and ${oauthConsents.userId} = ${userId}
+          and ${oauthConsents.oauthClientId} = ${receiverClientId}
+          and ${oauthConsents.revokedAt} is null
+      ) or exists (
+        select 1 from ${refreshTokens}
+        join ${realms} on ${realms.id} = ${realmId}
+        join ${oauthClients} as "issuing_client"
+          on "issuing_client"."id" = ${refreshTokens.oauthClientId}
+        where ${refreshTokens.userId} = ${userId}
+          and not ${refreshTokens.revoked}
+          and ${refreshTokens.expiresAt} > ${now}
+          and (
+            ${realms.ssoMaxLifespan} is null
+            or (
+              ${refreshTokens.familyCreatedAt} + ${realms.ssoMaxLifespan} * 1000 > ${now}
+              and (
+                ${refreshTokens.familySessionExpiresAt} is null
+                or ${refreshTokens.familySessionExpiresAt} > ${now}
+              )
+            )
+          )
+          and (
+            ${refreshTokens.oauthClientId} = ${receiverClientId}
+            or exists (
+              select 1
+              from jsonb_array_elements_text(
+                case
+                  when jsonb_array_length(${refreshTokens.resource}) > 0
+                    then ${refreshTokens.resource}
+                  when exists (
+                    select 1
+                    from jsonb_array_elements_text(
+                      coalesce("issuing_client"."audience", '[]'::jsonb)
+                    ) as "own"("value")
+                    where "own"."value" !~* ${RESERVED_AUDIENCE_SQL_PATTERN}
+                  ) then "issuing_client"."audience"
+                  else jsonb_build_array("issuing_client"."client_id")
+                end
+              ) as "token_audience"("value")
+              join ${oauthClients} as "receiver_client"
+                on "receiver_client"."id" = ${receiverClientId}
+              cross join lateral jsonb_array_elements_text(
+                coalesce("receiver_client"."audience", '[]'::jsonb)
+              ) as "served"("value")
+              where "served"."value" = "token_audience"."value"
+                and "served"."value" !~* ${RESERVED_AUDIENCE_SQL_PATTERN}
+                and (
+                  ${realms.issuer} is null
+                  or "served"."value" not in (${realms.issuer}, ${realms.issuer} || '/')
+                )
+            )
+          )
+      )
+    )
+  )`;
+}
 
 /**
  * Factory for the Shared Signals Framework streams (issue #410). See
@@ -195,46 +315,64 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
 
     async isRelatedUser(realmId, receiverClientId, userId, now) {
       if (![realmId, receiverClientId, userId].every(isUuid)) return false;
-      // A refresh token is live as the token endpoint reads it: neither
-      // revoked nor expired, and its family not ended. The family ends at
-      // its start plus the realm's `sso_max_lifespan`, and no later than the
-      // browser session that started it; a realm that sets no limit (`null`;
-      // the realm refuses 0) bounds neither (`refreshFamilyEnd` in the auth
-      // server).
-      const { rows } = await db.execute<{ related: boolean }>(sql`
-        select exists (
-          select 1 from ${users}
-          where ${users.id} = ${userId}
-            and ${users.realmId} = ${realmId}
-            and ${users.enabled}
-        ) and (
-          exists (
-            select 1 from ${oauthConsents}
-            where ${oauthConsents.realmId} = ${realmId}
-              and ${oauthConsents.userId} = ${userId}
-              and ${oauthConsents.oauthClientId} = ${receiverClientId}
-              and ${oauthConsents.revokedAt} is null
-          ) or exists (
-            select 1 from ${refreshTokens}
-            join ${realms} on ${realms.id} = ${realmId}
-            where ${refreshTokens.userId} = ${userId}
-              and ${refreshTokens.oauthClientId} = ${receiverClientId}
-              and not ${refreshTokens.revoked}
-              and ${refreshTokens.expiresAt} > ${now}
-              and (
-                ${realms.ssoMaxLifespan} is null
-                or (
-                  ${refreshTokens.familyCreatedAt} + ${realms.ssoMaxLifespan} * 1000 > ${now}
-                  and (
-                    ${refreshTokens.familySessionExpiresAt} is null
-                    or ${refreshTokens.familySessionExpiresAt} > ${now}
-                  )
-                )
-              )
-          )
-        ) as "related"
-      `);
+      const related = relatedUserCondition(
+        {
+          realmId: sql`${realmId}`,
+          receiverClientId: sql`${receiverClientId}`,
+          userId: sql`${userId}`,
+        },
+        now
+      );
+      const { rows } = await db.execute<{ related: boolean }>(sql`select ${related} as "related"`);
       return rows[0]?.related === true;
+    },
+
+    async sweepUserSubjects(now) {
+      // The user's id as the event store and the subject hold it, as a
+      // `uuid`; any other text names no user, so its subject is unrelated.
+      const userId = sql`(case when ${ssfStreamSubjects.eventSubjectId} ~* ${UUID_TEXT_SQL_PATTERN}
+        then ${ssfStreamSubjects.eventSubjectId}::uuid end)`;
+      const related = relatedUserCondition(
+        {
+          realmId: sql`${ssfStreams.realmId}`,
+          receiverClientId: sql`${ssfStreams.receiverClientId}`,
+          userId,
+        },
+        now
+      );
+      const result = await db.execute(sql`
+        delete from ${ssfStreamSubjects}
+        using ${ssfStreams}
+        where ${ssfStreamSubjects.streamId} = ${ssfStreams.id}
+          and ${ssfStreamSubjects.eventSubjectType} = 'user'
+          and not ${related}
+          -- Every event about the user is behind the realm's SSF fan-out
+          -- position, so none of them can still be matched to this subject:
+          -- the event of the withdrawal that ended the relation included.
+          and not exists (
+            select 1 from ${events}
+            join ${eventDeliveryPositions}
+              on ${eventDeliveryPositions.realmId} = ${events.realmId}
+              and ${eventDeliveryPositions.destinationKind} = ${SSF_DELIVERY_KIND}
+            where ${events.realmId} = ${ssfStreams.realmId}
+              and ${events.subjectType} = 'user'
+              and ${events.subjectId} = ${ssfStreamSubjects.eventSubjectId}
+              and (${events.xid}, ${events.seq})
+                > (${eventDeliveryPositions.xid}, ${eventDeliveryPositions.seq})
+          )
+          -- And none of them waits to be delivered to this stream: held,
+          -- queued or retrying.
+          and not exists (
+            select 1 from ${eventDeliveries}
+            join ${events} on ${events.id} = ${eventDeliveries.eventId}
+            where ${eventDeliveries.destinationKind} = ${SSF_DELIVERY_KIND}
+              and ${eventDeliveries.destinationId} = ${ssfStreams.id}::text
+              and ${eventDeliveries.status} = 'pending'
+              and ${events.subjectType} = 'user'
+              and ${events.subjectId} = ${ssfStreamSubjects.eventSubjectId}
+          )
+      `);
+      return result.rowCount ?? 0;
     },
 
     async listDestinations() {

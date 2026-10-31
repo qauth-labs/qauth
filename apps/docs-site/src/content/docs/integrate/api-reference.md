@@ -542,7 +542,7 @@ not exist, before the request is validated.
 | `PATCH /ssf/stream`, `PUT /ssf/stream` | Update or replace the receiver-supplied members.                            |
 | `DELETE /ssf/stream`                   | Delete it with `?stream_id=`: `204`.                                        |
 | `GET /ssf/status`, `POST /ssf/status`  | Read or set `enabled`, `paused` or `disabled`, with `delivery_status`.      |
-| `POST /ssf/subjects/add`               | Add an RFC 9493 subject: `200`; `403` for a user not related to the client. |
+| `POST /ssf/subjects/add`               | Add an RFC 9493 subject: `200`; `403` for an unrelated user.                |
 | `POST /ssf/subjects/remove`            | Remove one: `204`.                                                          |
 | `POST /ssf/verify`                     | Ask for a verification event: `204`; `429` within 10 seconds of the last.   |
 
@@ -560,7 +560,10 @@ a stream receives events only about the subjects its receiver added, and its
 verification events. `events_supported` lists the CAEP, RISC and QAuth-defined
 events QAuth's security events are sent as; [SSF events](/reference/ssf-events/)
 gives the mapping. A receiver may add a user only when the user holds an active
-consent for the receiver's client or a live refresh token it was issued.
+consent for the receiver's client or a live refresh token it was issued, or a live
+refresh token whose audience names the receiver as a resource server; the subject
+ends once that relation has ended and the events about the user have reached the
+stream (see [SSF transmitter](/operate/ssf-transmitter/#register-a-receiver)).
 
 Errors are problem documents (see [Error model](#error-model)): SSF 1.0 gives
 stream management statuses but defines no error body, so these routes are not

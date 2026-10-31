@@ -706,8 +706,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and commits in the transaction that revokes a refresh token's family; a refresh token whose
   family was revoked already names no one, so a second revocation sends no second SET. A receiver
   may add a user as a subject only when the user holds an active consent for
-  its client or a live refresh token it was issued; any other user is refused
-  with `403`; a disabled user is related to no client. The delivery role now
+  its client or a live refresh token it was issued, or a live refresh token
+  whose audience names the receiver as a resource server (a value of its
+  `audience`, never a `urn:qauth:aud:` value or the realm's issuer); any other
+  user is refused with `403`, and a disabled user is related to no receiver.
+  A user subject lasts as long as that relation: the new `ssf-subject-sweep`
+  job (hourly, on `api`) deletes it once the relation has ended and every event
+  about the user has reached the stream, so the SET of the withdrawal that
+  ended it is still sent. The delivery role now
   reads `realms.issuer`, for the `iss_sub` subjects. Each delivery attempt reads
   the stream as it is then: a held or retried delivery of an event the receiver
   no longer requests, or about a subject it has removed, is not sent. The docs

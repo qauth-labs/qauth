@@ -151,15 +151,17 @@ export interface SsfStreamsRepository {
   /** The subjects of a stream, oldest first. */
   listSubjects(streamId: string): Promise<SsfStreamSubject[]>;
   /**
-   * Whether a user of the realm is related to the receiver's client, so that
-   * the receiver may add the user as a subject (#540, decided 2026-10-26): the
-   * user is enabled and holds an active consent for the client, or a refresh
-   * token the client was issued for the user that is live at `now` (epoch
-   * milliseconds) as the token endpoint reads it: neither revoked nor
-   * expired, and its family not past the realm's `sso_max_lifespan` or the
-   * end of the browser session that started it. `false` for a disabled user,
-   * a user of another realm, a user id that does not exist, and an id that is
-   * not a UUID.
+   * Whether a user of the realm is related to the receiver, so that the
+   * receiver may add the user as a subject (#540): the user is enabled and
+   * holds an active consent for the receiver's client or a live refresh token
+   * it was issued (decided 2026-10-26), or a live refresh token whose
+   * audience names the receiver as a resource server (decided 2026-10-31):
+   * a value of the receiver's `audience`, never a `urn:qauth:aud:` value nor
+   * the realm's issuer. A refresh token is live at `now` (epoch milliseconds)
+   * as the token endpoint reads it: neither revoked nor expired, and its
+   * family not past the realm's `sso_max_lifespan` or the end of the browser
+   * session that started it. `false` for a disabled user, a user of another
+   * realm, a user id that does not exist, and an id that is not a UUID.
    */
   isRelatedUser(
     realmId: string,
@@ -167,6 +169,20 @@ export interface SsfStreamsRepository {
     userId: string,
     now: number
   ): Promise<boolean>;
+  /**
+   * End the user subjects whose relation has ended (#540, decided
+   * 2026-10-31): delete each user subject of a stream whose receiver is no
+   * longer related to the user at `now` (epoch milliseconds), by the rule of
+   * {@link isRelatedUser}, a user who is disabled or gone included, once no
+   * event about the user can still reach the stream: every such event is
+   * behind the realm's SSF fan-out position, and none of the stream's
+   * deliveries about the user is pending (held, queued or retrying). So the
+   * event that ended the relation, a withdrawn consent's say, is still sent.
+   * Client subjects and subjects QAuth cannot place are left alone.
+   *
+   * @returns how many subjects it deleted
+   */
+  sweepUserSubjects(now: number): Promise<number>;
   /**
    * Every stream the delivery route serves: `enabled` and `paused` ones of an
    * active receiver (enabled, not suspended, holding `ssf:stream`), in realms
