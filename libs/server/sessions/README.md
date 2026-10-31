@@ -95,7 +95,10 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
 - **Revoke.** Postgres first, then a tombstone is written over the cache entry for twice the cache
   time. A read that sees the tombstone answers "absent", so a fill that raced the revocation cannot
   bring the session back, even one that reached Redis late. Reads on the node that were already
-  waiting on Postgres do not answer the reads that start after the revocation.
+  waiting on Postgres do not answer the reads that start after the revocation. A sid is no secret
+  (an ID token carries it), so a `user` actor names the session's owner (`userId`; an admin names
+  the owner too): another user's session is `not_found`, and neither its row nor its cache entry is
+  touched.
 - **Revoke many.** `revokeAllForUser` ends a user's sessions in one transaction, but `exceptSid`
   and, with `createdBefore`, the sessions created since then (a password reset: ADR-017's session
   epoch). It ends the sessions Postgres holds when it runs: a sign-in that checked the old password

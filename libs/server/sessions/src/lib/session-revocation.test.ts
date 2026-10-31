@@ -145,7 +145,13 @@ describe('listForUser', () => {
     const expired = await signInAt();
     const idle = await signInAt();
     const live = await signInAt();
-    await service.revoke({ realmId: REALM_A, sid: revoked, reason: 'admin', actor: ADMIN_ACTOR });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: ALICE,
+      sid: revoked,
+      reason: 'admin',
+      actor: ADMIN_ACTOR,
+    });
     store.update(expired, { expiresAt: clock.now() - 1 });
     store.update(idle, { lastSeenAt: clock.now() - 601 * SECOND });
 
@@ -328,7 +334,13 @@ describe('listForClient', () => {
   it('no longer lists a session once it ended', async () => {
     const sid = await signInAt();
     store.recordClient(sid, APP);
-    await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: ALICE_ACTOR });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: ALICE,
+      sid,
+      reason: 'sign_out',
+      actor: ALICE_ACTOR,
+    });
 
     expect(
       (await service.listForClient({ realmId: REALM_A, oauthClientId: APP.oauthClientId })).items
@@ -344,6 +356,7 @@ describe('revoke', () => {
 
     const result = await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid,
       reason: 'sign_out',
       actor: ALICE_ACTOR,
@@ -373,11 +386,18 @@ describe('revoke', () => {
 
   it('reports a second call as already ended, and tells no listener again', async () => {
     const sid = await signInAt();
-    await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: ALICE_ACTOR });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: ALICE,
+      sid,
+      reason: 'sign_out',
+      actor: ALICE_ACTOR,
+    });
     const row = store.row(sid);
 
     const again = await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid,
       reason: 'admin',
       actor: ADMIN_ACTOR,
@@ -386,6 +406,61 @@ describe('revoke', () => {
     expect(again).toEqual({ outcome: 'already_ended', session: row });
     expect(store.row(sid)).toEqual(row);
     expect(notices).toHaveLength(1);
+  });
+
+  it('ends only the named owner’s session: another user’s is not found, and untouched', async () => {
+    const bobs = await signInAt({ userId: BOB });
+    store.recordClient(bobs, APP);
+
+    expect(
+      await service.revoke({
+        realmId: REALM_A,
+        userId: ALICE,
+        sid: bobs,
+        reason: 'sign_out',
+        actor: ALICE_ACTOR,
+      })
+    ).toEqual({ outcome: 'not_found' });
+    expect(store.row(bobs)?.revokedAt).toBeNull();
+    expect(store.clientsOf(bobs)).toHaveLength(1);
+    expect(cache.calls.tombstones).toBe(0);
+    expect(await service.get({ realmId: REALM_A, sid: bobs })).not.toBeNull();
+    expect(notices).toEqual([]);
+  });
+
+  it('answers another user’s ended session as not found, without its record', async () => {
+    const bobs = await signInAt({ userId: BOB });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: BOB,
+      sid: bobs,
+      reason: 'sign_out',
+      actor: { type: 'user', id: BOB },
+    });
+
+    expect(
+      await service.revoke({
+        realmId: REALM_A,
+        userId: ALICE,
+        sid: bobs,
+        reason: 'admin',
+        actor: ALICE_ACTOR,
+      })
+    ).toEqual({ outcome: 'not_found' });
+    expect(store.row(bobs)?.revokedReason).toBe('sign_out');
+  });
+
+  it('refuses a user actor that names no owner, and lets the system end any session', async () => {
+    const sid = await signInAt();
+
+    await expect(
+      service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: ALICE_ACTOR })
+    ).rejects.toThrow(RangeError);
+    expect(store.calls.revokes).toBe(0);
+
+    expect(
+      await service.revoke({ realmId: REALM_A, sid, reason: 'admin', actor: { type: 'system' } })
+    ).toMatchObject({ outcome: 'ended', session: { id: sid, userId: ALICE } });
   });
 
   it('refuses an unknown reason or a malformed actor before Postgres sees anything', async () => {
@@ -742,6 +817,7 @@ describe('purge', () => {
     const longEnded = await signInAt();
     await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid: longEnded,
       reason: 'sign_out',
       actor: ALICE_ACTOR,
@@ -751,6 +827,7 @@ describe('purge', () => {
     const recentlyEnded = await signInAt();
     await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid: recentlyEnded,
       reason: 'sign_out',
       actor: ALICE_ACTOR,
@@ -788,7 +865,13 @@ describe('onSessionsEnded', () => {
       seen.push(store.row(sid)?.revokedReason, await cache.read(REALM_A, sid));
     });
 
-    await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: ALICE_ACTOR });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: ALICE,
+      sid,
+      reason: 'sign_out',
+      actor: ALICE_ACTOR,
+    });
 
     expect(seen).toEqual(['sign_out', { kind: 'revoked' }]);
   });
@@ -803,6 +886,7 @@ describe('onSessionsEnded', () => {
 
     const result = await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid,
       reason: 'sign_out',
       actor: ALICE_ACTOR,
@@ -822,6 +906,7 @@ describe('onSessionsEnded', () => {
     const remove = service.onSessionsEnded(listener);
     await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid: await signInAt(),
       reason: 'sign_out',
       actor: ALICE_ACTOR,
@@ -829,6 +914,7 @@ describe('onSessionsEnded', () => {
     remove();
     await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid: await signInAt(),
       reason: 'sign_out',
       actor: ALICE_ACTOR,
@@ -847,6 +933,7 @@ describe('onSessionsEnded', () => {
     });
     await service.revoke({
       realmId: REALM_A,
+      userId: ALICE,
       sid: '0199a000-0000-7000-8000-0000000000ff',
       reason: 'sign_out',
       actor: ALICE_ACTOR,

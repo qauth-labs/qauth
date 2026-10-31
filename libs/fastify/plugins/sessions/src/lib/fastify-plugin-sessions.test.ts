@@ -113,7 +113,11 @@ describe('repositorySessionStore', () => {
     expect(sessions.updateLastSeen).toHaveBeenCalledWith(REALM, SID, { minIntervalMs: 60_000 });
 
     expect(await store.revoke(REALM, SID, 'sign_out')).toEqual({ session: ROW, clients: [CLIENT] });
-    expect(sessions.revoke).toHaveBeenCalledWith(REALM, SID, 'sign_out');
+    expect(sessions.revoke).toHaveBeenCalledWith(REALM, SID, 'sign_out', {});
+    await store.revoke(REALM, SID, 'sign_out', { userId: ROW.userId });
+    expect(sessions.revoke).toHaveBeenLastCalledWith(REALM, SID, 'sign_out', {
+      userId: ROW.userId,
+    });
     sessions.revoke.mockResolvedValueOnce(undefined as never);
     expect(await store.revoke(REALM, SID, 'sign_out')).toBeUndefined();
   });

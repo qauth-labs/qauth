@@ -162,12 +162,24 @@ export function createFakeSessionService(): FakeSessionService {
       if (session === undefined || session.realmId !== realmId) return null;
       return Date.now() < session.expiresAt ? session : null;
     }),
-    revoke: vi.fn<SessionService['revoke']>(async ({ realmId, sid, reason, actor }) => {
+    revoke: vi.fn<SessionService['revoke']>(async ({ realmId, sid, userId, reason, actor }) => {
+      if (actor.type === 'user' && userId === undefined) {
+        throw new RangeError('A user ends a session only by naming its owner: pass userId');
+      }
+      const owned = (session: { userId: string }) =>
+        userId === undefined || session.userId === userId;
       const before = ended.get(sid);
       if (before !== undefined && before.realmId === realmId) {
-        return { outcome: 'already_ended', session: before };
+        return owned(before)
+          ? { outcome: 'already_ended', session: before }
+          : { outcome: 'not_found' };
       }
-      const [done] = await endAll(realmId, reason, actor, (session) => session.sid === sid);
+      const [done] = await endAll(
+        realmId,
+        reason,
+        actor,
+        (session) => session.sid === sid && owned(session)
+      );
       return done === undefined
         ? { outcome: 'not_found' }
         : { outcome: 'ended', session: done.session, clients: done.clients };

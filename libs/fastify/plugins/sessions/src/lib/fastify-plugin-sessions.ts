@@ -99,8 +99,10 @@ export function repositorySessionStore(
       repositories.sessions.updateLastSeen(realmId, sid, { minIntervalMs }),
     // With the clients the session served (#549), which the revocation
     // deleted: the service hands them to its listeners (#550).
-    async revoke(realmId, sid, reason) {
-      const ended = await repositories.sessions.revoke(realmId, sid, reason);
+    async revoke(realmId, sid, reason, owner = {}) {
+      const ended = await repositories.sessions.revoke(realmId, sid, reason, {
+        ...(owner.userId === undefined ? {} : { userId: owner.userId }),
+      });
       return ended === undefined ? undefined : endedOf(ended);
     },
     async revokeForUser(realmId, userId, reason, filter) {

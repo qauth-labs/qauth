@@ -123,7 +123,14 @@ export async function resolveBrowserSession(
     // The account behind the session is gone or disabled, or was disabled
     // after the session began (#748) — end the session so the cookie cannot
     // keep using it, and treat it as no sign-in.
-    await endBrowserSession(fastify, session.realmId, session.sid, 'admin', SYSTEM_ACTOR);
+    await endBrowserSession(
+      fastify,
+      session.realmId,
+      session.sid,
+      'admin',
+      SYSTEM_ACTOR,
+      session.userId
+    );
     clearSessionCookie(reply);
     return null;
   }
@@ -162,15 +169,29 @@ async function trackBrowserSession(
  */
 const SYSTEM_ACTOR: SessionActor = Object.freeze({ type: 'system' });
 
-/** Revoke one session through the service and drop its side record. */
+/**
+ * Revoke one session through the service and drop its side record.
+ *
+ * @param userId - the session's owner. Required for a `user` actor: the
+ *   service ends only that user's session and answers another's as not found,
+ *   whose side record is then left alone too.
+ */
 export async function endBrowserSession(
   fastify: FastifyInstance,
   realmId: string,
   sid: string,
   reason: SessionRevokedReason,
-  actor: SessionActor
+  actor: SessionActor,
+  userId?: string
 ): Promise<void> {
-  await fastify.sessionService.revoke({ realmId, sid, reason, actor });
+  const result = await fastify.sessionService.revoke({
+    realmId,
+    sid,
+    reason,
+    actor,
+    ...(userId === undefined ? {} : { userId }),
+  });
+  if (userId !== undefined && result.outcome === 'not_found') return;
   await deleteSessionSideRecord(fastify, realmId, sid);
 }
 
@@ -194,7 +215,7 @@ export async function endBrowserSessions(
   // The user signs themselves out.
   const actor: SessionActor = { type: 'user', id: userId };
   for (const sid of sids) {
-    await endBrowserSession(fastify, realmId, sid, 'sign_out_everywhere', actor);
+    await endBrowserSession(fastify, realmId, sid, 'sign_out_everywhere', actor, userId);
   }
   await fastify.redis.del(key);
   return sids;

@@ -23,6 +23,7 @@ import type {
   NewSession,
   RevokedSession,
   RevokedSessionsBatch,
+  RevokeSessionFilter,
   Session,
   SessionClient,
   SessionClientDetail,
@@ -349,6 +350,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       realmId: string,
       id: string,
       reason: SessionRevokedReason,
+      filter: RevokeSessionFilter = {},
       tx?: DbClient
     ): Promise<RevokedSession | undefined> {
       const end = async (t: DbClient): Promise<RevokedSession | undefined> => {
@@ -357,7 +359,12 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
           .update(sessions)
           .set({ revokedAt: at, revokedReason: reason })
           .where(
-            and(eq(sessions.realmId, realmId), eq(sessions.id, id), isNull(sessions.revokedAt))
+            and(
+              eq(sessions.realmId, realmId),
+              eq(sessions.id, id),
+              isNull(sessions.revokedAt),
+              filter.userId === undefined ? undefined : eq(sessions.userId, filter.userId)
+            )
           )
           .returning();
         if (session === undefined) return undefined;

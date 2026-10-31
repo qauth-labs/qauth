@@ -636,7 +636,13 @@ describe('with the cache down', () => {
     cache.down = true;
 
     expect(
-      await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: USER_ACTOR })
+      await service.revoke({
+        realmId: REALM_A,
+        userId: USER,
+        sid,
+        reason: 'sign_out',
+        actor: USER_ACTOR,
+      })
     ).toMatchObject({ outcome: 'ended', session: { id: sid, revokedReason: 'sign_out' } });
     expect(await service.get({ realmId: REALM_A, sid })).toBeNull();
     expect(warn).toHaveBeenCalledWith(
@@ -667,7 +673,13 @@ describe('with a cache that does not answer', () => {
 
     const { sid } = await service.create(signIn());
     expect(
-      await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: USER_ACTOR })
+      await service.revoke({
+        realmId: REALM_A,
+        userId: USER,
+        sid,
+        reason: 'sign_out',
+        actor: USER_ACTOR,
+      })
     ).toMatchObject({ outcome: 'ended' });
     expect(warn).toHaveBeenCalledTimes(2);
   });
@@ -702,7 +714,13 @@ describe('a read in flight when the session ends', () => {
 
     const early = service.get({ realmId: REALM_A, sid });
     await atPostgres;
-    await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: USER_ACTOR });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: USER,
+      sid,
+      reason: 'sign_out',
+      actor: USER_ACTOR,
+    });
     const late = service.get({ realmId: REALM_A, sid });
     release();
 
@@ -750,7 +768,7 @@ describe('with Postgres down', () => {
     store.down = true;
 
     await expect(
-      service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: USER_ACTOR })
+      service.revoke({ realmId: REALM_A, userId: USER, sid, reason: 'sign_out', actor: USER_ACTOR })
     ).rejects.toThrow('store down');
     expect(cache.calls.tombstones).toBe(0);
   });
@@ -763,6 +781,7 @@ describe('revoke', () => {
 
     const ended = await service.revoke({
       realmId: REALM_A,
+      userId: USER,
       sid,
       reason: 'sign_out',
       actor: USER_ACTOR,
@@ -793,7 +812,13 @@ describe('revoke', () => {
     const stale = cache.entry(REALM_A, sid);
     if (stale === undefined) throw new Error('no entry');
 
-    await service.revoke({ realmId: REALM_A, sid, reason: 'sign_out', actor: USER_ACTOR });
+    await service.revoke({
+      realmId: REALM_A,
+      userId: USER,
+      sid,
+      reason: 'sign_out',
+      actor: USER_ACTOR,
+    });
     await cache.write(stale, stale.freshUntil - clock.now());
 
     expect(await service.get({ realmId: REALM_A, sid })).toBeNull();
@@ -808,6 +833,7 @@ describe('revoke', () => {
 
     await service.revoke({
       realmId: REALM_A,
+      userId: USER,
       sid,
       reason: 'sign_out_everywhere',
       actor: USER_ACTOR,
@@ -823,24 +849,48 @@ describe('revoke', () => {
     const { sid } = await service.create(signIn());
 
     expect(
-      await service.revoke({ realmId: REALM_B, sid, reason: 'admin', actor: USER_ACTOR })
+      await service.revoke({
+        realmId: REALM_B,
+        userId: USER,
+        sid,
+        reason: 'admin',
+        actor: USER_ACTOR,
+      })
     ).toEqual({ outcome: 'not_found' });
     expect(await service.get({ realmId: REALM_A, sid })).not.toBeNull();
 
     expect(
-      await service.revoke({ realmId: REALM_A, sid, reason: 'admin', actor: USER_ACTOR })
+      await service.revoke({
+        realmId: REALM_A,
+        userId: USER,
+        sid,
+        reason: 'admin',
+        actor: USER_ACTOR,
+      })
     ).toMatchObject({ outcome: 'ended' });
     // The second call reports that the session had ended already, and keeps
     // the first reason.
     expect(
-      await service.revoke({ realmId: REALM_A, sid, reason: 'reset', actor: USER_ACTOR })
+      await service.revoke({
+        realmId: REALM_A,
+        userId: USER,
+        sid,
+        reason: 'reset',
+        actor: USER_ACTOR,
+      })
     ).toMatchObject({ outcome: 'already_ended', session: { id: sid, revokedReason: 'admin' } });
     expect(store.row(sid)?.revokedReason).toBe('admin');
   });
 
   it('ignores a malformed id', async () => {
     expect(
-      await serviceWith().revoke({ realmId: REALM_A, sid: 'x', reason: 'admin', actor: USER_ACTOR })
+      await serviceWith().revoke({
+        realmId: REALM_A,
+        userId: USER,
+        sid: 'x',
+        reason: 'admin',
+        actor: USER_ACTOR,
+      })
     ).toEqual({ outcome: 'not_found' });
     expect(store.calls.revokes).toBe(0);
   });

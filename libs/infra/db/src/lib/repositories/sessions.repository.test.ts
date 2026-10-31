@@ -265,6 +265,19 @@ describe('createSessionsRepository', () => {
     expect(text).toContain('set "revoked_at" = $1, "revoked_reason" = $2');
     expect(text).toContain('"sessions"."revoked_at" is null');
     expect(query.values).toEqual([NOW, 'sign_out', REALM_ID, SESSION_ID]);
+    expect(text).not.toContain('"sessions"."user_id"');
+  });
+
+  it('revoke with a user ends only that user’s session', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', {
+      userId: USER_ID,
+    });
+
+    const update = statementsOf(queries)[0];
+    expect(update.text.toLowerCase()).toContain('"sessions"."user_id" = $5');
+    expect(update.values).toEqual([NOW, 'sign_out', REALM_ID, SESSION_ID, USER_ID]);
   });
 
   it('revoke deletes the ended session’s registry rows in the same transaction, in a later statement', async () => {
@@ -393,7 +406,7 @@ describe('createSessionsRepository', () => {
     );
 
     await db.transaction((tx) =>
-      createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', tx)
+      createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', {}, tx)
     );
 
     expect(queries.map((query) => query.text.toLowerCase().split(' ')[0])).toEqual([
@@ -415,7 +428,7 @@ describe('createSessionsRepository', () => {
 
       await expect(
         db.transaction((tx) =>
-          createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', tx)
+          createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out', {}, tx)
         )
       ).rejects.toThrow(`sessions.revoke needs a READ COMMITTED transaction`);
       expect(queries.some((query) => /^(update|delete)\b/i.test(query.text.trim()))).toBe(false);

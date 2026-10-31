@@ -65,15 +65,18 @@ export interface SessionStore {
   touchLastSeen(realmId: string, sid: string, minIntervalMs: number): Promise<boolean>;
   /**
    * Set `revoked_at` and `revoked_reason` on a row not yet revoked, and take
-   * its registry rows with it, in one transaction.
+   * its registry rows with it, in one transaction. With `owner.userId`, only
+   * when the row is that user's.
    *
    * @returns the ended row and the clients it served, or `undefined` when the
-   * realm holds no such session or it was already revoked
+   * realm holds no such session (of that user, with `owner.userId`) or it was
+   * already revoked
    */
   revoke(
     realmId: string,
     sid: string,
-    reason: SessionRevokedReason
+    reason: SessionRevokedReason,
+    owner?: { userId?: string }
   ): Promise<EndedSession | undefined>;
   /**
    * End a user's sessions not yet revoked, but `exceptSid` and those created

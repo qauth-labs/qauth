@@ -347,6 +347,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
 
     const first = await a.sessionService.revoke({
       realmId: realm,
+      userId: user,
       sid,
       reason: 'sign_out',
       actor: USER_ACTOR,
@@ -354,6 +355,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
     const { rows: before } = await a.dbPool.query(`SELECT * FROM sessions WHERE id = $1`, [sid]);
     const second = await b.sessionService.revoke({
       realmId: realm,
+      userId: user,
       sid,
       reason: 'admin',
       actor: ADMIN_ACTOR,
@@ -515,6 +517,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
       ...sids.map((sid, i) =>
         (i % 2 === 0 ? a : b).sessionService.revoke({
           realmId: realm,
+          userId: user,
           sid,
           reason: 'admin',
           actor: ADMIN_ACTOR,
@@ -565,6 +568,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
     const recentlyEnded = await signIn(a, realm, user);
     await a.sessionService.revoke({
       realmId: realm,
+      userId: user,
       sid: recentlyEnded,
       reason: 'sign_out',
       actor: USER_ACTOR,
@@ -572,6 +576,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
     const longEnded = await signIn(a, realm, user);
     await a.sessionService.revoke({
       realmId: realm,
+      userId: user,
       sid: longEnded,
       reason: 'sign_out',
       actor: USER_ACTOR,
@@ -688,6 +693,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
 
     await a.sessionService.revoke({
       realmId: realm,
+      userId: user,
       sid: sids[0],
       reason: 'sign_out',
       actor: USER_ACTOR,

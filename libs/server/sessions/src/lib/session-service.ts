@@ -689,13 +689,25 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     async revoke(input: RevokeSessionInput): Promise<RevokeSessionResult> {
       const reason = checkedReason(input.reason);
       const actor = checkedActor(input.actor);
+      if (actor.type === 'user' && input.userId === undefined) {
+        throw new RangeError('A user ends a session only by naming its owner: pass userId');
+      }
       const realmId = idOf(input.realmId);
       const sid = idOf(input.sid);
+      const userId = input.userId === undefined ? undefined : idOf(input.userId);
       if (realmId === undefined || sid === undefined) return { outcome: 'not_found' };
-      const ended = await store.revoke(realmId, sid, reason);
+      if (input.userId !== undefined && userId === undefined) return { outcome: 'not_found' };
+      const owner = userId === undefined ? {} : { userId };
+      const ended = await store.revoke(realmId, sid, reason, owner);
       if (ended !== undefined) {
         await afterEnded(realmId, reason, actor, [ended]);
         return { outcome: 'ended', session: ended.session, clients: ended.clients };
+      }
+      const stored = await store.find(realmId, sid);
+      // Another user's session is none of this caller's: it is not found,
+      // and neither its row nor its cache entry is touched.
+      if (stored !== undefined && userId !== undefined && stored.session.userId !== userId) {
+        return { outcome: 'not_found' };
       }
       // Nothing ended here. A read started on this node before an earlier
       // end must still not answer the reads after it, and a stale entry of a
@@ -709,7 +721,6 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
           'Session cache tombstone write failed; another node may serve the session until its cache entry lapses'
         );
       }
-      const stored = await store.find(realmId, sid);
       return stored !== undefined && stored.session.revokedAt !== null
         ? { outcome: 'already_ended', session: stored.session }
         : { outcome: 'not_found' };

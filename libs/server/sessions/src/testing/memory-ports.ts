@@ -225,11 +225,16 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
       return true;
     },
 
-    async revoke(realmId, sid, reason: SessionRevokedReason) {
+    async revoke(realmId, sid, reason: SessionRevokedReason, owner = {}) {
       if (store.down) throw new Error('store down');
       calls.revokes += 1;
       const row = rows.get(sid);
-      if (row === undefined || row.realmId !== realmId || row.revokedAt !== null) {
+      if (
+        row === undefined ||
+        row.realmId !== realmId ||
+        row.revokedAt !== null ||
+        (owner.userId !== undefined && row.userId !== owner.userId)
+      ) {
         return undefined;
       }
       return end(row, reason);

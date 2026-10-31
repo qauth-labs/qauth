@@ -1034,6 +1034,12 @@ export interface SessionListPage {
   after?: SessionListPosition;
 }
 
+/** Whose session {@link SessionsRepository.revoke} may end. */
+export interface RevokeSessionFilter {
+  /** End the session only when it is this user's. */
+  userId?: string;
+}
+
 /** Which of a user's sessions {@link SessionsRepository.revokeForUser} ends. */
 export interface RevokeUserSessionsFilter {
   /** Keep this session: the one the request that signs out everywhere else came from. */
@@ -1190,14 +1196,18 @@ export interface SessionsRepository {
    * `DELETE` reads the snapshot from before the `UPDATE` waited. A `tx` at
    * another level is refused with an error before anything is written.
    *
+   * With `filter.userId`, only that user's session is ended: a session of
+   * another user is left as it is, as if the realm held none.
+   *
    * @returns the ended row and the clients it served, or `undefined` when the
-   * realm holds no such session or it was already revoked. A second call
-   * changes nothing and keeps the first reason.
+   * realm holds no such session (of that user, with `filter.userId`) or it was
+   * already revoked. A second call changes nothing and keeps the first reason.
    */
   revoke(
     realmId: string,
     id: string,
     reason: SessionRevokedReason,
+    filter?: RevokeSessionFilter,
     tx?: DbClient
   ): Promise<RevokedSession | undefined>;
   /**

@@ -561,7 +561,9 @@ describe('sessions integration (real Postgres)', () => {
       let mint: Promise<boolean> | undefined;
 
       await db().transaction(async (tx) => {
-        expect((await repo.revoke(realm, created.id, 'sign_out', tx))?.session.id).toBe(created.id);
+        expect((await repo.revoke(realm, created.id, 'sign_out', {}, tx))?.session.id).toBe(
+          created.id
+        );
         mint = record(realm, created.id, client);
         await waitForLockWait();
       });

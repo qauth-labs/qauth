@@ -292,7 +292,13 @@ describe('the session service on a real Postgres and Redis', () => {
     expect(await b.sessionService.get({ realmId, sid })).not.toBeNull();
     expect(await c.sessionService.get({ realmId, sid })).not.toBeNull();
 
-    const ended = await a.sessionService.revoke({ realmId, sid, reason: 'sign_out', actor: USER });
+    const ended = await a.sessionService.revoke({
+      realmId,
+      userId,
+      sid,
+      reason: 'sign_out',
+      actor: USER,
+    });
     const revokedAt = Date.now();
 
     expect(ended).toMatchObject({
@@ -403,6 +409,7 @@ describe('the session service with Redis stopped', () => {
     expect(
       await node.sessionService.revoke({
         realmId,
+        userId,
         sid: after.sid,
         reason: 'sign_out',
         actor: USER,
@@ -455,7 +462,13 @@ describe('the session service with Postgres stopped', () => {
       node.sessionService.create({ realmId, userId, authTime: Date.now() })
     ).rejects.toThrow();
     await expect(
-      node.sessionService.revoke({ realmId, sid: cached.sid, reason: 'sign_out', actor: USER })
+      node.sessionService.revoke({
+        realmId,
+        userId,
+        sid: cached.sid,
+        reason: 'sign_out',
+        actor: USER,
+      })
     ).rejects.toThrow();
 
     // The cache alone vouches for a session no longer than the cache time.

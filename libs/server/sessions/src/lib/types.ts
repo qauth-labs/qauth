@@ -289,6 +289,14 @@ export interface ListClientSessionsInput {
 
 /** Input of {@link SessionService.revoke}. */
 export interface RevokeSessionInput extends SessionQuery {
+  /**
+   * The user whose session the caller means to end: a session of another
+   * user is `not_found`, untouched, and nothing of it is returned. A `sid` is
+   * no secret (an ID token carries it), so a caller acting for a user names
+   * that user. Required when `actor.type` is `user` (an admin is a `user`
+   * too, and names the session's owner); the service throws without it.
+   */
+  userId?: string;
   reason: SessionRevokedReason;
   actor: SessionActor;
 }
