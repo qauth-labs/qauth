@@ -1764,6 +1764,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Enabling an account again no longer brings back what it held before it
+  was disabled** ([#748], the case [GHSA-vw34-9q55-2vg3](https://github.com/qauth-labs/qauth/security/advisories/GHSA-vw34-9q55-2vg3)
+  left open). Since 0.1.0 a disabled account's sessions and tokens are refused
+  where they are used, but a browser session or a refresh token nobody used
+  while the account was disabled worked again once it was enabled, so whoever
+  held it came back without signing in. Migration 0044 adds
+  `users.not_valid_before`, which a trigger sets from the database's clock
+  whenever `enabled` turns false, by any `UPDATE`, and which nothing can clear
+  or move back. Every browser session, refresh token, authorization code and
+  access token of the user issued before it is refused: the hosted pages send
+  the browser to sign-in, the token endpoint answers `invalid_grant`,
+  introspection reports the token inactive, and userinfo, token exchange, the
+  developer API, the API families, the admin API and the `/oauth/authorize`
+  Bearer path refuse it as they refuse a disabled account's. The refusal
+  `reason` in events is `issued_before_disablement`. The new operator tool
+  `db:disable-user` disables an account or, with `--enable`, enables it again,
+  and writes the new admin events `user.disabled` and `user.enabled` in the
+  same transaction. The operator guide's new **Accounts** page
+  (`operate/accounts`) describes both.
 - **The OpenAPI document no longer claims version 1.0.0.** `info.version` was
   a fixed `1.0.0` from the first Swagger UI (2026-02-28), which read as the 1.0
   stability promise QAuth has not made. A release image now carries its own
@@ -1794,6 +1813,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
+[#748]: https://github.com/qauth-labs/qauth/issues/748
 
 ## [0.1.3] - 2026-10-21
 
