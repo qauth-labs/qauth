@@ -1,5 +1,5 @@
 /**
- * Seed-then-migrate test for migration 0045: the domain an admin verified for
+ * Seed-then-migrate test for migration 0047: the domain an admin verified for
  * a client (ADR-019 Decision 6, #593).
  *
  * The migration is forward-only: it adds a nullable column and a CHECK, and
@@ -10,7 +10,7 @@
  * the form the screens show, the same form `isVerifiedDomain` accepts.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
- * and upgraded through 0044, then 0045, so a later migration cannot change
+ * and upgraded through 0046, then 0047, so a later migration cannot change
  * what this test sees.
  */
 import { rmSync } from 'node:fs';
@@ -26,12 +26,12 @@ import { isVerifiedDomain } from '@qauth-labs/shared-validation';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const MIGRATION_IDX = 45;
+const MIGRATION_IDX = 47;
 
 /** Every column of `oauth_clients` but `verified_domain`, as one row reads them. */
 const ROW_WITHOUT_VERIFIED_DOMAIN = `to_jsonb(oauth_clients) - 'verified_domain'`;
 
-describe('migration 0045 — oauth_clients.verified_domain (seed-then-migrate)', () => {
+describe('migration 0047 — oauth_clients.verified_domain (seed-then-migrate)', () => {
   let container: StartedPostgres | undefined;
   let pool: Pool | undefined;
   let dockerUp = false;
@@ -69,7 +69,7 @@ describe('migration 0045 — oauth_clients.verified_domain (seed-then-migrate)',
     return pool;
   }
 
-  /** Apply every migration through 0045. */
+  /** Apply every migration through 0047. */
   async function migrate(): Promise<void> {
     if (!container) throw new Error('no container');
     await applyQauthMigrations(container.connectionString, through);

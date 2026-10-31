@@ -1168,7 +1168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any other client is unverified. A loopback redirect is "this device". The
   name a client declares is capped at 64 characters and stripped of control,
   bidirectional, zero-width and markup characters and of stacked combining
-  marks; a client-supplied logo or link is never returned. Migration 0045 adds
+  marks; a client-supplied logo or link is never returned. Migration 0047 adds
   the nullable `oauth_clients.verified_domain`, which only the
   `db:seed-oauth-clients` manifest (`verified_domain`) writes until the admin
   API's `clients.update` does, as a security operation.
