@@ -22,7 +22,9 @@ export interface SignInTransaction {
   readonly v: typeof SIGN_IN_TRANSACTION_VERSION;
   /**
    * The identifier, checked and normalised: the first one the transaction
-   * was given. It never changes; a different one ends the transaction.
+   * was given. It never changes; a different one ends the transaction, and so
+   * does any one brought after a discoverable factor fixed the subject
+   * without one.
    */
   readonly identifier?: string;
   /** The user the first factor proved. It never changes; another user's proof ends the transaction. */
@@ -72,9 +74,9 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   const parsed = signInTransactionSchema.safeParse(value);
   if (!parsed.success) return null;
   const { identifier, subject, verified, authTime } = parsed.data;
-  // A subject without an identifier, or an auth_time without a subject, is
-  // no state the engine writes.
-  if (subject !== undefined && identifier === undefined) return null;
+  // An auth_time without a subject, or a subject without one, is no state the
+  // engine writes. (A subject without an identifier is: a discoverable factor
+  // names the account by itself.)
   if ((authTime === undefined) !== (subject === undefined)) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,

@@ -5,11 +5,11 @@ export {
   type SignInEngineDependencies,
 } from './lib/engine';
 export {
+  factorStrength,
   FIRST_FACTOR_STRENGTH,
   provenFactorStrength,
   provesMfa,
   secondFactorRequired,
-  STEP_FACTOR,
   strongestBoundFactor,
 } from './lib/factors';
 export {
@@ -42,6 +42,7 @@ export {
   type SignInAccount,
   type SignInAuditReason,
   type SignInAuditRecord,
+  type SignInCandidate,
   SYSTEM_CLOCK,
 } from './lib/ports';
 export type {
@@ -53,6 +54,7 @@ export type {
 } from './lib/round';
 export {
   type AnyStepHandler,
+  type ProvedAccount,
   STEP_ROLES,
   type StepHandler,
   type StepRole,

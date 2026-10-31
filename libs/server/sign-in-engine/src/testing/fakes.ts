@@ -2,12 +2,14 @@ import { createHmac } from 'node:crypto';
 
 import type {
   AccountDirectory,
+  BoundFactor,
   IdentifierDigest,
   MfaPolicy,
   MfaPolicyReader,
   PasswordVerifier,
   SignInAccount,
   SignInAuditRecord,
+  SignInCandidate,
 } from '../lib/ports';
 
 /**
@@ -41,15 +43,47 @@ export class FakePasswords implements PasswordVerifier {
   }
 }
 
-/** An account directory over a map of normalised identifiers. */
+/** One account of a {@link FakeDirectory}: what both of its reads return, in one record. */
+export interface FakeAccount {
+  readonly userId: string;
+  readonly enabled: boolean;
+  readonly verified: boolean;
+  readonly admin: boolean;
+  /** The password, as `SignInCandidate` holds it; `null` for an account without one. */
+  readonly password: { readonly disabled: boolean; readonly hash: string | null } | null;
+  /** Every other bound factor: passkeys, TOTP. */
+  readonly others: readonly BoundFactor[];
+}
+
+/** An account directory over a map of normalised identifiers, recording each read. */
 export class FakeDirectory implements AccountDirectory {
   readonly reads: string[] = [];
 
-  constructor(readonly accounts: Map<string, SignInAccount> = new Map()) {}
+  constructor(readonly accounts: Map<string, FakeAccount> = new Map()) {}
 
-  async findByIdentifier(realmId: string, identifier: string): Promise<SignInAccount | null> {
-    this.reads.push(`${realmId}:${identifier}`);
-    return this.accounts.get(identifier) ?? null;
+  async findByIdentifier(realmId: string, identifier: string): Promise<SignInCandidate | null> {
+    this.reads.push(`identifier:${realmId}:${identifier}`);
+    const account = this.accounts.get(identifier);
+    if (account === undefined) return null;
+    const { userId, enabled, verified, password } = account;
+    return { userId, enabled, verified, password };
+  }
+
+  async findByUserId(realmId: string, userId: string): Promise<SignInAccount | null> {
+    this.reads.push(`user:${realmId}:${userId}`);
+    const account = [...this.accounts.values()].find((entry) => entry.userId === userId);
+    if (account === undefined) return null;
+    return {
+      userId,
+      enabled: account.enabled,
+      admin: account.admin,
+      factors: [
+        ...(account.password === null
+          ? []
+          : [{ type: 'password' as const, disabled: account.password.disabled }]),
+        ...account.others,
+      ],
+    };
   }
 }
 
@@ -89,14 +123,15 @@ export function recordingAudit(): {
 export function passwordAccount(
   userId: string,
   password: string,
-  overrides: Partial<SignInAccount> = {}
-): SignInAccount {
+  overrides: Partial<FakeAccount> = {}
+): FakeAccount {
   return {
     userId,
     enabled: true,
     verified: true,
     admin: false,
-    factors: [{ type: 'password', disabled: false, hash: fakeHash(password) }],
+    password: { disabled: false, hash: fakeHash(password) },
+    others: [],
     ...overrides,
   };
 }

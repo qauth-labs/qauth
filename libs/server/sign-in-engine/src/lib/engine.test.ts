@@ -7,6 +7,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  type FakeAccount,
   FakeDirectory,
   fakeHash,
   fakeIdentifierDigest,
@@ -32,7 +33,7 @@ const USER = '0199fa20-5e1a-7000-8000-000000000001';
 const OTHER_USER = '0199fa20-5e1a-7000-8000-000000000002';
 const PASSWORD = 'correct horse battery staple';
 /** One account of {@link accountKinds}, which must exist. */
-function kindAccount(kind: Exclude<AccountKind, 'unknown'>): SignInAccount {
+function kindAccount(kind: Exclude<AccountKind, 'unknown'>): FakeAccount {
   const account = accountKinds()[kind];
   if (account === null) throw new Error(kind);
   return account;
@@ -70,32 +71,24 @@ type AccountKind =
   | 'unreadable';
 
 /** The account kinds the engine must not tell apart before a factor succeeds. */
-function accountKinds(): Record<AccountKind, SignInAccount | null> {
+function accountKinds(): Record<AccountKind, FakeAccount | null> {
   return {
     unknown: null,
     passwordOnly: passwordAccount(USER, PASSWORD),
-    passkeyOnly: {
-      userId: USER,
-      enabled: true,
-      verified: true,
-      admin: false,
-      factors: [{ type: 'passkey', disabled: false }],
-    },
+    passkeyOnly: passwordAccount(USER, PASSWORD, {
+      password: null,
+      others: [{ type: 'passkey', disabled: false }],
+    }),
     passwordAndPasskey: passwordAccount(USER, PASSWORD, {
-      factors: [
-        { type: 'password', disabled: false, hash: fakeHash(PASSWORD) },
-        { type: 'passkey', disabled: false },
-      ],
+      others: [{ type: 'passkey', disabled: false }],
     }),
     disabled: passwordAccount(USER, PASSWORD, { enabled: false }),
     // The ladder's hard action disabled the password (#615): it is locked.
     locked: passwordAccount(USER, PASSWORD, {
-      factors: [{ type: 'password', disabled: true, hash: fakeHash(PASSWORD) }],
+      password: { disabled: true, hash: fakeHash(PASSWORD) },
     }),
     unverified: passwordAccount(USER, PASSWORD, { verified: false }),
-    unreadable: passwordAccount(USER, PASSWORD, {
-      factors: [{ type: 'password', disabled: false, hash: null }],
-    }),
+    unreadable: passwordAccount(USER, PASSWORD, { password: { disabled: false, hash: null } }),
   };
 }
 
@@ -108,16 +101,14 @@ interface Built {
 }
 
 function build(
-  accounts: Record<string, SignInAccount | null> = {
+  accounts: Record<string, FakeAccount | null> = {
     [IDENTIFIER]: passwordAccount(USER, PASSWORD),
   },
   options: Partial<SignInEngineDependencies> = {}
 ): Built {
   const directory = new FakeDirectory(
     new Map(
-      Object.entries(accounts).filter(
-        (entry): entry is [string, SignInAccount] => entry[1] !== null
-      )
+      Object.entries(accounts).filter((entry): entry is [string, FakeAccount] => entry[1] !== null)
     )
   );
   const passwords = new FakePasswords();
@@ -582,10 +573,7 @@ describe('the MFA policy, read on every round', () => {
     const built = build(
       {
         [IDENTIFIER]: passwordAccount(USER, PASSWORD, {
-          factors: [
-            { type: 'password', disabled: false, hash: fakeHash(PASSWORD) },
-            { type: 'totp', disabled: false },
-          ],
+          others: [{ type: 'totp', disabled: false }],
         }),
       },
       { steps: [totp] }
@@ -610,10 +598,7 @@ describe('the MFA policy, read on every round', () => {
     const built = build(
       {
         [IDENTIFIER]: passwordAccount(USER, PASSWORD, {
-          factors: [
-            { type: 'password', disabled: false, hash: fakeHash(PASSWORD) },
-            { type: 'totp', disabled: false },
-          ],
+          others: [{ type: 'totp', disabled: false }],
         }),
       },
       { steps: [totp] }
@@ -653,10 +638,7 @@ describe('the downgrade rule', () => {
     for (const disabled of [false, true]) {
       const built = build({
         [IDENTIFIER]: passwordAccount(USER, PASSWORD, {
-          factors: [
-            { type: 'password', disabled: false, hash: fakeHash(PASSWORD) },
-            { type: 'passkey', disabled },
-          ],
+          others: [{ type: 'passkey', disabled }],
         }),
       });
       const { second } = await signIn(built, PASSWORD);
@@ -664,7 +646,8 @@ describe('the downgrade rule', () => {
         kind: 'redirect',
         reason: 'step_not_available',
       });
-      expect(second.transaction).toMatchObject({ subject: USER });
+      // The transaction ends with the redirect: no later round can complete it.
+      expect(second.transaction).toBeNull();
     }
   });
 
@@ -705,11 +688,12 @@ describe('try another way', () => {
       );
       if (refused.kind === 'step') offers.add(JSON.stringify(refused.offer));
     }
+    // ADR-017 Decision 4: with a login_hint, the same password-required shape
+    // for every account, with the passkey offered.
     expect([...offers].map((offer) => JSON.parse(offer))).toEqual([
       {
-        current: { step: 'webauthn_get', params: PASSKEY_PARAMS },
-        alternatives: [{ step: 'password', params: {} }],
-        required: false,
+        current: { step: 'password', params: {} },
+        alternatives: [{ step: 'webauthn_get', params: PASSKEY_PARAMS }],
       },
       {
         current: { step: 'password', params: {}, error: 'invalid_credentials' },
@@ -718,14 +702,81 @@ describe('try another way', () => {
     ]);
   });
 
+  it('offers a discoverable passkey first when no identifier is known, preferred, beside the password and the identifier', async () => {
+    const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER);
+    const offers = new Set<string>();
+    for (const account of Object.values(accountKinds())) {
+      const built = build({ [IDENTIFIER]: account }, { steps: [passkey] });
+      const result = await built.engine.advance(null, null, context());
+      if (result.kind === 'step') offers.add(JSON.stringify(result.offer));
+    }
+    expect([...offers].map((offer) => JSON.parse(offer))).toEqual([
+      {
+        current: { step: 'webauthn_get', params: PASSKEY_PARAMS },
+        alternatives: [
+          { step: 'password', params: {} },
+          { step: 'identifier', params: {} },
+        ],
+        required: false,
+      },
+    ]);
+    // A FiPA client that did not list webauthn_get gets the password it listed.
+    const built = build({ [IDENTIFIER]: kindAccount('passwordOnly') }, { steps: [passkey] });
+    const first = await built.engine.advance(null, null, context());
+    if (first.kind !== 'step') throw new Error(first.kind);
+    const listing = createFipaMapper({ serves: ['identifier', 'password', 'webauthn_get'] });
+    expect(
+      listing.challenge(first.offer, {
+        issuer: 'https://auth.example.com',
+        newAuthSession: () => 'A'.repeat(43),
+        interactionTypesSupported: [STEP_URNS.identifier, STEP_URNS.password],
+      }).body
+    ).toMatchObject({ interaction_type_required: STEP_URNS.password });
+  });
+
+  it('signs in with a discoverable passkey before any identifier', async () => {
+    const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER);
+    const built = build({ [IDENTIFIER]: kindAccount('passkeyOnly') }, { steps: [passkey] });
+    const ctx = context();
+    const done = await built.engine.advance(
+      null,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      ctx
+    );
+    expect(done).toMatchObject({
+      kind: 'complete',
+      signIn: { subject: USER, amr: ['pop', 'mfa'] },
+    });
+    expect(done.kind === 'complete' && done.signIn.identifier).toBeUndefined();
+    expect(ctx.records).toEqual([{ outcome: 'passed', step: 'webauthn_get', userId: USER }]);
+    const totp = fakeFactorStep('totp', 'second_factor', 'totp', USER);
+    const mfa = build(
+      {
+        [IDENTIFIER]: passwordAccount(USER, PASSWORD, {
+          password: null,
+          others: [
+            { type: 'passkey', disabled: false },
+            { type: 'totp', disabled: false },
+          ],
+        }),
+      },
+      { steps: [passkey, totp] }
+    );
+    mfa.policy.policy = { realm: 'required', client: 'off' };
+    const proved = await mfa.engine.advance(
+      null,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      context()
+    );
+    // A passkey alone carries mfa: the policy is met.
+    expect(proved.kind).toBe('complete');
+  });
+
   it('offers after the first factor only the account’s remaining methods that meet the rules', async () => {
     const totp = fakeFactorStep('totp', 'second_factor', 'totp', USER);
     const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER);
     const account = passwordAccount(USER, PASSWORD, {
-      factors: [
-        { type: 'password', disabled: false, hash: fakeHash(PASSWORD) },
-        { type: 'totp', disabled: false },
-      ],
+      others: [{ type: 'totp', disabled: false }],
     });
     const built = build({ [IDENTIFIER]: account }, { steps: [passkey, totp] });
     built.policy.policy = { realm: 'required', client: 'off' };
@@ -760,15 +811,12 @@ describe('audit records', () => {
       records.push(record);
     };
     const totp = fakeFactorStep('totp', 'second_factor', 'totp', USER);
-    const accounts: Record<string, SignInAccount | null> = {};
+    const accounts: Record<string, FakeAccount | null> = {};
     for (const [kind, account] of Object.entries(accountKinds())) {
       accounts[`${kind.toLowerCase()}@example.com`] = account;
     }
     accounts['second@example.com'] = passwordAccount(USER, PASSWORD, {
-      factors: [
-        { type: 'password', disabled: false, hash: fakeHash(PASSWORD) },
-        { type: 'totp', disabled: false },
-      ],
+      others: [{ type: 'totp', disabled: false }],
     });
     const built = build(accounts, { steps: [totp] });
     const ctx = (loginHint?: string) =>
@@ -866,10 +914,98 @@ describe('audit records', () => {
     }
     expect(reasons).toEqual({
       disabled: 'account_disabled:hmac',
-      unverified: 'email_not_verified:user',
+      unverified: 'email_not_verified:hmac',
       unknown: 'invalid_credentials:hmac',
       locked: 'invalid_credentials:hmac',
     });
+  });
+});
+
+describe('what the review of #614 pinned', () => {
+  it('refuses a disabled account any factor step proves, like a wrong answer, and fixes no subject', async () => {
+    const passkey: AnyStepHandler = {
+      ...fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER),
+      verify: async () => ({
+        kind: 'proved',
+        account: { userId: USER, enabled: false, verified: true },
+      }),
+    } as AnyStepHandler;
+    const built = build({ [IDENTIFIER]: kindAccount('passwordAndPasskey') }, { steps: [passkey] });
+    const ctx = context({ loginHint: IDENTIFIER });
+    const result = await built.engine.advance(
+      null,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      ctx
+    );
+    expect(result).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'webauthn_get', error: 'invalid_credentials' } },
+    });
+    expect(result.transaction).not.toHaveProperty('subject');
+    expect(ctx.records.at(-1)).toEqual({
+      outcome: 'refused',
+      step: 'webauthn_get',
+      reason: 'account_disabled',
+      identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+    });
+  });
+
+  it('gives the same answer whichever way the password went when settling the ladder fails', async () => {
+    const onUnavailable = vi.fn();
+    const ladder: LadderHook = {
+      reserve: async () => ({
+        kind: 'reserved',
+        settle: async () => Promise.reject(new Error('redis down')),
+      }),
+    };
+    const built = build(undefined, { hooks: { ladder }, onUnavailable });
+    const wrong = await built.engine.advance(null, passwordAnswer(WRONG, IDENTIFIER), context());
+    const right = await built.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context());
+    expect(wrong).toMatchObject({
+      kind: 'step',
+      offer: { current: { error: 'invalid_credentials' } },
+    });
+    expect(right.kind).toBe('complete');
+    expect(onUnavailable).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads only what the password needs before it is checked, and the whole account after', async () => {
+    const built = build();
+    await built.engine.advance(null, passwordAnswer(WRONG, IDENTIFIER), context());
+    expect(built.directory.reads).toEqual([`identifier:${REALM}:${IDENTIFIER}`]);
+    await built.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context());
+    expect(built.directory.reads.slice(1)).toEqual([
+      `identifier:${REALM}:${IDENTIFIER}`,
+      `user:${REALM}:${USER}`,
+    ]);
+  });
+
+  it('takes no identifier from an answer to a step nobody offered', async () => {
+    const built = build();
+    const ctx = context();
+    const result = await built.engine.advance(
+      null,
+      answer('password_reset', { login_hint: IDENTIFIER }),
+      ctx
+    );
+    expect(result).toMatchObject({ kind: 'step', offer: { current: { step: 'identifier' } } });
+    expect(result.transaction).toEqual({ v: 1, verified: [] });
+    expect(ctx.records).toEqual([]);
+  });
+
+  it('keeps the identifier a refused round fixed, so the next round audits it no more', async () => {
+    const ladder: LadderHook = { reserve: async () => ({ kind: 'wait', retryAfterSeconds: 8 }) };
+    const built = build(undefined, { hooks: { ladder } });
+    const ctx = context();
+    const result = await built.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), ctx);
+    expect(result).toMatchObject({
+      kind: 'refused',
+      reason: 'throttled',
+      transaction: { identifier: IDENTIFIER, verified: [] },
+    });
+    const next = context();
+    await built.engine.advance(result.transaction as SignInTransaction, null, next);
+    expect(next.records).toEqual([]);
   });
 });
 
@@ -887,7 +1023,7 @@ describe('a disabled user', () => {
 
   it('ends a later round once the account is disabled after its factor', async () => {
     const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER);
-    const accounts = new Map<string, SignInAccount>([
+    const accounts = new Map<string, FakeAccount>([
       [IDENTIFIER, kindAccount('passwordAndPasskey')],
     ]);
     const directory = new FakeDirectory(accounts);
@@ -1062,15 +1198,10 @@ describe('answers and transactions', () => {
       passwordAnswer(PASSWORD),
       ctx
     );
+    // The transaction ends with the completion: no later round mints again.
     expect(second).toEqual({
       kind: 'complete',
-      transaction: {
-        v: 1,
-        identifier: IDENTIFIER,
-        subject: USER,
-        verified: [{ step: 'password', params: {} }],
-        authTime: verifiedAt,
-      },
+      transaction: null,
       signIn: { subject: USER, identifier: IDENTIFIER, amr: ['pwd'], authTime: verifiedAt },
     });
   });
@@ -1131,7 +1262,10 @@ describe('answers and transactions', () => {
 
   it('refuses the round when the account directory or the identifier key fails', async () => {
     const failing = build(undefined, {
-      accounts: { findByIdentifier: async () => Promise.reject(new Error('db down')) },
+      accounts: {
+        findByIdentifier: async () => Promise.reject(new Error('db down')),
+        findByUserId: async () => null,
+      },
     });
     expect(
       await failing.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context())
@@ -1218,6 +1352,7 @@ function fakeFactorStep(
     step,
     role,
     factor,
+    ...(factor === 'passkey' ? { discoverable: true } : {}),
     usableBy: (account: SignInAccount) =>
       account.factors.some((bound) => bound.type === factor && !bound.disabled),
     params: () => (step === 'totp' ? { digits: 6 } : PASSKEY_PARAMS),
@@ -1225,10 +1360,7 @@ function fakeFactorStep(
       round.identifier === undefined ? {} : { identifier: round.identifier },
     verify: async () => ({
       kind: 'proved' as const,
-      account: {
-        ...passwordAccount(userId, PASSWORD),
-        factors: [{ type: factor, disabled: false }],
-      },
+      account: { userId, enabled: true, verified: true },
     }),
   };
   return handler as unknown as AnyStepHandler;

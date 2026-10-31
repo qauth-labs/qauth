@@ -17,8 +17,9 @@
 #   handlers that later issues register; until then a sign-in that needs one of them is answered with a redirect.
 # - A round that ends in a step keeps the transaction live: the next round's answer is a new event from that state. A
 #   refused round (`throttled`, `lockedOut`, `unavailable`, `requestRefused`, `botChallengeDue`, `answerRefused`)
-#   leaves the transaction as the round found it, and the next round starts from there; the graph ends the walk at the
-#   refusal, so that each refusal is one exit.
+#   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
+#   the next round starts from there; the graph ends the walk at the refusal, so that each refusal is one exit. A
+#   completed sign-in, a redirect and an ended transaction return no transaction: nothing can complete twice.
 schema: delurio-graph/0
 kind: flow
 id: core.sign-in
@@ -54,8 +55,13 @@ scope:
     - 'the per-transaction budgets of the FiPA auth_session (#647): rounds and failures per step'
     - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
       round of its own'
-    - "a malformed answer to a step the engine expects (an identifier over 254 bytes or not an email address, a field
-      outside the step's answer schema) is refused as a request fault; it verifies nothing and counts nothing"
+    - "a password answer outside the password step's answer schema (an empty password, one over 256 UTF-16 code units)
+      is refused as a request fault when the password step is next, and ignored like any other answer otherwise; it
+      verifies nothing and counts nothing"
+    - 'an answer to a step the engine did not ask for, a password_reset answer included, is ignored with its
+      login_hint; only the identifier and password answers carry one'
+    - "a failure of the password verifier or of the identifier key refuses the round as unavailable, alike for every
+      identifier; a failure to settle the ladder's reservation is reported and changes no answer"
 
 context:
   # The transport's authorization request carries a login_hint. It is frozen at round 0, so every round sees the same.
@@ -127,17 +133,21 @@ context:
       botChallengeDue: 'a soft threshold asks for a bot challenge'
       lockedOut: >-
         the identifier's ladder is inside a wait: the identifier HMAC's counter, whether or not an account holds it
-  # Whether an identifier a later round brings differs from the one the transaction holds.
+  # Whether the identifiers a round brings differ: from the one the transaction holds, or from each other.
   differentIdentifier:
     values: [false, true]
     initial: any
     say:
       'false': 'every identifier a round brings is the one the transaction holds, after normalisation'
-      'true': 'a later round brings another identifier: another login_hint, or another identifier answer'
+      'true': >-
+        a round brings another identifier than the one the transaction holds (another login_hint, another identifier
+        answer), or the request's login_hint and the answer's differ
   identifierHeld: { values: [false, true], initial: false }
   subjectFixed: { values: [false, true], initial: false }
-  # this round read the account (its factors, its enabled flag)
+  # this round read the account the identifier names (its user, enabled flag and password)
   accountRead: { values: [false, true], initial: false }
+  # this round read the whole account a factor proved (every factor, its admin role)
+  provenAccountRead: { values: [false, true], initial: false }
   # this round ran Argon2id against the account's hash
   hashVerified: { values: [false, true], initial: false }
   # this round ran Argon2id against the dummy hash
@@ -158,7 +168,10 @@ guards:
   lockedOut: "gate == 'lockedOut'"
   malformedAnswer: "answer == 'malformed'"
   roundBringsIdentifier: "loginHint == 'given' or answer in ['identifier', 'passwordWithHint']"
-  identifierMismatch: 'identifierHeld and roundBringsIdentifier and differentIdentifier'
+  answerBringsIdentifier: "answer in ['identifier', 'passwordWithHint']"
+  identifierMismatch: >-
+    differentIdentifier and ((identifierHeld and roundBringsIdentifier) or (loginHint == 'given' and
+    answerBringsIdentifier))
   noIdentifier: 'not identifierHeld and not roundBringsIdentifier'
   passwordAnswered: "answer in ['password', 'passwordWithHint']"
   noUsablePassword: "account in ['unknown', 'passkeyOnly', 'passwordDisabled']"
@@ -173,6 +186,7 @@ effects:
   newRound:
     set:
       accountRead: false
+      provenAccountRead: false
       hashVerified: false
       decoyVerified: false
       attemptReserved: false
@@ -188,6 +202,7 @@ effects:
   ignoreAnswer: { set: { answerIgnored: true } }
   reserveAttempt: { set: { attemptReserved: true } }
   readAccount: { set: { accountRead: true } }
+  readProvenAccount: { set: { provenAccountRead: true } }
   verifyHash: { set: { hashVerified: true } }
   verifyDecoy: { set: { decoyVerified: true } }
   fixSubject: { set: { subjectFixed: true } }
@@ -198,6 +213,7 @@ failures:
   readingPolicy: { from: mfaPolicy, store: [unavailable] }
   reservingAttempt: { from: ladder, store: [unavailable] }
   readingAccount: { from: accountDirectory, store: [unavailable] }
+  readingProvenAccount: { from: accountDirectory, store: [unavailable] }
 
 # The main story: a browser ceremony with no login_hint; the person types the identifier, then the right password of an
 # enabled, verified, password-only account, with no second factor required.
@@ -239,7 +255,7 @@ states:
       MALFORMED:
         target: readingPolicy
         effect: [newRound, answerMalformed]
-        say: "the first round carries an answer whose fields fail its step's answer schema or the identifier checks"
+        say: 'the first round carries an answer whose login_hint is not an identifier'
 
   readingPolicy:
     title: Read the realm's and the client's MFA policy
@@ -303,13 +319,15 @@ states:
       - guard: malformedAnswer
         target: answerRefused
         effect: [waitFloor]
-        say: 'the answer fails its schema or the identifier checks; nothing is verified or counted'
+        say: >-
+          the answer's login_hint is not an identifier (an email address of at most 254 bytes); nothing is verified or
+          counted
       - guard: identifierMismatch
         target: ended
         effect: [auditByHmac, waitFloor]
         say: >-
-          the round brings another identifier than the one the transaction holds: the transaction ends, and
-          subject_mismatch is audited under the identifier HMAC (or the subject, once one is fixed)
+          the round brings another identifier than the one the transaction holds, or the request's and the answer's
+          differ: the transaction ends, and subject_mismatch is audited under the identifier HMAC
       - guard: noIdentifier
         target: offeringIdentifier
         effect: [waitFloor]
@@ -357,10 +375,11 @@ states:
         say: 'the ladder store fails; the floor is waited out'
 
   readingAccount:
-    title: Read the account the identifier names
+    title: Read what the password needs of the account the identifier names
     description: >-
-      Its user, its enabled flag, whether its primary identity is proven, and every factor bound to it with whether it
-      is disabled. Nothing about it reaches the answer before a factor succeeds.
+      Its user, its enabled flag, whether its primary identity is proven, and its password. Nothing more, so an
+      account that exists costs and risks one read more than none, and nothing about it reaches the answer before a
+      factor succeeds.
     invoke: { external: accountDirectory }
     on:
       DONE:
@@ -398,16 +417,32 @@ states:
           under the identifier HMAC; no subject is fixed and the user is not changed
       - guard: unverifiedUnderTheGate
         target: passwordRefused
-        effect: [verifyHash, waitFloor]
+        effect: [verifyHash, auditByHmac, waitFloor]
         say: >-
           the password is right, the account is unverified, and REQUIRE_VERIFIED_ACCOUNT is on: refused like a wrong
-          password (ANT-2026-SPEMY9GU), audited as email_not_verified with the user as its subject; PRO-15 (#638)
+          password (ANT-2026-SPEMY9GU), audited as email_not_verified under the identifier HMAC; PRO-15 (#638)
           verifies it inline instead
-      - target: afterFirstFactor
+      - target: readingProvenAccount
         effect: [verifyHash, fixSubject]
         say: >-
           the password is right: the attempt settles as a success, the subject is fixed, auth_time is now, and
           the step is audited with the user as its subject
+
+  readingProvenAccount:
+    title: Read the whole account the password proved
+    description: >-
+      Every factor bound to it, disabled ones included, and whether it holds an admin role in the realm: what the
+      downgrade rule and the MFA policy need, read only once a factor proved the account.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        target: afterFirstFactor
+        effect: [readProvenAccount]
+        say: 'the account is read again, with every factor'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; the subject the round fixed stays in the transaction'
 
   afterFirstFactor:
     title: Apply the rules after a first factor (rule 8)
@@ -462,7 +497,7 @@ states:
       MALFORMED:
         target: readingPolicy
         effect: [newRound, answerMalformed]
-        say: 'the next round carries a malformed answer'
+        say: 'the next round carries an answer whose login_hint is not an identifier'
 
   offeringPassword:
     title: Ask for the password
@@ -495,7 +530,7 @@ states:
       MALFORMED:
         target: readingPolicy
         effect: [newRound, answerMalformed]
-        say: 'the next round carries a malformed answer'
+        say: 'the next round carries an answer whose login_hint is not an identifier'
 
   passwordRefused:
     title: Ask for the password again
@@ -528,7 +563,7 @@ states:
       MALFORMED:
         target: readingPolicy
         effect: [newRound, answerMalformed]
-        say: 'the next round carries a malformed answer'
+        say: 'the next round carries an answer whose login_hint is not an identifier'
 
   # Exits
 
@@ -537,10 +572,12 @@ states:
     title: Complete the sign-in
     description: >-
       The transport mints the session (the Interaction API) or the code (the FiPA endpoint) from what the engine
-      returns; the engine itself writes nothing to the account.
+      returns; the engine itself writes nothing to the account. The transaction ends with it, so nothing completes
+      twice.
     response:
       kind: complete
       body:
+        transaction: null
         subject: "the account's user id"
         amr: '["pwd"], from the step grammar''s transactionAmr over the verified steps'
         authTime: 'when the password was verified, in epoch milliseconds'
@@ -550,11 +587,11 @@ states:
     title: Continue elsewhere
     description: >-
       A rule after the first factor needs a step that does not exist yet or that the transport cannot serve. The FiPA
-      endpoint answers redirect_to_web; the Interaction API ends the interaction. The subject is fixed but nothing is
-      minted.
+      endpoint answers redirect_to_web; the Interaction API ends the interaction. The transaction ends with it, and
+      nothing is minted.
     response:
       kind: redirect
-      body: { reason: step_not_available }
+      body: { reason: step_not_available, transaction: null }
 
   ended:
     type: final
@@ -569,7 +606,7 @@ states:
   throttled:
     type: final
     title: Refuse the round for a limiter
-    description: The transaction stays as the round found it.
+    description: The transaction stays as far as the round took it.
     response:
       kind: refused
       body: { reason: throttled, retryAfterSeconds: "the limiter's" }
@@ -579,7 +616,7 @@ states:
     title: Refuse the round inside the ladder's wait
     description: >-
       The same answer for every identifier inside a wait, held by an account or not. Neither verified nor counted; the
-      transaction stays as the round found it.
+      transaction stays as far as the round took it.
     response:
       kind: refused
       body: { reason: throttled, retryAfterSeconds: "the ladder's" }
@@ -606,7 +643,7 @@ states:
   answerRefused:
     type: final
     title: Refuse a malformed answer
-    description: A fault of the request; the transaction stays as the round found it.
+    description: A fault of the request; the transaction stays as far as the round took it.
     response:
       kind: refused
       body: { reason: invalid_answer }
@@ -616,7 +653,7 @@ states:
     title: Refuse the round while a store is down
     description: >-
       The policy, the ladder or the account directory cannot be read: the round is refused before any credential is
-      checked (fail closed), and the transaction stays as the round found it.
+      checked (fail closed), and the transaction stays as far as the round took it.
     response:
       kind: refused
       body: { reason: unavailable }
@@ -651,8 +688,11 @@ assertions:
   - id: refused-rounds-verify-nothing
     never: >-
       state in ['unavailable', 'throttled', 'lockedOut', 'requestRefused', 'botChallengeDue', 'answerRefused'] and
-      (hashVerified or decoyVerified)
-    say: 'A refused round, a store outage or an unreadable policy included, checks no credential'
+      (hashVerified or decoyVerified) and not subjectFixed
+    say: >-
+      A refused round, a store outage or an unreadable policy included, checks no credential, unless the credential
+      already proved the account: a store that fails after the proof keeps the subject in the transaction, so a
+      refusal never tells a right password from a wrong one
   - id: subject-mismatch-is-audited
     never: "state == 'ended' and not auditedByHmac"
     say: >-
@@ -671,6 +711,6 @@ assertions:
       Every round answers no earlier than 500 ms after it arrived: those that resolve an identifier or carry a
       credential, as ADR-017 Decision 7 asks, and every other one, so that no answer is timed apart
   - id: no-raw-identifier-before-a-subject
-    never: "state in ['passwordRefused', 'lockedOut'] and not subjectFixed and not auditedByHmac and not unverifiedUnderTheGate"
+    never: "state in ['passwordRefused', 'lockedOut', 'ended'] and not subjectFixed and not auditedByHmac"
     say: >-
       While no user is proven, the audit names the person only by the identifier HMAC, never by the identifier itself

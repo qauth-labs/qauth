@@ -45,8 +45,11 @@ export interface RoundContext {
 export interface CompletedSignIn {
   /** The user id. */
   readonly subject: string;
-  /** The identifier the person signed in with, normalised. */
-  readonly identifier: string;
+  /**
+   * The identifier the person signed in with, normalised. Absent when a
+   * discoverable factor named the account before any identifier (#651).
+   */
+  readonly identifier?: string;
   /** The RFC 8176 values, from the step grammar's `transactionAmr`. */
   readonly amr: readonly AmrValue[];
   /** When the last authenticator succeeded, in epoch milliseconds. */
@@ -76,20 +79,24 @@ export type RoundResult =
       /** The current step's personal data: at most the identifier the person gave. */
       readonly personal: Readonly<Record<string, unknown>>;
     }
-  /** The sign-in is complete: the transport mints the session or the code. */
+  /**
+   * The sign-in is complete: the transport mints the session or the code,
+   * once. The transaction ends with it, so no later round can complete it
+   * again.
+   */
   | {
       readonly kind: 'complete';
-      readonly transaction: SignInTransaction;
+      readonly transaction: null;
       readonly signIn: CompletedSignIn;
     }
   /**
    * Continue elsewhere (FiPA: `redirect_to_web`): a step the sign-in needs is
    * not built yet or not served by the transport (`step_not_available`), or the
-   * request checks asked for a browser (`request`).
+   * request checks asked for a browser (`request`). The transaction ends.
    */
   | {
       readonly kind: 'redirect';
-      readonly transaction: SignInTransaction;
+      readonly transaction: null;
       readonly reason: 'step_not_available' | 'request';
     }
   | { readonly kind: 'refused'; readonly reason: 'transaction_ended'; readonly transaction: null }
@@ -97,7 +104,7 @@ export type RoundResult =
       readonly kind: 'refused';
       readonly reason: 'throttled';
       readonly retryAfterSeconds: number;
-      /** The transaction as the round found it. */
+      /** The transaction as far as the round took it before the refusal: nothing it refused is in it. */
       readonly transaction: SignInTransaction;
     }
   | {

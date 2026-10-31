@@ -21,21 +21,18 @@ export type FactorType = (typeof FACTOR_TYPES)[number];
  * counts as bound for the downgrade rule and the MFA policy (ADR-017
  * Decisions 4 and 7).
  */
-export type BoundFactor =
-  | {
-      readonly type: 'password';
-      readonly disabled: boolean;
-      /**
-       * The stored Argon2id hash, or `null` when the credential's data cannot
-       * be read: the engine then verifies against the dummy hash and refuses,
-       * as for an account with no password.
-       */
-      readonly hash: string | null;
-    }
-  | { readonly type: 'passkey' | 'totp'; readonly disabled: boolean };
+export interface BoundFactor {
+  readonly type: FactorType;
+  readonly disabled: boolean;
+}
 
-/** What the engine knows of an account. Nothing of it reaches an answer before a factor succeeds. */
-export interface SignInAccount {
+/**
+ * What the first factor needs of the account an identifier names, and no
+ * more: it is read before any credential is checked, so the read must cost
+ * and risk as little as it can for an account that exists. Nothing of it
+ * reaches an answer before a factor succeeds.
+ */
+export interface SignInCandidate {
   /** The user id: the subject a completed sign-in carries. */
   readonly userId: string;
   /** `users.enabled`. A disabled user is answered as a wrong password and never changed. */
@@ -46,6 +43,19 @@ export interface SignInAccount {
    * one like a wrong password until PRO-15 (#638) verifies it inline.
    */
   readonly verified: boolean;
+  /**
+   * The account's password, when it has one: whether it is disabled, and its
+   * Argon2id hash, `null` when the credential's data cannot be read. Without
+   * a usable one the engine verifies against the dummy hash and refuses.
+   */
+  readonly password: { readonly disabled: boolean; readonly hash: string | null } | null;
+}
+
+/** What rule 8 needs of the account a factor proved: read only after the proof. */
+export interface SignInAccount {
+  readonly userId: string;
+  /** `users.enabled`, read again: an account disabled after its factor ends the transaction. */
+  readonly enabled: boolean;
   /** Whether the account holds an admin role in the realm, for the `required_for_admins` MFA policy. */
   readonly admin: boolean;
   /** Every authenticator bound to it, disabled ones included. */
@@ -55,20 +65,27 @@ export interface SignInAccount {
 /** Where the engine reads accounts. */
 export interface AccountDirectory {
   /**
-   * The account `identifier` names in the realm, or `null` when none does.
-   * `identifier` is already checked and normalised.
+   * What the first factor needs of the account `identifier` names in the
+   * realm, or `null` when none does. `identifier` is already checked and
+   * normalised.
    */
-  findByIdentifier(realmId: string, identifier: string): Promise<SignInAccount | null>;
+  findByIdentifier(realmId: string, identifier: string): Promise<SignInCandidate | null>;
+  /** The account of a user a factor proved, every factor included, or `null` when the realm has none. */
+  findByUserId(realmId: string, userId: string): Promise<SignInAccount | null>;
 }
 
 /** Argon2id, for the password step. */
 export interface PasswordVerifier {
-  /** Whether `presented` is the password `hash` was made from. */
+  /**
+   * Whether `presented` is the password `hash` was made from. A hash it
+   * cannot read answers `false`: a throw is an outage, which refuses the
+   * round, and must not depend on the account.
+   */
   verify(hash: string, presented: string): Promise<boolean>;
   /**
    * Spend one verification of `presented` against a dummy hash, for an
    * identifier with no usable password, so it costs what a real check does
-   * (ADR-017 Decision 7). Never throws for a wrong password.
+   * (ADR-017 Decision 7). It fails only as {@link verify} would.
    */
   verifyDecoy(presented: string): Promise<void>;
 }

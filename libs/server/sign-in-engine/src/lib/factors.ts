@@ -17,12 +17,10 @@ export const FIRST_FACTOR_STRENGTH: Readonly<Partial<Record<FactorType, number>>
   passkey: 2,
 });
 
-/** The factor each verifying step proves. */
-export const STEP_FACTOR: Readonly<Partial<Record<StepName, FactorType>>> = Object.freeze({
-  password: 'password',
-  webauthn_get: 'passkey',
-  totp: 'totp',
-});
+/** The strength of one factor type: 0 for a factor the downgrade rule does not rank. */
+export function factorStrength(factor: FactorType | undefined): number {
+  return factor === undefined ? 0 : (FIRST_FACTOR_STRENGTH[factor] ?? 0);
+}
 
 /**
  * The strength of the account's strongest bound first factor. A disabled
@@ -30,19 +28,22 @@ export const STEP_FACTOR: Readonly<Partial<Record<StepName, FactorType>>> = Obje
  */
 export function strongestBoundFactor(account: SignInAccount): number {
   let strongest = 0;
-  for (const factor of account.factors) {
-    strongest = Math.max(strongest, FIRST_FACTOR_STRENGTH[factor.type] ?? 0);
-  }
+  for (const factor of account.factors)
+    strongest = Math.max(strongest, factorStrength(factor.type));
   return strongest;
 }
 
-/** The strength of the strongest first factor the transaction proved. */
-export function provenFactorStrength(verified: readonly OfferedStep[]): number {
+/**
+ * The strength of the strongest first factor the transaction proved.
+ * `factorOf` names the factor each step proves: the engine passes its
+ * handlers', so a step and its rank have one source.
+ */
+export function provenFactorStrength(
+  verified: readonly OfferedStep[],
+  factorOf: (step: StepName) => FactorType | undefined
+): number {
   let strongest = 0;
-  for (const step of verified) {
-    const factor = STEP_FACTOR[step.step];
-    if (factor !== undefined) strongest = Math.max(strongest, FIRST_FACTOR_STRENGTH[factor] ?? 0);
-  }
+  for (const step of verified) strongest = Math.max(strongest, factorStrength(factorOf(step.step)));
   return strongest;
 }
 

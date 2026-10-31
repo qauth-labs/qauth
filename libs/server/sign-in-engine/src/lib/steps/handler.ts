@@ -5,7 +5,7 @@ import type {
   StepParams,
 } from '@qauth-labs/server-step-grammar';
 
-import type { FactorType, SignInAccount, SignInAuditReason } from '../ports';
+import type { FactorType, SignInAccount, SignInAuditReason, SignInCandidate } from '../ports';
 import type { SignInTransaction } from '../transaction';
 
 /**
@@ -51,19 +51,30 @@ export interface StepRound {
   identifierHmac(): Promise<string>;
 }
 
-/** How the person is named in the audit record of a verdict; the engine adds the identifier HMAC when no user is named. */
+/**
+ * Why a verdict refused. The engine names the person in the audit record
+ * itself: by the identifier's HMAC until the transaction's subject is fixed,
+ * never by a user a refused answer happened to resolve.
+ */
 export interface VerdictAudit {
   readonly reason: SignInAuditReason;
-  /** The user, when the step resolved one (a right password on an unverified account). */
-  readonly userId?: string;
 }
+
+/** The account a factor proved, as far as the engine checks it before fixing the subject. */
+export type ProvedAccount = Pick<SignInCandidate, 'userId' | 'enabled' | 'verified'>;
 
 /** What a handler made of an answer. */
 export type StepVerdict =
   /** The identifier step: who the transaction is for, checked and normalised. */
   | { readonly kind: 'identified'; readonly identifier: string }
-  /** A factor proved the account: its user becomes, or must be, the transaction's subject. */
-  | { readonly kind: 'proved'; readonly account: SignInAccount }
+  /**
+   * A factor proved the account: its user becomes, or must be, the
+   * transaction's subject. A handler refuses a disabled account, and an
+   * unverified one under `REQUIRE_VERIFIED_ACCOUNT`, itself (settling its
+   * ladder as a failure); the engine refuses any it still proves, with the
+   * step's `invalid_credentials`, and never fixes the subject.
+   */
+  | { readonly kind: 'proved'; readonly account: ProvedAccount }
   /** The bot challenge was solved. */
   | { readonly kind: 'passed' }
   /** The answer was refused: the step is offered again with `error`, from the step's closed set. */
@@ -81,6 +92,14 @@ export interface StepHandler<N extends StepName = StepName> {
   readonly role: StepRole;
   /** For a factor: the authenticator type it proves, which ranks it for the downgrade rule. */
   readonly factor?: FactorType;
+  /**
+   * For a first factor: whether it names the account by itself (a
+   * discoverable passkey, #651), so it can be offered before any identifier.
+   * Before the identifier it is preferred, with the identifier step and the
+   * other first factors as alternatives; once the transaction holds an
+   * identifier it is offered after them (ADR-017 Decision 4).
+   */
+  readonly discoverable?: boolean;
   /**
    * Whether `account` can answer this step now: the authenticator is bound
    * and usable. Asked only after a first factor succeeded, never before, so

@@ -1,6 +1,5 @@
 import {
   createInteractionMapper,
-  grammarStep,
   isStepName,
   type OfferedStep,
   type ReadAnswer,
@@ -15,6 +14,7 @@ import {
 } from '@qauth-labs/server-step-grammar';
 
 import {
+  factorStrength,
   FIRST_FACTOR_STRENGTH,
   provenFactorStrength,
   provesMfa,
@@ -37,7 +37,13 @@ import {
   SYSTEM_CLOCK,
 } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
-import type { AnyStepHandler, StepHandler, StepRound, StepVerdict } from './steps/handler';
+import type {
+  AnyStepHandler,
+  ProvedAccount,
+  StepHandler,
+  StepRound,
+  StepVerdict,
+} from './steps/handler';
 import { createIdentifierStep } from './steps/identifier';
 import { createPasswordStep } from './steps/password';
 import { fromStore, SignInStoreUnavailableError } from './store';
@@ -67,8 +73,10 @@ import {
  * 5. The bot challenge's hook: a due challenge comes before every other step.
  * 6. The identifier: the request's `login_hint`, else an answer's. The first
  *    one is fixed; a different one ends the transaction (`subject_mismatch`).
- * 7. The first factor, offered alike to every account: the password here, a
- *    passkey before it from #651. Its answer is reserved on the ladder's hook
+ *    With none, the identifier step, or a discoverable first factor before it
+ *    once #651 adds one.
+ * 7. The first factor, offered alike to every account: the password here, and
+ *    from #651 a passkey beside it. Its answer is reserved on the ladder's hook
  *    before it is verified.
  * 8. After a first factor: the downgrade rule (the account's strongest bound
  *    factor, a disabled one included), then the MFA policy just read.
@@ -101,11 +109,14 @@ export interface SignInEngineDependencies {
   /**
    * The steps later issues add (passkeys, TOTP, the bot challenge), in the
    * order they are preferred. The identifier and password steps are the
-   * engine's own; a first factor added here is preferred to the password.
+   * engine's own.
    */
   readonly steps?: readonly AnyStepHandler[];
   readonly clock?: Clock;
-  /** Told when a store refused a round, for the transport's log. */
+  /**
+   * Told when a store refused a round, or when settling a ladder reservation
+   * failed (which changes no answer), for the transport's log.
+   */
   readonly onUnavailable?: (error: SignInStoreUnavailableError) => void;
 }
 
@@ -114,8 +125,9 @@ export interface SignInEngine {
   /**
    * Run one round of a sign-in: `transaction` is what the last round
    * returned (`null` for round 0), `answer` the round's answer, if any.
-   * The returned transaction is the one to keep; a refusal that ends the
-   * transaction returns `null` in its place. A failed audit write rejects.
+   * The returned transaction is the one to keep. A completed sign-in, a
+   * redirect and a refusal that ends the transaction return `null` in its
+   * place. A failed audit write rejects.
    */
   advance(
     transaction: SignInTransaction | null,
@@ -124,13 +136,12 @@ export interface SignInEngine {
   ): Promise<RoundResult>;
 }
 
-/** The steps whose answer carries an identifier (`login_hint`), from the grammar. */
-const STEPS_WITH_LOGIN_HINT: ReadonlySet<StepName> = new Set(
-  STEP_NAMES.filter((name) => {
-    const shape = (grammarStep(name).answer as { shape?: Record<string, unknown> }).shape;
-    return shape !== undefined && Object.hasOwn(shape, 'login_hint');
-  })
-);
+/**
+ * The steps whose answer may carry the identifier: the identifier step, and
+ * the password step for a page that asks for both at once. An answer to any
+ * other step the engine did not ask for is ignored, its `login_hint` too.
+ */
+const STEPS_WITH_LOGIN_HINT: ReadonlySet<StepName> = new Set<StepName>(['identifier', 'password']);
 
 /** An identifier HMAC: HMAC-SHA-256, base64url without padding. */
 const IDENTIFIER_HMAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -152,6 +163,7 @@ function buildHandlers(deps: SignInEngineDependencies) {
     passwords: deps.passwords,
     ladder: deps.hooks?.ladder ?? NO_LADDER,
     requireVerifiedAccount: deps.requireVerifiedAccount,
+    ...(deps.onUnavailable === undefined ? {} : { onSettleFailure: deps.onUnavailable }),
   });
   const extra = deps.steps ?? [];
   const byStep = new Map<StepName, AnyStepHandler>([
@@ -185,15 +197,26 @@ function buildHandlers(deps: SignInEngineDependencies) {
     ) {
       throw new Error(`sign-in engine: ${handler.factor} is not a first factor`);
     }
+    if (handler.discoverable === true && handler.role !== 'first_factor') {
+      throw new Error(`sign-in engine: only a first factor is discoverable (${handler.step})`);
+    }
     byStep.set(handler.step, handler);
   }
   const ofRole = (role: AnyStepHandler['role']) => extra.filter((handler) => handler.role === role);
+  const firstFactors = [...ofRole('first_factor'), password];
   return Object.freeze({
     byStep,
     identifier,
     challenge: ofRole('challenge')[0],
-    // A first factor a later issue adds (a passkey) comes before the password.
-    firstFactors: Object.freeze([...ofRole('first_factor'), password]),
+    // The first factors that need an identifier (the password) come before
+    // the discoverable ones once the transaction holds one (ADR-017
+    // Decision 4: "the same password-required shape for every account, with
+    // webauthn_get offered").
+    firstFactors: Object.freeze([
+      ...firstFactors.filter((handler) => handler.discoverable !== true),
+      ...firstFactors.filter((handler) => handler.discoverable === true),
+    ]),
+    discoverable: Object.freeze(firstFactors.filter((handler) => handler.discoverable === true)),
     secondFactors: Object.freeze(ofRole('second_factor')),
   });
 }
@@ -215,6 +238,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** The transaction a round works on: what a refusal hands back is as far as the round took it. */
+interface RoundState {
+  transaction: SignInTransaction;
+}
+
 /** Build a sign-in engine. */
 export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine {
   const handlers = buildHandlers(deps);
@@ -222,6 +250,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   const clock = deps.clock ?? SYSTEM_CLOCK;
   // The step grammar's one answer reader, shared with both transports.
   const grammar = createInteractionMapper();
+  const factorOf = (step: StepName) => handlers.byStep.get(step)?.factor;
 
   async function advance(
     stored: SignInTransaction | null,
@@ -247,33 +276,40 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const found = stored === null ? newSignInTransaction() : readSignInTransaction(stored);
     // A transaction the engine did not write ends: nothing in it can be trusted.
     if (found === null) return TRANSACTION_ENDED;
+    const state: RoundState = { transaction: found };
     try {
-      return await rules(found, answer, context);
+      return await rules(state, answer, context);
     } catch (error) {
       if (!(error instanceof SignInStoreUnavailableError)) throw error;
       deps.onUnavailable?.(error);
-      return Object.freeze({ kind: 'refused', reason: 'unavailable', transaction: found });
+      return Object.freeze({
+        kind: 'refused',
+        reason: 'unavailable',
+        transaction: freezeTransaction(state.transaction),
+      });
     }
   }
 
   async function rules(
-    found: SignInTransaction,
+    state: RoundState,
     answer: RoundAnswer | null,
     context: RoundContext
   ): Promise<RoundResult> {
+    const found = state.transaction;
     const realmId = context.realm.id;
     const clientId = context.client.id;
     const served = new Set<StepName>(context.serves ?? STEP_NAMES);
-    let transaction = found;
     const answeredName =
       answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
     /** The round's answer while no step has taken it. */
-    let pending: { readonly name: StepName; readonly answer: RoundAnswer } | null =
-      answer !== null && answeredName !== undefined ? { name: answeredName, answer } : null;
+    const turn: { pending: { readonly name: StepName; readonly answer: RoundAnswer } | null } = {
+      pending:
+        answer !== null && answeredName !== undefined ? { name: answeredName, answer } : null,
+    };
 
     let hmac: Promise<string> | undefined;
     const identifierHmac = (): Promise<string> => {
-      const { identifier } = transaction;
+      const { identifier } = state.transaction;
       if (identifier === undefined) throw new Error('sign-in engine: no identifier to digest');
       hmac ??= fromStore('identifierDigest', async () => {
         const digest = await deps.identifierDigest({ realmId, identifier });
@@ -288,29 +324,36 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       Object.freeze({
         realmId,
         clientId,
-        transaction,
-        ...(transaction.identifier === undefined ? {} : { identifier: transaction.identifier }),
+        transaction: state.transaction,
+        ...(state.transaction.identifier === undefined
+          ? {}
+          : { identifier: state.transaction.identifier }),
         identifierHmac,
       });
 
-    /** Write one audit record, naming the user once resolved and the identifier HMAC before. */
+    /**
+     * Write one audit record. The person is named by the transaction's
+     * subject once a factor fixed one, by the identifier's HMAC before; with
+     * neither, nobody can be named and nothing is written (a bot challenge or
+     * a discoverable factor refused before any identifier).
+     */
     const audit = async (
       outcome: SignInAuditRecord['outcome'],
       step: StepName,
-      reason?: SignInAuditReason,
-      userId?: string
+      reason?: SignInAuditReason
     ): Promise<void> => {
       const base = { outcome, step, ...(reason === undefined ? {} : { reason }) };
       let record: SignInAuditRecord;
-      if (userId !== undefined) record = { ...base, userId };
-      else if (transaction.identifier !== undefined) {
+      const { subject, identifier } = state.transaction;
+      if (subject !== undefined) record = { ...base, userId: subject };
+      else if (identifier !== undefined)
         record = { ...base, identifierHmac: await identifierHmac() };
-      } else return; // nobody to name: a bot challenge before any identifier
+      else return;
       await context.audit(Object.freeze(record));
     };
 
     const ended = async (step: StepName, reason: SignInAuditReason): Promise<RoundResult> => {
-      await audit('ended', step, reason, transaction.subject);
+      await audit('ended', step, reason);
       return TRANSACTION_ENDED;
     };
     const throttled = (retryAfterSeconds: number): RoundResult =>
@@ -318,32 +361,36 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         kind: 'refused',
         reason: 'throttled',
         retryAfterSeconds,
-        transaction: found,
+        transaction: freezeTransaction(state.transaction),
       });
     const invalidAnswer = (): RoundResult =>
-      Object.freeze({ kind: 'refused', reason: 'invalid_answer', transaction: found });
+      Object.freeze({
+        kind: 'refused',
+        reason: 'invalid_answer',
+        transaction: freezeTransaction(state.transaction),
+      });
     const redirect = (reason: 'step_not_available' | 'request'): RoundResult =>
-      Object.freeze({ kind: 'redirect', reason, transaction: freezeTransaction(transaction) });
+      Object.freeze({ kind: 'redirect', reason, transaction: null });
 
     /** The offer of `steps`, the first one current, with their params for this round. */
     const offerOf = async (
       steps: readonly AnyStepHandler[],
       options: { readonly preferred?: boolean } = {}
     ): Promise<StepOffer> => {
-      const round = stepRound();
+      const current = stepRound();
       const offered = await Promise.all(
         steps.map(async (handler) => ({
           step: handler.step,
-          params: await (handler as StepHandler).params(round),
+          params: await (handler as StepHandler).params(current),
         }))
       );
-      const [current, ...alternatives] = offered;
-      if (current === undefined) throw new Error('sign-in engine: an empty offer');
+      const [first, ...alternatives] = offered;
+      if (first === undefined) throw new Error('sign-in engine: an empty offer');
       return Object.freeze({
-        current: Object.freeze(current),
+        current: Object.freeze(first),
         alternatives: Object.freeze(alternatives.map((step) => Object.freeze(step))),
-        // A step that one of its alternatives may replace (a passkey offered
-        // before the first factor) is preferred, not required.
+        // A step that one of its alternatives may replace (a discoverable
+        // passkey before any identifier) is preferred, not required.
         ...(options.preferred === true && alternatives.length > 0 ? { required: false } : {}),
       } as StepOffer);
     };
@@ -355,21 +402,30 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const handler = handlers.byStep.get(current.step) as StepHandler | undefined;
       return Object.freeze({
         kind: 'step',
-        transaction: freezeTransaction(transaction),
+        transaction: freezeTransaction(state.transaction),
         offer: Object.freeze({ ...offer, current }),
         personal: Object.freeze({ ...(handler?.personal?.(stepRound()) ?? {}) }),
       });
     };
     /** Whether the round's answer is to one of `offer`'s steps. */
-    const answers = (offer: StepOffer): boolean =>
-      pending !== null &&
-      [offer.current.step, ...offer.alternatives.map((step) => step.step)].includes(pending.name);
+    const answers = (offer: StepOffer): boolean => {
+      const { pending } = turn;
+      return (
+        pending !== null &&
+        [offer.current.step, ...offer.alternatives.map((step) => step.step)].includes(pending.name)
+      );
+    };
     /** Read the pending answer against `offer` with the step grammar; `null` when it is malformed. */
     const readPending = (offer: StepOffer): ReadAnswer | null => {
+      const { pending } = turn;
       if (pending === null) throw new Error('sign-in engine: no answer to read');
-      const { name, answer: raw } = pending;
       try {
-        return grammar.readAnswer(offer, STEP_URNS[name], raw.fields, raw.encoding ?? 'form');
+        return grammar.readAnswer(
+          offer,
+          STEP_URNS[pending.name],
+          pending.answer.fields,
+          pending.answer.encoding ?? 'form'
+        );
       } catch (error) {
         if (error instanceof StepAnswerError) return null;
         throw error;
@@ -391,28 +447,49 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         ) as StepOffer['alternatives'],
       });
     };
+    const refuseAnswer = async (
+      offer: StepOffer,
+      step: StepName,
+      error: StepErrorCode,
+      reason: SignInAuditReason
+    ): Promise<RoundResult> => {
+      await audit('refused', step, reason);
+      return offerStep(refusedOffer(offer, step), error);
+    };
 
     /**
-     * A factor proved an account: one subject per transaction, then record
-     * the step and the time. `null` when the transaction ended.
+     * A factor proved an account. The engine checks what every handler must
+     * have checked (an enabled account, verified under the gate) and refuses
+     * it like a wrong answer if not, so no step it adds later can fix a
+     * disabled user as the subject. Then one subject per transaction, and the
+     * step and the time are recorded.
      */
-    let proven: SignInAccount | null = null;
-    const prove = async (account: SignInAccount, read: ReadAnswer): Promise<boolean> => {
-      if (transaction.subject !== undefined && transaction.subject !== account.userId) {
-        return false;
+    const prove = async (
+      offer: StepOffer,
+      account: ProvedAccount,
+      read: ReadAnswer
+    ): Promise<RoundResult | null> => {
+      if (!account.enabled) {
+        return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_disabled');
       }
-      transaction = {
-        ...transaction,
+      if (!account.verified && deps.requireVerifiedAccount) {
+        return refuseAnswer(offer, read.step, 'invalid_credentials', 'email_not_verified');
+      }
+      const { subject } = state.transaction;
+      if (subject !== undefined && subject !== account.userId) {
+        return ended(read.step, 'subject_mismatch');
+      }
+      state.transaction = {
+        ...state.transaction,
         subject: account.userId,
         verified: [
-          ...transaction.verified,
+          ...state.transaction.verified,
           { step: read.step, params: read.params } as OfferedStep,
         ],
         authTime: clock.now(),
       };
-      proven = account;
-      await audit('passed', read.step, undefined, account.userId);
-      return true;
+      await audit('passed', read.step);
+      return null;
     };
 
     /**
@@ -423,7 +500,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const verifyPending = async (offer: StepOffer): Promise<RoundResult | null> => {
       const read = readPending(offer);
       if (read === null) return invalidAnswer();
-      pending = null;
+      turn.pending = null;
       const handler = handlers.byStep.get(read.step) as StepHandler;
       const verdict: StepVerdict = await handler.verify(stepRound(), {
         params: read.params,
@@ -431,20 +508,21 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       });
       switch (verdict.kind) {
         case 'refused':
-          await audit('refused', read.step, verdict.audit.reason, verdict.audit.userId);
-          return offerStep(refusedOffer(offer, read.step), verdict.error);
+          return refuseAnswer(offer, read.step, verdict.error, verdict.audit.reason);
         case 'throttled':
-          await audit('refused', read.step, verdict.audit.reason, verdict.audit.userId);
+          await audit('refused', read.step, verdict.audit.reason);
           return throttled(verdict.retryAfterSeconds);
         case 'proved':
-          if (!(await prove(verdict.account, read))) return ended(read.step, 'subject_mismatch');
-          return null;
+          if (handler.role !== 'first_factor' && handler.role !== 'second_factor') {
+            throw new Error(`sign-in engine: ${read.step} proved an account`);
+          }
+          return prove(offer, verdict.account, read);
         case 'passed':
           if (handler.role !== 'challenge') throw new Error(`sign-in engine: ${read.step} passed`);
-          transaction = {
-            ...transaction,
+          state.transaction = {
+            ...state.transaction,
             verified: [
-              ...transaction.verified,
+              ...state.transaction.verified,
               { step: read.step, params: read.params } as OfferedStep,
             ],
           };
@@ -464,7 +542,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       realmId,
       clientId,
       transaction: found,
-      ...(pending === null ? {} : { answered: pending.name }),
+      ...(turn.pending === null ? {} : { answered: turn.pending.name }),
     });
 
     // Rule 3: the limiters.
@@ -511,88 +589,112 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const identifier = readIdentifier(context.loginHint);
       if (identifier !== null) brought.push({ identifier, step: 'identifier' });
     }
-    if (pending !== null && STEPS_WITH_LOGIN_HINT.has(pending.name)) {
-      const fields = pending.answer.fields;
+    if (turn.pending !== null && STEPS_WITH_LOGIN_HINT.has(turn.pending.name)) {
+      const fields = turn.pending.answer.fields;
       if (isRecord(fields) && Object.hasOwn(fields, 'login_hint')) {
         const identifier = readIdentifier(fields['login_hint']);
         if (identifier === null) return invalidAnswer();
-        brought.push({ identifier, step: pending.name });
-      } else if (pending.name === 'identifier') {
+        brought.push({ identifier, step: turn.pending.name });
+      } else if (turn.pending.name === 'identifier') {
         return invalidAnswer();
       }
     }
-    const heldBefore = transaction.identifier;
+    const heldBefore = state.transaction.identifier;
     for (const { identifier, step } of brought) {
-      if (transaction.identifier === undefined) {
-        transaction = { ...transaction, identifier };
-      } else if (transaction.identifier !== identifier) {
+      if (state.transaction.identifier === undefined) {
+        // A discoverable factor fixed the subject without an identifier: one
+        // brought now cannot be checked against it, so it ends the
+        // transaction.
+        if (state.transaction.subject !== undefined) return ended(step, 'subject_mismatch');
+        state.transaction = { ...state.transaction, identifier };
+      } else if (state.transaction.identifier !== identifier) {
         return ended(step, 'subject_mismatch');
       }
     }
-    if (transaction.identifier === undefined) {
-      // Nobody is named yet: the identifier step, the same for everyone.
-      return offerStep(await offerOf([handlers.identifier]));
-    }
-    const identifier = transaction.identifier;
-    if (heldBefore === undefined) {
-      if (pending?.name === 'identifier') {
-        // The identifier step was the one asked for: its answer is read by the
-        // grammar like any other, and its handler confirms the identifier.
-        const offer = await offerOf([handlers.identifier]);
-        const read = readPending(offer);
-        if (read === null) return invalidAnswer();
-        pending = null;
-        const verdict = await handlers.identifier.verify(stepRound(), {
-          params: {},
-          answer: read.answer as { login_hint: string },
+
+    if (state.transaction.subject === undefined) {
+      if (state.transaction.identifier === undefined) {
+        // Nobody is named yet: the identifier step, the same for everyone, or
+        // a discoverable first factor before it, with the identifier step and
+        // the other first factors beside it (ADR-017 Decision 4).
+        const discoverable = handlers.discoverable.filter((handler) => served.has(handler.step));
+        if (discoverable.length === 0) return offerStep(await offerOf([handlers.identifier]));
+        const others = handlers.firstFactors.filter(
+          (handler) => handler.discoverable !== true && served.has(handler.step)
+        );
+        // A password offered here is answered with its login_hint, which
+        // the identifier rule above has already taken.
+        const offer = await offerOf([...discoverable, ...others, handlers.identifier], {
+          preferred: true,
         });
-        if (verdict.kind !== 'identified' || verdict.identifier !== transaction.identifier) {
-          throw new Error('sign-in engine: the identifier step disagrees with the identifier');
+        const pendingName = turn.pending?.name;
+        if (!discoverable.some((handler) => handler.step === pendingName)) return offerStep(offer);
+        const result = await verifyPending(offer);
+        if (result !== null) return result;
+      } else {
+        if (heldBefore === undefined) {
+          if (turn.pending?.name === 'identifier') {
+            // The identifier step was the one asked for: its answer is read by
+            // the grammar like any other, and its handler confirms it.
+            const offer = await offerOf([handlers.identifier]);
+            const read = readPending(offer);
+            if (read === null) return invalidAnswer();
+            turn.pending = null;
+            const verdict = await handlers.identifier.verify(stepRound(), {
+              params: {},
+              answer: read.answer as { login_hint: string },
+            });
+            if (
+              verdict.kind !== 'identified' ||
+              verdict.identifier !== state.transaction.identifier
+            ) {
+              throw new Error('sign-in engine: the identifier step disagrees with the identifier');
+            }
+          }
+          await audit('passed', 'identifier');
         }
+        // The same identifier again: nothing more to do with that answer.
+        if (turn.pending?.name === 'identifier') turn.pending = null;
+
+        // Rule 7: the first factor, offered alike to every account until one
+        // succeeds. Only an answer to it is verified; any other is ignored.
+        const firstFactors = handlers.firstFactors.filter((handler) => served.has(handler.step));
+        if (firstFactors.length === 0) return redirect('step_not_available');
+        const offer = await offerOf(firstFactors);
+        if (!answers(offer)) return offerStep(offer);
+        const result = await verifyPending(offer);
+        if (result !== null) return result;
       }
-      await audit('passed', 'identifier');
-    }
-    if (pending?.name === 'identifier') pending = null; // the same identifier again: nothing to do
-
-    // Rule 7: the first factor, offered alike to every account until one
-    // succeeds. Only an answer to it is verified; any other is ignored.
-    if (transaction.subject === undefined) {
-      const firstFactors = handlers.firstFactors.filter((handler) => served.has(handler.step));
-      if (firstFactors.length === 0) return redirect('step_not_available');
-      const offer = await offerOf(firstFactors, { preferred: true });
-      if (!answers(offer)) return offerStep(offer);
-      const result = await verifyPending(offer);
-      if (result !== null) return result;
     }
 
-    // Rule 8: after a first factor. The account is the one the factor just
-    // proved, or read again on a later round.
-    let account: SignInAccount | null =
-      proven ??
-      (await fromStore('accounts', () => deps.accounts.findByIdentifier(realmId, identifier)));
-    if (account === null || account.userId !== transaction.subject) {
+    // Rule 8: after a first factor. The account is read again, every factor
+    // included, now that a factor proved it.
+    const subject = state.transaction.subject;
+    if (subject === undefined) throw new Error('sign-in engine: rule 8 without a subject');
+    const readAccount = (): Promise<SignInAccount | null> =>
+      fromStore('accounts', () => deps.accounts.findByUserId(realmId, subject));
+    const provenAccount = await readAccount();
+    if (provenAccount === null || provenAccount.userId !== subject)
       return ended('identifier', 'subject_mismatch');
-    }
-    if (!account.enabled) return ended('identifier', 'account_disabled');
+    if (!provenAccount.enabled) return ended('identifier', 'account_disabled');
+    let account: SignInAccount = provenAccount;
 
     for (;;) {
       const current: SignInAccount = account;
-      const verifiedSteps = new Set(transaction.verified.map((step) => step.step));
+      const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
       const candidate = (handler: AnyStepHandler) =>
         served.has(handler.step) &&
         !verifiedSteps.has(handler.step) &&
         (handler.usableBy?.(current) ?? false);
-      const strength = (handler: AnyStepHandler) =>
-        handler.factor === undefined ? 0 : (FIRST_FACTOR_STRENGTH[handler.factor] ?? 0);
       let needed: AnyStepHandler[] | null = null;
-      const strongest = strongestBoundFactor(account);
-      if (provenFactorStrength(transaction.verified) < strongest) {
+      const strongest = strongestBoundFactor(current);
+      if (provenFactorStrength(state.transaction.verified, factorOf) < strongest) {
         // The downgrade rule: only a factor as strong as the strongest bound
         // one, a disabled one included, completes the sign-in.
         needed = handlers.firstFactors.filter(
-          (handler) => candidate(handler) && strength(handler) >= strongest
+          (handler) => candidate(handler) && factorStrength(handler.factor) >= strongest
         );
-      } else if (secondFactorRequired(policy, account) && !provesMfa(transaction.verified)) {
+      } else if (secondFactorRequired(policy, current) && !provesMfa(state.transaction.verified)) {
         // The MFA policy: the transaction's amr must carry mfa.
         needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(candidate);
       }
@@ -603,22 +705,26 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (!answers(offer)) return offerStep(offer);
       const result = await verifyPending(offer);
       if (result !== null) return result;
-      account = proven ?? account;
+      const reread = await readAccount();
+      if (reread === null || reread.userId !== subject)
+        return ended('identifier', 'subject_mismatch');
+      if (!reread.enabled) return ended('identifier', 'account_disabled');
+      account = reread;
     }
 
-    // Rule 9: complete. The transport mints the session or the code.
-    const amr = transactionAmr(transaction.verified);
-    const { subject, authTime } = transaction;
-    if (amr === undefined || subject === undefined || authTime === undefined) {
+    // Rule 9: complete. The transport mints the session or the code, and the
+    // transaction ends with it.
+    const amr = transactionAmr(state.transaction.verified);
+    const { authTime, identifier } = state.transaction;
+    if (amr === undefined || authTime === undefined) {
       throw new Error('sign-in engine: complete without a factor');
     }
-    const final = freezeTransaction(transaction);
     return Object.freeze({
       kind: 'complete',
-      transaction: final,
+      transaction: null,
       signIn: Object.freeze({
         subject,
-        identifier,
+        ...(identifier === undefined ? {} : { identifier }),
         amr,
         authTime,
       }),
