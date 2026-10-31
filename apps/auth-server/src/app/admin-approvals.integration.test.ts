@@ -323,7 +323,7 @@ describe('approvals for security operations (#512, real containers)', () => {
     approver: { realmId: string; accountId: string }
   ) {
     const engine = await import('./admin/approvals/engine');
-    const decision = { realmId, approvalId, approver };
+    const decision = { realmId, approvalId, approver, sessionIssuedAtMs: Date.now() };
     const { challenge } = await engine.startApproval(app(), test.factor, decision, engineOptions());
     return engine.completeApproval(
       app(),
@@ -665,7 +665,7 @@ describe('approvals for security operations (#512, real containers)', () => {
     // The page hands the ids over as it got them; the authenticator answers
     // with the account's own credential.
     const approveAs = async (approver: { realmId: string; accountId: string }) => {
-      const decision = { realmId, approvalId: filed.id, approver };
+      const decision = { realmId, approvalId: filed.id, approver, sessionIssuedAtMs: Date.now() };
       const { challenge } = await engine.startApproval(
         app(),
         test.factor,
@@ -694,6 +694,45 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect(row).toMatchObject({ operation_id: 'approvals.approve', actor_id: requester.userId });
   });
 
+  it('takes a decision only from a session issued after the approver was last disabled', async () => {
+    const realmId = await tenant('alpha');
+    const requester = await adminWith(realmId, 'security-admin');
+    const filed = await file(realmId, requester.token);
+    // The account is disabled once, then enabled again (#748).
+    await app().dbPool.query('UPDATE users SET enabled = false WHERE id = $1', [requester.userId]);
+    await app().dbPool.query('UPDATE users SET enabled = true WHERE id = $1', [requester.userId]);
+    const { rows } = await app().dbPool.query<{ not_valid_before: string }>(
+      'SELECT not_valid_before FROM users WHERE id = $1',
+      [requester.userId]
+    );
+    const disabledAt = Number(rows[0].not_valid_before);
+    const engine = await import('./admin/approvals/engine');
+    const decision = (sessionIssuedAtMs: number) => ({
+      realmId,
+      approvalId: filed.id,
+      approver: requester.approver,
+      sessionIssuedAtMs,
+    });
+
+    // A session issued before the disablement is answered as a stranger is.
+    await expect(
+      engine.startApproval(app(), test.factor, decision(disabledAt - 60_000), engineOptions())
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      engine.denyApproval(app(), decision(disabledAt - 60_000), engineOptions())
+    ).rejects.toMatchObject({ statusCode: 404 });
+    // One signed in after it was enabled again approves.
+    const fresh = decision(disabledAt + 5_000);
+    const { challenge } = await engine.startApproval(app(), test.factor, fresh, engineOptions());
+    const approved = await engine.completeApproval(
+      app(),
+      test.factor,
+      { ...fresh, response: test.answer(challenge, requester.approver) },
+      engineOptions()
+    );
+    expect(approved.status).toBe('approved');
+  });
+
   it('refuses an answer the factor made for another approval', async () => {
     const realmId = await tenant('alpha');
     const requester = await adminWith(realmId, 'security-admin');
@@ -703,13 +742,23 @@ describe('approvals for security operations (#512, real containers)', () => {
     const forFirst = await engine.startApproval(
       app(),
       test.factor,
-      { realmId, approvalId: first.id, approver: requester.approver },
+      {
+        realmId,
+        approvalId: first.id,
+        approver: requester.approver,
+        sessionIssuedAtMs: Date.now(),
+      },
       engineOptions()
     );
     await engine.startApproval(
       app(),
       test.factor,
-      { realmId, approvalId: second.id, approver: requester.approver },
+      {
+        realmId,
+        approvalId: second.id,
+        approver: requester.approver,
+        sessionIssuedAtMs: Date.now(),
+      },
       engineOptions()
     );
     await expect(
@@ -717,6 +766,7 @@ describe('approvals for security operations (#512, real containers)', () => {
         realmId,
         approvalId: second.id,
         approver: requester.approver,
+        sessionIssuedAtMs: Date.now(),
         response: test.answer(forFirst.challenge, requester.approver),
       })
     ).rejects.toMatchObject({ statusCode: 403 });
@@ -744,6 +794,7 @@ describe('approvals for security operations (#512, real containers)', () => {
           realmId,
           approvalId: denied.id,
           approver: requester.approver,
+          sessionIssuedAtMs: Date.now(),
         })
       ).status
     ).toBe('denied');

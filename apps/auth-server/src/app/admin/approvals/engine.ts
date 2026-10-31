@@ -253,6 +253,12 @@ export interface ApprovalDecision {
   readonly approvalId: string;
   /** The account signed in on the approval page. */
   readonly approver: Approver;
+  /**
+   * When the approval page's browser session was issued (its `createdAt`), in
+   * epoch milliseconds. A session issued before the approver's account was
+   * last disabled decides nothing (#748), as a token issued before it does not.
+   */
+  readonly sessionIssuedAtMs: number;
   /** The id under which the page's request was logged, for the audit row. */
   readonly traceId?: string;
 }
@@ -268,12 +274,14 @@ export interface ApprovalEngineOptions {
 /**
  * What `approver` may do on the realm `targetRealmId`: its grants there,
  * read as the admin API reads a caller's, with every admin scope, since the
- * approval page's factor, not a token, is the fresh step.
+ * approval page's factor, not a token, is the fresh step. The page's session,
+ * issued at `sessionIssuedAtMs` (epoch ms), stands in for the token's `iat`.
  */
 export async function approverAuthority(
   fastify: FastifyInstance,
   approver: Approver,
-  targetRealmId: string
+  targetRealmId: string,
+  sessionIssuedAtMs: number
 ) {
   const realm = await fastify.repositories.realms.findById(approver.realmId);
   if (realm === undefined || !realm.enabled || realm.issuer === null) {
@@ -282,6 +290,10 @@ export async function approverAuthority(
   return resolveAdminAuthority(fastify, {
     iss: realm.issuer,
     sub: approver.accountId,
+    // In whole seconds, as a token's `iat`: the milliseconds dropped make the
+    // session at most one second older, which only refuses one issued within
+    // two seconds after the account was enabled again (#748).
+    iat: Math.floor(sessionIssuedAtMs / 1000),
     scopes: ADMIN_SCOPE_LIST,
     targetRealmId,
   });
@@ -311,7 +323,12 @@ async function approvalTheApproverMayDecide(
     decision.approvalId
   );
   if (approval === undefined) throw notFound();
-  const authority = await approverAuthority(fastify, decision.approver, approval.realmId);
+  const authority = await approverAuthority(
+    fastify,
+    decision.approver,
+    approval.realmId,
+    decision.sessionIssuedAtMs
+  );
   if (!authority.allowed) throw notFound();
   const approver: Approver = { realmId: authority.issuerRealm.id, accountId: authority.userId };
   const standing = approvalStanding(
