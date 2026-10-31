@@ -1,7 +1,9 @@
+import { EventValidationError } from '@qauth-labs/shared-events';
 import type { FastifyInstance } from 'fastify';
 
 import {
   claimExpiredInteraction,
+  eventClientIdOf,
   type ExpiredInteraction,
   expiredInteractionEntries,
   relistExpiredInteraction,
@@ -37,17 +39,29 @@ export interface InteractionExpiryDependencies {
 function expiredEvent(expired: ExpiredInteraction) {
   const { record } = expired;
   const userId = record?.transaction.userId;
+  const clientId = record === null ? null : eventClientIdOf(record);
   return {
     type: 'urn:qauth:event:interaction.expired:v1-rc.0' as const,
     realm: expired.realmId,
     actor: { type: 'system' as const },
     ...(userId === undefined ? {} : { subject: { type: 'user' as const, id: userId } }),
-    ...(record === null ? {} : { client: { id: record.request.client_id } }),
+    ...(clientId === null ? {} : { client: { id: clientId } }),
     data: {
       interaction: expired.ref,
       ...(record === null ? {} : { step: record.step.name }),
     },
   };
+}
+
+/**
+ * Whether the event store refused an event for its content. By name as well,
+ * since a test's module registry can load a second copy of the class.
+ */
+function isEventValidationError(error: unknown): error is EventValidationError {
+  return (
+    error instanceof EventValidationError ||
+    (error instanceof Error && error.name === 'EventValidationError' && 'problems' in error)
+  );
 }
 
 /**
@@ -62,8 +76,10 @@ function expiredEvent(expired: ExpiredInteraction) {
  *
  * When an event cannot be written, the claimed interaction is put back in the
  * index and the run fails, so the next run reports it: no expiry goes
- * unaudited because the event store was briefly down. Repeating the sweep
- * reports nothing twice.
+ * unaudited because the event store was briefly down. An event the contract
+ * refuses (`EventValidationError`) would be refused on every run, so it is
+ * logged and dropped instead, and the sweep goes on: one bad record never
+ * holds back the rest. Repeating the sweep reports nothing twice.
  */
 export function createInteractionExpiryJob(deps: InteractionExpiryDependencies): JobDefinition {
   return defineJob({
@@ -72,6 +88,7 @@ export function createInteractionExpiryJob(deps: InteractionExpiryDependencies):
     intervalMs: INTERACTION_EXPIRY_INTERVAL_MS,
     async run({ signal, now, log }) {
       let expired = 0;
+      let dropped = 0;
       for (;;) {
         signal.throwIfAborted();
         const entries = await expiredInteractionEntries(
@@ -86,6 +103,14 @@ export function createInteractionExpiryJob(deps: InteractionExpiryDependencies):
           try {
             await deps.events.emitInOwnTransaction(expiredEvent(claimed));
           } catch (error) {
+            if (isEventValidationError(error)) {
+              log.warn(
+                { interaction: claimed.ref, problems: error.problems },
+                'interaction expiry event refused by the event contract; dropped'
+              );
+              dropped += 1;
+              continue;
+            }
             await relistExpiredInteraction(deps.redis, claimed);
             throw error;
           }
@@ -93,7 +118,7 @@ export function createInteractionExpiryJob(deps: InteractionExpiryDependencies):
         }
         if (entries.length < INTERACTION_EXPIRY_BATCH) break;
       }
-      log.info({ expired }, 'expired interactions audited');
+      log.info({ expired, dropped }, 'expired interactions audited');
     },
   });
 }

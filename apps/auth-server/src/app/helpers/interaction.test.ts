@@ -1,6 +1,7 @@
 import { Writable } from 'node:stream';
 
 import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
+import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +38,14 @@ import {
   startInteraction,
   switchInteractionUser,
 } from './interaction';
-import { IDENTIFIER_STEP, interactionIdHash, type InteractionStep } from './interaction-record';
+import {
+  IDENTIFIER_STEP,
+  interactionIdHash,
+  type InteractionStep,
+  readInteractionRecord,
+  takeInteractionTurn,
+  writeInteractionState,
+} from './interaction-record';
 import { SESSION_COOKIE_NAME, verifySignedSessionId } from './session-cookie';
 import { emitUserEvent } from './user-events';
 
@@ -93,6 +101,8 @@ interface Harness {
   sessions: ReturnType<typeof createBrowserSessionFixture>;
   /** The states `decide` saw, in order: one per processed answer. */
   decided: InteractionState[];
+  /** Run inside `decide`, for a test that acts while the engine works. */
+  duringDecide: { action?: () => Promise<void> };
   logs: string[];
 }
 
@@ -121,11 +131,20 @@ async function buildHarness(): Promise<Harness> {
   app.decorate('redis', redis as unknown as FastifyInstance['redis']);
   app.decorate('sessionService', sessions.service);
   const decided: InteractionState[] = [];
+  const duringDecide: Harness['duringDecide'] = {};
 
   app.post('/start', async (request, reply) => {
-    const body = (request.body ?? {}) as { step?: InteractionStep; personal?: object };
+    const body = (request.body ?? {}) as {
+      step?: InteractionStep;
+      personal?: object;
+      request?: object;
+    };
     return startInteraction(request, reply, {
-      request: { ...AUTHORIZE_REQUEST, ...((request.query as object) ?? {}) },
+      request: {
+        ...AUTHORIZE_REQUEST,
+        ...((request.query as object) ?? {}),
+        ...(body.request ?? {}),
+      },
       step: body.step ?? PASSWORD_STEP,
       ...(body.personal === undefined ? {} : { personal: body.personal as never }),
     });
@@ -148,6 +167,9 @@ async function buildHarness(): Promise<Harness> {
       { id: (request.params as { id: string }).id, revision },
       async (state): Promise<InteractionDecision> => {
         decided.push(state);
+        const action = duringDecide.action;
+        duringDecide.action = undefined;
+        if (action !== undefined) await action();
         if (delayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, delayMs));
         if (decision.kind === 'authenticated') {
           return {
@@ -160,6 +182,9 @@ async function buildHarness(): Promise<Harness> {
       }
     );
   });
+  app.post(`${INTERACTION_API_PREFIX}/:id/fail`, async () => {
+    throw new InvalidRequestError('the answer names a field twice');
+  });
   app.post(`${INTERACTION_API_PREFIX}/:id/cancel`, async (request, reply) =>
     cancelInteraction(request, reply, (request.params as { id: string }).id)
   );
@@ -167,7 +192,7 @@ async function buildHarness(): Promise<Harness> {
     switchInteractionUser(request, reply, (request.params as { id: string }).id)
   );
   await app.ready();
-  return { app, redis, sessions, decided, logs };
+  return { app, redis, sessions, decided, duringDecide, logs };
 }
 
 /** A browser: its cookie jar, replayed on every request. */
@@ -441,7 +466,7 @@ describe('answers (#592)', () => {
     });
   });
 
-  it('ends the interaction when the engine throws while it decides', async () => {
+  it('keeps the interaction at its step, answerable, when the engine fails while it decides', async () => {
     const owner = new Browser();
     const id = await owner.start();
     harness.app.log.level = 'fatal';
@@ -450,7 +475,110 @@ describe('answers (#592)', () => {
       step: { name: 'urn:qauth:ia:no_such_step:v1-rc.0', params: {}, alternatives: [] },
     });
     expect(failed.statusCode).toBe(500);
-    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+
+    // Nothing changed, and the turn came back: the retry is processed.
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+      step: PASSWORD_STEP,
+      revision: 0,
+    });
+    const retry = await owner.answer(id, 0, { kind: 'step', step: CONSENT_STEP });
+    expect(retry.json()).toMatchObject({ kind: 'step', view: { revision: 1 } });
+  });
+
+  it('gives a turn back that it took for a later state: a cancel racing an answer leaves the next step answerable', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const idHash = interactionIdHash(id);
+    const redis = harness.redis as unknown as FastifyInstance['redis'];
+    // The cancel reads revision 0; before it takes the turn, an answer on
+    // another node takes turn 0 and writes revision 1 with turn 1.
+    harness.redis.beforeNextGetdel(
+      (key) => key === REDIS_KEYS.INTERACTION_TURN(REALM.id, idHash),
+      async () => {
+        const silent = harness.app.log;
+        expect(await takeInteractionTurn(redis, silent, REALM.id, idHash)).toBe(0);
+        const record = await readInteractionRecord(redis, silent, REALM.id, idHash);
+        if (record === null) throw new Error('no record');
+        await writeInteractionState(redis, idHash, {
+          ...record,
+          step: CONSENT_STEP,
+          revision: 1,
+        });
+      }
+    );
+
+    const cancel = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`);
+
+    expect(cancel.json()).toEqual({ kind: 'stale' });
+    // Turn 1 was given back: the owner answers the consent step.
+    const next = await owner.answer(id, 1, { kind: 'finished' });
+    expect(next.json()).toMatchObject({ kind: 'finished' });
+  });
+
+  it('refuses an answer whose interaction the expiry sweep took while the engine worked, and brings nothing back', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const idHash = interactionIdHash(id);
+    harness.duringDecide.action = async () => {
+      harness.redis.strings.delete(REDIS_KEYS.INTERACTION(REALM.id, idHash));
+    };
+
+    const answered = await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+
+    expect(answered.statusCode).toBe(410);
+    expect(harness.redis.strings.has(REDIS_KEYS.INTERACTION(REALM.id, idHash))).toBe(false);
+    expect(harness.redis.strings.has(REDIS_KEYS.INTERACTION_TURN(REALM.id, idHash))).toBe(false);
+    // The session created for the answer was ended: no browser holds it.
+    expect(harness.sessions.service.create).toHaveBeenCalledTimes(1);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM.id, reason: 'sign_out' })
+    );
+    expect(harness.sessions.service.sessions.size).toBe(0);
+  });
+
+  it('does not finish or cancel an interaction the expiry sweep claimed first', async () => {
+    for (const finish of [
+      (owner: Browser, id: string) => owner.answer(id, 0, { kind: 'finished' }),
+      (owner: Browser, id: string) =>
+        owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`),
+    ]) {
+      vi.mocked(emitUserEvent).mockClear();
+      const owner = new Browser();
+      const id = await owner.start();
+      // The sweep claims the member just before the take.
+      harness.redis.beforeNextGetdel(
+        (key) => key === REDIS_KEYS.INTERACTION_TURN(REALM.id, interactionIdHash(id)),
+        async () => {
+          harness.redis.sortedSets.clear();
+        }
+      );
+
+      const response = await finish(owner, id);
+
+      expect(response.statusCode).toBe(410);
+      expect(response.json()).toMatchObject({ code: 'interaction_expired' });
+      const types = vi.mocked(emitUserEvent).mock.calls.map(([, type]) => type);
+      expect(types).toEqual(['urn:qauth:event:interaction.created:v1-rc.0']);
+    }
+  });
+
+  it('refuses an answer that outlasted the expiry while the engine worked', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    harness.duringDecide.action = async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 1_800_000 });
+    };
+
+    const answered = await owner.answer(id, 0, { kind: 'finished' });
+
+    expect(answered.statusCode).toBe(410);
+    // Left for the sweep: still listed for expiry.
+    expect(harness.redis.sortedSets.get(REDIS_KEYS.INTERACTION_EXPIRY_INDEX())?.size).toBe(1);
   });
 
   it('finishes the interaction: the request goes back to the caller, the id is dead and its secret leaves the cookie', async () => {
@@ -520,6 +648,31 @@ describe('authentication (#592)', () => {
     });
   });
 
+  it('ends the session a first authentication created when a second one in the interaction replaces it', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: PASSWORD_STEP,
+    });
+    const first = verifySignedSessionId(owner.cookies.get(SESSION_COOKIE_NAME));
+
+    await owner.answer(id, 1, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['otp'],
+      step: CONSENT_STEP,
+    });
+
+    const second = verifySignedSessionId(owner.cookies.get(SESSION_COOKIE_NAME));
+    expect(second).not.toBe(first);
+    expect([...harness.sessions.service.sessions.keys()]).toEqual([second]);
+    await owner.answer(id, 2, { kind: 'finished' });
+    expect(harness.decided.at(-1)?.transaction).toMatchObject({ sid: second, amr: ['pwd', 'otp'] });
+  });
+
   it('refuses a second subject in one transaction', async () => {
     const owner = new Browser();
     const id = await owner.start();
@@ -540,7 +693,9 @@ describe('authentication (#592)', () => {
 
     expect(second.statusCode).toBe(500);
     expect(harness.sessions.service.create).toHaveBeenCalledTimes(1);
-    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+    // Nothing of the second user was written: the interaction stays with the first.
+    await owner.answer(id, 1, { kind: 'finished' });
+    expect(harness.decided.at(-1)?.transaction).toMatchObject({ userId: USER_A });
   });
 });
 
@@ -581,6 +736,27 @@ describe('the user switch (#592)', () => {
     const state = harness.decided.at(-1);
     expect(state?.request).toEqual({ ...AUTHORIZE_REQUEST, nonce: 'n-0S6_WzA2Mj' });
     expect(state?.transaction).toEqual({ amr: [] });
+  });
+
+  it('keeps the absolute expiry of the authorization request: switching never extends it', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const { expiresAt } = (
+      await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)
+    ).json() as {
+      expiresAt: number;
+    };
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 600_000 });
+
+    const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    const newId = (switched.json() as { id: string }).id;
+
+    expect((switched.json() as { expiresAt: number }).expiresAt).toBe(expiresAt);
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${newId}`)).json()).toMatchObject(
+      {
+        expiresAt,
+      }
+    );
   });
 });
 
@@ -644,27 +820,61 @@ describe('audit and logs (#592)', () => {
 });
 
 describe('bounds (#592)', () => {
-  it('holds the largest authorization request the authorize schema accepts', async () => {
+  /** `count` RFC 8707 resources of `length` characters each. */
+  const resources = (count: number, length: number) =>
+    Array.from({ length: count }, (_, index) => {
+      const base = `https://api${index}.example.com/`;
+      return base + 'r'.repeat(length - base.length);
+    });
+
+  it('holds a request near its ceiling, and leaves room for the steps', async () => {
     const browser = new Browser();
-    const id = await browser.start(
-      {},
-      {
+    const id = await browser.start({
+      request: {
         state: '"'.repeat(2048),
         nonce: '"'.repeat(2048),
         scope: 'x'.repeat(2048),
-      }
-    );
+        resource: resources(10, 2048),
+      },
+    });
     expect((await browser.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(200);
+    // The next state still fits beside it.
+    const answered = await browser.answer(id, 0, { kind: 'step', step: SELECT_ACCOUNT_STEP });
+    expect(answered.statusCode).toBe(200);
   });
 
-  it('refuses a state too large to hold through a ceremony with invalid_request, and stores nothing', async () => {
+  it('refuses a request too large to hold through a ceremony with invalid_request, and stores nothing', async () => {
     const response = await new Browser().request('POST', '/start', {
-      step: SELECT_ACCOUNT_STEP,
-      personal: { accounts: ['a'.repeat(50 * 1024)] },
+      request: {
+        state: '\u0001'.repeat(2048),
+        nonce: '\u0001'.repeat(2048),
+        scope: '\u0001'.repeat(2048),
+        resource: resources(10, 2048),
+      },
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 'invalid_request' });
     expect(harness.redis.strings.size).toBe(0);
     expect(harness.redis.sortedSets.size).toBe(0);
+  });
+
+  it('answers any error on an Interaction API path without instance, detail or errors', async () => {
+    harness.app.log.level = 'fatal';
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: `${INTERACTION_API_PREFIX}/${'D'.repeat(43)}/fail`,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(Object.keys(response.json() as object).sort()).toEqual(
+      ['code', 'status', 'title', 'trace_id', 'type'].sort()
+    );
+    expect(response.body).not.toContain('D'.repeat(43));
+  });
+
+  it('names no client in an event when the client_id is longer than an event holds', async () => {
+    const longClientId = `https://client.example.com/${'c'.repeat(300)}`;
+    await new Browser().start({ request: { client_id: longClientId } });
+    const [, , , options] = vi.mocked(emitUserEvent).mock.calls[0] ?? [];
+    expect(options).toMatchObject({ clientId: null });
   });
 });

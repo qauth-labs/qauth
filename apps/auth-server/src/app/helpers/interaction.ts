@@ -6,7 +6,7 @@ import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
-import { createBrowserSession } from './browser-session';
+import { createBrowserSession, endBrowserSession } from './browser-session';
 import {
   flowBindingOf,
   matchFlowSecret,
@@ -17,16 +17,16 @@ import {
 } from './flow-cookie';
 import { InteractionExpiredError } from './interaction-expired';
 import {
-  abandonInteraction,
   deleteInteraction,
+  eventClientIdOf,
   IDENTIFIER_STEP,
   insertInteraction,
   INTERACTION_RECORD_VERSION,
   interactionIdHash,
   type InteractionPersonalData,
   type InteractionRecord,
-  InteractionRecordTooLargeError,
   type InteractionRequest,
+  InteractionRequestTooLargeError,
   type InteractionStep,
   interactionStepSchema,
   type InteractionTransaction,
@@ -78,9 +78,14 @@ import { emitUserEvent } from './user-events';
  * again, checking that it is still the state and the binding it was given
  * for (ADR-013 §5, ADR-017 Decision 6). Of two concurrent answers to one
  * step, only the one that took the turn is processed; the other gets `stale`.
- * The record stays readable while the engine works. If the engine throws
- * while it decides, the interaction ends: its record and turn go, and the
- * sweep audits its expiry.
+ * The record stays readable while the engine works. If anything fails
+ * before the next state is written, the turn is given back and the
+ * interaction stays at its step, unchanged: a retry answers it again, as after
+ * a refused answer, so a store that is briefly down does not end the
+ * ceremony. A browser session the failed answer created is ended. An answer
+ * that outlasts the interaction's expiry is refused, and so is a finish or a
+ * cancel that the expiry sweep beat to the interaction: what the sweep reports
+ * expired never also finishes.
  */
 
 /** The step view a reader of the interaction id may see: no personal data. */
@@ -207,7 +212,7 @@ async function emitInteractionEvent<Type extends RegisteredEventType>(
 ): Promise<void> {
   await emitUserEvent(request, type, data, {
     realmId: record.realmId,
-    clientId: record.request.client_id,
+    clientId: eventClientIdOf(record),
     userId: record.transaction.userId ?? null,
     actor: 'user',
   });
@@ -303,6 +308,8 @@ async function createInteraction(
   input: StartInteractionInput & {
     readonly secrets: readonly string[];
     readonly replace?: { readonly secret: string; readonly ref: string };
+    /** The absolute expiry, when it is not `INTERACTION_TTL` from now. */
+    readonly expiresAt?: number;
   }
 ): Promise<StartedInteraction> {
   const step = interactionStepSchema.parse(input.step);
@@ -321,14 +328,14 @@ async function createInteraction(
     flowBinding: flowBindingOf(secret),
     revision: 0,
     createdAt: now,
-    expiresAt: now + lifetimeMs(),
+    expiresAt: input.expiresAt ?? now + lifetimeMs(),
   };
   try {
     await insertInteraction(request.server.redis, interactionIdHash(id), record);
   } catch (error) {
     // Caller-driven: the request is too large to hold through a ceremony,
     // as the pending-authorization stash refuses one.
-    if (error instanceof InteractionRecordTooLargeError) {
+    if (error instanceof InteractionRequestTooLargeError) {
       throw new InvalidRequestError('authorization request is too large');
     }
     throw error;
@@ -431,16 +438,42 @@ export async function answerInteraction(
   if (taken === null) return { kind: 'stale' };
 
   // From here the turn is taken. Until the next state is written (or the
-  // interaction deleted), any failure ends the interaction: its record and
-  // turn go, and the sweep audits its expiry. Fail closed, and never leave a
-  // record that reads as live but can no longer be answered.
-  const settled = { done: false };
+  // interaction deleted), a failure gives the turn back, so the interaction
+  // stays at its step, unchanged, and never reads as live while no one can
+  // answer it. Past its expiry the turn stays taken: the sweep reports it.
+  // A browser session created for an answer that was not written is ended.
+  const settled: Settlement = { done: false };
   try {
     return await settleAnswer(request, reply, bound, taken, decide, settled);
   } catch (error) {
-    if (!settled.done) await abandonInteraction(request.server.redis, taken, bound.idHash);
+    if (settled.session !== undefined) {
+      await endUnusedSession(request, settled.session);
+    }
+    if (!settled.done && taken.expiresAt > Date.now()) {
+      await returnInteractionTurn(request.server.redis, taken, bound.idHash, taken.revision);
+    }
     throw error;
   }
+}
+
+/** How far {@link settleAnswer} got, for the clean-up of a failure. */
+interface Settlement {
+  /** The next state is written or the interaction deleted: nothing to give back. */
+  done: boolean;
+  /** A browser session created for the answer and not yet in the next state. */
+  session?: { readonly realmId: string; readonly sid: string };
+}
+
+/**
+ * End a browser session that an answer created but whose interaction state
+ * was never written: no browser holds its cookie. Ended as `sign_out`, the
+ * closest of the recorded reasons: the session ends before anyone used it.
+ */
+async function endUnusedSession(
+  request: FastifyRequest,
+  session: { readonly realmId: string; readonly sid: string }
+): Promise<void> {
+  await endBrowserSession(request.server, session.realmId, session.sid, 'sign_out');
 }
 
 /** {@link answerInteraction} once the turn is taken: decide, then write what was decided. */
@@ -450,7 +483,7 @@ async function settleAnswer(
   bound: Bound,
   taken: InteractionRecord,
   decide: (state: InteractionState) => Promise<InteractionDecision>,
-  settled: { done: boolean }
+  settled: Settlement
 ): Promise<InteractionAnswerResult> {
   const { redis } = request.server;
   const decision = await decide(
@@ -462,6 +495,9 @@ async function settleAnswer(
       revision: taken.revision,
     })
   );
+  // The engine may take a while (a password hash): an interaction that
+  // expired meanwhile is not answered. The turn stays taken; the sweep reports it.
+  if (taken.expiresAt <= Date.now()) refuse(request, 'expired');
   const answered = (
     outcome: 'next_step' | 'authenticated' | 'finished',
     record: InteractionRecord
@@ -473,8 +509,10 @@ async function settleAnswer(
     });
 
   if (decision.kind === 'finished') {
-    await deleteInteraction(redis, taken, bound.idHash);
+    const owned = await deleteInteraction(redis, taken, bound.idHash);
     settled.done = true;
+    // The sweep claimed it first and reports it expired: it does not finish.
+    if (!owned) refuse(request, 'expired');
     setFlowCookie(
       reply,
       nextFlowSecrets(bound.secrets, { remove: bound.secret }),
@@ -492,8 +530,10 @@ async function settleAnswer(
       transaction: { ...taken.transaction, amr: withAmr(taken.transaction.amr, decision.amr) },
       revision: taken.revision + 1,
     };
-    settled.done = await writeInteractionState(redis, bound.idHash, next);
-    if (!settled.done) return { kind: 'stale' };
+    const written = await writeInteractionState(redis, bound.idHash, next);
+    settled.done = true;
+    // The record was gone (the expiry sweep took it): nothing to answer.
+    if (!written) refuse(request, 'expired');
     await answered('next_step', next);
     return { kind: 'step', view: viewOf(next) };
   }
@@ -512,6 +552,7 @@ async function settleAnswer(
     ...(signIn.assuranceLevel === undefined ? {} : { assuranceLevel: signIn.assuranceLevel }),
     ...(signIn.issuedAt === undefined ? {} : { issuedAt: signIn.issuedAt }),
   });
+  settled.session = { realmId: session.realmId, sid: session.sid };
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
     ...taken,
@@ -526,9 +567,16 @@ async function settleAnswer(
     flowBinding: flowBindingOf(secret),
     revision: taken.revision + 1,
   };
-  settled.done = await writeInteractionState(redis, bound.idHash, next);
-  if (!settled.done) return { kind: 'stale' };
+  const written = await writeInteractionState(redis, bound.idHash, next);
+  settled.done = true;
+  if (!written) refuse(request, 'expired');
+  settled.session = undefined;
   setSessionCookie(reply, session.sid);
+  // A second authentication in one interaction (step-up) replaces the session
+  // the first created: the browser's cookie no longer names it, so it ends.
+  if (taken.transaction.sid !== undefined && taken.transaction.sid !== session.sid) {
+    await endUnusedSession(request, { realmId: taken.realmId, sid: taken.transaction.sid });
+  }
   setFlowCookie(
     reply,
     nextFlowSecrets(bound.secrets, { remove: bound.secret, add: secret }),
@@ -553,7 +601,10 @@ export async function cancelInteraction(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
-  await deleteInteraction(request.server.redis, taken, bound.idHash);
+  // The sweep claimed it first and reports it expired: it is not cancelled.
+  if (!(await deleteInteraction(request.server.redis, taken, bound.idHash))) {
+    refuse(request, 'expired');
+  }
   setFlowCookie(
     reply,
     nextFlowSecrets(bound.secrets, { remove: bound.secret }),
@@ -573,7 +624,8 @@ export async function cancelInteraction(
  * identifier step, bound to a new flow secret that replaces this one's.
  * Nothing proved here carries over (ADR-017, one subject per transaction):
  * the new transaction is empty. The old id gets the generic expired answer
- * from now on. The new interaction has a lifetime of its own.
+ * from now on. The new interaction keeps the request's absolute expiry: one
+ * authorization request has one lifetime, and switching never extends it.
  *
  * @param identifierStep - the identifier step as the engine offers it (its
  *   alternatives); the plain identifier step when absent
@@ -591,7 +643,9 @@ export async function switchInteractionUser(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
-  await deleteInteraction(request.server.redis, taken, bound.idHash);
+  if (!(await deleteInteraction(request.server.redis, taken, bound.idHash))) {
+    refuse(request, 'expired');
+  }
   await emitInteractionEvent(request, taken, 'urn:qauth:event:interaction.cancelled:v1-rc.0', {
     interaction: taken.ref,
     step: taken.step.name,
@@ -602,6 +656,9 @@ export async function switchInteractionUser(
     step: identifierStep,
     secrets: bound.secrets,
     replace: { secret: bound.secret, ref: taken.ref },
+    // One authorization request, one absolute lifetime: switching users
+    // never extends it.
+    expiresAt: taken.expiresAt,
   });
   return { kind: 'switched', ...started };
 }

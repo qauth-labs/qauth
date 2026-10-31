@@ -17,6 +17,11 @@ import { vi } from 'vitest';
 export interface MemoryInteractionRedis {
   readonly strings: Map<string, { value: string; deadline?: number }>;
   readonly sortedSets: Map<string, Map<string, number>>;
+  /**
+   * Run once, just before the next `GETDEL` of a key that `match` accepts:
+   * another client's commands, landing between a request's read and its take.
+   */
+  beforeNextGetdel(match: (key: string) => boolean, action: () => Promise<void>): void;
   get(key: string): Promise<string | null>;
   getdel(key: string): Promise<string | null>;
   set(key: string, value: string, ...args: (string | number)[]): Promise<'OK' | null>;
@@ -60,6 +65,8 @@ export function createMemoryInteractionRedis<Base extends object>(
     return inclusive ? (score) => score <= limit : (score) => score < limit;
   }
 
+  const hooks: { match: (key: string) => boolean; action: () => Promise<void> }[] = [];
+
   const own = {
     strings,
     sortedSets,
@@ -67,8 +74,13 @@ export function createMemoryInteractionRedis<Base extends object>(
       await tick();
       return live(key);
     }),
+    beforeNextGetdel(match: (key: string) => boolean, action: () => Promise<void>) {
+      hooks.push({ match, action });
+    },
     getdel: vi.fn(async (key: string) => {
       await tick();
+      const hook = hooks.findIndex((candidate) => candidate.match(key));
+      if (hook !== -1) await hooks.splice(hook, 1)[0].action();
       const value = live(key);
       strings.delete(key);
       return value;
@@ -77,6 +89,7 @@ export function createMemoryInteractionRedis<Base extends object>(
       await tick();
       const upper = args.map((arg) => (typeof arg === 'string' ? arg.toUpperCase() : arg));
       if (upper.includes('NX') && live(key) !== null) return null;
+      if (upper.includes('XX') && live(key) === null) return null;
       const at = upper.indexOf('PXAT');
       const deadline = at === -1 ? undefined : Number(upper[at + 1]);
       if (deadline !== undefined && deadline <= Date.now()) {

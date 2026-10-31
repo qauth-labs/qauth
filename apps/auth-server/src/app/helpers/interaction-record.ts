@@ -5,7 +5,12 @@ import { stepByUrn, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { INTERACTION_MAX_RECORD_BYTES, INTERACTION_SWEEP_GRACE_MS, REDIS_KEYS } from '../constants';
+import {
+  INTERACTION_MAX_RECORD_BYTES,
+  INTERACTION_MAX_REQUEST_BYTES,
+  INTERACTION_SWEEP_GRACE_MS,
+  REDIS_KEYS,
+} from '../constants';
 import { authorizeQuerySchema } from '../schemas/oauth';
 
 /**
@@ -160,7 +165,33 @@ export const interactionRecordSchema = z.strictObject({
 
 export type InteractionRecord = z.infer<typeof interactionRecordSchema>;
 
-/** The record too large to store: the request or the engine's step data. */
+/**
+ * The longest `client_id` an event names (the event envelope's `client.id`,
+ * the `events.client_id` column). A registered client's id always fits; a
+ * longer one, which only a client the authorization endpoint did not resolve
+ * could carry, is left out of the event rather than failing it.
+ */
+export const EVENT_CLIENT_ID_MAX_LENGTH = 255;
+
+/** The record's `client_id` for an event, or `null` when it does not fit one. */
+export function eventClientIdOf(record: Pick<InteractionRecord, 'request'>): string | null {
+  const clientId = record.request.client_id;
+  return clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null;
+}
+
+/**
+ * The authorization request is too large to hold through a ceremony
+ * ({@link INTERACTION_MAX_REQUEST_BYTES}): the caller's doing, refused when the
+ * interaction is created.
+ */
+export class InteractionRequestTooLargeError extends Error {
+  constructor() {
+    super(`authorization request is larger than ${INTERACTION_MAX_REQUEST_BYTES} bytes`);
+    this.name = 'InteractionRequestTooLargeError';
+  }
+}
+
+/** The record too large to store: the engine's step data does not fit. */
 export class InteractionRecordTooLargeError extends Error {
   constructor() {
     super(`interaction state is larger than ${INTERACTION_MAX_RECORD_BYTES} bytes`);
@@ -168,9 +199,17 @@ export class InteractionRecordTooLargeError extends Error {
   }
 }
 
-/** The record as stored, refused when larger than {@link INTERACTION_MAX_RECORD_BYTES}. */
+/**
+ * The record as stored, refused when its request is larger than
+ * {@link INTERACTION_MAX_REQUEST_BYTES} or the whole is larger than
+ * {@link INTERACTION_MAX_RECORD_BYTES}.
+ */
 function serialize(record: InteractionRecord): string {
-  const serialized = JSON.stringify(interactionRecordSchema.parse(record));
+  const parsed = interactionRecordSchema.parse(record);
+  if (Buffer.byteLength(JSON.stringify(parsed.request), 'utf8') > INTERACTION_MAX_REQUEST_BYTES) {
+    throw new InteractionRequestTooLargeError();
+  }
+  const serialized = JSON.stringify(parsed);
   if (Buffer.byteLength(serialized, 'utf8') > INTERACTION_MAX_RECORD_BYTES) {
     throw new InteractionRecordTooLargeError();
   }
@@ -321,31 +360,24 @@ export async function returnInteractionTurn(
  * Remove an interaction for good: its record, its turn and its member of the
  * expiry index, once it finished, was cancelled or was replaced by a user
  * switch.
+ *
+ * @returns whether this call took the member out of the index. `false` means
+ *   the expiry sweep claimed the interaction first and reports it expired: the
+ *   caller must treat it as expired, not as finished or cancelled.
  */
 export async function deleteInteraction(
   redis: Redis,
   record: Pick<InteractionRecord, 'realmId' | 'ref'>,
   idHash: string
-): Promise<void> {
-  assertExecuted(
+): Promise<boolean> {
+  const [, unlisted] = assertExecuted(
     await redis
       .multi()
       .del(recordKey(record.realmId, idHash), turnKey(record.realmId, idHash))
       .zrem(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), indexMember(record, idHash))
       .exec()
   );
-}
-
-/**
- * End an interaction the engine failed on: its record and turn go, and its
- * member stays in the expiry index, so the sweep audits its end at expiry.
- */
-export async function abandonInteraction(
-  redis: Redis,
-  record: Pick<InteractionRecord, 'realmId'>,
-  idHash: string
-): Promise<void> {
-  await redis.del(recordKey(record.realmId, idHash), turnKey(record.realmId, idHash));
+  return unlisted === 1;
 }
 
 /** An index member the expiry sweep may claim: its member string and its expiry. */

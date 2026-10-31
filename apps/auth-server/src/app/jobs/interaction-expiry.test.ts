@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { parseEvent } from '@qauth-labs/shared-events';
+import { EventValidationError, parseEvent } from '@qauth-labs/shared-events';
 import { stepUrn } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
@@ -208,5 +208,41 @@ describe('interaction-expiry (#592)', () => {
 
     expect(emitted).toHaveLength(INTERACTION_EXPIRY_BATCH + 3);
     expect(redis.sortedSets.size).toBe(0);
+  });
+
+  it('drops an event the contract refuses, and goes on with the rest', async () => {
+    const { redis, events, emitted, job } = world();
+    const refused = record({ expiresAt: NOW - 10 });
+    const fine = record({ expiresAt: NOW - 5 });
+    await insert(redis, refused);
+    await insert(redis, fine);
+    events.emitInOwnTransaction.mockImplementationOnce(async () => {
+      throw new EventValidationError('not an event', ['/data/step: Invalid']);
+    });
+    const ctx = context();
+
+    await job.run(ctx);
+    await job.run(ctx);
+
+    expect(emitted).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ interaction: fine.ref }) }),
+    ]);
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ interaction: refused.ref }),
+      'interaction expiry event refused by the event contract; dropped'
+    );
+    expect(redis.sortedSets.size).toBe(0);
+  });
+
+  it('names no client when the client_id is longer than an event holds', async () => {
+    const { redis, emitted, job } = world();
+    const value = record();
+    value.request.client_id = `https://client.example.com/${'c'.repeat(300)}`;
+    await insert(redis, value);
+
+    await job.run(context());
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).not.toHaveProperty('client');
   });
 });

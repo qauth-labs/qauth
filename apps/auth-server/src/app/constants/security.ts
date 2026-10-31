@@ -329,16 +329,29 @@ export const ASSERTED_IDENTIFIER_MAX_LENGTH = 320;
 export const JWKS_CACHE_CONTROL = 'public, max-age=300';
 
 /**
- * Hard ceiling on one interaction record (#592), serialised: the bounded
- * snapshot of the authorization request plus the current step and its
- * personal data. The record is written BEFORE anyone signs in, into the Redis
- * that also holds sessions and rate-limit counters, and lives for
- * `INTERACTION_TTL`, so it must never be an unbounded write. The per-parameter
- * bounds of the authorize request are the primary control (its largest legal
- * form is about 30 KiB, ten 2048-character `resource` values included); this
- * is the backstop.
+ * Hard ceiling on the authorization request an interaction holds (#592),
+ * serialised as JSON. The record is written BEFORE anyone signs in, into the
+ * Redis that also holds sessions and rate-limit counters, and lives for
+ * `INTERACTION_TTL`, so what a caller puts in it is bounded twice: by the
+ * per-parameter bounds of the authorize request, and by this backstop.
+ *
+ * 32 KiB holds any realistic request many times over: the largest plausible
+ * one, a 2048-character `state` and `nonce` and a few RFC 8707 `resource`
+ * values, is under 8 KiB. A request at the absolute schema maximum (ten
+ * 2048-character `resource` values, and opaque values whose every character
+ * JSON escapes to six bytes) can pass 60 KiB; it is refused with
+ * `invalid_request`, as the pending-authorization stash refuses an authorize
+ * URL over {@link PENDING_AUTHORIZATION_MAX_URL_BYTES}.
  */
-export const INTERACTION_MAX_RECORD_BYTES = 48 * 1024;
+export const INTERACTION_MAX_REQUEST_BYTES = 32 * 1024;
+
+/**
+ * Hard ceiling on one whole interaction record (#592), serialised: the
+ * request ({@link INTERACTION_MAX_REQUEST_BYTES} at most) plus the current
+ * step and its personal data, which the engine writes. The headroom keeps a
+ * request at its own ceiling from leaving no room for the steps.
+ */
+export const INTERACTION_MAX_RECORD_BYTES = 64 * 1024;
 
 /**
  * How long an interaction record stays in Redis after its absolute expiry
