@@ -779,20 +779,22 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       if (wanted !== undefined && typeof wanted !== 'string') {
         throw new SignerRequestRefusedError('INVALID_KID', 'A cookie key id is a string');
       }
-      let records = await listKeys(realmId, 'cookie_hmac', null);
-      // A cookie names a key this list lacks: another node may sign with a key
-      // this one has not read yet (#493). Read the store again, unless a read
-      // for a missing key already did within the last second.
-      if (wanted !== undefined && !records.some((key) => key.kid === wanted)) {
-        records = await listKeys(realmId, 'cookie_hmac', null, true);
+      let { current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null));
+      // A cookie names a key that is neither the current nor the previous key
+      // of this list: another node may sign with a key this one has not read
+      // yet, or read only while it was still `next` (#493). Read the store
+      // again, unless a read for a missing key already did within the last
+      // second.
+      if (
+        wanted !== undefined &&
+        !current.some((key) => key.kid === wanted) &&
+        previous?.kid !== wanted
+      ) {
+        ({ current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null, true)));
       }
-      const current = records.filter((key) => key.status === 'active' && key.algorithm === 'HS256');
       if (current.length !== 1) {
         throw new SignerKeyNotFoundError(realmId, 'cookie_hmac', { algorithm: 'HS256' });
       }
-      const [previous] = records
-        .filter((key) => key.status === 'retired' && key.algorithm === 'HS256')
-        .sort(byMostRecentlyRetired);
 
       return Object.freeze({
         current: await secretOf(realmId, current[0]),
@@ -1034,6 +1036,21 @@ function sameKeys(a: readonly SignerKeyRecord[], b: readonly SignerKeyRecord[]):
 }
 
 /** Newest retirement first; a key without a retirement time, then the newest key, last. */
+/**
+ * A realm's cookie keys in a key list: every active HS256 key (one, unless the
+ * store is inconsistent) and the most recently retired one, the previous key.
+ */
+function cookieKeysOf(records: readonly SignerKeyRecord[]): {
+  current: SignerKeyRecord[];
+  previous: SignerKeyRecord | undefined;
+} {
+  const current = records.filter((key) => key.status === 'active' && key.algorithm === 'HS256');
+  const [previous] = records
+    .filter((key) => key.status === 'retired' && key.algorithm === 'HS256')
+    .sort(byMostRecentlyRetired);
+  return { current, previous };
+}
+
 function byMostRecentlyRetired(a: SignerKeyRecord, b: SignerKeyRecord): number {
   return (b.retireAt ?? -1) - (a.retireAt ?? -1) || b.createdAt - a.createdAt;
 }

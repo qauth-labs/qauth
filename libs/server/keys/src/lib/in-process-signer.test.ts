@@ -953,6 +953,26 @@ describe('getCookieSecrets', () => {
     expect(asked.previous?.kid).toBe(first);
   });
 
+  it('reads the store again for a kid its list holds only as the next key (#493)', async () => {
+    const { signer, keys, factory, store, advance } = await setup();
+    const first = activeKid(keys, REALM_A, 'cookie_hmac', 'HS256');
+    // This node reads the list between the two steps of another node's rotation.
+    const [second] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'cookie_hmac',
+      status: 'next',
+    });
+    await signer.getCookieSecrets('local', REALM_A);
+    store.update(REALM_A, first, { status: 'retired', retireAt: NOW + 1 });
+    store.update(REALM_A, second.kid, { status: 'active' });
+    advance(1);
+
+    const asked = await signer.getCookieSecrets('local', REALM_A, { kid: second.kid });
+
+    expect(asked.current.kid).toBe(second.kid);
+    expect(asked.previous?.kid).toBe(first);
+  });
+
   it('reads the store at most once a second for cookie kids no key has', async () => {
     const { signer, store, advance } = await setup();
     await signer.getCookieSecrets('local', REALM_A);
