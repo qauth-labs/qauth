@@ -7,6 +7,7 @@ import type {
   AccountDirectory,
   BoundFactor,
   SignInAccount,
+  SignInCandidate,
 } from '@qauth-labs/server-sign-in-engine';
 
 /** A `user_credentials` row, as far as the directory reads it. */
@@ -52,24 +53,28 @@ export interface AccountDirectoryLog {
  * (ADR-002: `users` is the identity anchor, credentials live in
  * `user_credentials`).
  *
- * - An identifier names an account through its password credential: the
- *   `password` row whose `external_sub` is the normalised address, in the
- *   realm. No such row, or no users row behind it, is no account.
- * - The account is enabled as `users.enabled` says, verified as the password
- *   credential's `email_verified` says (the proof of a password account's
- *   primary identity), and an admin when it holds a live admin grant seen
- *   from the realm (#510).
- * - Its factors are its password (its hash, or `null` when the credential's
- *   data cannot be read, which the engine refuses like a wrong password) and
- *   each passkey (`webauthn`) it holds. None is disabled yet:
- *   `user_credentials.disabled_at` comes with the ladder's hard action (#615).
+ * - Before any credential is checked (`findByIdentifier`) it reads only what
+ *   the password needs: the `password` credential whose `external_sub` is the
+ *   normalised address in the realm, and the users row behind it. No such row,
+ *   or no users row, is no account. The account is enabled as
+ *   `users.enabled` says and verified as the credential's `email_verified`
+ *   says (the proof of a password account's primary identity); its hash is
+ *   `null` when the credential's data cannot be read, which the engine
+ *   refuses like a wrong password.
+ * - Once a factor proved the user (`findByUserId`) it reads the whole
+ *   account: every password and passkey (`webauthn`) credential it holds in
+ *   the realm, and whether it holds a live admin grant seen from the realm
+ *   (#510). An account that exists so costs one read more than none before
+ *   the password is checked, not four.
+ * - No factor is disabled yet: `user_credentials.disabled_at` comes with the
+ *   ladder's hard action (#615).
  */
 export function createRepositoryAccountDirectory(
   stores: AccountDirectoryRepositories,
   log: AccountDirectoryLog
 ): AccountDirectory {
   return Object.freeze({
-    async findByIdentifier(realmId: string, identifier: string): Promise<SignInAccount | null> {
+    async findByIdentifier(realmId: string, identifier: string): Promise<SignInCandidate | null> {
       const credential = await stores.userCredentials.findByRealmProviderSub(
         realmId,
         PASSWORD_PROVIDER_TYPE,
@@ -89,18 +94,35 @@ export function createRepositoryAccountDirectory(
           'malformed credential_data on password credential'
         );
       }
-      const passkeys = (
+      return Object.freeze({
+        userId: user.id,
+        enabled: user.enabled,
+        verified: data.success && data.data.email_verified,
+        password: Object.freeze({
+          disabled: false,
+          hash: data.success ? data.data.password_hash : null,
+        }),
+      });
+    },
+
+    async findByUserId(realmId: string, userId: string): Promise<SignInAccount | null> {
+      const user = await stores.users.findById(realmId, userId);
+      if (user === undefined) return null;
+      const ofRealm = (rows: CredentialRow[]) => rows.filter((row) => row.realmId === realmId);
+      const passwords = ofRealm(
+        await stores.userCredentials.findAllByUserIdAndType(user.id, PASSWORD_PROVIDER_TYPE)
+      );
+      const passkeys = ofRealm(
         await stores.userCredentials.findAllByUserIdAndType(user.id, WEBAUTHN_PROVIDER_TYPE)
-      ).filter((row) => row.realmId === realmId);
+      );
       const grants = await stores.adminGrants.listLive(realmId, user.id);
       const factors: BoundFactor[] = [
-        { type: 'password', disabled: false, hash: data.success ? data.data.password_hash : null },
+        ...passwords.map(() => ({ type: 'password' as const, disabled: false })),
         ...passkeys.map(() => ({ type: 'passkey' as const, disabled: false })),
       ];
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,
-        verified: data.success && data.data.email_verified,
         admin: grants.length > 0,
         factors: Object.freeze(factors),
       });

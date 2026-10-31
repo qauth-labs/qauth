@@ -9,9 +9,9 @@ through this one, which re-exports the types it needs.
 
 | Export                               | What                                                                                                                               |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `createRepositoryAccountDirectory`   | The account an identifier names: its password credential, users row, passkeys and live admin grants                                |
-| `createArgon2PasswordVerifier`       | Argon2id through the server's hasher, and the dummy verification against the hash of a secret nobody holds, which never throws     |
-| `createCookieSecretIdentifierDigest` | The identifier's keyed HMAC, under a key derived from the realm's `cookie_hmac` secret with a label of its own                     |
+| `createRepositoryAccountDirectory`   | Before the password: its credential and users row only. After a proof: every password and passkey credential and the admin grants  |
+| `createArgon2PasswordVerifier`       | Argon2id through the server's hasher, and the dummy verification, which fails only as a real one does                              |
+| `createCookieSecretIdentifierDigest` | The identifier's keyed HMAC, under a key derived with HKDF from the realm's `cookie_hmac` secret and a label of its own            |
 | `signInAuditEvent`                   | An audit record as `user.sign_in_step_passed` or `user.sign_in_failed`, with the user as subject once resolved and the HMAC before |
 | `signInEnginePlugin`                 | Decorates `fastify.signInEngine` with an engine built from its options                                                             |
 

@@ -21,10 +21,14 @@ export interface PasswordVerifierLog {
  * random secret nobody holds, made once by the hasher itself, so its cost
  * parameters are the ones real hashes are stored with. Argon2id runs on the
  * libuv thread pool, one queue for the whole process, so a miss must queue
- * for and cost what a hit does. A dummy verification never throws: a failure
- * there must not turn the ordinary refusal of an unknown identifier into an
- * answer only unknown identifiers would get. It is logged, and the next miss
- * makes a new dummy hash.
+ * for and cost what a hit does.
+ *
+ * The two paths fail alike, so a failure tells no account from another: the
+ * verification itself throws the same way on both (an outage the engine
+ * refuses as `unavailable` for every identifier), while a failure to make the
+ * dummy hash, which only misses meet, is logged and swallowed, and the next
+ * miss makes a new one. The hasher answers `false` for a hash it cannot
+ * read, as the engine's port asks.
  */
 export function createArgon2PasswordVerifier(
   hasher: Argon2Hasher,
@@ -34,13 +38,16 @@ export function createArgon2PasswordVerifier(
   return Object.freeze({
     verify: (hash: string, presented: string) => hasher.verifyPassword(hash, presented),
     async verifyDecoy(presented: string): Promise<void> {
+      let hash: string;
       try {
         dummyHash ??= hasher.hashPassword(randomBytes(32).toString('hex'));
-        await hasher.verifyPassword(await dummyHash, presented);
+        hash = await dummyHash;
       } catch (err) {
         dummyHash = undefined;
-        log.error({ err }, 'dummy password verification failed');
+        log.error({ err }, 'could not make the dummy password hash');
+        return;
       }
+      await hasher.verifyPassword(hash, presented);
     },
   });
 }

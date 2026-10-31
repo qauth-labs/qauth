@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, hkdfSync } from 'node:crypto';
 
 import { createSignInEngine, type SignInAuditRecord } from '@qauth-labs/server-sign-in-engine';
 import {
@@ -55,6 +55,11 @@ function stubStores(
       },
       findAllByUserIdAndType: async (userId, providerType) => {
         calls.push(`all:${userId}:${providerType}`);
+        if (providerType === 'password') {
+          return state.credential === undefined
+            ? []
+            : [{ id: 'cred-1', userId, realmId: REALM, credentialData: state.credential }];
+        }
         return state.passkeys.map((passkey, index) => ({
           id: `passkey-${index}`,
           userId,
@@ -89,23 +94,38 @@ describe('the repository account directory', () => {
     expect(calls).toEqual([`credential:${REALM}:password:${IDENTIFIER}`]);
   });
 
-  it('reads the user, the password, the passkeys and the admin grants of an account', async () => {
-    const { repos } = stubStores({
-      passkeys: [{ realmId: REALM }, { realmId: OTHER_REALM }],
-      grants: [{ grant: {} }],
-    });
+  it('reads only the credential and the user before the password is checked', async () => {
+    const { repos, calls } = stubStores({ passkeys: [{ realmId: REALM }], grants: [{}] });
     const directory = createRepositoryAccountDirectory(repos, log());
     expect(await directory.findByIdentifier(REALM, IDENTIFIER)).toEqual({
       userId: USER,
       enabled: true,
       verified: true,
+      password: { disabled: false, hash: 'hash' },
+    });
+    expect(calls).toEqual([`credential:${REALM}:password:${IDENTIFIER}`, `user:${REALM}:${USER}`]);
+  });
+
+  it('reads every factor and the admin grants of the user a factor proved', async () => {
+    const { repos } = stubStores({
+      passkeys: [{ realmId: REALM }, { realmId: OTHER_REALM }],
+      grants: [{ grant: {} }],
+    });
+    const directory = createRepositoryAccountDirectory(repos, log());
+    expect(await directory.findByUserId(REALM, USER)).toEqual({
+      userId: USER,
+      enabled: true,
       admin: true,
       // A passkey of another realm's row is not this account's.
       factors: [
-        { type: 'password', disabled: false, hash: 'hash' },
+        { type: 'password', disabled: false },
         { type: 'passkey', disabled: false },
       ],
     });
+    const { repos: none } = stubStores({ user: undefined });
+    expect(
+      await createRepositoryAccountDirectory(none, log()).findByUserId(REALM, USER)
+    ).toBeNull();
   });
 
   it('reports a disabled, unverified account as such', async () => {
@@ -115,7 +135,7 @@ describe('the repository account directory', () => {
     });
     expect(
       await createRepositoryAccountDirectory(repos, log()).findByIdentifier(REALM, IDENTIFIER)
-    ).toMatchObject({ enabled: false, verified: false, admin: false });
+    ).toMatchObject({ enabled: false, verified: false });
   });
 
   it('gives an unreadable credential no hash, and logs it without its data', async () => {
@@ -125,10 +145,7 @@ describe('the repository account directory', () => {
       REALM,
       IDENTIFIER
     );
-    expect(account).toMatchObject({
-      verified: false,
-      factors: [{ type: 'password', disabled: false, hash: null }],
-    });
+    expect(account).toMatchObject({ verified: false, password: { disabled: false, hash: null } });
     expect(logger.error).toHaveBeenCalledWith({ credentialId: 'cred-1' }, expect.any(String));
   });
 
@@ -171,7 +188,7 @@ describe('the Argon2id password verifier', () => {
     ]);
   });
 
-  it('never throws from the dummy verification, and makes a new dummy hash after a failure', async () => {
+  it('swallows a failure to make the dummy hash, and makes a new one on the next miss', async () => {
     const argon = hasher();
     argon.hashPassword.mockRejectedValueOnce(new Error('argon2 failed'));
     const logger = log();
@@ -183,6 +200,14 @@ describe('the Argon2id password verifier', () => {
     expect(argon.hashPassword).toHaveBeenCalledTimes(2);
     expect(argon.verifyPassword).toHaveBeenCalledTimes(1);
   });
+
+  it('fails the dummy verification as the real one fails, so an outage tells no account apart', async () => {
+    const argon = hasher();
+    argon.verifyPassword.mockRejectedValue(new Error('thread pool gone'));
+    const verifier = createArgon2PasswordVerifier(argon, log());
+    await expect(verifier.verify('hash:x', 'x')).rejects.toThrow('thread pool gone');
+    await expect(verifier.verifyDecoy('x')).rejects.toThrow('thread pool gone');
+  });
 });
 
 describe('the identifier HMAC', () => {
@@ -192,6 +217,7 @@ describe('the identifier HMAC', () => {
     return {
       getCookieSecrets: vi.fn(async () => ({
         current: { kid: 'cookie-1', secret: Buffer.from(secret) },
+        previous: { kid: 'cookie-0', secret: Buffer.from('the retired cookie secret') },
       })),
     };
   }
@@ -200,18 +226,27 @@ describe('the identifier HMAC', () => {
     const source = signer();
     const digest = createCookieSecretIdentifierDigest(source);
     const value = await digest({ realmId: REALM, identifier: IDENTIFIER });
-    const key = createHmac('sha256', secret).update(IDENTIFIER_HMAC_LABEL).digest();
+    const key = Buffer.from(hkdfSync('sha256', secret, Buffer.alloc(0), IDENTIFIER_HMAC_LABEL, 32));
     expect(value).toBe(
       createHmac('sha256', key).update(`${REALM}\u0000${IDENTIFIER}`).digest('base64url')
     );
     expect(value).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(source.getCookieSecrets).toHaveBeenCalledWith('web', REALM);
+    // Both secrets the signer handed over are wiped once used.
+    const handed = await source.getCookieSecrets.mock.results[0].value;
+    expect(handed.current.secret.every((byte: number) => byte === 0)).toBe(true);
+    expect(handed.previous.secret.every((byte: number) => byte === 0)).toBe(true);
   });
 
   it('is neither a cookie signature under the same secret nor the same in two realms', async () => {
     const digest = createCookieSecretIdentifierDigest(signer());
     const value = await digest({ realmId: REALM, identifier: IDENTIFIER });
     expect(value).not.toBe(createHmac('sha256', secret).update(IDENTIFIER).digest('base64url'));
+    // The key is not the cookie signature of the label under the same secret.
+    const signedLabel = createHmac('sha256', secret).update(IDENTIFIER_HMAC_LABEL).digest();
+    expect(value).not.toBe(
+      createHmac('sha256', signedLabel).update(`${REALM}\u0000${IDENTIFIER}`).digest('base64url')
+    );
     expect(await digest({ realmId: OTHER_REALM, identifier: IDENTIFIER })).not.toBe(value);
     expect(await digest({ realmId: REALM, identifier: 'bob@example.com' })).not.toBe(value);
   });
