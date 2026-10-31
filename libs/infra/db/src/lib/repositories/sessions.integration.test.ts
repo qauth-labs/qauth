@@ -819,7 +819,7 @@ describe('sessions integration (real Postgres)', () => {
       expect((await repo.findById(other, elsewhere.id))?.revokedAt).toBeNull();
     });
 
-    it('marks sessions past an end as idle or expired, at the time each ended, and leaves live ones', async () => {
+    it('marks sessions past an end as idle or expired, and leaves live ones', async () => {
       const now = Date.now();
       const strict = await one(
         `INSERT INTO realms (name, sso_max_lifespan, sso_idle_timeout) VALUES ($1, 7200, 600) RETURNING id`,
@@ -861,24 +861,23 @@ describe('sessions integration (real Postgres)', () => {
         limit: 100,
       });
 
+      // Marked at the batch's time, whenever each one ended: retention counts
+      // from the mark.
       const byId = new Map(batch.ended.map((row) => [row.session.id, row]));
-      expect(byId.get(idle.id)?.session).toMatchObject({
-        revokedReason: 'idle',
-        revokedAt: now - 11 * 60_000 + 600_000,
-      });
+      expect(byId.get(idle.id)?.session).toMatchObject({ revokedReason: 'idle', revokedAt: now });
       expect(byId.get(idle.id)?.clients.map((client) => client.oauthClientId)).toEqual([app]);
       expect(await used(code)).toBe(true);
       expect(byId.get(tooOld.id)?.session).toMatchObject({
         revokedReason: 'expired',
-        revokedAt: now - 3 * HOUR + 2 * HOUR,
+        revokedAt: now,
       });
       expect(byId.get(expired.id)?.session).toMatchObject({
         revokedReason: 'expired',
-        revokedAt: now - HOUR,
+        revokedAt: now,
       });
       expect(byId.get(pastTtl.id)?.session).toMatchObject({
         revokedReason: 'expired',
-        revokedAt: now - 5 * HOUR + 4 * HOUR,
+        revokedAt: now,
       });
       expect(byId.has(live.id)).toBe(false);
       expect((await repo.findById(strict, live.id))?.revokedAt).toBeNull();
@@ -887,6 +886,219 @@ describe('sessions integration (real Postgres)', () => {
         (await repo.revokeLapsedBatch({ now, defaultMaxLifespanMs: 4 * HOUR, limit: 100 })).ended
       ).toEqual([]);
     });
+
+    it('marks a session exactly at each end, not a millisecond before, and names the end that came first', async () => {
+      // The session service's rules (lifetimes.ts): absolute end =
+      // least(expires_at, created_at + (sso_max_lifespan ?? SESSION_COOKIE_TTL)
+      // seconds); idle end = last_seen_at + sso_idle_timeout seconds; a
+      // session is no longer live AT an end; the absolute end wins a tie.
+      const now = Date.now();
+      const ttlMs = 4 * HOUR;
+      const strict = await one(
+        `INSERT INTO realms (name, sso_max_lifespan, sso_idle_timeout) VALUES ($1, 7200, 600) RETURNING id`,
+        [`realm-${Math.random().toString(36).slice(2)}`]
+      );
+      const open = await seedRealm();
+      const strictUser = await seedUser(strict);
+      const openUser = await seedUser(open);
+      const cases: Array<
+        [name: string, row: Partial<NewSession>, realm: string, expected: string | null]
+      > = [
+        // Idle end (last seen + 600 s) at now - 1, now, now + 1.
+        [
+          'idle end passed',
+          { createdAt: now - HOUR, lastSeenAt: now - 600_001, expiresAt: now + HOUR },
+          strict,
+          'idle',
+        ],
+        [
+          'idle end now',
+          { createdAt: now - HOUR, lastSeenAt: now - 600_000, expiresAt: now + HOUR },
+          strict,
+          'idle',
+        ],
+        [
+          'idle end ahead',
+          { createdAt: now - HOUR, lastSeenAt: now - 599_999, expiresAt: now + HOUR },
+          strict,
+          null,
+        ],
+        // The realm's maximum lifespan (7200 s from creation) at the same three points.
+        [
+          'lifespan passed',
+          { createdAt: now - 7_200_001, lastSeenAt: now - 1_000, expiresAt: now + HOUR },
+          strict,
+          'expired',
+        ],
+        [
+          'lifespan now',
+          { createdAt: now - 7_200_000, lastSeenAt: now - 1_000, expiresAt: now + HOUR },
+          strict,
+          'expired',
+        ],
+        [
+          'lifespan ahead',
+          { createdAt: now - 7_199_999, lastSeenAt: now - 1_000, expiresAt: now + HOUR },
+          strict,
+          null,
+        ],
+        // expires_at, earlier than the lifespan.
+        [
+          'expires_at now',
+          { createdAt: now - HOUR, lastSeenAt: now - 1_000, expiresAt: now },
+          strict,
+          'expired',
+        ],
+        [
+          'expires_at ahead',
+          { createdAt: now - HOUR, lastSeenAt: now - 1_000, expiresAt: now + 1 },
+          strict,
+          null,
+        ],
+        // Both ends at the same moment: the absolute end names it.
+        [
+          'tie',
+          { createdAt: now - HOUR, lastSeenAt: now - 600_000, expiresAt: now },
+          strict,
+          'expired',
+        ],
+        // Idle first, then past the absolute end too.
+        [
+          'idle before expiry',
+          { createdAt: now - HOUR, lastSeenAt: now - 700_000, expiresAt: now - 1 },
+          strict,
+          'idle',
+        ],
+        // A realm with no lifetimes: SESSION_COOKIE_TTL from creation, no idle limit.
+        [
+          'ttl now',
+          { createdAt: now - ttlMs, lastSeenAt: now - ttlMs, expiresAt: now + HOUR },
+          open,
+          'expired',
+        ],
+        [
+          'ttl ahead',
+          { createdAt: now - ttlMs + 1, lastSeenAt: now - ttlMs, expiresAt: now + HOUR },
+          open,
+          null,
+        ],
+        // A longer lifespan never extends a session past its expires_at.
+        [
+          'no idle limit, expires_at now',
+          { createdAt: now - HOUR, lastSeenAt: now - 3 * HOUR, expiresAt: now },
+          open,
+          'expired',
+        ],
+      ];
+      const ids = new Map<string, string>();
+      for (const [name, row, realm] of cases) {
+        const created = await repo.create(
+          session(realm, realm === strict ? strictUser : openUser, row)
+        );
+        ids.set(name, created.id);
+      }
+
+      const batch = await repo.revokeLapsedBatch({ now, defaultMaxLifespanMs: ttlMs, limit: 100 });
+
+      const marked = new Map(batch.ended.map((row) => [row.session.id, row.session.revokedReason]));
+      expect(
+        Object.fromEntries(cases.map(([name]) => [name, marked.get(ids.get(name) ?? '') ?? null]))
+      ).toEqual(Object.fromEntries(cases.map(([name, , , expected]) => [name, expected])));
+    });
+
+    it('a code mint holding its share lock delays a bulk revocation and the sweep, which then return its client', async () => {
+      if (!ctx) throw new Error('no ctx');
+      const db = ctx.database.db;
+      const realm = await one(
+        `INSERT INTO realms (name, sso_idle_timeout) VALUES ($1, 600) RETURNING id`,
+        [`realm-${Math.random().toString(36).slice(2)}`]
+      );
+      const user = await seedUser(realm);
+      const client = await seedClient(realm);
+      const now = Date.now();
+      const forRealm = await repo.create(session(realm, user, { createdAt: now - 1_000 }));
+      // Idle in a minute: the sweep below judges it at now + 11 minutes.
+      const forSweep = await repo.create(
+        session(realm, user, { createdAt: now - 1_000, lastSeenAt: now - 1_000 })
+      );
+
+      async function lockWait(): Promise<void> {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const { rows } = await pool().query(
+            `SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock'`
+          );
+          if ((rows[0].n as number) > 0) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error('no backend waited on a lock');
+      }
+
+      let realmBatch: ReturnType<SessionsRepository['revokeRealmBatch']> | undefined;
+      await db.transaction(async (tx) => {
+        expect(await repo.recordClient(realm, forRealm.id, client, tx)).toBe(true);
+        realmBatch = repo.revokeRealmBatch(realm, 'key_retired', {
+          createdThrough: now,
+          limit: 1,
+        });
+        await lockWait();
+      });
+      const ended = await realmBatch;
+      expect(
+        ended?.ended.map((row) => [row.session.id, row.clients.map((c) => c.oauthClientId)])
+      ).toEqual([[forRealm.id, [client]]]);
+
+      let sweep: ReturnType<SessionsRepository['revokeLapsedBatch']> | undefined;
+      await db.transaction(async (tx) => {
+        expect(await repo.recordClient(realm, forSweep.id, client, tx)).toBe(true);
+        sweep = repo.revokeLapsedBatch({
+          now: now + 11 * 60_000,
+          defaultMaxLifespanMs: 24 * HOUR,
+          limit: 100,
+        });
+        await lockWait();
+      });
+      const swept = (await sweep)?.ended.find((row) => row.session.id === forSweep.id);
+      expect(swept?.session.revokedReason).toBe('idle');
+      expect(swept?.clients.map((c) => c.oauthClientId)).toEqual([client]);
+      expect(
+        await count('session_clients', 'session_id = ANY($1::uuid[])', [[forRealm.id, forSweep.id]])
+      ).toBe(0);
+    });
+
+    it('lists no client of a revoked session that kept registry rows, and leaves it out of the client’s list', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm);
+      const app = await seedClient(realm);
+      const created = await repo.create(session(realm, user));
+      await recordAt(created.id, app, Date.now() - 1_000);
+      // As a previous release revokes during a rolling upgrade: the row only.
+      await pool().query(
+        `UPDATE sessions SET revoked_at = $2, revoked_reason = 'sign_out' WHERE id = $1`,
+        [created.id, Date.now()]
+      );
+
+      const [listed] = await repo.listForUser(realm, user, { limit: 10 });
+      expect(listed.session.id).toBe(created.id);
+      expect(listed.clients).toEqual([]);
+      expect(await repo.listForClient(realm, app, { limit: 10 })).toEqual([]);
+    });
+
+    it('signs out a user with more sessions than a statement has parameters', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm);
+      const now = Date.now();
+      await pool().query(
+        `INSERT INTO sessions (realm_id, user_id, auth_time, expires_at, created_at, last_seen_at)
+         SELECT $1, $2, $3, $4, $3, $3 FROM generate_series(1, 70000)`,
+        [realm, user, now - 1_000, now + HOUR]
+      );
+
+      const ended = await repo.revokeForUser(realm, user, 'sign_out_everywhere');
+
+      expect(ended).toHaveLength(70_000);
+      expect(await count('sessions', 'user_id = $1 AND revoked_at IS NULL', [user])).toBe(0);
+    }, 120_000);
 
     it('deletes rows revoked or expired before the cut-off and keeps the rest', async () => {
       const realm = await seedRealm();

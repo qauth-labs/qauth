@@ -1255,7 +1255,8 @@ export interface SessionsRepository {
    * One page of a user's sessions in the realm, newest first (`created_at`,
    * then `id`), whatever their state: live, past an end, or revoked, until
    * {@link deleteEnded} removes them. Each comes with the clients its
-   * registry holds. Empty for a user of another realm.
+   * registry holds; a revoked one with none. Empty for a user of another
+   * realm.
    */
   listForUser(
     realmId: string,
@@ -1266,8 +1267,10 @@ export interface SessionsRepository {
   /**
    * One page of the realm's sessions that served a client (its
    * `oauth_clients.id`), newest first, each with all the clients its
-   * registry holds. A revoked session holds no registry row, so only
-   * sessions not yet revoked are listed. Empty for a client of another realm.
+   * registry holds. Only sessions not yet revoked are listed: a revocation
+   * deletes the registry rows, and one a previous release made during a
+   * rolling upgrade, which left them, does not count. Empty for a client of
+   * another realm.
    */
   listForClient(
     realmId: string,
@@ -1313,8 +1316,9 @@ export interface SessionsRepository {
    * `expired`, past the realm's idle limit (`sso_idle_timeout` from
    * `last_seen_at`) as `idle`, whichever came first. The rules are the
    * session service's, so the rows marked are sessions it already treats as
-   * absent. `revoked_at` is the time the session ended, not the time of the
-   * mark. Otherwise as {@link revokeRealmBatch}.
+   * absent. `revoked_at` is `batch.now`, the time of the mark, so the
+   * retention of {@link deleteEnded} counts from it. Otherwise as
+   * {@link revokeRealmBatch}.
    */
   revokeLapsedBatch(batch: RevokeLapsedSessionsBatch): Promise<RevokedSessionsBatch>;
   /**

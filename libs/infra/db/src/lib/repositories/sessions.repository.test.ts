@@ -77,6 +77,11 @@ const SESSION_ROW: unknown[] = [
   String(NOW - 10_000),
 ];
 
+/** The same row, live: not revoked. */
+const LIVE_ROW: unknown[] = SESSION_ROW.map((value, index) =>
+  index === 9 || index === 10 ? null : value
+);
+
 const NEW_SESSION: NewSession = {
   realmId: REALM_ID,
   userId: USER_ID,
@@ -366,7 +371,9 @@ describe('createSessionsRepository', () => {
     const lookup = queries.find((query) =>
       query.text.toLowerCase().includes('from "oauth_clients"')
     );
-    expect(lookup?.text.toLowerCase()).toContain('where "oauth_clients"."id" in ($1, $2)');
+    // The ids go as ONE array parameter, whatever their number.
+    expect(lookup?.text.toLowerCase()).toContain('where "oauth_clients"."id" = any($1::uuid[])');
+    expect(lookup?.values).toEqual([[CLIENT_ID, OTHER_CLIENT]]);
     expect(
       queries.map((query) => query.text.toLowerCase().split(' ').slice(0, 2).join(' '))
     ).toEqual([
@@ -540,8 +547,10 @@ describe('session lists and bulk revocations (#550)', () => {
     expect(text).toContain(
       'inner join "session_clients" on "session_clients"."session_id" = "sessions"."id"'
     );
+    // A session a previous release revoked may keep registry rows: it is
+    // not listed.
     expect(text).toContain(
-      'where ("sessions"."realm_id" = $1 and "session_clients"."oauth_client_id" = $2)'
+      'where ("sessions"."realm_id" = $1 and ("session_clients"."oauth_client_id" = $2 and "sessions"."revoked_at" is null))'
     );
     expect(queries[0].values).toEqual([REALM_ID, CLIENT_ID, 5]);
   });
@@ -549,7 +558,7 @@ describe('session lists and bulk revocations (#550)', () => {
   it('a list reads the registry of the sessions on the page, with their clients', async () => {
     const { db, queries } = createRecordingDb((text) => {
       const lower = text.toLowerCase();
-      if (lower.includes('from "sessions"')) return [SESSION_ROW];
+      if (lower.includes('from "sessions"')) return [LIVE_ROW];
       if (lower.includes('from "session_clients"')) {
         return [[SESSION_ID, CLIENT_ID, String(NOW - 1_000)]];
       }
@@ -571,8 +580,24 @@ describe('session lists and bulk revocations (#550)', () => {
         clientName: 'App',
       },
     ]);
-    expect(queries[1].text.toLowerCase()).toContain('where "session_clients"."session_id" in ($1)');
-    expect(queries[1].values).toEqual([SESSION_ID]);
+    expect(queries[1].text.toLowerCase()).toContain(
+      'where "session_clients"."session_id" = any($1::uuid[])'
+    );
+    expect(queries[1].values).toEqual([[SESSION_ID]]);
+  });
+
+  it('a list shows a revoked session without clients, and reads no registry row for it', async () => {
+    const { db, queries } = createRecordingDb((text) =>
+      text.toLowerCase().includes('from "sessions"') ? [SESSION_ROW] : undefined
+    );
+
+    const [listed] = await createSessionsRepository(db).listForUser(REALM_ID, USER_ID, {
+      limit: 10,
+    });
+
+    expect(listed.session.revokedReason).toBe('sign_out');
+    expect(listed.clients).toEqual([]);
+    expect(queries).toHaveLength(1);
   });
 
   it('revokeForUser locks the user’s unrevoked sessions in id order, then ends them as revoke ends one', async () => {
@@ -610,9 +635,9 @@ describe('session lists and bulk revocations (#550)', () => {
     const update = queries[2];
     expect(update.text.toLowerCase()).toContain('set "revoked_at" = $1, "revoked_reason" = $2');
     expect(update.text.toLowerCase()).toContain(
-      'where ("sessions"."id" in ($3) and "sessions"."revoked_at" is null)'
+      'where ("sessions"."id" = any($3::uuid[]) and "sessions"."revoked_at" is null)'
     );
-    expect(update.values).toEqual([NOW, 'reset', SESSION_ID]);
+    expect(update.values).toEqual([NOW, 'reset', [SESSION_ID]]);
   });
 
   it('revokeForUser writes nothing more when it locks no session', async () => {
@@ -658,8 +683,8 @@ describe('session lists and bulk revocations (#550)', () => {
       limit: 2,
     });
 
-    // The UPDATE answered no row (another transaction ended both): the batch
-    // still moves past them.
+    // The recording client answers the UPDATE with no row: the batch still
+    // reports what it selected, and the next one starts after it.
     expect(batch).toEqual({ ended: [], last: OTHER_SESSION, selected: 2 });
     const lock = statementsOf(queries)[0];
     expect(lock.text.toLowerCase()).toContain(
@@ -684,7 +709,7 @@ describe('session lists and bulk revocations (#550)', () => {
     ).toEqual({ ended: [], last: null, selected: 0 });
   });
 
-  it('revokeLapsedBatch judges both ends with the realm’s lifetimes and SESSION_COOKIE_TTL, and records when each session ended', async () => {
+  it('revokeLapsedBatch judges both ends with the realm’s lifetimes and SESSION_COOKIE_TTL, and marks the sessions at the batch’s time', async () => {
     const { db, queries } = createRecordingDb((text) =>
       text.toLowerCase().startsWith('select "sessions"."id"') ? [[SESSION_ID]] : undefined
     );
@@ -709,7 +734,10 @@ describe('session lists and bulk revocations (#550)', () => {
     );
     expect(lock.text.trim()).toMatch(/limit \$\d+ for update of "sessions"$/);
     expect(lock.values).toEqual(expect.arrayContaining([86_400_000, NOW, 50]));
-    expect(update.text).toMatch(/^update "sessions" set "revoked_at" = least\(least\(/);
+    expect(update.text).toMatch(
+      /^update "sessions" set "revoked_at" = \$1, "revoked_reason" = case when/
+    );
+    expect(update.values[0]).toBe(NOW);
     expect(update.text).toContain("then 'idle' else 'expired' end");
     expect(update.text).toContain('from "realms"');
     expect(update.text).toContain('returning');
@@ -734,7 +762,68 @@ describe('session lists and bulk revocations (#550)', () => {
     expect(select.values).toEqual([OTHER_SESSION, NOW, NOW, 1]);
     expect(remove.text).toContain('delete from "sessions"');
     expect(remove.text).toContain(
-      'where ("sessions"."id" in ($1) and ("sessions"."revoked_at" < $2 or "sessions"."expires_at" < $3))'
+      'where ("sessions"."id" = any($1::uuid[]) and ("sessions"."revoked_at" < $2 or "sessions"."expires_at" < $3))'
     );
+  });
+
+  /** A recording client whose `UPDATE "sessions"` fails with `error` the first `times` times. */
+  function failingUpdates(
+    error: object,
+    times: number,
+    respond?: (text: string) => unknown[] | undefined
+  ) {
+    const { db, queries } = createRecordingDb(
+      (text) =>
+        respond?.(text) ??
+        (text.toLowerCase().startsWith('select "id" from "sessions"') ? [[SESSION_ID]] : undefined)
+    );
+    let failures = 0;
+    const client = (db as unknown as { $client: { query: (...args: unknown[]) => unknown } })
+      .$client;
+    const query = client.query;
+    client.query = (config: unknown, values?: unknown) => {
+      const text = typeof config === 'string' ? config : ((config as { text?: string }).text ?? '');
+      if (text.toLowerCase().startsWith('update "sessions"') && failures < times) {
+        failures += 1;
+        return Promise.reject(Object.assign(new Error('failed'), error));
+      }
+      return query(config, values);
+    };
+    return { db, queries, failures: () => failures };
+  }
+
+  it('runs a bulk revocation again when Postgres aborts it as a deadlock, up to three times', async () => {
+    const twice = failingUpdates({ code: '40P01' }, 2);
+
+    await createSessionsRepository(twice.db).revokeForUser(REALM_ID, USER_ID, 'reset');
+
+    expect(twice.failures()).toBe(2);
+    expect(twice.queries.filter((query) => /^rollback/i.test(query.text))).toHaveLength(2);
+    expect(twice.queries.filter((query) => /^commit/i.test(query.text))).toHaveLength(1);
+
+    const always = failingUpdates({ code: '40P01' }, 3);
+    await expect(
+      createSessionsRepository(always.db).revokeRealmBatch(REALM_ID, 'admin', {
+        createdThrough: NOW,
+        limit: 10,
+      })
+    ).rejects.toMatchObject({ cause: { code: '40P01' } });
+    expect(always.failures()).toBe(3);
+  });
+
+  it('does not run a bulk revocation again for any other error, or inside a caller’s transaction', async () => {
+    const other = failingUpdates({ code: '23503' }, 1);
+    await expect(
+      createSessionsRepository(other.db).revokeForUser(REALM_ID, USER_ID, 'reset')
+    ).rejects.toMatchObject({ cause: { code: '23503' } });
+    expect(other.failures()).toBe(1);
+
+    const inCaller = failingUpdates({ code: '40P01' }, 1, isolationLevel('read committed'));
+    await expect(
+      inCaller.db.transaction((tx) =>
+        createSessionsRepository(inCaller.db).revokeForUser(REALM_ID, USER_ID, 'reset', {}, tx)
+      )
+    ).rejects.toMatchObject({ cause: { code: '40P01' } });
+    expect(inCaller.failures()).toBe(1);
   });
 });

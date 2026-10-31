@@ -6,7 +6,6 @@ import {
   getTableColumns,
   gt,
   gte,
-  inArray,
   isNotNull,
   isNull,
   lt,
@@ -15,6 +14,7 @@ import {
   or,
   type SQL,
   sql,
+  type SQLWrapper,
 } from 'drizzle-orm';
 
 import type {
@@ -88,6 +88,13 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
    * level gives each statement of a revocation a snapshot taken after the
    * rows were locked (see {@link finishEnded}), so a `tx` at another level is
    * refused before anything is written.
+   *
+   * A transaction of its own that Postgres aborts as a deadlock is run again,
+   * up to {@link DEADLOCK_ATTEMPTS} times: it wrote nothing, so a second run
+   * is the same revocation. Revocations lock sessions in id order, so they
+   * cannot deadlock among themselves; deleting a client or a realm cascades
+   * through `session_clients` in another order and can. In a caller's
+   * transaction the error is the caller's.
    */
   async function inReadCommitted<T>(
     method: string,
@@ -95,7 +102,13 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
     tx?: DbClient
   ): Promise<T> {
     if (tx === undefined) {
-      return defaultDb.transaction(work, { isolationLevel: 'read committed' });
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await defaultDb.transaction(work, { isolationLevel: 'read committed' });
+        } catch (error) {
+          if (attempt >= DEADLOCK_ATTEMPTS || !isDeadlock(error)) throw error;
+        }
+      }
     }
     const { rows } = await tx.execute<{ level: string }>(
       sql`select current_setting('transaction_isolation') as level`
@@ -129,7 +142,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
         name: oauthClients.name,
       })
       .from(oauthClients)
-      .where(inArray(oauthClients.id, ids));
+      .where(anyOf(oauthClients.id, ids));
     const byId = new Map(clients.map((client) => [client.id, client]));
     return rows
       .flatMap((row) => {
@@ -167,7 +180,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
     const bySession =
       ids.length === 1
         ? eq(sessionClients.sessionId, ids[0])
-        : inArray(sessionClients.sessionId, ids);
+        : anyOf(sessionClients.sessionId, ids);
     const removed = await t.delete(sessionClients).where(bySession).returning();
     const clients = await withClientDetails(
       t,
@@ -181,7 +194,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
         and(
           ids.length === 1
             ? eq(authorizationCodes.sessionId, ids[0])
-            : inArray(authorizationCodes.sessionId, ids),
+            : anyOf(authorizationCodes.sessionId, ids),
           eq(authorizationCodes.used, false)
         )
       );
@@ -221,7 +234,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       .set({ revokedAt: at, revokedReason: reason })
       .where(
         and(
-          inArray(
+          anyOf(
             sessions.id,
             locked.map((row) => row.id)
           ),
@@ -264,15 +277,17 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       .orderBy(desc(sessions.createdAt), desc(sessions.id))
       .limit(page.limit);
     if (rows.length === 0) return [];
-    const registry = await invoker
-      .select()
-      .from(sessionClients)
-      .where(
-        inArray(
-          sessionClients.sessionId,
-          rows.map((row) => row.id)
-        )
-      );
+    // A revoked session holds no client. One a previous release revoked
+    // during a rolling upgrade may still have registry rows; they are not
+    // shown.
+    const unrevoked = rows.filter((row) => row.revokedAt === null).map((row) => row.id);
+    const registry =
+      unrevoked.length === 0
+        ? []
+        : await invoker
+            .select()
+            .from(sessionClients)
+            .where(anyOf(sessionClients.sessionId, unrevoked));
     const clients = await withClientDetails(
       invoker,
       registry,
@@ -429,7 +444,13 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
     },
 
     listForClient(realmId, oauthClientId, page, tx) {
-      return listPage(realmId, eq(sessionClients.oauthClientId, oauthClientId), page, true, tx);
+      return listPage(
+        realmId,
+        and(eq(sessionClients.oauthClientId, oauthClientId), isNull(sessions.revokedAt)) as SQL,
+        page,
+        true,
+        tx
+      );
     },
 
     async revokeForUser(realmId, userId, reason, filter = {}, tx) {
@@ -499,19 +520,22 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
           .limit(batch.limit)
           .for('update', { of: sessions });
         if (locked.length === 0) return { ended: [], last: null, selected: 0 };
-        // LEAST ignores the NULL idle end of a realm with no idle limit. The
-        // end that came first names the reason; the absolute end wins a tie.
+        // The end that came first names the reason; the absolute end wins a
+        // tie, and a realm with no idle limit has a NULL idle end, which the
+        // comparison leaves to the absolute end. `revoked_at` is the time of
+        // the mark: retention counts from it, so a session a shortened
+        // lifespan ends now is still listed for the whole retention.
         const ended = await t
           .update(sessions)
           .set({
-            revokedAt: sql`least(${absoluteEnd}, ${idleEnd})`,
+            revokedAt: batch.now,
             revokedReason: sql`case when ${idleEnd} < ${absoluteEnd} then 'idle' else 'expired' end`,
           })
           .from(realms)
           .where(
             and(
               eq(realms.id, sessions.realmId),
-              inArray(
+              anyOf(
                 sessions.id,
                 locked.map((row) => row.id)
               ),
@@ -543,7 +567,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
         .delete(sessions)
         .where(
           and(
-            inArray(
+            anyOf(
               sessions.id,
               doomed.map((row) => row.id)
             ),
@@ -558,6 +582,27 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       };
     },
   };
+}
+
+/** How many times a transaction of its own is run when Postgres aborts it as a deadlock. */
+const DEADLOCK_ATTEMPTS = 3;
+
+/** Whether `error`, or the driver error drizzle wrapped in it, is a deadlock (40P01). */
+function isDeadlock(error: unknown): boolean {
+  for (let current: unknown = error, depth = 0; current && depth < 3; depth++) {
+    if ((current as { code?: unknown }).code === '40P01') return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * `column = any($1::uuid[])`: the ids as ONE array parameter. `inArray` sends
+ * one parameter per id, and the protocol allows at most 65,535, so a user
+ * with that many sessions could not be signed out.
+ */
+function anyOf(column: SQLWrapper, ids: readonly string[]): SQL {
+  return sql`${column} = any(${sql.param([...ids])}::uuid[])`;
 }
 
 /** Byte order of two ids: the order Postgres sorts `uuid` values in. */
