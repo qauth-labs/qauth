@@ -118,9 +118,10 @@ the line leaves to this page:
 - **The limit is the one the page read.** The page states the realm's limit
   as it is when the page renders. A limit the operator changes later applies
   to the family as the Refresh Token section describes, not as the page said.
-  For about a minute after a change, a browser session that was signed in
-  before it can still carry the old limit as its end (the session cache), and
-  a family started in that window keeps that end.
+  A browser session keeps the end it was given at sign-in, so after a realm
+  raises `sso_max_lifespan`, a family started from a session signed in before
+  the change ends at the earlier of its start plus the new limit and that
+  session's own end, which the old limit set.
 
 A stored consent never skips the screen for an agent client (ADR-015
 Decision 11): every authorization request from an agent shows it, `prompt=none`
