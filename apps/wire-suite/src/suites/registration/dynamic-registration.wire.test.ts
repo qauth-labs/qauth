@@ -11,7 +11,9 @@ import { call } from '../../helpers/operations';
 /**
  * Registration on a default deployment, as the documentation describes it:
  * RFC 7591 dynamic registration is open (no initial access token), its scopes
- * capped to the realm's allowlist, and client ID metadata documents are off.
+ * capped to the realm's allowlist, and client ID metadata documents are on
+ * (`CIMD_ENABLED` defaults to true), so a URL `client_id` is resolved by
+ * fetching its document.
  *
  * The suite takes its working clients from `seed/clients.json` only. The
  * clients registered here exist to prove registration itself: one is used
@@ -104,21 +106,25 @@ describe('RFC 7591 §3 — open dynamic registration on a default deployment', (
   });
 });
 
-describe('RFC 8414 §2 — client ID metadata documents, off on a default deployment', () => {
+describe('RFC 8414 §2 — client ID metadata documents, on by default', () => {
   it.each(DISCOVERY_DOCUMENTS)(
-    'leaves client_id_metadata_document_supported out of %s (§2)',
+    'advertises client_id_metadata_document_supported as true in %s (§2)',
     async (path) => {
       const { body } = await getJsonObject(serverPath(baseUrl, path));
 
-      expect(body).not.toHaveProperty('client_id_metadata_document_supported');
+      expect(body['client_id_metadata_document_supported']).toBe(true);
     }
   );
 });
 
-describe('RFC 6749 §4.1.2.1 — a URL client_id while client ID metadata documents are off', () => {
+// The server resolves a URL client_id by fetching its metadata document, and
+// fetches nothing from a loopback address unless an operator allows it, so
+// this request is refused before any lookup or connection: the test needs no
+// network beyond the server.
+describe('RFC 6749 §4.1.2.1 — a URL client_id whose metadata document the server may not fetch', () => {
   it('answers it exactly as a client_id that names no client: 400 invalid_request, no redirect (§4.1.2.1)', async () => {
     const asUrl = authorizationRequest({
-      client_id: `https://wire-suite.example/clients/${randomUUID()}`,
+      client_id: `https://127.0.0.1/wire-suite/${randomUUID()}/client.json`,
     });
     const asName = authorizationRequest({ client_id: `wire-suite-${randomUUID()}` });
 

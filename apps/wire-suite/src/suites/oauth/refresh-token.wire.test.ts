@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { serverPath, wireConfig } from '../../config';
@@ -102,8 +104,10 @@ describe('RFC 6749 §6 — refreshing an access token, with rotation', () => {
     );
   });
 
-  it('refuses a refresh token the server never issued with invalid_grant (§5.2)', async () => {
-    await expectOAuthError(await refresh('wire-suite-not-a-refresh-token'), {
+  it('refuses a well-formed refresh token the server never issued with invalid_grant (§5.2)', async () => {
+    // QAuth's refresh tokens are 64 hex characters; another shape is refused
+    // by the request schema as invalid_request before any lookup.
+    await expectOAuthError(await refresh(randomBytes(32).toString('hex')), {
       status: 400,
       error: 'invalid_grant',
     });
