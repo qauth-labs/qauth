@@ -460,9 +460,10 @@ export interface RefreshTokensRepository {
     tx?: DbClient
   ): Promise<number>;
   /**
-   * Revoke every live refresh token of one client, for every user, under each
-   * holder's revocation lock (#631: removing a client's first-party profile
-   * ends every family it holds).
+   * Revoke every live refresh token of one client, for every user, under the
+   * client's exclusive token lock, which every rotation and every insert of
+   * the client's tokens holds shared (#631: removing a client's first-party
+   * profile ends every family it holds).
    *
    * @returns Count of rows revoked by this call.
    */

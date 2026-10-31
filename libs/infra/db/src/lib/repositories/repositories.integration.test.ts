@@ -24,7 +24,7 @@ import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import type { RefreshToken, RefreshTokensRepository } from '../../types';
+import type { DbClient, RefreshToken, RefreshTokensRepository } from '../../types';
 import { oauthClients, oauthConsents, refreshTokens } from '../schema';
 import {
   createApiKeysRepository,
@@ -711,6 +711,11 @@ describe('repository integration (real Postgres)', () => {
         (tokens: RefreshTokensRepository, parent: RefreshToken) =>
           tokens.revokeAllForUser(parent.userId, 'logout'),
       ],
+      [
+        'revokeAllForClient',
+        (tokens: RefreshTokensRepository, parent: RefreshToken) =>
+          tokens.revokeAllForClient(parent.oauthClientId, 'first_party_profile_removed'),
+      ],
     ] as const) {
       it(`${name} reaches the child of a rotation that is in flight (race)`, async () => {
         const realm = await seedRealm();
@@ -737,6 +742,152 @@ describe('repository integration (real Postgres)', () => {
         expect(child.revokedReason).not.toBe('rotated');
       });
     }
+
+    // #631: revokeAllForClient holds one exclusive lock on the client, which
+    // every rotation and every insert of the client's tokens holds shared.
+
+    /** Run `body` in a transaction held open until `commit` is called. */
+    async function holdOpen<T>(body: (tx: DbClient) => Promise<T>) {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let produced!: (value: T) => void;
+      const result = new Promise<T>((resolve) => {
+        produced = resolve;
+      });
+      const transaction = db().database.db.transaction(async (tx) => {
+        produced(await body(tx as unknown as DbClient));
+        await held;
+      });
+      return {
+        result: await result,
+        commit: () => {
+          release();
+          return transaction;
+        },
+      };
+    }
+
+    /** Whether `promise` is still pending after the database had time to answer it. */
+    async function stillPending(promise: Promise<unknown>): Promise<boolean> {
+      let settled = false;
+      void promise.then(
+        () => (settled = true),
+        () => (settled = true)
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return !settled;
+    }
+
+    function newToken(userId: string, clientId: string, tokenHash: string) {
+      return {
+        tokenHash,
+        userId,
+        oauthClientId: clientId,
+        familyCreatedAt: Date.now(),
+        familySessionExpiresAt: null,
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 600_000,
+      };
+    }
+
+    it('revokeAllForClient reaches a new family whose insert is in flight (race)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+
+      const issuing = await holdOpen((tx) =>
+        tokens.create(newToken(user.id, client.id, 'n'.repeat(64)), tx)
+      );
+      const revocation = tokens.revokeAllForClient(client.id, 'first_party_profile_removed');
+      expect(await stillPending(revocation)).toBe(true);
+      await issuing.commit();
+
+      expect(await revocation).toBe(1);
+      const [row] = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, issuing.result.id));
+      expect(row).toMatchObject({ revoked: true, revokedReason: 'first_party_profile_removed' });
+    });
+
+    it('a rotation or an insert that starts while revokeAllForClient is open waits for it', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const other = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const parent = await seedToken(user.id, client.id, 'p'.repeat(64), 'fam-open', {
+        familyId: undefined,
+      });
+
+      const revocation = await holdOpen((tx) =>
+        tokens.revokeAllForClient(client.id, 'first_party_profile_removed', tx)
+      );
+      expect(revocation.result).toBe(1);
+
+      const rotation = db().database.db.transaction((tx) =>
+        tokens.revokeIfActive(parent.id, 'rotated', tx)
+      );
+      const issuing = tokens.create(newToken(other.id, client.id, 'q'.repeat(64)));
+      expect(await stillPending(rotation)).toBe(true);
+      expect(await stillPending(issuing)).toBe(true);
+      await revocation.commit();
+
+      // The rotation finds its parent revoked: the refresh is refused.
+      expect(await rotation).toBeUndefined();
+      // The family started after the revocation committed is a new one.
+      expect(await issuing).toMatchObject({ revoked: false });
+      const [stored] = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, parent.id));
+      expect(stored.revokedReason).toBe('first_party_profile_removed');
+    });
+
+    it('revokeAllForClient leaves another client and expired or revoked tokens alone', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const otherClient = await seedClient(realm.id, 'client-b');
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const live = await seedToken(user.id, client.id, 'a'.repeat(64), 'fam-a', {
+        familyId: undefined,
+      });
+      const expired = await seedToken(user.id, client.id, 'b'.repeat(64), 'fam-b', {
+        familyId: undefined,
+        expiresAt: Date.now() - 1_000,
+      });
+      const loggedOut = await seedToken(user.id, client.id, 'c'.repeat(64), 'fam-c', {
+        familyId: undefined,
+      });
+      await tokens.revoke(loggedOut.id, 'logout');
+      const elsewhere = await seedToken(user.id, otherClient.id, 'd'.repeat(64), 'fam-d', {
+        familyId: undefined,
+      });
+
+      expect(await tokens.revokeAllForClient(client.id, 'first_party_profile_removed')).toBe(1);
+
+      const state = async (id: string) =>
+        (
+          await db()
+            .database.db.select({
+              revoked: refreshTokens.revoked,
+              revokedReason: refreshTokens.revokedReason,
+            })
+            .from(refreshTokens)
+            .where(eq(refreshTokens.id, id))
+        )[0];
+      expect(await state(live.id)).toEqual({
+        revoked: true,
+        revokedReason: 'first_party_profile_removed',
+      });
+      expect(await state(expired.id)).toEqual({ revoked: false, revokedReason: null });
+      expect(await state(loggedOut.id)).toEqual({ revoked: true, revokedReason: 'logout' });
+      expect(await state(elsewhere.id)).toEqual({ revoked: false, revokedReason: null });
+    });
   });
 
   // --- code replay revokes the family the code started (#627) --------------
