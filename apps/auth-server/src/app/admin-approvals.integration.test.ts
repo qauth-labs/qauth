@@ -3,7 +3,7 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createTestApprovalFactor, type TestApprovalFactor } from '../testing/approval-factor';
+import type { TestApprovalFactor } from '../testing/approval-factor';
 import {
   baseEnvironment,
   bootAuthServer,
@@ -228,6 +228,9 @@ describe('approvals for security operations (#512, real containers)', () => {
     steer.failAfterChange = false;
     steer.entered = undefined;
     steer.release = undefined;
+    // Imported once the boot reset the modules, as the engine is: the factor's
+    // refusal is then the class the engine knows.
+    const { createTestApprovalFactor } = await import('../testing/approval-factor');
     test = createTestApprovalFactor();
   });
 
