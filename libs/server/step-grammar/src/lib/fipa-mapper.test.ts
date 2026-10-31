@@ -111,9 +111,10 @@ describe('the FiPA mapper', () => {
     });
   });
 
-  // The uniform first response of ADR-017 Decision 3: the same for every
+  // The uniform first response of ADR-017 Decision 3, as its first example
+  // shows it since the amendment of 2026-10-31: the same for every
   // account, and a wrong password adds only the error.
-  it('answers the uniform password step, and a refused password adds only qauth_interaction_error', () => {
+  it('answers the uniform password step of ADR-017 Decision 3 member for member, an empty params entry for each step, and a refused password adds only qauth_interaction_error', () => {
     const offer: StepOffer = {
       current: { step: 'password', params: {} },
       alternatives: [{ step: 'password_reset', params: {} }],

@@ -132,7 +132,11 @@
 > #591). In Decision 4's passkey-first round the passkey is preferred, not required: a client that
 > did not list `webauthn_get` gets the password step it listed instead of `redirect_to_web`. The
 > engine marks each offered step required or preferred, and an unmarked step is required, so a
-> second factor or a bot challenge never gives way. Decision 4 is edited in place.
+> second factor or a bot challenge never gives way. Two wire details of Decision 3 were settled the
+> same day: `qauth_interaction_params` is always present, with `{}` for a step that has no params,
+> and `new_password` carries its `purpose` on this endpoint too. Decisions 3 and 4 are edited in
+> place, and the URNs of Decision 3's wire examples now carry the `-rc.0` label as the amendment
+> of 2026-10-24 required.
 
 ## Context
 
@@ -465,7 +469,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `qauth_interaction_type`          | any request | the step URN this request answers or selects; required when several were offered; with no answer field other than `login_hint` it selects a path (reset, resend)                                                                                                       |
 | `interaction_type_required`       | 403 body    | always a value the client listed                                                                                                                                                                                                                                       |
 | `qauth_interaction_types_offered` | 403 body    | every step the AS accepts next, preferred first; the first equals `interaction_type_required`                                                                                                                                                                          |
-| `qauth_interaction_params`        | 403 body    | one object keyed by step URN with only what each offered step's screen needs                                                                                                                                                                                           |
+| `qauth_interaction_params`        | 403 body    | one object keyed by step URN with only what each offered step's screen needs; always present, with `{}` for a step that has no params                                                                                                                                  |
 | `qauth_interaction_error`         | 403 body    | closed set: `invalid_credentials` (any rejected password, code or passkey, for any account state), `code_expired`, `password_rejected` (with `reasons`), `captcha_failed` (F1b); a rejected answer is still 403 `insufficient_authorization` with a new `auth_session` |
 | answer fields                     | request     | unprefixed, scoped by step: `login_hint`, `password`, `otp` (the name of FiPA Appendix B.1 "Authorization Challenge Request Parameters"), `new_password`, `captcha_token`, `webauthn_response`                                                                         |
 
@@ -474,8 +478,8 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `identifier`                         | F1    | `{}`                                                                                                         | `login_hint`                                  | —             |
 | `password`                           | F1    | `{}`                                                                                                         | `password` (+ `login_hint` if none was given) | `pwd`         |
 | `email_code`                         | F1    | `purpose` (`verify_account`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
-| `new_password`                       | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
-| `password_reset`                     | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
+| `new_password`                       | F1    | `purpose` (`register`, `reset`, `update_required`), `min_length`, `max_length`, optional `reasons`           | `new_password`                                | —             |
+| `password_reset`                     | F1    | `{}`: a path marker, no data                                                                                 | — (+ `login_hint`)                            | —             |
 | `captcha`                            | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
 | `webauthn_get`                       | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
 | `webauthn_create`                    | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
@@ -507,8 +511,8 @@ Content-Type: application/x-www-form-urlencoded
 
 response_type=code&CA&scope=openid%20profile%20offline_access
 &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
-&interaction_types_supported=urn%3Aqauth%3Aia%3Apassword%3Av1%2Curn%3Aqauth%3Aia%3Aemail_code%3Av1%2Curn%3Aqauth%3Aia%3Anew_password%3Av1%2Curn%3Aqauth%3Aia%3Apassword_reset%3Av1
-&qauth_interaction_type=urn%3Aqauth%3Aia%3Apassword%3Av1
+&interaction_types_supported=urn%3Aqauth%3Aia%3Apassword%3Av1-rc.0%2Curn%3Aqauth%3Aia%3Aemail_code%3Av1-rc.0%2Curn%3Aqauth%3Aia%3Anew_password%3Av1-rc.0%2Curn%3Aqauth%3Aia%3Apassword_reset%3Av1-rc.0
+&qauth_interaction_type=urn%3Aqauth%3Aia%3Apassword%3Av1-rc.0
 &login_hint=alice%40example.com&password=correct%20horse%20battery%20staple%20x
 
 HTTP/1.1 200 OK
@@ -525,13 +529,14 @@ is not yet verified (a password account whose address is unproved), followed by 
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example",
         "auth_session": "Qm9vbGVhbi1ub3QtYS1yZWFsLWhhbmRsZS0yNTYtYml0cw",
         "interaction_type_required": "urn:qauth:ia:password:v1-rc.0",
-        "qauth_interaction_types_offered": ["urn:qauth:ia:password:v1-rc.0", "urn:qauth:ia:password_reset:v1-rc.0"] }
+        "qauth_interaction_types_offered": ["urn:qauth:ia:password:v1-rc.0", "urn:qauth:ia:password_reset:v1-rc.0"],
+        "qauth_interaction_params": { "urn:qauth:ia:password:v1-rc.0": {}, "urn:qauth:ia:password_reset:v1-rc.0": {} } }
 
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example", "auth_session": "p0Lr…",
         "interaction_type_required": "urn:qauth:ia:email_code:v1-rc.0", "qauth_interaction_types_offered": ["urn:qauth:ia:email_code:v1-rc.0"],
         "qauth_interaction_params": { "urn:qauth:ia:email_code:v1-rc.0":
             { "purpose": "verify_account", "length": 6, "expires_in": 600, "resend_after": 60 } } }
-→ auth_session=p0Lr…&qauth_interaction_type=urn%3Aqauth%3Aia%3Aemail_code%3Av1&otp=482913&CA
+→ auth_session=p0Lr…&qauth_interaction_type=urn%3Aqauth%3Aia%3Aemail_code%3Av1-rc.0&otp=482913&CA
 ← 200 { "authorization_code": "…", "iss": "https://auth.acme.example" }
 ```
 

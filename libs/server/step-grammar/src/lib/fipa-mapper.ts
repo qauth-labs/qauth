@@ -109,7 +109,7 @@ export interface FipaInsufficientAuthorization {
   readonly interaction_type_required: FipaStepUrn;
   /** Every step the engine accepts next, preferred first; the first is `interaction_type_required`. */
   readonly qauth_interaction_types_offered: readonly FipaStepUrn[];
-  /** The params of every offered step, keyed by step name. */
+  /** The params of every offered step, keyed by step name: always present, `{}` for a step that has none (ADR-017 Decision 3). */
   readonly qauth_interaction_params: Readonly<Partial<Record<FipaStepUrn, unknown>>>;
   /** Why the last answer was refused, from the required step's closed set. */
   readonly qauth_interaction_error?: StepError<FipaStepName>;

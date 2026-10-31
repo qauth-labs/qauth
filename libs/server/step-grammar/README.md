@@ -176,8 +176,6 @@ names, which JSON Schema's `contentSchema` only annotates.
 
 ## Known gaps, for the issues that serve these steps
 
-- On the FiPA endpoint, `new_password` sends the contract's `purpose` (`register`, `reset` or
-  `update_required`), which ADR-017 Decision 3's table does not list for that endpoint.
 - `webauthn_create` keeps the account's `user` and `excludeCredentials` in its personal data,
   which only the Interaction API reads. A native app on the FiPA endpoint needs them in the
   creation options; the passkey enrolment issue decides where they go.
