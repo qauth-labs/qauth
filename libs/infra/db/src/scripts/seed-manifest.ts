@@ -11,6 +11,7 @@ import {
   isReservedQauthScope,
   normaliseVerifiedDomain,
   normaliseWebAuthnOrigin,
+  redirectTarget,
 } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
@@ -84,7 +85,16 @@ export const clientSpecSchema = z
     response_types: z.array(responseTypeZ).optional(),
     scopes: z.array(z.string().min(1)).optional(),
     audience: z.array(z.string().min(1)).nullable().optional(),
-    redirect_uris: z.array(z.url()).optional(),
+    // Each one a URI the consent screen can show where the code goes to
+    // (ADR-019 Decision 6, #593), as every registration path requires.
+    redirect_uris: z
+      .array(
+        z.url().refine((uri) => redirectTarget(uri) !== undefined, {
+          error: (issue) =>
+            `"${String(issue.input)}": the consent screen cannot show where this redirect URI goes: name a DNS host of valid labels, an IPv4 address or a loopback address, or a scheme of at most 64 characters`,
+        })
+      )
+      .optional(),
     require_pkce: z.boolean().optional(),
     token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
     // ADR-007 §2: classify a seeded client as an autonomous AI agent.

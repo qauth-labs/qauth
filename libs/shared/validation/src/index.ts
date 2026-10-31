@@ -10,6 +10,8 @@ export type * from './lib/realm-host';
 export * from './lib/realm-host';
 export type * from './lib/realm-relying-party';
 export * from './lib/realm-relying-party';
+export type * from './lib/redirect-target';
+export * from './lib/redirect-target';
 export type * from './lib/reserved-audiences';
 export * from './lib/reserved-audiences';
 export type * from './lib/reserved-scopes';

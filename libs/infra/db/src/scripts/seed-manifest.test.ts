@@ -308,6 +308,22 @@ describe('isCimdClientIdShape', () => {
       expect(result.error?.issues[0].message).toContain(`"${value}"`);
     });
 
+    it('refuses a redirect URI the consent screen cannot show, naming it', () => {
+      const result = manifestSchema.safeParse({
+        realm: 'master',
+        clients: [
+          {
+            client_id: 'notes',
+            name: 'Notes',
+            grant_types: ['authorization_code'],
+            redirect_uris: ['https://notes.example.com/cb', 'https://notes_app.example.com/cb'],
+          },
+        ],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain('"https://notes_app.example.com/cb"');
+    });
+
     it('refuses it on a CIMD entry, whose verified domain is the host of its client id', () => {
       expect(
         manifestSchema.safeParse({

@@ -1,5 +1,5 @@
 import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
-import { isReservedQauthScope } from '@qauth-labs/shared-validation';
+import { isReservedQauthScope, redirectTarget } from '@qauth-labs/shared-validation';
 
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
@@ -74,7 +74,12 @@ export function registrationSchemaError(
  *
  * The `localhost` hostname SHOULD be avoided in native apps (RFC 8252 §7.3
  * recommends `127.0.0.1` / `[::1]`), but we accept it because many desktop
- * tools still use it — we just require the URL parse as loopback.
+ * tools still use it — we just require the URL parse as loopback. *
+ * The URI must also be one the consent screen can show (ADR-019 Decision 6,
+ * #593): a host of valid DNS labels or an IPv4 address, a loopback address, or
+ * a private-use scheme of at most 64 characters (`redirectTarget` in
+ * shared-validation). Otherwise the screen would have to refuse the client
+ * after the user signed in, since it shows where the code goes.
  */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', '::1', 'localhost']);
 
@@ -104,6 +109,13 @@ export function validateRedirectUri(uri: string, customSchemes: readonly string[
   // Reject fragments per RFC 6749 §3.1.2
   if (parsed.hash && parsed.hash.length > 0) {
     rejectRegistration('invalid_redirect_uri', 'redirect_uri must not include a fragment');
+  }
+
+  if (redirectTarget(uri) === undefined) {
+    rejectRegistration(
+      'invalid_redirect_uri',
+      'redirect_uri must name a DNS host of valid labels, an IPv4 address or a loopback address, or a scheme of at most 64 characters'
+    );
   }
 
   if (parsed.protocol === 'http:') {
