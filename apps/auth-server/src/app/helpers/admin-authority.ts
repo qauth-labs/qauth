@@ -154,8 +154,9 @@ export interface AdminAuthorityRequest {
   /** The token's `sub`: the account. */
   readonly sub: string;
   /**
-   * The token's `iat`, in seconds. A token with none, or one issued before the
-   * account was last disabled, names no active account (#748).
+   * The token's `iat`, in seconds. A token issued before the account was last
+   * disabled names no active account (#748); a token with none is refused only
+   * once the account has a `not_valid_before`.
    */
   readonly iat?: number;
   /** The token's `scope` claim, space-delimited, or its scopes as a list. */
