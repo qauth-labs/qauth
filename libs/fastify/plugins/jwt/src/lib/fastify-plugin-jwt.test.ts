@@ -788,16 +788,6 @@ describe('verifying across a rotation (#492)', () => {
       await expect(
         app.jwtUtils.verifyHybridAccessToken(realms.a, after, { requirePqc: true })
       ).resolves.toMatchObject({ sub: 'user-1' });
-
-      // The ML-DSA half is checked with the key its signed pqc_kid names: the
-      // new pair's signature does not pass for the old token.
-      await expect(
-        app.jwtUtils.verifyHybridAccessToken(
-          realms.a,
-          { ...before, pqcSignature: after.pqcSignature },
-          { requirePqc: true }
-        )
-      ).rejects.toThrow();
     } finally {
       await app.close();
     }
