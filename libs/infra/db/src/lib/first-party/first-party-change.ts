@@ -60,6 +60,27 @@ export interface FirstPartyChangeResult {
   readonly revokedTokenCount: number;
 }
 
+/**
+ * Why an existing row can never carry a first-party profile because of who
+ * wrote it, or `null` when it can: a developer owns it, or dynamic
+ * registration or a CIMD document created it (the first CHECK of migration
+ * 0048). The operator paths ask before they write, so they refuse such a row
+ * by name instead of failing on the CHECK. Whether the row is an agent is the
+ * caller's to check: the seed rewrites `is_agent` from its manifest, the
+ * system-client provisioner refuses an agent.
+ */
+export function ownershipRefusalOf(row: {
+  developerId: string | null;
+  dynamicRegisteredAt: number | null;
+  metadata: Readonly<Record<string, unknown>> | null;
+}): 'developer_owned' | 'dynamic' | 'cimd' | null {
+  if (row.developerId !== null) return 'developer_owned';
+  const registrationType = row.metadata?.['registrationType'];
+  if (registrationType === 'cimd') return 'cimd';
+  if (row.dynamicRegisteredAt !== null || registrationType === 'dynamic') return 'dynamic';
+  return null;
+}
+
 /** JSON with object keys sorted, so two equal values compare equal. */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;

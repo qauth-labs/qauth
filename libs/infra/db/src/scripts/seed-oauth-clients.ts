@@ -108,6 +108,20 @@ async function main(): Promise<void> {
   const raw: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const manifest = manifestSchema.parse(raw);
 
+  // The system client is provisioned by the `system_client` section and the
+  // migration runner only (#631): a `clients` entry for it would rewrite it as
+  // an ordinary client on every --rotate, removing its profile and revoking
+  // the portal's tokens, and the runner would flip it back. Refused before
+  // anything is written.
+  const systemClientId = process.env['SYSTEM_CLIENT_ID']?.trim() || 'system';
+  if ((manifest.clients ?? []).some((spec) => spec.client_id === systemClientId)) {
+    console.error(
+      `"${systemClientId}" is the system client (SYSTEM_CLIENT_ID): provision it under ` +
+        '"system_client", not under "clients". Nothing was written.'
+    );
+    process.exit(2);
+  }
+
   const db = drizzle(databaseUrl);
 
   try {
@@ -165,6 +179,7 @@ function report(realm: string, issued: Issued[]): void {
   const created = issued.filter((i) => i.action === 'created');
   const rotated = issued.filter((i) => i.action === 'rotated');
   const skipped = issued.filter((i) => i.action === 'skipped');
+  const refused = issued.filter((i) => i.action === 'refused');
 
   console.log(
     `\nSeeded realm "${realm}": ` +
@@ -197,6 +212,16 @@ function report(realm: string, issued: Issued[]): void {
       );
     }
     console.log('');
+  }
+
+  if (refused.length > 0) {
+    console.error(
+      'Refused, and left unchanged: these entries set first_party_profile on a client that ' +
+        'can never be first party (a developer, dynamic registration or a CIMD document wrote it):\n  ' +
+        refused.map((r) => `${r.clientId} (${r.refusal})`).join(', ') +
+        '\n'
+    );
+    process.exitCode = 1;
   }
 
   if (skipped.length > 0) {

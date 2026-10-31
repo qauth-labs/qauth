@@ -306,4 +306,39 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
     expect(await tokenState(live)).toEqual({ revoked: false, revokedReason: null });
     expect(await firstPartyEvents(realmId)).toHaveLength(1);
   });
+
+  it('refuses, before issuing a secret, a --rotate entry flagging a client that can never be first party', async () => {
+    const realmId = await realm('fp-6');
+    const developerId = await user(realmId);
+    const kinds = [
+      ['developer_owned', { developerId }],
+      ['dynamic', { dynamicRegisteredAt: 1, metadata: { registrationType: 'dynamic' } }],
+      ['cimd', { metadata: { registrationType: 'cimd' } }],
+    ] as const;
+    for (const [refusal, columns] of kinds) {
+      const clientId = `taken-${refusal}`;
+      await db()
+        .insert(oauthClients)
+        .values({
+          realmId,
+          clientId,
+          clientSecretHash: 'unchanged-hash',
+          name: clientId,
+          redirectUris: ['https://app.example.com/cb'],
+          ...columns,
+        });
+      const before = await client(realmId, clientId);
+
+      const issued = await provisionClient(
+        db(),
+        realmId,
+        spec({ ...NATIVE, client_id: clientId }),
+        true
+      );
+
+      expect(issued, refusal).toEqual({ clientId, secret: '', action: 'refused', refusal });
+      expect(await client(realmId, clientId), refusal).toEqual(before);
+    }
+    expect(await firstPartyEvents(realmId)).toEqual([]);
+  });
 });

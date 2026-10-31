@@ -11,7 +11,7 @@ import { hash } from '@node-rs/argon2';
 import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
-import { recordFirstPartyChange } from '../lib/first-party/first-party-change';
+import { ownershipRefusalOf, recordFirstPartyChange } from '../lib/first-party/first-party-change';
 import { oauthClients } from '../lib/schema';
 import type { Database, DbTransaction } from '../types';
 import { type ClientSpec, firstPartyColumnsOf } from './seed-manifest';
@@ -24,11 +24,17 @@ function generateClientSecret(): string {
   return randomBytes(32).toString('hex');
 }
 
-export type Action = 'created' | 'rotated' | 'skipped';
+export type Action = 'created' | 'rotated' | 'skipped' | 'refused';
 export type Issued = {
   clientId: string;
   secret: string;
   action: Action;
+  /**
+   * Why a `--rotate` entry that sets a first-party profile was refused (#631):
+   * its row was written by a developer, dynamic registration or a CIMD
+   * document, which can never be first party. Nothing was written.
+   */
+  refusal?: 'developer_owned' | 'dynamic' | 'cimd';
   /** Whether the write changed the client's first-party profile, policy or reason (#631). */
   firstPartyChanged?: boolean;
   /** How many refresh tokens removing the client's profile revoked (#631). */
@@ -56,15 +62,18 @@ export async function provisionClient(
 ): Promise<Issued> {
   return db.transaction(async (tx) => {
     // FOR NO KEY UPDATE, not FOR UPDATE: removing a first-party profile then
-    // takes the revocation lock of every user holding a token of the client,
-    // and a rotation that holds one of those waits on this row only for a
-    // key-share lock, which this mode does not block (#631).
+    // waits for the client's token lock (`revokeAllForClient`), which a token
+    // insert holds while its foreign-key check takes a key-share lock on this
+    // row, and this mode does not block that (#631).
     const [existing] = await tx
       .select({
         id: oauthClients.id,
         firstPartyProfile: oauthClients.firstPartyProfile,
         firstPartyPolicy: oauthClients.firstPartyPolicy,
         firstPartyReason: oauthClients.firstPartyReason,
+        developerId: oauthClients.developerId,
+        dynamicRegisteredAt: oauthClients.dynamicRegisteredAt,
+        metadata: oauthClients.metadata,
       })
       .from(oauthClients)
       .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, spec.client_id)))
@@ -73,6 +82,15 @@ export async function provisionClient(
 
     if (existing && !rotate) {
       return { clientId: spec.client_id, secret: '', action: 'skipped' as const };
+    }
+
+    // A row the profile's CHECK would refuse is refused here, by name, before
+    // a secret is issued: failing on the CHECK would abort the run after
+    // earlier entries committed new secrets the report never printed (#631).
+    const refusal =
+      existing && spec.first_party_profile !== undefined ? ownershipRefusalOf(existing) : null;
+    if (refusal !== null) {
+      return { clientId: spec.client_id, secret: '', action: 'refused' as const, refusal };
     }
 
     const plaintextSecret = generateClientSecret();

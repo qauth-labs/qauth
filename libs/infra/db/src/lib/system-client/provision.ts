@@ -42,6 +42,7 @@ import {
   canonicalJson,
   type FirstPartyColumns,
   firstPartyColumnsDiffer,
+  ownershipRefusalOf,
   recordFirstPartyChange,
 } from '../first-party/first-party-change';
 import { oauthClients, realms } from '../schema/core';
@@ -181,10 +182,7 @@ function refusalOf(row: {
 }): SystemClientRefusal | null {
   if (row.developerId !== null) return 'developer_owned';
   if (row.isAgent) return 'agent';
-  const registrationType = row.metadata?.['registrationType'];
-  if (registrationType === 'cimd') return 'cimd';
-  if (row.dynamicRegisteredAt !== null || registrationType === 'dynamic') return 'dynamic';
-  return null;
+  return ownershipRefusalOf(row);
 }
 
 /**
