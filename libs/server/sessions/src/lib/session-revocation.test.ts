@@ -10,7 +10,11 @@ import {
 } from '../testing/memory-ports';
 import type { SessionLogger } from './ports';
 import { InvalidSessionCursorError } from './session-cursor';
-import { createSessionService, MAX_SESSION_PAGE_LIMIT } from './session-service';
+import {
+  createSessionService,
+  MAX_SESSION_PAGE_LIMIT,
+  SESSION_CLOCK_SKEW_ALLOWANCE_MS,
+} from './session-service';
 import type {
   CreateSessionInput,
   SessionActor,
@@ -593,12 +597,12 @@ describe('revokeAllForRealm', () => {
     );
   });
 
-  it('leaves a session created after the call began', async () => {
+  it('leaves a session created after the call began, past the skew allowance', async () => {
     for (let i = 0; i < 4; i++) await signInAt();
     let signedInDuring: string | undefined;
     service.onSessionsEnded(async () => {
       if (signedInDuring !== undefined) return;
-      clock.advance(1);
+      clock.advance(SESSION_CLOCK_SKEW_ALLOWANCE_MS + 1);
       signedInDuring = (await service.create(signIn())).sid;
     });
 
@@ -612,6 +616,23 @@ describe('revokeAllForRealm', () => {
     expect(result.ended).toBe(4);
     expect(signedInDuring).toBeDefined();
     expect(await service.get({ realmId: REALM_A, sid: signedInDuring ?? '' })).not.toBeNull();
+  });
+
+  it('ends a session another node stamped up to the skew allowance ahead of this one', async () => {
+    const before = await signInAt();
+    // Created before the call on a node whose clock runs ahead: its
+    // created_at is later than this node's clock when the call begins.
+    const { sid: ahead } = await service.create(signIn());
+    store.update(ahead, { createdAt: clock.now() + SESSION_CLOCK_SKEW_ALLOWANCE_MS });
+    const { sid: tooFar } = await service.create(signIn());
+    store.update(tooFar, { createdAt: clock.now() + SESSION_CLOCK_SKEW_ALLOWANCE_MS + 1 });
+
+    expect(
+      await service.revokeAllForRealm({ realmId: REALM_A, reason: 'admin', actor: ADMIN_ACTOR })
+    ).toEqual({ ended: 2, batches: 1 });
+    expect(store.row(before)?.revokedAt).not.toBeNull();
+    expect(store.row(ahead)?.revokedAt).not.toBeNull();
+    expect(store.row(tooFar)?.revokedAt).toBeNull();
   });
 
   it('ends nothing more when repeated', async () => {

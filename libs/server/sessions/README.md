@@ -101,8 +101,9 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
   epoch). It ends the sessions Postgres holds when it runs: a sign-in that checked the old password
   before the reset and stores its session after the call is not ended, unless the caller also checks
   the reset time when a session is read. `revokeAllForRealm` ends a realm's sessions in batches of 500
-  (at most 5,000) in id order, each batch its own transaction, leaving a session created after the
-  call began; `activeSince` keeps the sessions not used since then, allowing for the last-seen write
+  (at most 5,000) in id order, each batch its own transaction, leaving a session created more than
+  `SESSION_CLOCK_SKEW_ALLOWANCE_MS` (5 seconds) after the call began, so a node whose clock runs
+  ahead cannot stamp a session made before the call past the cut; `activeSince` keeps the sessions not used since then, allowing for the last-seen write
   interval. It returns counts only, and the sessions reach the listeners batch by batch. Every
   revocation locks its rows in id order, takes their registry rows with it, spends their unredeemed
   codes, binds the ids as one array (no parameter limit), and is safe to repeat; one Postgres aborts

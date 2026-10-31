@@ -37,6 +37,7 @@ export {
   DEFAULT_SESSION_REVOCATION_BATCH_SIZE,
   MAX_SESSION_BATCH_SIZE,
   MAX_SESSION_PAGE_LIMIT,
+  SESSION_CLOCK_SKEW_ALLOWANCE_MS,
   type SessionServiceOptions,
   type SessionServiceSettings,
   UnknownSessionRealmError,

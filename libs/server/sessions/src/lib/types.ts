@@ -417,8 +417,10 @@ export interface SessionService {
   revokeAllForUser(input: RevokeUserSessionsInput): Promise<RevokedSessions>;
   /**
    * End the realm's sessions in batches, each its own short transaction, in
-   * id order: key retirement and bulk revocation. A session created after the
-   * call began is left alone. Each batch's sessions reach the listeners as the
+   * id order: key retirement and bulk revocation. A session created more
+   * than `SESSION_CLOCK_SKEW_ALLOWANCE_MS` after the call began is left alone;
+   * one created within it is ended, so a node whose clock runs ahead cannot
+   * stamp a session made before the call past the cut. Each batch's sessions reach the listeners as the
    * batch commits; the call returns only counts, so a realm of any size fits
    * in memory. Safe to repeat.
    */

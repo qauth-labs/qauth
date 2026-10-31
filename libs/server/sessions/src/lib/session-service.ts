@@ -63,6 +63,16 @@ export const DEFAULT_SESSION_REVOCATION_BATCH_SIZE = 500;
 export const DEFAULT_SESSION_PURGE_BATCH_SIZE = 1000;
 
 /**
+ * How far past its own clock a realm-wide revocation reaches, in
+ * milliseconds. A session's `created_at` is the clock of the node that
+ * created it, so a node running ahead stamps a session made just before the
+ * revocation with a later time; without an allowance that session would
+ * survive it. A sign-in this close after the call began is ended too, and
+ * signs in again.
+ */
+export const SESSION_CLOCK_SKEW_ALLOWANCE_MS = 5000;
+
+/**
  * The largest batch a caller may ask for: one transaction never locks or
  * deletes more rows than this.
  */
@@ -738,8 +748,11 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       const realmId = idOf(input.realmId);
       if (realmId === undefined) return { ended: 0, batches: 0 };
       // Sessions created after the call began are not ended: a sign-in after
-      // a key retirement or a bulk revocation was decided stands.
-      const createdThrough = now();
+      // a key retirement or a bulk revocation was decided stands. The cut is
+      // this node's clock plus the skew allowance, so a session another node
+      // created before the call, on a clock running up to that far ahead, is
+      // ended too.
+      const createdThrough = now() + SESSION_CLOCK_SKEW_ALLOWANCE_MS;
       let after: string | null = null;
       let ended = 0;
       let batches = 0;
