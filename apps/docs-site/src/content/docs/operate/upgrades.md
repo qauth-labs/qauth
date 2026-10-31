@@ -254,6 +254,13 @@ enabled again, and can start new refresh families from its old sessions: enable
 an account that was disabled for a takeover only after every node runs this
 release ([Accounts](/operate/accounts/)).
 
+An account that was disabled and enabled again before the upgrade gets no
+time, and keeps every session and token the previous release brought back
+when it was enabled. For each account you enabled again after a takeover,
+once every node runs this release, run `db:disable-user` and then
+`db:disable-user --enable`: that records the time now and ends everything the
+account holds ([Accounts from before the upgrade](/operate/accounts/#accounts-from-before-the-upgrade)).
+
 ### The delivery role reads `realms.issuer`
 
 From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user

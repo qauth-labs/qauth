@@ -1848,10 +1848,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `user.enabled` in the same transaction; SSF streams receive them as RISC 1.0
   `account-disabled` and `account-enabled` ([#540]). A refresh token issued
   before the disablement no longer relates the user to an SSF receiver
-  either. The operator guide's new
-  **Accounts** page (`operate/accounts`) describes both, and the upgrade guide
-  says why to enable an account disabled for a takeover only once every node
-  runs this release.
+  either. The operator guide's new **Accounts** page (`operate/accounts`)
+  describes both, what to undo after a takeover before enabling the account,
+  and the bounds of the margin; the upgrade guide says why to enable an
+  account disabled for a takeover only once every node runs this release.
+
+  **Action for operators**: an account disabled and enabled again before the
+  upgrade gets no time, so what the previous release brought back when it was
+  enabled keeps working. For each account enabled again after a takeover,
+  once every node runs this release, run `db:disable-user`, take the steps
+  the Accounts page lists after a takeover, and run `db:disable-user --enable`:
+  disabling records the time now and ends every session and token the account
+  holds.
+
 - **A blank `PASSWORD_MIN_SCORE` no longer means score 0.** The schema read
   `''` as the number `0`, the weakest zxcvbn score, so a deployment that set
   the variable blank (`PASSWORD_MIN_SCORE=`, or an orchestrator that passes an

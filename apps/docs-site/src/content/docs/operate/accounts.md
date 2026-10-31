@@ -24,6 +24,67 @@ already holds stops working at its next use:
 The account keeps its credentials, consents and clients. Signing out still
 works.
 
+## After a takeover
+
+Disabling ends what the account holds, not what whoever took it changed or
+added. Enabling the account gives that back with it. Before you enable an
+account that was taken over:
+
+1. Find what the account did since the takeover. Its events name it, such as
+   `wallet.linked`, `client.created`, `client.secret_rotated` and
+   `api_key.created` ([Events](/reference/events/)):
+
+   ```sql
+   SELECT to_timestamp(time / 1000.0) AS at, type, subject_type, subject_id, client_id
+   FROM events
+   WHERE actor_id = '<user id>' AND time >= <takeover time, epoch ms>
+   ORDER BY time;
+   ```
+
+2. Replace the password. QAuth has no password reset yet
+   ([#642](https://github.com/qauth-labs/qauth/issues/642)): an account taken
+   over with its password signs in with it again once it is enabled, so keep
+   such an account disabled until its password can be replaced.
+3. Remove every credential added since the takeover, such as a linked wallet.
+   List the account's credentials and delete those you did not expect:
+
+   ```sql
+   SELECT id, provider_type, to_timestamp(created_at / 1000.0) AS added
+   FROM user_credentials
+   WHERE user_id = '<user id>'
+   ORDER BY created_at;
+
+   DELETE FROM user_credentials WHERE id = '<credential id>';
+   ```
+
+4. Suspend every client the account created since the takeover, and every
+   client whose secret it rotated or to which it added an API key. A client
+   lives on while its developer is disabled, and its secret and keys with it:
+
+   ```sql
+   SELECT c.client_id, to_timestamp(c.created_at / 1000.0) AS created
+   FROM oauth_clients c
+   WHERE c.developer_id = '<user id>'
+   ORDER BY c.created_at;
+
+   SELECT c.client_id, k.name, to_timestamp(k.created_at / 1000.0) AS created
+   FROM api_keys k
+   JOIN oauth_clients c ON c.id = k.client_id
+   WHERE k.developer_id = '<user id>' AND k.revoked_at IS NULL
+   ORDER BY k.created_at;
+   ```
+
+   ```bash
+   DATABASE_URL=postgresql://qauth:pw@db:5432/qauth \
+     pnpm nx run infra-db:db:suspend-oauth-client -- --realm=<realm name> --client-id=<client_id>
+   ```
+
+   Once the owner has signed in again, they rotate the secret
+   (`POST /api/clients/:id/regenerate-secret`) and revoke the keys
+   (`DELETE /api/clients/:clientId/api-keys/:keyId`) through the developer
+   API, or delete a client they did not create. Then lift the suspension of
+   the clients they keep, with `--lift`.
+
 ## Enabling an account again
 
 Enabling an account lets its holder sign in again. It does not bring back what
@@ -52,12 +113,33 @@ of less than a second: keep both synchronised, for example with NTP. Nothing
 is issued to a disabled account, so the margin only matters for an account
 enabled again within those seconds.
 
-### Accounts disabled before the upgrade
+The margin bounds what slips through. A request that read the account as
+enabled before the disabling transaction committed, and stored its session,
+code or refresh token more than a second after that time, issued it after
+the time: it survives the account being enabled again. Such a request takes
+milliseconds between the read and the write. An access token issued that way
+lasts until it expires. A commit that waits more than a second for a
+synchronous standby has the same effect. A database superuser or the owner of
+the `users` table can turn the triggers off; QAuth does not guard against
+them.
+
+### Accounts from before the upgrade
 
 Migration 0044 adds the column. An account that is disabled when it runs was
 disabled at a time nothing recorded, so it gets the time of the migration:
 nothing is issued to a disabled account, so everything it holds is older, and
 stays refused once the account is enabled.
+
+An account that was disabled and enabled again before the upgrade gets no
+time: the migration finds it enabled, and nothing recorded that it was ever
+disabled. The previous release brought back every browser session and refresh
+token that nobody used while it was disabled, and they keep working after the
+upgrade. For each account you enabled again after a takeover before
+upgrading, once every node runs this release, disable the account with the
+tool (`db:disable-user`), take the steps of [After a takeover](#after-a-takeover),
+and enable it again (`db:disable-user --enable`). Disabling records the time
+now and ends every session and token the account holds: whoever holds one,
+its owner included, signs in again.
 
 During a rolling upgrade, a node of the previous release still checks only
 whether the account is enabled. Once the account is enabled again, such a node
