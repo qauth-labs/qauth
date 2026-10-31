@@ -342,6 +342,16 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
   listPolicyRecords(tx?: DbClient): Promise<RealmPolicyRecord[]>;
 
   /**
+   * A realm's policies with its row locked until `tx` ends (`SELECT ... FOR
+   * UPDATE`, #516), or `undefined` when there is no such realm. The boot step
+   * reads a realm through it before computing the realm's fill: the trigger
+   * keeps the counter of a realm with no policies at 0 through a plain write
+   * (a previous release's node during a rolling upgrade), so the counter
+   * compare alone would let the fill overwrite such a write.
+   */
+  lockPolicyRecord(realmId: string, tx: DbClient): Promise<RealmPolicyRecord | undefined>;
+
+  /**
    * Add an endpoint host to a realm. An IP literal is allowed.
    *
    * @throws InvalidRealmHostError if the host cannot be a realm host
@@ -876,6 +886,11 @@ export function createRealmsRepository(
         .from(realms)
         .orderBy(realms.createdAt, realms.id);
       return rows.map(realmPolicyRecord);
+    },
+
+    async lockPolicyRecord(realmId: string, tx: DbClient): Promise<RealmPolicyRecord | undefined> {
+      const [realm] = await tx.select().from(realms).where(eq(realms.id, realmId)).for('update');
+      return realm === undefined ? undefined : realmPolicyRecord(realm);
     },
 
     async addEndpointHost(realmId: string, host: string, tx?: DbClient): Promise<RealmHost> {

@@ -6,7 +6,8 @@
  *   also when the counter moved through a plain realm UPDATE (the trigger);
  * - a new realm gets `defaultsFromEnv`, and a realm with no policies gets its
  *   fill once, keeping the row values the server read before;
- * - two nodes filling a realm at once leave one consistent document;
+ * - two nodes filling a realm at once leave one consistent document, and a
+ *   fill never overwrites a plain UPDATE of the row it waited on;
  * - a secret never reaches `realms.policies`.
  *
  * Requires Docker; self-skips without it.
@@ -357,6 +358,33 @@ describe('policy store over the realms table (integration)', () => {
       const stored = await storeOn(db()).get(id);
       expect(stored?.version).toBe(1);
       expect(fillOf(stored?.policies)).toBe('A');
+    });
+
+    it('fills a realm as a plain UPDATE that held its row left it, not as the list read it', async () => {
+      if (!second) throw new Error('no second pool');
+      const id = await insertPreviousRealm('tightened');
+      // A previous release's node tightens the ceiling while the fill runs.
+      // The trigger keeps the counter at 0, so the counter compare alone would
+      // let the fill write the ceiling it read before.
+      const client = await db().pool.connect();
+      let fill: ReturnType<RealmPolicyStore<Realm, DbClient>['seedRealms']> | undefined;
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE realms SET max_environment_laxity = 'production' WHERE id = $1`,
+          [id]
+        );
+        fill = storeOn(second).seedRealms();
+        await waitForLockWait();
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+
+      expect((await fill)?.filled).toEqual([{ realmId: id, realmName: 'tightened' }]);
+      const stored = await storeOn(db()).get(id);
+      expect(stored).toMatchObject({ version: 1, hasPolicies: true });
+      expect(stored?.policies.posture.maxEnvironmentLaxity).toBe('production');
     });
 
     it('leaves one consistent document over many concurrent rounds', async () => {

@@ -128,8 +128,9 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
 - A realm with no policies yet (`version` 0, created before migration 0046) reads as its fill: the
   seeds, with the values of its row the server read before (the environment ceiling, a non-empty
   dynamic registration allowlist). A field missing from a stored document, which a later release
-  added, reads as its seed; `seedRealms` writes both once, with `UPDATE ... WHERE policies_version
-  = <read>`, so the first node to boot wins.
+  added, reads as its seed; `seedRealms` writes both once, reading the row locked (the storage's
+  `readLocked`) and writing with `UPDATE ... WHERE policies_version = <read>`, so the first node to
+  boot wins and a plain write of the row is never overwritten.
 - Members of a stored document this release does not know (a later release's) are skipped on read
   and carried over on write, so a node of the previous release never drops them during a rolling
   upgrade. A document of another schema version is not written: `update` refuses it

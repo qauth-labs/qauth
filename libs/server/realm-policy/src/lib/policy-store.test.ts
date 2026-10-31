@@ -44,9 +44,11 @@ interface Tx {
 function memoryStorage(realms: MemoryRealm[]) {
   const rows = new Map(realms.map((realm) => [realm.id, realm]));
   const writes: { realmId: string; write: RealmPolicyWrite; tx: Tx | undefined }[] = [];
+  const locks: { realmId: string; tx: Tx }[] = [];
   const transactions: (Tx | undefined)[] = [];
   let nextTx = 1;
   let beforeWrite: ((realmId: string) => void) | undefined;
+  let afterList: (() => void) | undefined;
 
   const recordOf = (realm: MemoryRealm): RealmPolicyRecord =>
     structuredClone({
@@ -65,7 +67,14 @@ function memoryStorage(realms: MemoryRealm[]) {
       return realm === undefined ? undefined : recordOf(realm);
     },
     async list() {
-      return [...rows.values()].map(recordOf);
+      const listed = [...rows.values()].map(recordOf);
+      afterList?.();
+      return listed;
+    },
+    async readLocked(realmId, tx) {
+      locks.push({ realmId, tx });
+      const realm = rows.get(realmId);
+      return realm === undefined ? undefined : recordOf(realm);
     },
     async write(realmId, write, tx) {
       writes.push({ realmId, write: structuredClone(write), tx });
@@ -86,9 +95,14 @@ function memoryStorage(realms: MemoryRealm[]) {
     storage,
     rows,
     writes,
+    locks,
     transactions,
     onBeforeWrite(hook: (realmId: string) => void) {
       beforeWrite = hook;
+    },
+    /** Run `hook` once `list` has read the rows: a write another transaction commits after it. */
+    onAfterList(hook: () => void) {
+      afterList = hook;
     },
   };
 }
@@ -582,6 +596,25 @@ describe('createPolicyStore — seedRealms', () => {
     });
   });
 
+  it('computes a fill from the row read locked, in its transaction, not from the list', async () => {
+    // A plain write of the row (a previous release's node) commits after the
+    // list: the trigger keeps the counter at 0, so only the locked read sees
+    // it, and the operator's tightened ceiling survives the fill.
+    const memory = memoryStorage([realmWithoutPolicies()]);
+    memory.onAfterList(() => {
+      const realm = memory.rows.get('realm-old');
+      if (realm) realm.keptOnFill = { posture: { maxEnvironmentLaxity: 'production' } };
+    });
+    const store = createPolicyStore({ storage: memory.storage, seeds: SEEDS });
+
+    await store.seedRealms();
+
+    expect(memory.locks).toEqual([{ realmId: 'realm-old', tx: memory.writes[0].tx }]);
+    expect(memory.rows.get('realm-old')?.document).toMatchObject({
+      posture: { maxEnvironmentLaxity: 'production' },
+    });
+  });
+
   it('writes no realm that has its policies: a later change of the environment changes nothing', async () => {
     const memory = memoryStorage([realmWithPolicies()]);
     const store = createPolicyStore({
@@ -591,6 +624,7 @@ describe('createPolicyStore — seedRealms', () => {
 
     expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
     expect(memory.writes).toEqual([]);
+    expect(memory.locks).toEqual([]);
     expect(memory.rows.get('realm-a')?.document).toEqual(SEEDS);
   });
 
