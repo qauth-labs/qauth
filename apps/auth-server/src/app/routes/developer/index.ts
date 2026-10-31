@@ -18,8 +18,13 @@ import { registerDeveloperConsentRoutes } from './consents';
  * whose only audience is `urn:qauth:aud:developer:v1-rc.0`, with no `act`
  * claim, whose subject is an enabled user of the request's realm (#869). The
  * developer portal's `/auth/login` token is one since #524. The guard runs
- * before validation, so a caller without such a token learns nothing about
- * what a route accepts. Each route still looks its rows up in
+ * as the route's first `preValidation` hook, before the params, the query and
+ * the body are validated, so a caller without such a token learns nothing of
+ * a route's schemas. It does not run before anything: Fastify parses the body
+ * before `preValidation`, so a body in a media type no parser here takes
+ * answers 415, and one its parser cannot read answers 400, to a caller with
+ * no token too. Those answers tell only which media types this module parses,
+ * which the OpenAPI document publishes. Each route still looks its rows up in
  * `requestRealm(request)`.
  *
  * The domain logic is shared with the deprecated `/api/clients` and

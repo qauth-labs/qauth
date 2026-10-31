@@ -284,7 +284,10 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
     '/clients/:clientId',
     {
       // The token first, then the media type and `If-Match`, all before the
-      // body is validated: 401, then 415, then 428, then 400.
+      // body is validated: 401, then 415, then 428, then 400. Fastify parses
+      // the body before these hooks, though: a media type no parser of the
+      // module takes is 415, and a body the parser cannot read is 400, before
+      // the token is checked.
       preValidation: [guard, requireMergePatch, requireIfMatch],
       schema: {
         operationId: 'developer.clients.update',

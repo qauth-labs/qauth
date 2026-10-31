@@ -203,7 +203,7 @@ is enforced two levels below it, and neither is client-side:
   `apps/auth-server/src/app/routes/clients/index.ts:216` on the deprecated path) and then goes out
   of scope. Regeneration is the same shape: only the new `hash` is persisted
   (`apps/auth-server/src/app/helpers/developer-clients.ts:648`), and the plaintext is returned once
-  (`apps/auth-server/src/app/routes/developer/clients.ts:401`). No code path — in the portal or the
+  (`apps/auth-server/src/app/routes/developer/clients.ts:404`). No code path — in the portal or the
   auth-server — reads a plaintext secret back out of storage, because no plaintext secret is
   ever stored.
 
