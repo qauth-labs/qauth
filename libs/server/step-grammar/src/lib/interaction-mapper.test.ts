@@ -186,7 +186,7 @@ describe('the Interaction API mapper', () => {
     );
   });
 
-  it('refuses an unknown step, params that do not match their step, and more alternatives than a read carries', () => {
+  it('refuses an unknown step, and params that do not match their step', () => {
     expectRefusal(
       () =>
         mapper.stepView({ current: { step: 'sms_code' as never, params: {} }, alternatives: [] }),
@@ -200,16 +200,29 @@ describe('the Interaction API mapper', () => {
         }),
       'invalid_params'
     );
-    const all = STEP_NAMES.filter((name) => name !== 'password');
-    expect(all.length).toBeGreaterThan(MAX_INTERACTION_ALTERNATIVES);
-    expectRefusal(
-      () =>
-        mapper.stepView({
-          current: { step: 'password', params: {} },
-          alternatives: all.map((name) => ({ step: name, params: paramsOf(name) })) as never,
-        }),
-      'too_many_alternatives'
-    );
+  });
+
+  // The contract's `maxItems` for `alternatives`. Today's grammar cannot
+  // exceed it: 17 steps, less the current one and the bot challenge, which is
+  // never an alternative, leave 15. The check is there for the steps to come.
+  it('carries at most the contract’s maximum of alternatives, and accepts the longest offer the grammar allows', () => {
+    const { schemas } = INTERACTION_OPENAPI['components'] as {
+      schemas: { Interaction: { properties: { alternatives: { maxItems: number } } } };
+    };
+    expect(MAX_INTERACTION_ALTERNATIVES).toBe(schemas.Interaction.properties.alternatives.maxItems);
+    const all = STEP_NAMES.filter((name) => name !== 'password' && name !== 'captcha');
+    expect(all).toHaveLength(MAX_INTERACTION_ALTERNATIVES);
+    const view = mapper.stepView({
+      current: { step: 'password', params: {} },
+      alternatives: all.map((name) => ({
+        step: name,
+        params:
+          name === 'new_password'
+            ? { purpose: 'reset', min_length: 15, max_length: 256 }
+            : paramsOf(name),
+      })) as never,
+    });
+    expect(view.alternatives).toHaveLength(MAX_INTERACTION_ALTERNATIVES);
   });
 
   it('refuses a configuration that names an unknown step or a step twice', () => {

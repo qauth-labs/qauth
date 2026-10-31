@@ -103,5 +103,11 @@ export function defineStep<
   for (const value of step.amr) {
     if (!AMR_VALUES.has(value)) throw new Error(`${step.name}: ${value} is not an amr value here`);
   }
-  return { ...step, urn: stepUrn(step.name) as StepUrnOf<N> };
+  return Object.freeze({
+    ...step,
+    transports: Object.freeze([...step.transports]) as unknown as T,
+    errors: Object.freeze([...step.errors]) as unknown as E,
+    amr: Object.freeze([...step.amr]) as unknown as M,
+    urn: stepUrn(step.name) as StepUrnOf<N>,
+  });
 }

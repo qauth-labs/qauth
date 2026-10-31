@@ -39,7 +39,7 @@ export {
   type StepMappingErrorCode,
 } from './lib/mapping-error';
 export type { CurrentStep, OfferedStep, StepOffer } from './lib/offer';
-export { generatedStepSchemaFile, publishedStepSchemaPath } from './lib/step-files';
+export { generatedStepSchemaFile } from './lib/step-files';
 export {
   EMAIL_CODE_PURPOSES,
   FIPA_STEP_NAMES,

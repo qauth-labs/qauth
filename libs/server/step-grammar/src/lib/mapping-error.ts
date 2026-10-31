@@ -20,6 +20,8 @@ export const STEP_MAPPING_ERROR_CODES = [
   'not_served',
   /** A bot challenge the client did not list: answered by the engine's delay and 429, never by `redirect_to_web`. */
   'not_negotiated',
+  /** A bot challenge offered with alternatives, or as one: it is required, and the pending step resumes after it. */
+  'bot_challenge_not_alone',
   /** The transport configuration or the round context is malformed. */
   'invalid_configuration',
 ] as const;

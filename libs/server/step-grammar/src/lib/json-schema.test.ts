@@ -1,11 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
-import {
-  STEP_SCHEMA_DIR,
-  stepJsonSchema,
-  stepNamed,
-} from '@qauth-labs/shared-interaction-contract';
+import { stepJsonSchema, stepNamed } from '@qauth-labs/shared-interaction-contract';
 import {
   describeErrors,
   strictValidator,
@@ -13,18 +9,16 @@ import {
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PUBLISHED_STEP_DIR, readPublishedStepFile, REPO_ROOT } from '../testing/published-files';
 import { toJsonSchemaPart } from './json-schema';
-import { generatedStepSchemaFile, publishedStepSchemaPath } from './step-files';
+import { generatedStepSchemaFile } from './step-files';
 import { grammarStep, STEP_GRAMMAR, STEP_NAMES, type StepName } from './steps';
 import { matching } from './zod-kit';
-
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 
 /** A value as it is written to a file and read back. */
 const asJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
-const published = (name: StepName): unknown =>
-  JSON.parse(readFileSync(join(REPO_ROOT, publishedStepSchemaPath(name)), 'utf8'));
+const published = readPublishedStepFile;
 
 const MISMATCH =
   'The step schema generated from the grammar’s Zod schemas differs from the file the Interaction API contract publishes. Change both libraries together: the Zod schema in libs/server/step-grammar/src/lib/steps/ and the step in libs/shared/interaction-contract/src/lib/steps/, then run `pnpm exec nx run shared-interaction-contract:contract-export`.';
@@ -48,7 +42,7 @@ describe('the JSON Schema generated from the Zod schemas', () => {
   });
 
   it('covers every step file the contract publishes, and no other', () => {
-    const files = readdirSync(join(REPO_ROOT, STEP_SCHEMA_DIR)).sort();
+    const files = readdirSync(join(REPO_ROOT, PUBLISHED_STEP_DIR)).sort();
     expect(files).toEqual(STEP_NAMES.map((name) => `${name}.json`).sort());
   });
 
@@ -241,6 +235,63 @@ describe('the Zod schemas and the published schema', () => {
         false,
       ],
       ['captcha', 'params', { provider: 'hosted', name: 'turnstile', site_key: '0x4AAAA' }, true],
+      // Formats: checked as the published schemas' validator checks them.
+      [
+        'device_confirm',
+        'params',
+        { user_code: 'WDJB-MJHT', requested_at: '2026-10-26T09:29:12Z' },
+        true,
+      ],
+      [
+        'device_confirm',
+        'params',
+        { user_code: 'WDJB-MJHT', requested_at: '2026-13-45T25:61:61Z' },
+        false,
+      ],
+      [
+        'device_confirm',
+        'params',
+        { user_code: 'WDJB-MJHT', requested_at: '2026-02-29T00:00:00Z' },
+        false,
+      ],
+      [
+        'device_confirm',
+        'params',
+        { user_code: 'WDJB-MJHT', requested_at: '2026-10-26T23:59:60Z' },
+        true,
+      ],
+      ...[
+        'https://a.example/%zz',
+        'urn:a:%',
+        'https://[::1/',
+        'https://a.example/#a#b',
+        'https://a.example/{x}',
+      ].map((resource): [StepName, 'params', unknown, boolean] => [
+        'consent',
+        'params',
+        {
+          scopes: [{ scope: 'openid', sensitive: false, dangerous: false }],
+          resources: [resource],
+          remember_default: false,
+        },
+        false,
+      ]),
+      [
+        'consent',
+        'params',
+        {
+          scopes: [{ scope: 'openid', sensitive: false, dangerous: false }],
+          resources: ['https://notes.example.com/v1?tenant=a', 'urn:example:notes'],
+          remember_default: false,
+        },
+        true,
+      ],
+      [
+        'totp_setup',
+        'personal',
+        { secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/a%zz' },
+        false,
+      ],
     ];
     for (const [name, part, value, valid] of cases) {
       expect(verdicts(name, part, value), `${name}.${part} ${JSON.stringify(value)}`).toEqual({

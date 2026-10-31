@@ -2,7 +2,7 @@ import type { z } from 'zod';
 
 import type { AnyGrammarStep } from './grammar';
 import { StepMappingError } from './mapping-error';
-import { readOffer, refuseUnknownMembers, type StepOffer } from './offer';
+import { checkParams, readOffer, refuseUnknownMembers, type StepOffer } from './offer';
 import {
   type GrammarStepUnion,
   isStepName,
@@ -36,7 +36,7 @@ export type InteractionMapperTable<S extends AnyGrammarStep = GrammarStepUnion> 
 
 const same = <P>(params: P): P => params;
 
-export const INTERACTION_STEP_MAPPERS: InteractionMapperTable = {
+export const INTERACTION_STEP_MAPPERS: InteractionMapperTable = Object.freeze({
   identifier: same,
   password: same,
   email_code: (params) => {
@@ -61,7 +61,7 @@ export const INTERACTION_STEP_MAPPERS: InteractionMapperTable = {
   device_code: same,
   device_confirm: same,
   logout_confirm: same,
-};
+});
 
 /** The step grammar's members of a step read. */
 export interface InteractionStepView {
@@ -81,14 +81,14 @@ export interface InteractionTransportConfig {
 export const MAX_INTERACTION_ALTERNATIVES = 15;
 
 export interface InteractionMapper {
-  /** The steps this transport serves. */
-  readonly serves: ReadonlySet<StepName>;
+  /** The steps this transport serves, in grammar order. */
+  readonly serves: readonly StepName[];
   /**
    * The grammar's members of the step read for `offer`. The current step must
    * be one this transport serves, since the Interaction API is where every
    * other transport sends a step it cannot serve; an alternative it does not
-   * serve is left out. Throws {@link StepMappingError} for an offer the
-   * grammar refuses.
+   * serve is left out. The steps the result names are the ones the page may
+   * answer. Throws {@link StepMappingError} for an offer the grammar refuses.
    */
   stepView(offer: StepOffer): InteractionStepView;
 }
@@ -106,11 +106,17 @@ export function createInteractionMapper(
     serves.add(name);
   }
 
+  // What a per-step mapper returns is checked again, so no mapper can add a
+  // member or a value the step's schema does not allow.
   const mapParams = (name: StepName, params: unknown) =>
-    (INTERACTION_STEP_MAPPERS[name] as (value: unknown) => unknown)(params);
+    checkParams(
+      name,
+      (INTERACTION_STEP_MAPPERS[name] as (value: unknown) => unknown)(params),
+      'interaction mapper'
+    );
 
   return {
-    serves,
+    serves: Object.freeze(STEP_NAMES.filter((name) => serves.has(name))),
     stepView(offer) {
       const read = readOffer(offer);
       const { current } = read;

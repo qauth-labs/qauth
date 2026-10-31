@@ -22,15 +22,27 @@ import {
 
 const ISS = 'https://auth.acme.example';
 const AUTH_SESSION = 'cm91bmQtaGFuZGxlLW9mLTMyLXJhbmRvbS1ieXRlcyE';
-const ALL_URNS = STEP_NAMES.map((name) => STEP_URNS[name]);
+/** A client that lists every step the FiPA endpoint may serve. */
+const FIPA_URNS = FIPA_STEP_NAMES.map((name) => STEP_URNS[name]);
 
-const round = (supported: readonly string[] = ALL_URNS): FipaRoundContext => ({
+/** A client that lists the FiPA steps and every step only the Interaction API serves, but one: 16 entries, the limit. */
+const MOST_URNS = [
+  ...FIPA_URNS,
+  ...INTERACTION_ONLY_STEP_NAMES.slice(0, 7).map((name) => STEP_URNS[name]),
+];
+
+const round = (supported: readonly string[] = FIPA_URNS): FipaRoundContext => ({
   issuer: ISS,
   authSession: AUTH_SESSION,
   interactionTypesSupported: supported,
 });
 
-const paramsOf = (name: StepName) => stepNamed(name).example.step.params as never;
+/** A step's example params, as offered without an error: `new_password` without `reasons`. */
+function paramsOf(name: StepName): never {
+  const params = { ...(stepNamed(name).example.step.params as Record<string, unknown>) };
+  delete params['reasons'];
+  return params as never;
+}
 const offerOf = (name: StepName, alternatives: readonly StepName[] = []): StepOffer =>
   ({
     current: { step: name, params: paramsOf(name) },
@@ -155,12 +167,16 @@ describe('the FiPA mapper', () => {
     let answers = 0;
     for (const name of STEP_NAMES) {
       for (const supported of [
-        ALL_URNS,
+        MOST_URNS,
         [STEP_URNS[name]],
         FIPA_STEP_NAMES.map((n) => STEP_URNS[n]),
       ]) {
         for (const serves of [FIPA_STEP_NAMES, FIPA_STEP_NAMES.filter((n) => n !== 'captcha')]) {
-          const alternatives = STEP_NAMES.filter((other) => other !== name).slice(0, 3);
+          // A bot challenge is offered alone, and never as an alternative.
+          const alternatives =
+            name === 'captcha'
+              ? []
+              : STEP_NAMES.filter((other) => other !== name && other !== 'captcha').slice(0, 3);
           let response;
           try {
             response = createFipaMapper({ serves }).challenge(
@@ -193,7 +209,10 @@ describe('the FiPA mapper and the steps it cannot serve', () => {
   it.each(INTERACTION_ONLY_STEP_NAMES)(
     '%s: as the required step, gives redirect_to_web and nothing of the step',
     (name) => {
-      const response = challenge(offerOf(name, ['identifier', 'password']));
+      const response = challenge(
+        offerOf(name, ['identifier', 'password']),
+        round([...FIPA_URNS, STEP_URNS[name]])
+      );
       expect(response).toStrictEqual({ status: 403, body: { error: 'redirect_to_web', iss: ISS } });
       const text = JSON.stringify(response);
       expect(text).not.toContain(STEP_URNS[name]);
@@ -204,7 +223,10 @@ describe('the FiPA mapper and the steps it cannot serve', () => {
   it.each(INTERACTION_ONLY_STEP_NAMES)(
     '%s: as an alternative, is left out of the offered list and the params',
     (name) => {
-      const answer = body(offerOf('password', [name, 'identifier']));
+      const answer = body(
+        offerOf('password', [name, 'identifier']),
+        round([...FIPA_URNS, STEP_URNS[name]])
+      );
       expect(answer.qauth_interaction_types_offered).toEqual([
         STEP_URNS.password,
         STEP_URNS.identifier,
@@ -273,9 +295,23 @@ describe('the FiPA round context', () => {
       { ...round(), authSession: `${AUTH_SESSION}=` },
       { ...round(), interactionTypesSupported: 'urn:qauth:ia:password:v1-rc.0' },
       { ...round(), error_description: 'Enter your password' },
+      { ...round(), issuer: 'https://auth.acme.example/?realm=b' },
+      { ...round(), issuer: 'https://auth.acme.example/#x' },
+      { ...round(), interactionTypesSupported: Array(17).fill(STEP_URNS.password) },
     ]) {
       expectRefusal(() => mapper.challenge(offer, context as never), 'invalid_configuration');
     }
+  });
+
+  it('takes an http issuer, which only a development realm has, and up to 16 listed steps', () => {
+    const answer = body(offerOf('password'), {
+      ...round(FIPA_STEP_NAMES.map((name) => STEP_URNS[name])),
+      issuer: 'http://localhost:3000',
+    });
+    expect(answer.iss).toBe('http://localhost:3000');
+    expect(body(offerOf('password'), round(Array(16).fill(STEP_URNS.password))).error).toBe(
+      'insufficient_authorization'
+    );
   });
 
   it('refuses a configuration that names a step twice or has another member', () => {

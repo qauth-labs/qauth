@@ -7,7 +7,9 @@ import { toJsonSchemaPart } from './json-schema';
 import { StepMappingError } from './mapping-error';
 import type { StepOffer } from './offer';
 import {
+  FIPA_STEP_NAMES,
   grammarStep,
+  INTERACTION_ONLY_STEP_NAMES,
   STEP_ERROR_CODES,
   STEP_NAMES,
   STEP_URNS,
@@ -21,14 +23,21 @@ import {
  * other step and with each of its errors, is walked: no prose member is
  * present anywhere, and every string is a step name, an error code, an
  * envelope value the transport fixes, or a params value at a place the
- * step's schema bounds with a `const`, an `enum` or a `pattern`. And the
- * mappers refuse an offer that tries to carry a sentence.
+ * step's schema bounds with a `const`, an `enum` or a token pattern. The two
+ * places where params carry words, a scope's consent text and the realm's
+ * name in the passkey options, hold text the realm's admin set, under the
+ * display rule: data from the realm's records, not text the server writes.
+ * And the mappers refuse an offer that tries to carry a sentence.
  */
 
 const ROUND: FipaRoundContext = {
   issuer: 'https://auth.example.com',
   authSession: 'YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE',
-  interactionTypesSupported: STEP_NAMES.map((name) => STEP_URNS[name]),
+  // Every FiPA step, and seven of the eight only the Interaction API serves:
+  // 16, the endpoint's limit. Listing those changes nothing.
+  interactionTypesSupported: [...FIPA_STEP_NAMES, ...INTERACTION_ONLY_STEP_NAMES.slice(0, 7)].map(
+    (name) => STEP_URNS[name]
+  ),
 };
 
 /** Members that hold sentences in OAuth, RFC 9457 and common error formats. */
@@ -48,6 +57,13 @@ const interaction = createInteractionMapper();
 const fipa = createFipaMapper(FIPA_SERVES_ALL);
 const paramsOf = (name: StepName) => stepNamed(name).example.step.params as never;
 
+/** A step's example params as the engine would offer them: `reasons` only after `password_rejected`. */
+function offeredParams(name: StepName, error?: string): never {
+  const params = { ...(paramsOf(name) as Record<string, unknown>) };
+  if (name === 'new_password' && error !== 'password_rejected') delete params['reasons'];
+  return params as never;
+}
+
 /** Every offer the walk covers: each step alone, with each other step, and with each of its errors. */
 function offers(): StepOffer[] {
   const all: StepOffer[] = [];
@@ -56,13 +72,18 @@ function offers(): StepOffer[] {
     for (const error of errors) {
       const current = {
         step: name,
-        params: paramsOf(name),
+        params: offeredParams(name, error),
         ...(error === undefined ? {} : { error }),
       };
       all.push({ current, alternatives: [] } as never);
+      // A bot challenge is offered alone, and never as an alternative.
+      if (name === 'captcha') continue;
       for (const other of STEP_NAMES) {
-        if (other !== name) {
-          all.push({ current, alternatives: [{ step: other, params: paramsOf(other) }] } as never);
+        if (other !== name && other !== 'captcha') {
+          all.push({
+            current,
+            alternatives: [{ step: other, params: offeredParams(other) }],
+          } as never);
         }
       }
     }
@@ -117,10 +138,14 @@ function walk(
   }
 }
 
-const isBounded = (schema: JsonSchema) =>
-  schema['const'] !== undefined ||
-  schema['enum'] !== undefined ||
-  typeof schema['pattern'] === 'string';
+/**
+ * The only params values that may hold words: text a realm admin set, shown
+ * as data under the display rule (no markup, control or format character),
+ * never text the server writes. Any other string must be a bounded token: a
+ * `const`, an `enum`, or a pattern that is not the display rule. A new
+ * display value in a step's params must be added here on purpose.
+ */
+const REALM_TEXT = new Set(['consent scopes.*.text', 'webauthn_create options.rp.name']);
 
 /** Check one params object, keyed by its step's URN, against its step's schema. */
 function checkParams(urn: string, params: unknown) {
@@ -131,7 +156,17 @@ function checkParams(urn: string, params: unknown) {
   walk(params, [], strings, []);
   for (const string of strings) {
     const node = schemaAt(schema, params, string.path);
-    expect(isBounded(node), `${urn} ${string.path.join('.')}`).toBe(true);
+    const where = `${name} ${string.path.map((part) => (typeof part === 'number' ? '*' : part)).join('.')}`;
+    if (node['x-qauth-display'] !== undefined) {
+      expect(REALM_TEXT.has(where), `${where} holds display text`).toBe(true);
+      expect(node['x-qauth-display'], where).toBe('realm');
+      continue;
+    }
+    const token =
+      node['const'] !== undefined ||
+      node['enum'] !== undefined ||
+      typeof node['pattern'] === 'string';
+    expect(token, `${where} is not a bounded token`).toBe(true);
   }
 }
 
@@ -142,7 +177,7 @@ describe('the mappers’ output', () => {
     expect(all.length).toBeGreaterThan(STEP_NAMES.length * (STEP_NAMES.length - 1));
   });
 
-  it('on the Interaction API: no prose member, and every string is a step name, an error code or a bounded params value', () => {
+  it('on the Interaction API: no prose member; every string is a step name, an error code, a bounded token or a realm’s own display text', () => {
     for (const offer of all) {
       const view = interaction.stepView(offer);
       const members: string[] = [];
@@ -158,7 +193,7 @@ describe('the mappers’ output', () => {
     }
   });
 
-  it('on the FiPA endpoint: no prose member, and every string is a step name, an error code, a fixed envelope value or a bounded params value', () => {
+  it('on the FiPA endpoint: no prose member; every string is a step name, an error code, an envelope value, a bounded token or a realm’s own display text', () => {
     for (const offer of all) {
       let response;
       try {
@@ -268,6 +303,9 @@ describe('an offer that tries to carry prose', () => {
               ...(paramsOf('webauthn_create') as { options: object }).options,
               rp: {
                 id: 'auth.example.com',
+                // A realm's display name is the realm's data; the display rule
+                // still refuses a line break, so no second line can pose as a
+                // message.
                 name: 'Example\nPlease confirm your account at https://evil.example',
               },
             },

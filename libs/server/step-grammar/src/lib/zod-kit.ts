@@ -1,6 +1,7 @@
 import { DISPLAY_TEXT_PATTERN, type DisplaySource } from '@qauth-labs/shared-interaction-contract';
 import { z } from 'zod';
 
+import { isDateTime, isUri } from './formats';
 import { toJsonSchemaPart } from './json-schema';
 
 /**
@@ -10,11 +11,14 @@ import { toJsonSchemaPart } from './json-schema';
  * runtime check, and its JSON Schema (`json-schema.ts`) is the one the
  * contract publishes; `json-schema.test.ts` compares every step file.
  *
- * Two differences from a JSON Schema validator, both on the strict side:
+ * A `format` is checked as the published schemas' validator checks it
+ * (`formats.ts`, ajv-formats in full mode), beside the `pattern`.
+ *
  * Zod counts a string's length in UTF-16 code units where JSON Schema counts
  * code points, so a character outside the Basic Multilingual Plane counts
- * twice against a `max`; and `format` is an annotation here, as JSON Schema
- * 2020-12 makes it by default: the `pattern` beside it is the check.
+ * twice. Against a maximum that is stricter. Against a minimum it would be
+ * laxer, but every string here with a minimum above one is held to ASCII by
+ * its pattern or is parsed as JSON (`jsonString`), so no value is affected.
  */
 
 /**
@@ -40,12 +44,14 @@ export function base64url(min: number, max: number, description: string) {
   return matching(z.string().min(min).max(max), pattern).meta({ description });
 }
 
-/** An RFC 3339 UTC time, such as `2026-10-26T09:30:00Z`. */
+/** An RFC 3339 UTC time, such as `2026-10-26T09:30:00Z`: a real date and time. */
 export function dateTime(description: string) {
   return matching(
     z.string().max(30),
     '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$'
-  ).meta({ format: 'date-time', description });
+  )
+    .refine(isDateTime)
+    .meta({ format: 'date-time', description });
 }
 
 /** A DNS host name in its ASCII form (IDNs as `xn--` labels), lower case. */
@@ -67,11 +73,19 @@ export function absoluteUri(maxLength: number, description: string) {
   const browserLocal = new RegExp(BROWSER_LOCAL_SCHEME, 'u');
   return matching(z.string().max(maxLength), `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS}+$`)
     .refine((value) => !browserLocal.test(value))
+    .refine(isUri)
     .meta({
       format: 'uri',
       not: { type: 'string', pattern: BROWSER_LOCAL_SCHEME },
       description,
     });
+}
+
+/** A URI that matches `pattern`: `format: uri`, checked as RFC 3986 reads it. */
+export function uriMatching(maxLength: number, pattern: string, description: string) {
+  return matching(z.string().max(maxLength), pattern)
+    .refine(isUri)
+    .meta({ format: 'uri', description });
 }
 
 /** Mark a value that a client or a device declared (the contract's `declared`). */

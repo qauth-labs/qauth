@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import { strictValidator } from '@qauth-labs/shared-interaction-contract/src/testing/schema-validator';
 import { loadVectors } from '@qauth-labs/shared-test-vectors';
 import { describe, expect, it } from 'vitest';
 
-import { publishedStepSchemaPath } from './step-files';
-import { STEP_NAMES, STEP_URNS, type StepName, stepNameOfUrn } from './steps';
+import { readPublishedStepFile, REPO_ROOT } from '../testing/published-files';
+import { STEP_NAMES, type StepName, stepNameOfUrn } from './steps';
 import {
   STEP_VECTORS_ID,
   STEP_VECTORS_PATH,
@@ -16,8 +16,6 @@ import {
   type StepVectorInput,
   VECTORS_EXPORT_COMMAND,
 } from './vectors';
-
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 
 // The id as a literal: shared-test-vectors' tree test finds a file's loader by it.
 const vectors = loadVectors<StepVectorInput, StepVectorExpected>('interaction/steps');
@@ -81,13 +79,15 @@ describe('the step vectors (test-vectors/interaction/steps.json)', () => {
     '%s: the step record validates against the step’s published schema',
     (_id, vector) => {
       const name = stepNameOfUrn(vector.input.step.type) as StepName;
-      const file = JSON.parse(readFileSync(join(REPO_ROOT, publishedStepSchemaPath(name)), 'utf8'));
+      const file = readPublishedStepFile(name) as { examples: unknown[] };
       expect(file.examples[0]).toStrictEqual(vector.input.step);
       const ajv = strictValidator();
       expect(ajv.validate(file, vector.input.step)).toBe(true);
-      expect(vector.input.fipa.interaction_types_supported).toEqual(
-        STEP_NAMES.map((n) => STEP_URNS[n])
-      );
+      const listed = vector.input.fipa.interaction_types_supported;
+      expect(listed.length).toBeLessThanOrEqual(16);
+      for (const urn of [vector.input.step.type, ...vector.input.alternatives.map((a) => a.type)]) {
+        expect(listed).toContain(urn);
+      }
     }
   );
 });

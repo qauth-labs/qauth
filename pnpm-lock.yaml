@@ -1532,6 +1532,9 @@ importers:
       '@qauth-labs/shared-interaction-contract':
         specifier: workspace:*
         version: link:../../shared/interaction-contract
+      ajv-formats:
+        specifier: 'catalog:'
+        version: 3.0.1(ajv@8.20.0)
       tslib:
         specifier: 'catalog:'
         version: 2.8.1

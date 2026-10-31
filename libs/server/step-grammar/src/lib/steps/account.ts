@@ -15,6 +15,7 @@ import {
   matching,
   object,
   URI_CHARACTERS,
+  uriMatching,
 } from '../zod-kit';
 import {
   accountIdentifier,
@@ -33,7 +34,11 @@ import {
  */
 
 /** Why an email code was sent. `confirm_sign_in` is the FiPA endpoint's alone (`interaction-mapper.ts`). */
-export const EMAIL_CODE_PURPOSES = ['verify_account', 'recovery', 'confirm_sign_in'] as const;
+export const EMAIL_CODE_PURPOSES = Object.freeze([
+  'verify_account',
+  'recovery',
+  'confirm_sign_in',
+] as const);
 
 export const emailCode = defineStep({
   name: 'email_code',
@@ -182,10 +187,11 @@ export const totpSetup = defineStep({
     secret: matching(z.string().min(32).max(32), '^[A-Z2-7]{32}$').meta({
       description: 'The shared secret, 160 bits in base32 (RFC 4648 §6), unpadded.',
     }),
-    otpauth_uri: matching(z.string().max(1024), `^otpauth://totp/${URI_CHARACTERS}+$`).meta({
-      format: 'uri',
-      description: 'The same secret as an `otpauth://` URI, for the QR code.',
-    }),
+    otpauth_uri: uriMatching(
+      1024,
+      `^otpauth://totp/${URI_CHARACTERS}+$`,
+      'The same secret as an `otpauth://` URI, for the QR code.'
+    ),
   }),
   answer: object({ otp: sixDigitOtp }),
   errors: ['invalid_credentials'],

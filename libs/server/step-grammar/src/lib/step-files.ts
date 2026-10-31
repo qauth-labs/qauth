@@ -1,9 +1,7 @@
 import {
-  CONTRACT_DIR,
   type JsonSchema,
   stepJsonSchema,
   stepNamed,
-  stepSchemaFile,
 } from '@qauth-labs/shared-interaction-contract';
 
 import { toJsonSchemaPart } from './json-schema';
@@ -38,9 +36,4 @@ export function generatedStepSchemaFile(name: StepName): JsonSchema {
     errors: step.errors,
     amr: step.amr,
   });
-}
-
-/** Where the contract publishes step `name`'s schema, from the repository root. */
-export function publishedStepSchemaPath(name: StepName): string {
-  return `${CONTRACT_DIR}/${stepSchemaFile({ name })}`;
 }

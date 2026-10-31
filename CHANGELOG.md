@@ -920,8 +920,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `403 redirect_to_web`, as an alternative it is left out, and no
   configuration can list one. Neither mapper sends prose: an offer with an
   undeclared member, an out-of-schema value or an error outside the step's set
-  is refused. A step added without a mapper on each transport fails the type
-  check. Nothing serves the mappers yet; the engine and the two endpoints use
+  is refused, and a bot challenge is offered alone. The Zod schemas check
+  `uri` and `date-time` formats with ajv-formats, as the published schemas'
+  validator does. A step added without a mapper on each transport fails the
+  type check. Nothing serves the mappers yet; the engine and the two endpoints use
   them in later issues. The contract's step examples are published as shared
   test vectors, `test-vectors/interaction/steps.json`, with each transport's
   answer.

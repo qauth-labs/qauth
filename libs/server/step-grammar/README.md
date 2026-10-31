@@ -24,6 +24,7 @@ publishes cannot drift apart.
 | `lib/interaction-mapper.ts` | The Interaction API mapper: the step-grammar members of the step read                          |
 | `lib/fipa-mapper.ts`        | The FiPA mapper: `403 insufficient_authorization`, or `403 redirect_to_web`                    |
 | `lib/mapping-error.ts`      | `StepMappingError`: why a mapper refused an offer (a code fault, never sent)                   |
+| `lib/formats.ts`            | The `uri` and `date-time` checks of ajv-formats, which the Zod schemas run beside each pattern |
 | `lib/vectors.ts`            | The contract's step examples as shared test vectors, with each transport's answer              |
 | `scripts/export-vectors.ts` | Writes `test-vectors/interaction/steps.json`. Nothing imports it                               |
 
@@ -76,10 +77,23 @@ createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).chall
   `interaction_types_supported`) gives `403 redirect_to_web`; as an alternative it is left out. A
   bot challenge is the one exception: it never becomes `redirect_to_web` (ADR-017 Decisions 4 and
   7), so the mapper throws and the engine throttles instead.
-- **No prose.** No output carries `error_description` or a sentence: every string is a step name,
-  an error code, an envelope value or a params value its schema bounds. An offer with a member the
-  grammar does not define, a params value outside its schema or an error outside the closed set is
-  refused with a `StepMappingError`, which the transport answers as an internal error.
+- **No prose.** No output carries `error_description` or a sentence the server writes: every string
+  is a step name, an error code, an envelope value or a bounded token (a `const`, an `enum` or a
+  token pattern). The only params that hold words are text the realm's admin set, under the display
+  rule: a scope's consent text and the realm's name in the passkey options. An offer with a member
+  the grammar does not define, a params value outside its schema or an error outside the closed set
+  is refused with a `StepMappingError`, which the transport answers as an internal error. What each
+  per-step mapper returns is parsed again by the step's schema.
+- **Rules between members.** A bot challenge (`captcha`) is offered alone and never as an
+  alternative: the pending step resumes after it, so no other answer may skip it (ADR-017
+  Decision 4). `new_password` carries `reasons` exactly when its last answer was refused with
+  `password_rejected`, and its `min_length` is not above its `max_length`.
+- **What may be answered next** is what the output names: the step read's `step` and
+  `alternatives`, or the FiPA body's `qauth_interaction_types_offered` (none after
+  `redirect_to_web`). A transport accepts an answer only to one of those.
+- **The FiPA round** carries the realm's issuer (no query or fragment; `http` only for a
+  development realm), the new `auth_session` (43 base64url characters) and the client's parsed
+  `interaction_types_supported`, at most 16 entries.
 - **Exhaustive.** Each mapper has a table keyed by the step union, so a step added to `STEP_LIST`
   without an entry on both transports fails the type check; on the FiPA table a step only the
   Interaction API serves takes the `INTERACTION_ONLY` marker, and cannot take a mapper.
@@ -98,16 +112,28 @@ pnpm exec nx run server-step-grammar:vectors-export
 the step. The shared vectors are append-only (`test-vectors/README.md`): a changed example needs a
 new case id, not an edited case.
 
-Zod and JSON Schema read the same rules with two differences, both on the strict side: Zod counts
-a string's length in UTF-16 code units, where JSON Schema counts code points; and the server
-parses a WebAuthn response string as the JSON document it names, which JSON Schema's
-`contentSchema` only annotates.
+Zod and the published schema's validator read the same rules, `format` included: the Zod schemas
+run ajv-formats' `uri` and `date-time` checks, the ones the contract's own tests validate with.
+Two differences remain, on purpose. Zod counts a string's length in UTF-16 code units, where JSON
+Schema counts code points: stricter against a maximum, and no value is affected against a minimum,
+because every string with a minimum above one is held to ASCII by its pattern or parsed as JSON.
+And the server parses a WebAuthn response string as the JSON document it names, which JSON
+Schema's `contentSchema` only annotates.
+
+## Known gaps, for the issues that serve these steps
+
+- On the FiPA endpoint, `new_password` sends the contract's `purpose` (`register`, `reset` or
+  `update_required`), which ADR-017 Decision 3's table does not list for that endpoint.
+- `webauthn_create` keeps the account's `user` and `excludeCredentials` in its personal data,
+  which only the Interaction API reads. A native app on the FiPA endpoint needs them in the
+  creation options; the passkey enrolment issue decides where they go.
 
 ## The tests
 
 | Test                         | What it holds the grammar to                                                                                          |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `json-schema.test.ts`        | The generated step files equal the published ones; every INT-01 example validates; Zod and the published schema agree |
+| `offer.test.ts`              | The rules between members, the second check of mapper output, and frozen tables and lists                             |
 | `steps.test.ts`              | The names, URNs, transports, errors and `amr` equal the contract's                                                    |
 | `interaction-mapper.test.ts` | The step view of every example equals the contract's example step read                                                |
 | `fipa-mapper.test.ts`        | ADR-017's wire examples; `redirect_to_web`; `interaction_type_required` is always a version-1 name                    |

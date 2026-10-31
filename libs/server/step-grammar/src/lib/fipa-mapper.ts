@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { AnyGrammarStep } from './grammar';
 import { StepMappingError } from './mapping-error';
-import { readOffer, refuseUnknownMembers, type StepOffer } from './offer';
+import { checkParams, readOffer, refuseUnknownMembers, type StepOffer } from './offer';
 import {
   FIPA_STEP_NAMES,
   type FipaStepName,
@@ -50,7 +50,7 @@ export type FipaMapperTable<S extends AnyGrammarStep = GrammarStepUnion> = {
 
 const same = <P>(params: P): P => params;
 
-export const FIPA_STEP_MAPPERS: FipaMapperTable = {
+export const FIPA_STEP_MAPPERS: FipaMapperTable = Object.freeze({
   identifier: same,
   password: same,
   email_code: same,
@@ -68,7 +68,7 @@ export const FIPA_STEP_MAPPERS: FipaMapperTable = {
   device_code: INTERACTION_ONLY,
   device_confirm: INTERACTION_ONLY,
   logout_confirm: INTERACTION_ONLY,
-};
+});
 
 /**
  * The steps that never become `redirect_to_web` when the client did not list
@@ -76,7 +76,7 @@ export const FIPA_STEP_MAPPERS: FipaMapperTable = {
  * instead, so an attacker is not moved to a path with other controls
  * (ADR-017 Decisions 4 and 7).
  */
-export const NEVER_REDIRECTED: readonly FipaStepName[] = ['captcha'];
+export const NEVER_REDIRECTED: readonly FipaStepName[] = Object.freeze(['captcha'] as const);
 
 /** The URN of a step the FiPA endpoint may serve. */
 export type FipaStepUrn = StepNamed<FipaStepName>['urn'];
@@ -123,22 +123,32 @@ export interface FipaRoundContext {
   readonly interactionTypesSupported: readonly string[];
 }
 
+/** The most entries `interaction_types_supported` may list (ADR-017 Decision 3). */
+export const MAX_INTERACTION_TYPES_SUPPORTED = 16;
+
 const contextSchema = z.strictObject({
-  issuer: z.url({ protocol: /^https?$/ }).max(2048),
+  // An issuer identifier has no query and no fragment (RFC 8414 §2). `http`
+  // only for a development realm's issuer; the endpoint itself is `https`.
+  issuer: z
+    .url({ protocol: /^https?$/ })
+    .max(2048)
+    .refine((value) => !value.includes('?') && !value.includes('#')),
   authSession: base64url(43, 43, 'The auth_session handle.'),
-  interactionTypesSupported: z.array(z.string().max(1024)),
+  interactionTypesSupported: z.array(z.string().max(1024)).max(MAX_INTERACTION_TYPES_SUPPORTED),
 });
 
 export interface FipaMapper {
-  /** The steps this transport serves. */
-  readonly serves: ReadonlySet<FipaStepName>;
+  /** The steps this transport serves, in grammar order. */
+  readonly serves: readonly FipaStepName[];
   /**
    * The endpoint's answer to `offer`. A step the endpoint cannot serve (an
    * Interaction-API-only step, one this deployment does not serve, or one
    * the client did not list) is `redirect_to_web` when it is the current
-   * step, and left out when it is an alternative. Throws
-   * {@link StepMappingError} for an offer the grammar refuses, and for a bot
-   * challenge the client did not list.
+   * step, and left out when it is an alternative. The steps the body names
+   * in `qauth_interaction_types_offered` are the ones the client may answer
+   * next (none after `redirect_to_web`). Throws {@link StepMappingError} for
+   * an offer the grammar refuses, and for a bot challenge the client did not
+   * list.
    */
   challenge(offer: StepOffer, context: FipaRoundContext): FipaChallengeResponse;
 }
@@ -156,11 +166,17 @@ export function createFipaMapper(config: FipaTransportConfig): FipaMapper {
     serves.add(name);
   }
 
+  // What a per-step mapper returns is checked again, so no mapper can add a
+  // member or a value the step's schema does not allow.
   const mapParams = (name: FipaStepName, params: unknown) =>
-    (FIPA_STEP_MAPPERS[name] as (value: unknown) => unknown)(params);
+    checkParams(
+      name,
+      (FIPA_STEP_MAPPERS[name] as (value: unknown) => unknown)(params),
+      'FiPA mapper'
+    );
 
   return {
-    serves,
+    serves: Object.freeze(FIPA_STEP_NAMES.filter((name) => serves.has(name))),
     challenge(offer, context) {
       const read = readOffer(offer);
       const parsedContext = contextSchema.safeParse(context);

@@ -27,7 +27,7 @@ export { EMAIL_CODE_PURPOSES } from './account';
  * first the steps ADR-017 Decision 3 lists, which the FiPA endpoint may serve
  * too, then the steps only the Interaction API serves.
  */
-export const STEP_LIST = [
+export const STEP_LIST = Object.freeze([
   identifier,
   password,
   emailCode,
@@ -45,7 +45,7 @@ export const STEP_LIST = [
   deviceCode,
   deviceConfirm,
   logoutConfirm,
-] as const;
+] as const);
 
 /** The union of every step. A new step joins it here, and then needs a mapper on each transport. */
 export type GrammarStepUnion = (typeof STEP_LIST)[number];
@@ -89,7 +89,7 @@ export const STEP_GRAMMAR = Object.freeze(
 ) as { readonly [N in StepName]: StepNamed<N> };
 
 /** Every step name, in grammar order. */
-export const STEP_NAMES: readonly StepName[] = STEP_LIST.map((step) => step.name);
+export const STEP_NAMES: readonly StepName[] = Object.freeze(STEP_LIST.map((step) => step.name));
 
 /** The URN of every step, by its short name. */
 export const STEP_URNS = Object.freeze(
@@ -107,19 +107,20 @@ export const STEP_ERRORS = Object.freeze(
 ) as { readonly [N in StepName]: StepNamed<N>['errors'] };
 
 /** The union of every step's errors, in first-seen order: the contract's `StepError` values. */
-export const STEP_ERROR_CODES: readonly StepErrorCode[] = [
+export const STEP_ERROR_CODES: readonly StepErrorCode[] = Object.freeze([
   ...new Set<StepErrorCode>(STEP_LIST.flatMap((step) => step.errors)),
-];
+]);
 
 /** The steps the FiPA endpoint may serve, in grammar order. */
-export const FIPA_STEP_NAMES = STEP_LIST.filter(
-  (step): step is Extract<GrammarStepUnion, { readonly name: FipaStepName }> =>
+export const FIPA_STEP_NAMES = Object.freeze(
+  STEP_LIST.filter((step): step is Extract<GrammarStepUnion, { readonly name: FipaStepName }> =>
     (step.transports as readonly string[]).includes('fipa')
-).map((step) => step.name) as readonly FipaStepName[];
+  ).map((step) => step.name)
+) as readonly FipaStepName[];
 
 /** The steps only the Interaction API serves, in grammar order. */
-export const INTERACTION_ONLY_STEP_NAMES = STEP_NAMES.filter(
-  (name) => !(FIPA_STEP_NAMES as readonly string[]).includes(name)
+export const INTERACTION_ONLY_STEP_NAMES = Object.freeze(
+  STEP_NAMES.filter((name) => !(FIPA_STEP_NAMES as readonly string[]).includes(name))
 ) as readonly InteractionOnlyStepName[];
 
 /** Whether `name` names a step of the grammar. */

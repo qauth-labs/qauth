@@ -57,6 +57,23 @@ export function refuseUnknownMembers(value: unknown, allowed: readonly string[],
   }
 }
 
+/**
+ * Parse `params` with step `name`'s schema: strict, so a sentence in an
+ * undeclared member is refused. The mappers run it on the engine's params
+ * and again on what each transport's per-step mapper returns.
+ */
+export function checkParams(name: StepName, params: unknown, at: string): unknown {
+  const parsed = grammarStep(name).params.safeParse(params);
+  if (!parsed.success) {
+    const paths = parsed.error.issues.map((issue) => issue.path.join('.') || '(root)');
+    throw new StepMappingError(
+      'invalid_params',
+      `${at} ${name}: ${[...new Set(paths)].join(', ')}`
+    );
+  }
+  return parsed.data;
+}
+
 function readStep(value: unknown, at: string, allowError: boolean) {
   refuseUnknownMembers(value, allowError ? ['step', 'params', 'error'] : ['step', 'params'], at);
   const { step: name, params, error } = value as Record<string, unknown>;
@@ -64,22 +81,42 @@ function readStep(value: unknown, at: string, allowError: boolean) {
     throw new StepMappingError('unknown_step', `${at}.step`);
   }
   const step = grammarStep(name);
-  const parsed = step.params.safeParse(params);
-  if (!parsed.success) {
-    const paths = parsed.error.issues.map((issue) => issue.path.join('.') || '(root)');
-    throw new StepMappingError('invalid_params', `${name}: ${[...new Set(paths)].join(', ')}`);
-  }
+  const parsed = checkParams(name, params, at);
   if (error !== undefined && !(typeof error === 'string' && step.errors.includes(error))) {
     throw new StepMappingError('invalid_error', `${name}: not one of its errors`);
   }
-  return { name, params: parsed.data, error: error as StepErrorCode | undefined };
+  return { name, params: parsed, error: error as StepErrorCode | undefined };
 }
+
+/**
+ * The rules between members that a step's schema does not state, checked on
+ * every offered step: `new_password` carries `reasons` exactly when it is the
+ * current step and its last answer was refused with `password_rejected`
+ * (ADR-017 Decision 3), and its bounds do not cross.
+ */
+function checkStepRules(name: StepName, params: unknown, error: StepErrorCode | undefined): void {
+  if (name !== 'new_password') return;
+  const { min_length: min, max_length: max, reasons } = params as StepParams<'new_password'>;
+  if (min > max)
+    throw new StepMappingError('invalid_params', 'new_password: min_length above max_length');
+  if ((reasons !== undefined) !== (error === 'password_rejected')) {
+    throw new StepMappingError(
+      'invalid_error',
+      'new_password: reasons go with password_rejected only'
+    );
+  }
+}
+
+/** The bot challenge: required when it comes, so it is offered alone (ADR-017 Decision 4). */
+const BOT_CHALLENGE: StepName = 'captcha';
 
 /**
  * Check an offer against the grammar, whatever the transport: known steps
  * only, every params object valid for its step (a strict schema, so a
  * sentence in an undeclared member is refused), an error only on the current
- * step and only from its closed set, and no step offered twice.
+ * step and only from its closed set, no step offered twice, and a bot
+ * challenge with no alternative and never as one: the pending step resumes
+ * after it, so no other answer may skip it.
  */
 export function readOffer(offer: StepOffer): ReadOffer {
   refuseUnknownMembers(offer, ['current', 'alternatives'], 'offer');
@@ -87,11 +124,19 @@ export function readOffer(offer: StepOffer): ReadOffer {
     throw new StepMappingError('unknown_member', 'offer.alternatives is not an array');
   }
   const current = readStep(offer.current, 'offer.current', true);
+  checkStepRules(current.name, current.params, current.error);
+  if (current.name === BOT_CHALLENGE && offer.alternatives.length > 0) {
+    throw new StepMappingError('bot_challenge_not_alone', 'offer.alternatives');
+  }
   const seen = new Set<StepName>([current.name]);
   const alternatives = offer.alternatives.map((alternative, index) => {
     const read = readStep(alternative, `offer.alternatives.${index}`, false);
+    if (read.name === BOT_CHALLENGE) {
+      throw new StepMappingError('bot_challenge_not_alone', `offer.alternatives.${index}`);
+    }
     if (seen.has(read.name)) throw new StepMappingError('duplicate_step', read.name);
     seen.add(read.name);
+    checkStepRules(read.name, read.params, undefined);
     return { step: read.name, params: read.params };
   });
   return {

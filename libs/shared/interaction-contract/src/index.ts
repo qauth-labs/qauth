@@ -1,4 +1,3 @@
-export { CONTRACT_DIR, STEP_SCHEMA_DIR } from './lib/artifacts';
 export * from './lib/identifiers';
 export { buildInteractionOpenApi, INTERACTION_OPENAPI, type OpenApiDocument } from './lib/openapi';
 export {

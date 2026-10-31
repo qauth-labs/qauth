@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/shared-interaction-contract": "workspace:*",
+    "ajv-formats": "catalog:",
     "tslib": "catalog:",
     "zod": "catalog:"
   },
