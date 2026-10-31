@@ -153,6 +153,15 @@ function emittedData(type: string): unknown[] {
   return emitUserEventMock.mock.calls.filter(([, t]) => t === type).map(([, , data]) => data);
 }
 
+/**
+ * What of a refusal reaches the wire: its class, status, OAuth error code and
+ * description. Two refusals that agree here answer alike (#748).
+ */
+function wireAnswer(error: unknown): Record<string, unknown> {
+  const { name, statusCode, code, message, errorDescription } = error as Record<string, unknown>;
+  return { name, statusCode, code, message, errorDescription };
+}
+
 beforeEach(() => {
   emitUserEventMock.mockClear();
   recordGrantAccessTokenMock.mockClear();
@@ -2940,6 +2949,129 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     );
   });
 
+  // A code issued before the account was last disabled stays refused after it
+  // is enabled again, with the answer a disabled user's code gets.
+  it('rejects a code issued before its user was last disabled, as for a disabled user (invalid_grant, #748)', async () => {
+    const notValidBefore = Date.now() - 60_000;
+    const redeem = async (enabled: boolean) => {
+      const { fastify, ctx, authCode, user } = setupAuthCodeStub();
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({ ...authCode, createdAt: notValidBefore - 60_000 });
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        ...user,
+        enabled,
+        notValidBefore,
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+      const refused = await handler(baseRequest(), createReply()).catch((error: unknown) => error);
+      return { fastify, authCode, user, refused };
+    };
+
+    const disabled = await redeem(false);
+    emitUserEventMock.mockClear();
+    const { fastify, authCode, user, refused } = await redeem(true);
+
+    expect(refused).toBeInstanceOf(InvalidGrantError);
+    expect(refused).toMatchObject({ errorDescription: 'Invalid or expired authorization code' });
+    expect(wireAnswer(refused)).toEqual(wireAnswer(disabled.refused));
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    // The code is still burned, so the exchange cannot be retried.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      {
+        grantType: 'authorization_code',
+        error: 'invalid_grant',
+        reason: 'issued_before_disablement',
+      },
+      expect.objectContaining({ userId: user.id, clientId: 'test-client-1' })
+    );
+  });
+
+  it('redeems a code issued after its user was last disabled and enabled again (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, authCode, user } = setupAuthCodeStub();
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, createdAt: notValidBefore + 60_000 });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).resolves.toMatchObject({
+      access_token: 'signed.jwt.token',
+      refresh_token: 'refresh-token-plain',
+    });
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
+  });
+
+  // A disablement that commits while the account is being read is not seen
+  // by the read: the family it starts counts from before the read, so it
+  // cannot postdate that disablement's time.
+  it('starts the refresh family at the time taken before the account is read (#748)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { fastify, ctx, user } = setupAuthCodeStub();
+      const beforeRead = Date.now();
+      (fastify.repositories.users.findById as unknown as Mock).mockImplementation(async () => {
+        // The read waits, on the disabling transaction's row lock say, while
+        // the clock moves on.
+        vi.setSystemTime(Date.now() + 5_000);
+        return user;
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).resolves.toMatchObject({
+        refresh_token: 'refresh-token-plain',
+      });
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ familyCreatedAt: beforeRead }),
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A code the previous release minted after the account was enabled again,
+  // from a session older than the disablement: the sign-in behind it counts.
+  it('rejects a new code minted from a sign-in older than the last disablement (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, authCode, user } = setupAuthCodeStub();
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
+      ...authCode,
+      authTime: notValidBefore - 60_000,
+      createdAt: notValidBefore + 60_000,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'issued_before_disablement' }),
+    ]);
+  });
+
   // ADR-007 §2 (#184): the authorization_code grant enforces the agent's
   // CURRENT cap, like every other grant. A code approved under agent:exec must
   // not redeem into agent:exec after the operator lowers the cap.
@@ -3293,6 +3425,131 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     // The token is burned already; the refusal and its reason stand.
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
       { grantType: 'refresh_token', error: 'invalid_grant', reason: 'user_disabled' },
+    ]);
+  });
+
+  // A refresh token nobody used while the account was disabled does not come
+  // back when it is enabled again: it is burned, and the client is answered as
+  // for a disabled user.
+  it('revokes a refresh token issued before the user was last disabled, answering as for a disabled user (#748)', async () => {
+    const notValidBefore = Date.now() - 60_000;
+    const refresh = async (enabled: boolean) => {
+      const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        confidentialClient
+      );
+      (
+        fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue({ ...storedToken, createdAt: notValidBefore - 60_000 });
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        ...user,
+        enabled,
+        notValidBefore,
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+      const refused = await handler(refreshRequest(), createReply()).catch(
+        (error: unknown) => error
+      );
+      return { fastify, confidentialClient, storedToken, user, refused };
+    };
+
+    const disabled = await refresh(false);
+    expect(disabled.fastify.repositories.refreshTokens.revoke).toHaveBeenCalledWith(
+      disabled.storedToken.id,
+      'user_disabled'
+    );
+    emitUserEventMock.mockClear();
+    const { fastify, confidentialClient, storedToken, user, refused } = await refresh(true);
+
+    expect(refused).toBeInstanceOf(InvalidGrantError);
+    expect(refused).toMatchObject({ errorDescription: 'Invalid or expired refresh token' });
+    expect(wireAnswer(refused)).toEqual(wireAnswer(disabled.refused));
+    // Burned with the refusal as its reason; nothing rotated, nothing signed.
+    expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledExactlyOnceWith(
+      storedToken.id,
+      'issued_before_disablement'
+    );
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'issued_before_disablement' },
+      expect.objectContaining({ userId: user.id, clientId: confidentialClient.clientId })
+    );
+  });
+
+  it('rotates a refresh token issued after the user was last disabled and enabled again (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({
+      ...storedToken,
+      familyCreatedAt: notValidBefore + 30_000,
+      createdAt: notValidBefore + 60_000,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).resolves.toMatchObject({
+      access_token: 'new.access.jwt',
+      refresh_token: 'new-refresh-token',
+    });
+    expect(fastify.repositories.refreshTokens.revokeIfActive).toHaveBeenCalledWith(
+      storedToken.id,
+      'rotated',
+      expect.anything()
+    );
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
+  });
+
+  // A rotation made after the account was enabled again, by a node of the
+  // previous release or while the disabling transaction was still open, gives
+  // the token a new `created_at`; its family still began before.
+  it('revokes a rotated refresh token whose family began before the user was last disabled (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, storedToken, user, confidentialClient } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({
+      ...storedToken,
+      familyCreatedAt: notValidBefore - 60_000,
+      createdAt: notValidBefore + 60_000,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).rejects.toBeInstanceOf(
+      InvalidGrantError
+    );
+    expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledExactlyOnceWith(
+      storedToken.id,
+      'issued_before_disablement'
+    );
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'issued_before_disablement' },
     ]);
   });
 
@@ -4890,6 +5147,56 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
+  // A subject token minted before the account was last disabled stays refused
+  // after it is enabled again, and the agent cannot tell it from a disabled
+  // user's.
+  it('rejects a subject_token issued before the subject user was last disabled, as for a disabled user (invalid_request, #748)', async () => {
+    const notValidBefore = Date.now() - 60_000;
+    const exchange = async (enabled: boolean) => {
+      const { fastify, ctx, user, subjectPayload } = setupExchangeStub();
+      Object.assign(subjectPayload, { iat: Math.floor((notValidBefore - 60_000) / 1000) });
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        ...user,
+        enabled,
+        notValidBefore,
+      });
+      const refused = await invoke(fastify, ctx, exchangeRequest()).catch(
+        (error: unknown) => error
+      );
+      return { fastify, user, refused };
+    };
+
+    const disabled = await exchange(false);
+    emitUserEventMock.mockClear();
+    const { fastify, user, refused } = await exchange(true);
+
+    expect(refused).toBeInstanceOf(InvalidRequestError);
+    expect(wireAnswer(refused)).toEqual(wireAnswer(disabled.refused));
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TOKEN_REQUEST_FAILED,
+      { grantType: GRANT, error: 'invalid_request', reason: 'issued_before_disablement' },
+      expect.objectContaining({ userId: user.id, clientId: AGENT_CLIENT_ID })
+    );
+  });
+
+  it('mints for a subject_token issued after the subject user was last disabled and enabled again (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, user, subjectPayload } = setupExchangeStub();
+    Object.assign(subjectPayload, { iat: Math.floor(Date.now() / 1000) });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+
+    await expect(invoke(fastify, ctx, exchangeRequest())).resolves.toMatchObject({
+      access_token: 'delegated.jwt',
+      issued_token_type: ACCESS_TOKEN_TYPE,
+    });
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
+  });
+
   it("rejects the agent's own client_credentials token as subject_token without a user lookup (#754)", async () => {
     const { fastify, ctx, subjectPayload } = setupExchangeStub();
     // What `handleClientCredentials` mints with no `resource` and no client
@@ -5764,6 +6071,96 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects an assertion issued before its user was last disabled, as for a disabled user (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    // Issued two minutes ago, still within its lifetime; the account was
+    // disabled a minute ago and is enabled again.
+    const now = Math.floor(Date.now() / 1000);
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: (now - 60) * 1000,
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: now - 120, exp: now + 60 }))
+      )
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'issued_before_disablement' }),
+    ]);
+  });
+
+  it('counts an assertion as issued the clock-skew leeway earlier than its iat (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    // Disabled 100 s ago and enabled again since. The identity provider's
+    // clock may run ID_JAG_CLOCK_SKEW_LEEWAY (60 s) ahead of ours, so an `iat`
+    // half that past the disablement may have been issued before it.
+    const now = Math.floor(Date.now() / 1000);
+    const disabledAt = now - 100;
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: disabledAt * 1000,
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: disabledAt + 30, exp: now + 60 }))
+      )
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'issued_before_disablement' }),
+    ]);
+  });
+
+  it('redeems an assertion issued more than the clock-skew leeway after the disablement (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const now = Math.floor(Date.now() / 1000);
+    const disabledAt = now - 100;
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: disabledAt * 1000,
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: disabledAt + 62, exp: now + 60 }))
+      )
+    ).resolves.toMatchObject({ access_token: 'ema.access.jwt' });
+  });
+
+  it('redeems an assertion issued after its user was enabled again (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: Date.now() - 600_000,
+    });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).resolves.toMatchObject({ access_token: 'ema.access.jwt' });
   });
 
   it('rejects a requested scope wider than the assertion authorized', async () => {

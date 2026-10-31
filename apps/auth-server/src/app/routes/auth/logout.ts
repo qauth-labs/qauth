@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { accessTokenIssuedAt, issuedBeforeDisablement } from '../../helpers/account-validity';
 import { logAuthEvent } from '../../helpers/auth-events';
 import { endBrowserSessions } from '../../helpers/browser-session';
 import { assertManagementToken } from '../../helpers/management-token';
@@ -131,6 +132,14 @@ export default async function (fastify: FastifyInstance) {
         }
         userId = user.id;
         realmId = user.realmId;
+
+        // Once the account is enabled again, a token minted before it was
+        // last disabled ends nothing (#748): whoever held it then must not
+        // sign the owner out of the sessions they started since. While the
+        // account is disabled its user may still sign out, as above.
+        if (user.enabled && issuedBeforeDisablement(user, accessTokenIssuedAt(claims))) {
+          throw withEventReason(inactiveSubjectError(), 'issued_before_disablement');
+        }
 
         // End the user's hosted browser sessions first, so none of them can
         // obtain a new authorization code once the codes are invalidated

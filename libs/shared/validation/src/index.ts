@@ -2,6 +2,8 @@ export type * from './lib/email';
 export * from './lib/email';
 export type * from './lib/event-retention';
 export * from './lib/event-retention';
+export type * from './lib/not-valid-before';
+export * from './lib/not-valid-before';
 export type * from './lib/password';
 export * from './lib/password';
 export type * from './lib/realm-host';

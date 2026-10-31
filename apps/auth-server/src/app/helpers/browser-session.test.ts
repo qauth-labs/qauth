@@ -83,6 +83,17 @@ describe('createBrowserSession', () => {
     });
   });
 
+  it('counts the session from the issue time the sign-in took before reading the account (#748)', async () => {
+    const issuedAt = Date.now() - 1500;
+    await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      issuedAt,
+    });
+
+    expect(sessions.service.create.mock.calls[0][0].issuedAt).toBe(issuedAt);
+  });
+
   it('carries the assurance level the authentication established', async () => {
     await createBrowserSession(fastify, makeRequest(), {
       realmId: REALM.id,
@@ -230,6 +241,44 @@ describe('resolveBrowserSession', () => {
     expect(sessions.service.sessions.has(session.sid)).toBe(false);
     expect(sessions.redis.hashes.size).toBe(0);
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
+  });
+
+  it('revokes a session that began before the account was last disabled, once it is enabled again (#748)', async () => {
+    const disabledAt = Date.now() - 60_000;
+    users.findById.mockResolvedValue({ id: USER_ID, enabled: true, notValidBefore: disabledAt });
+    const { session, cookie } = await sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_ID,
+      authTime: disabledAt - 60_000,
+      side: { csrfToken: 'tok' },
+    });
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toBeNull();
+    expect(sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: session.sid,
+      reason: 'admin',
+    });
+    expect(sessions.redis.hashes.size).toBe(0);
+    expect(headers['Set-Cookie']).toContain('Max-Age=0');
+  });
+
+  it('keeps a session that began after the account was enabled again (#748)', async () => {
+    const disabledAt = Date.now() - 600_000;
+    users.findById.mockResolvedValue({ id: USER_ID, enabled: true, notValidBefore: disabledAt });
+    const { session, cookie } = await sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_ID,
+      authTime: disabledAt + 60_000,
+    });
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toEqual(
+      session
+    );
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(headers['Set-Cookie']).toBeUndefined();
   });
 
   it('revokes the session of a user that no longer exists', async () => {

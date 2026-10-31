@@ -351,7 +351,11 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       }
       const lifetimes = await store.findRealmLifetimes(input.realmId);
       if (lifetimes === undefined) throw new UnknownSessionRealmError(input.realmId);
-      const createdAt = now();
+      const current = now();
+      const createdAt =
+        input.issuedAt !== undefined && Number.isFinite(input.issuedAt)
+          ? Math.min(input.issuedAt, current)
+          : current;
       // Only the session's own columns are written: whatever else a caller
       // passes (a CSRF value, consent scopes) never reaches Postgres.
       const session = await store.insert({

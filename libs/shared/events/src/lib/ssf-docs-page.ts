@@ -191,21 +191,22 @@ stream of the realm that requested it receives. An event marked as going to the 
 reaches only the stream whose receiver is that client: it tells of the user's dealings with that
 one client, which another receiver has no need to see.
 
-A receiver may add a user only when the user is related to the receiver's client: the user has an
-active consent for it, or holds a live refresh token it was issued. Any other user, and a user id
-that does not exist, is refused with \`403\`, as SSF 1.0 §8.1.3.2 prescribes for a subject the
-receiver may not add. So the receiver is the client the users sign in through, given the
-\`client_credentials\` grant and the \`ssf:stream\` scope as well: a client of its own, which no
-user signs in to, can add no user. The relation is checked when the subject is added; the subject
-then stays on the stream until the receiver removes it, also after the user withdraws the consent
-or the refresh token ends.`,
+A receiver may add a user only when the user is related to it: the user has an active consent for
+the receiver's client or a live refresh token it was issued, or, for a receiver that serves as a
+resource server, a live refresh token whose audience names it. Any other user, and a user id that
+does not exist, is refused with \`403\`, as SSF 1.0 §8.1.3.2 prescribes for a subject the receiver
+may not add. A user subject lasts as long as its relation: the hourly \`ssf-subject-sweep\` job
+deletes it once the relation has ended and every event about the user has reached the stream, so
+the SET that tells of the end still arrives. A disabled user is related to no receiver, so after
+\`account-disabled\` reaches a stream the sweep deletes the user's subject there, and
+\`account-enabled\` reaches only a stream the sweep has not cleared yet: once the user is enabled,
+the receiver adds them again. The [SSF transmitter](/operate/ssf-transmitter/) guide gives the
+whole rule.`,
     `## Mapping`,
     mappingTable(definitions),
     notesList(definitions),
     `## Security events with no SSF event`,
     unmappedTable(definitions),
-    `RISC 1.0 \`account-disabled\` and \`account-enabled\` map the disabling and enabling of a user,
-which has no event type yet: they arrive with that feature, under the same rule.`,
     `## QAuth-defined events`,
     `Where no CAEP 1.0 or RISC 1.0 event says what happened, QAuth defines one. Its identifier is
 \`urn:qauth:secevent:<name>:v<N>\`, a URN rather than a URL so that it never looks like a standard

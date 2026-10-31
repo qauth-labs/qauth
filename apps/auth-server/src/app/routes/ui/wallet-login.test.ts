@@ -739,6 +739,7 @@ describe('wallet login — completion', () => {
       assuranceLevel: null,
       ipAddress: '127.0.0.1',
       userAgent: 'TestWallet/1.0',
+      issuedAt: expect.any(Number),
     });
     expect(input.authTime).toBeGreaterThanOrEqual(before);
     expect(input.authTime).toBeLessThanOrEqual(Date.now());
@@ -755,6 +756,41 @@ describe('wallet login — completion', () => {
     expect([...sessionUtils.store.keys()].some((k) => k.startsWith('wallet-login-signal:'))).toBe(
       false
     );
+  });
+
+  // A disablement that commits while the account is being read is not seen
+  // by the read: the session counts from before the read (#748).
+  it('counts the new session from the time taken before the account is read (#748)', async () => {
+    const { fastify, routes, sessionUtils, sessions, handle, flow, binderCookie } =
+      await startFlow();
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const beforeRead = Date.now();
+      (fastify.repositories.users.findById as unknown as Mock).mockImplementation(async () => {
+        // The read waits, on the disabling transaction's row lock say, while
+        // the clock moves on.
+        vi.setSystemTime(Date.now() + 5_000);
+        return { id: 'user-1', enabled: true };
+      });
+      const { reply, state } = createReply();
+      await routes.get('GET /wallet-login/:handle/status')!(
+        {
+          params: { handle },
+          headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(state.body.status).toBe('complete');
+      expect(sessions.service.create).toHaveBeenCalledOnce();
+      expect(sessions.service.create.mock.calls[0][0].issuedAt).toBe(beforeRead);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('mints a FRESH session id rather than reusing anything the browser had', async () => {

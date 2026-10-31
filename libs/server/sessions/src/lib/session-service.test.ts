@@ -170,6 +170,27 @@ describe('create', () => {
     expect(session.idleExpiresAt).toBe(createdAt + 600 * SECOND);
   });
 
+  it('counts a session from the issue time its sign-in took before reading the account (#748)', async () => {
+    store.putRealm(REALM_A, { maxLifespanSeconds: 3600, idleTimeoutSeconds: 600 });
+    const issuedAt = clock.now() - 2 * SECOND;
+
+    const session = await serviceWith().create(signIn({ issuedAt }));
+
+    expect(session.createdAt).toBe(issuedAt);
+    expect(session.lastSeenAt).toBe(issuedAt);
+    expect(session.expiresAt).toBe(issuedAt + 3600 * SECOND);
+    expect(store.row(session.sid)).toMatchObject({ createdAt: issuedAt, lastSeenAt: issuedAt });
+  });
+
+  it('never counts a session from an issue time ahead of its clock', async () => {
+    const now = clock.now();
+
+    const session = await serviceWith().create(signIn({ issuedAt: now + MINUTE }));
+
+    expect(session.createdAt).toBe(now);
+    expect(store.row(session.sid)?.createdAt).toBe(now);
+  });
+
   it('refuses a realm with no row', async () => {
     await expect(
       serviceWith().create(signIn({ realmId: '0199a000-0000-7000-8000-0000000000ff' }))

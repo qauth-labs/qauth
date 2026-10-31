@@ -417,6 +417,8 @@ describe('the SSF transmitter (real containers)', () => {
           'https://schemas.openid.net/secevent/caep/event-type/credential-change',
           'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
           'https://schemas.openid.net/secevent/caep/event-type/token-claims-change',
+          'https://schemas.openid.net/secevent/risc/event-type/account-disabled',
+          'https://schemas.openid.net/secevent/risc/event-type/account-enabled',
           'urn:qauth:secevent:key-emergency-retired:v1-rc.0',
           'urn:qauth:secevent:token-revoked:v1-rc.0',
         ],

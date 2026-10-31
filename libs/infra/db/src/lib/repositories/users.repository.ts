@@ -8,7 +8,13 @@ import { users } from '../schema/core';
 
 export type User = InferSelectModel<typeof users>;
 export type NewUser = InferInsertModel<typeof users>;
-export type UpdateUser = Partial<Omit<NewUser, 'id' | 'createdAt' | 'realmId'>> & {
+/**
+ * What an update may change. Not `notValidBefore`: the triggers of migration
+ * 0044 set it when the account is disabled (#748), and no caller writes it.
+ */
+export type UpdateUser = Partial<
+  Omit<NewUser, 'id' | 'createdAt' | 'realmId' | 'notValidBefore'>
+> & {
   updatedAt?: number;
 };
 

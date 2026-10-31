@@ -5,6 +5,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { systemClientId } from '../../helpers/oauth-client';
@@ -160,9 +161,12 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
 
     // A token outlives the login that minted it; a user disabled since gets
     // no claims, as introspection reports the token inactive and every grant
-    // refuses to mint for the user (401, RFC 6750 §3.1 `invalid_token`).
-    if (!user.enabled) {
-      throw withEventReason(inactiveSubjectError(), 'user_disabled');
+    // refuses to mint for the user (401, RFC 6750 §3.1 `invalid_token`). So
+    // does a token minted before the account was last disabled, once it is
+    // enabled again (#748).
+    const accountRefusal = accountCredentialRefusal(user, accessTokenIssuedAt(payload));
+    if (accountRefusal !== null) {
+      throw withEventReason(inactiveSubjectError(), accountRefusal);
     }
 
     // OIDC Core §5.4: userinfo claims are gated by the scopes the access

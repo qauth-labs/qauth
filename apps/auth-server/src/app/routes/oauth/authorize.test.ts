@@ -2174,6 +2174,97 @@ describe('GET /oauth/authorize — disabled user', () => {
     expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, BEARER_USER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
+
+  /**
+   * The Bearer path for the portal token of {@link BEARER_USER}, with `claims`
+   * on it, when the users table holds `user` for it.
+   */
+  async function bearerAuthorize(
+    user: Record<string, unknown>,
+    claims: Record<string, unknown> = {}
+  ) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-1',
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: BEARER_USER,
+      clientId: CLIENT.clientId,
+      aud: CLIENT.clientId,
+      ...claims,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(user);
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply, state } = createReply();
+    await handler(
+      {
+        query: BASE_QUERY,
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  /** The events emitted so far, by type and payload. */
+  function emittedEvents() {
+    return emitUserEventMock.mock.calls.map(([, type, payload]) => [type, payload]);
+  }
+
+  it('refuses a Bearer token minted before its user was last disabled, as a disabled user’s token (#748)', async () => {
+    // Disabled a minute ago and enabled again since; the token is older.
+    const disabledAt = Date.now() - 60_000;
+    const iat = Math.floor((disabledAt - 60_000) / 1000);
+    const issuedBefore = await bearerAuthorize(
+      { id: BEARER_USER, enabled: true, notValidBefore: disabledAt, realmId: REALM.id },
+      { iat }
+    );
+    expect(issuedBefore.state.redirected).toContain('https://example.com/cb');
+    expect(issuedBefore.state.redirected).toContain('error=access_denied');
+    expect(issuedBefore.state.redirected).not.toContain('code=');
+    expect(issuedBefore.fastify.repositories.users.findById).toHaveBeenCalledWith(
+      REALM.id,
+      BEARER_USER
+    );
+    expect(issuedBefore.fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    const issuedBeforeEvents = emittedEvents();
+    expect(issuedBeforeEvents).toEqual([
+      ['urn:qauth:event:authorization.failed:v1-rc.0', { error: 'access_denied' }],
+    ]);
+
+    emitUserEventMock.mockClear();
+    const disabled = await bearerAuthorize(
+      { id: BEARER_USER, enabled: false, realmId: REALM.id },
+      { iat }
+    );
+
+    // One answer: the client cannot tell the two apart.
+    expect(issuedBefore.state.statusCode).toBe(disabled.state.statusCode);
+    expect(issuedBefore.state.redirected).toBe(disabled.state.redirected);
+    expect(issuedBeforeEvents).toEqual(emittedEvents());
+  });
+
+  it('issues a code from a Bearer token minted after its user was enabled again (#748)', async () => {
+    const disabledAt = Date.now() - 600_000;
+    const { fastify, state } = await bearerAuthorize(
+      { id: BEARER_USER, enabled: true, notValidBefore: disabledAt, realmId: REALM.id },
+      { iat: Math.floor(Date.now() / 1000) }
+    );
+
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('code=');
+    expect(state.redirected).not.toContain('error=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 §5, #197)', () => {

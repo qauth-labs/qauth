@@ -1825,6 +1825,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Enabling an account again no longer brings back what it held before it
+  was disabled** ([#748], the case [GHSA-vw34-9q55-2vg3](https://github.com/qauth-labs/qauth/security/advisories/GHSA-vw34-9q55-2vg3)
+  left open). Since 0.1.0 a disabled account's sessions and tokens are refused
+  where they are used, but a browser session or a refresh token nobody used
+  while the account was disabled worked again once it was enabled, so whoever
+  held it came back without signing in. Migration 0044 adds
+  `users.not_valid_before`: triggers set it from the database's clock whenever
+  `enabled` turns false, by any `UPDATE`, to the commit of that transaction,
+  and nothing can clear it or move it back. An account already disabled when
+  the migration runs gets the time of the migration. Every browser session,
+  refresh token, authorization code, access token and ID-JAG assertion of the
+  user issued before it is refused, a refresh token by the start of its family,
+  a code by the sign-in behind it, and an ID-JAG assertion as issued
+  `ID_JAG_CLOCK_SKEW_LEEWAY` before its `iat`, the clock skew its validation
+  allows the identity provider. A sign-in and a code exchange take the issue
+  time of the session or the refresh family they start before they read the
+  account, so one that read it before the disabling commit counts as issued
+  before it. Where such a credential is used, the hosted pages send the
+  browser to sign-in, the token endpoint answers `invalid_grant`,
+  introspection reports the token inactive, and userinfo, token exchange, the
+  developer API, the API families, the admin API and the `/oauth/authorize`
+  Bearer path refuse it as they refuse a disabled account's. Such a token cannot sign the owner out
+  either. The refusal `reason` in events is `issued_before_disablement`. The
+  new operator tool `db:disable-user` disables an account or, with `--enable`,
+  enables it again, and writes the new admin events `user.disabled` and
+  `user.enabled` in the same transaction; SSF streams receive them as RISC 1.0
+  `account-disabled` and `account-enabled` ([#540]). A refresh token issued
+  before the disablement no longer relates the user to an SSF receiver
+  either. The operator guide's new **Accounts** page (`operate/accounts`)
+  describes both, what to undo after a takeover before enabling the account,
+  and the bounds of the margin; the upgrade guide says why to enable an
+  account disabled for a takeover only once every node runs this release.
+
+  **Action for operators**: an account disabled and enabled again before the
+  upgrade gets no time, so what the previous release brought back when it was
+  enabled keeps working. For each account enabled again after a takeover,
+  once every node runs this release, run `db:disable-user`, take the steps
+  the Accounts page lists after a takeover, and run `db:disable-user --enable`:
+  disabling records the time now and ends every session and token the account
+  holds.
+
 - **A blank `PASSWORD_MIN_SCORE` no longer means score 0.** The schema read
   `''` as the number `0`, the weakest zxcvbn score, so a deployment that set
   the variable blank (`PASSWORD_MIN_SCORE=`, or an orchestrator that passes an
@@ -1864,6 +1905,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
+[#748]: https://github.com/qauth-labs/qauth/issues/748
 
 ## [0.1.3] - 2026-10-21
 

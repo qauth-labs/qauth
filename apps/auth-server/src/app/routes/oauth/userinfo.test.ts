@@ -533,6 +533,120 @@ describe('GET /userinfo route', () => {
     );
   });
 
+  describe('a token minted before its user was last disabled (#748)', () => {
+    /** The user of every case: disabled once, `notValidBefore` ms ago. */
+    function withUser(fastify: FastifyInstance, enabled: boolean, notValidBefore: number): void {
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: 'user-7',
+        enabled,
+        notValidBefore,
+        firstName: 'Ada',
+        lastName: null,
+      });
+    }
+
+    function tokenIssuedAt(iat: number) {
+      return { sub: 'user-7', scope: 'openid email profile', iss: ISSUER, iat, ...OWN_AUDIENCE };
+    }
+
+    async function call(enabled: boolean, notValidBefore: number, iat: number) {
+      const { fastify, ctx } = createFastifyStub();
+      withUser(fastify, enabled, notValidBefore);
+      await userinfoRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Userinfo handler was not registered');
+      const request = {
+        jwtPayload: tokenIssuedAt(iat),
+        ip: '127.0.0.1',
+        realm: REALM,
+        headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+      } as unknown as FastifyRequest;
+      const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+      const outcome = await handler(request, reply).catch((error: unknown) => error);
+      return { fastify, request, outcome };
+    }
+
+    /** The answer of the real error handler to a request with that token. */
+    async function wire(enabled: boolean, notValidBefore: number, iat: number) {
+      const app = Fastify({ logger: false });
+      app.setValidatorCompiler(validatorCompiler);
+      app.setSerializerCompiler(serializerCompiler);
+      await app.register(errorHandler);
+      supplyRequestRealm(app, REALM);
+
+      const { fastify, ctx } = createFastifyStub();
+      withUser(fastify, enabled, notValidBefore);
+      await userinfoRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Userinfo handler was not registered');
+      app.get(
+        '/oauth/userinfo',
+        {
+          config: { errorFormat: ctx.options?.config?.errorFormat },
+          preHandler: async (request) => {
+            (request as unknown as { jwtPayload: unknown }).jwtPayload = tokenIssuedAt(iat);
+          },
+        },
+        handler
+      );
+
+      try {
+        return await app.inject({
+          method: 'GET',
+          url: '/oauth/userinfo',
+          headers: { authorization: 'Bearer token' },
+        });
+      } finally {
+        await app.close();
+      }
+    }
+
+    it('refuses it once the user is enabled again (401 invalid_token, no claims) (#748)', async () => {
+      const notValidBefore = Date.now() - 60_000;
+      const iat = Math.floor((notValidBefore - 60_000) / 1000);
+
+      const disabled = await call(false, notValidBefore, iat);
+      emitUserEventMock.mockClear();
+      const { fastify, request, outcome } = await call(true, notValidBefore, iat);
+
+      expect(outcome).toBeInstanceOf(JWTInvalidError);
+      const { name, message, statusCode } = disabled.outcome as JWTInvalidError;
+      expect(outcome).toMatchObject({ name, message, statusCode });
+      expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
+      expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+        request,
+        'urn:qauth:event:userinfo.request_failed:v1-rc.0',
+        { error: 'invalid_token', reason: 'issued_before_disablement' },
+        expect.objectContaining({ userId: 'user-7' })
+      );
+    });
+
+    it('answers it on the wire exactly as the token of a disabled user (#748)', async () => {
+      const notValidBefore = Date.now() - 60_000;
+      const iat = Math.floor((notValidBefore - 60_000) / 1000);
+
+      const disabled = await wire(false, notValidBefore, iat);
+      const stale = await wire(true, notValidBefore, iat);
+
+      expectInvalidTokenAnswer(stale);
+      expect(stale.statusCode).toBe(disabled.statusCode);
+      expect(stale.headers['www-authenticate']).toBe(disabled.headers['www-authenticate']);
+      expect(stale.headers['content-type']).toBe(disabled.headers['content-type']);
+      expect(stale.body).toBe(disabled.body);
+    });
+
+    it('answers a token minted after the user was enabled again (#748)', async () => {
+      const { outcome } = await call(true, Date.now() - 600_000, Math.floor(Date.now() / 1000));
+
+      expect(outcome).toEqual({
+        sub: 'user-7',
+        email: 'user@example.com',
+        email_verified: true,
+        name: 'Ada',
+      });
+    });
+  });
+
   it('omits BOTH email claims when no verified email attribute exists (email scope granted) — BREAKING #229 (OIDC Core §5.3.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);

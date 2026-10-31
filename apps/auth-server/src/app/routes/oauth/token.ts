@@ -21,6 +21,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
 import { adminIssuance } from '../../helpers/admin-issuance';
 import { actDepth, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
@@ -947,6 +948,12 @@ async function handleAuthorizationCode(
   // unspent code.
   if (authCode.used) return rejectCodeReplay(ctx, authCode);
 
+  // When the grant is issued: the start of the refresh family it may begin,
+  // taken before the account is read (#748). A disablement that commits after
+  // the read is not seen by it, so a start stamped later could fall past that
+  // disablement's time and outlive the account being enabled again. An
+  // earlier start only shortens the family under `sso_max_lifespan`.
+  const issuedAt = Date.now();
   const user = await fastify.repositories.users.findById(ctx.realmId, authCode.userId);
   if (!user) {
     // The code names no user any more, so the event has none. Answered as the
@@ -957,12 +964,20 @@ async function handleAuthorizationCode(
   }
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the
-  // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
-  // code is burned all the same, so it cannot be retried; a code a concurrent
-  // request spent first is burned already, and the answer is the same.
-  if (!user.enabled) {
+  // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14) —
+  // even when the account was enabled again before the code is redeemed
+  // (#748). The earlier of the code and the sign-in behind it: a code the
+  // previous release minted from a session older than the disablement is no
+  // newer a grant than that session. The code is burned all the same, so it
+  // cannot be retried; a code a concurrent request spent first is burned
+  // already, and the answer is the same.
+  const accountRefusal = accountCredentialRefusal(
+    user,
+    Math.min(authCode.createdAt, authCode.authTime ?? authCode.createdAt)
+  );
+  if (accountRefusal !== null) {
     await spendGrant(() => fastify.repositories.authorizationCodes.markUsed(authCode.id));
-    await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
+    await emitRequestFailed(ctx, 'invalid_grant', accountRefusal, user.id);
     throw new InvalidGrantError(UNUSABLE_CODE);
   }
 
@@ -996,7 +1011,7 @@ async function handleAuthorizationCode(
     user.id,
     client.id
   );
-  const familyCreatedAt = Date.now();
+  const familyCreatedAt = issuedAt;
   const refresh =
     consent && isScopeSubset(authCode.scopes, consent.scopes)
       ? {
@@ -1450,19 +1465,29 @@ async function handleRefreshToken(
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
 
-  // Load the subject user; reject if missing or disabled (RFC 9700 §4.14).
+  // Load the subject user; reject if missing or disabled (RFC 9700 §4.14),
+  // or if the token's family began before the account was last disabled
+  // (#748): a token nobody used while the account was disabled does not come
+  // back when it is enabled again. The family's start, not this token's: a
+  // rotation the previous release made after the account was enabled again,
+  // or one that read the account as enabled while the disabling transaction
+  // was still open, is no newer a grant than the token it replaced.
   const user = await fastify.repositories.users.findById(ctx.realmId, storedToken.userId);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_grant', 'user_not_found');
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
-  if (!user.enabled) {
+  const accountRefusal = accountCredentialRefusal(
+    user,
+    Math.min(storedToken.familyCreatedAt, storedToken.createdAt)
+  );
+  if (accountRefusal !== null) {
     // Burned all the same; a token a concurrent request revoked first is
     // burned already, and the answer is the same.
     await spendGrant(() =>
-      fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled')
+      fastify.repositories.refreshTokens.revoke(storedToken.id, accountRefusal)
     );
-    await emitRequestFailed(ctx, 'invalid_grant', 'user_disabled', user.id);
+    await emitRequestFailed(ctx, 'invalid_grant', accountRefusal, user.id);
     throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);
   }
 
@@ -1889,16 +1914,18 @@ async function handleTokenExchange(
     throw inactiveSubjectTokenError();
   }
 
-  // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
-  // the delegated token's `sub` to the *current* user record, not blindly to
-  // the token's `sub` string.
+  // The subject user must still exist and be enabled (RFC 9700 §4.14), and the
+  // subject token must be newer than the account's last disablement (#748).
+  // We bind the delegated token's `sub` to the *current* user record, not
+  // blindly to the token's `sub` string.
   const user = await fastify.repositories.users.findById(ctx.realmId, subjectPayload.sub);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_request', 'user_not_found');
     throw inactiveSubjectTokenError();
   }
-  if (!user.enabled) {
-    await emitRequestFailed(ctx, 'invalid_request', 'user_disabled', user.id);
+  const accountRefusal = accountCredentialRefusal(user, accessTokenIssuedAt(subjectPayload));
+  if (accountRefusal !== null) {
+    await emitRequestFailed(ctx, 'invalid_request', accountRefusal, user.id);
     throw inactiveSubjectTokenError();
   }
 
@@ -2498,12 +2525,21 @@ async function handleJwtBearer(
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
+  // An assertion issued before the account was last disabled is refused as a
+  // disabled account's is (#748), whatever the account's state now. Its `iat`
+  // is the identity provider's clock, which validation lets run up to
+  // `ID_JAG_CLOCK_SKEW_LEEWAY` ahead of ours: it counts as issued that much
+  // earlier, so an assertion issued before the disablement by a clock ahead
+  // within that leeway is refused too.
   const user = await fastify.repositories.users.findById(realmId, credential.userId);
-  if (!user || !user.enabled) {
+  const accountRefusal = user
+    ? accountCredentialRefusal(user, (assertion.issuedAt - env.ID_JAG_CLOCK_SKEW_LEEWAY) * 1000)
+    : 'user_not_found';
+  if (!user || accountRefusal !== null) {
     await emitRequestFailed(
       ctx,
       'invalid_grant',
-      user ? 'user_disabled' : 'user_not_found',
+      accountRefusal ?? 'user_not_found',
       user?.id ?? null
     );
     throw new InvalidGrantError('the presented assertion is not acceptable');

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
+import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { resolveAudience } from './client-auth';
 import { getOrCreateSystemClient } from './oauth-client';
 import { type RealmRow, requestRealm } from './request-realm';
@@ -14,6 +15,7 @@ interface ManagementTokenClaims {
   clientId?: string;
   aud?: string | string[];
   act?: unknown;
+  iat?: number;
 }
 
 /**
@@ -45,7 +47,8 @@ const uuidSubjectSchema = z.uuid();
  * - `sub` names a user that still exists and is enabled. The token outlives
  *   the login that minted it by up to its lifetime, and an account disabled
  *   in between must not keep managing its clients — the same gate every
- *   token grant applies to the user it would mint for.
+ *   token grant applies to the user it would mint for. Nor may a token minted
+ *   before the account was last disabled, once it is enabled again (#748).
  * - The token belongs to `realm`, the realm of the request (#487). Its
  *   `client_id`, audience and issuer read the same in every realm (the system
  *   client is named by `SYSTEM_CLIENT_ID` in each), so the realm is its
@@ -105,7 +108,7 @@ export async function assertManagementToken(
   // user here, refused exactly as an unknown or disabled subject is, so the
   // answer does not tell that the subject exists in another realm.
   const user = await fastify.repositories.users.findById(realm.id, claims.sub);
-  if (!user || !user.enabled) {
+  if (!user || accountCredentialRefusal(user, accessTokenIssuedAt(claims)) !== null) {
     throw inactiveSubjectError();
   }
 }

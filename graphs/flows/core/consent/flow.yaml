@@ -93,7 +93,9 @@ context:
         reader decodes without a catch
       noSession: 'the request carries no session cookie, or one whose signature does not verify'
       staleSession: 'the cookie is signed, but its session has ended or expired'
-      accountDisabled: 'the session is live, but its user has been deleted or disabled'
+      accountDisabled: >-
+        the session is live, but its user has been deleted or disabled, or was disabled after the session began
+        and enabled again since
   returnUrl:
     values: [fits, tooLarge]
     initial: any
@@ -340,11 +342,13 @@ states:
       - guard: staleSession
         target: parkingRequest
         say: 'the cookie names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:105
+        source: apps/auth-server/src/app/helpers/browser-session.ts:109
       - guard: accountDisabled
         target: parkingRequest
-        say: "the session's user is gone or disabled; the session is ended and its cookie cleared"
-        source: apps/auth-server/src/app/helpers/browser-session.ts:113
+        say: >-
+          the session's user is gone or disabled, or was disabled after the session began; the session is ended and
+          its cookie cleared
+        source: apps/auth-server/src/app/helpers/browser-session.ts:114
       - target: showCheckingClient
         say: 'the session is live'
         source: apps/auth-server/src/app/routes/ui/consent.ts:366
@@ -575,11 +579,13 @@ states:
       - guard: staleSession
         target: parkingRequest
         say: 'the cookie names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:105
+        source: apps/auth-server/src/app/helpers/browser-session.ts:109
       - guard: accountDisabled
         target: parkingRequest
-        say: "the session's user is gone or disabled; the session is ended and its cookie cleared"
-        source: apps/auth-server/src/app/helpers/browser-session.ts:113
+        say: >-
+          the session's user is gone or disabled, or was disabled after the session began; the session is ended and
+          its cookie cleared
+        source: apps/auth-server/src/app/helpers/browser-session.ts:114
       - target: checkingCsrf
         say: 'the session is live'
         source: apps/auth-server/src/app/routes/ui/consent.ts:609
@@ -958,7 +964,7 @@ states:
     type: final
     title: Clear the stale session cookie and send the browser to sign in
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:105
+    source: apps/auth-server/src/app/helpers/browser-session.ts:109
     response:
       status: 302
       headers:
@@ -972,7 +978,7 @@ states:
     title: End the session of a disabled or deleted user and send the browser to sign in
     description: The session is revoked and its side record deleted before the cookie is cleared.
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:113
+    source: apps/auth-server/src/app/helpers/browser-session.ts:114
     response:
       status: 302
       headers:

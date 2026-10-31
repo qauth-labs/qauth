@@ -240,6 +240,30 @@ each account that will use it a grant. During a rolling upgrade a node of the
 previous release still issues those scopes without the check, which reaches no
 route either.
 
+### Disabled accounts get the time of migration 0044
+
+Migration 0044 ([#748](https://github.com/qauth-labs/qauth/issues/748)) records
+when each account was last disabled, so that enabling it again brings back none
+of the sessions and tokens it held. An account that is disabled when the
+migration runs gets the time of the migration; every other account starts with
+none. Only disabled rows are written, but finding them reads the whole `users`
+table while the runner holds the lock the new column takes, so on a large table
+sign-ins wait for the runner's commit. Run it when no long transaction holds
+`users`: the migration sets no `lock_timeout`, so its `ALTER TABLE` queues
+behind any open transaction that read the table, and every sign-in and token
+request that reads `users` waits behind it while it queues. During a rolling
+upgrade a node of the previous release still accepts the old sessions and
+access tokens of an account enabled again, and can start new refresh families
+from its old sessions: enable an account that was disabled for a takeover only
+after every node runs this release ([Accounts](/operate/accounts/)).
+
+An account that was disabled and enabled again before the upgrade gets no
+time, and keeps every session and token the previous release brought back
+when it was enabled. For each account you enabled again after a takeover,
+once every node runs this release, run `db:disable-user` and then
+`db:disable-user --enable`: that records the time now and ends everything the
+account holds ([Accounts from before the upgrade](/operate/accounts/#accounts-from-before-the-upgrade)).
+
 ### The delivery role reads `realms.issuer`
 
 From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user

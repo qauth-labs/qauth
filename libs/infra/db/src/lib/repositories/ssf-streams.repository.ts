@@ -1,4 +1,7 @@
-import { RESERVED_AUDIENCE_PREFIX } from '@qauth-labs/shared-validation';
+import {
+  NOT_VALID_BEFORE_MARGIN_MS,
+  RESERVED_AUDIENCE_PREFIX,
+} from '@qauth-labs/shared-validation';
 import { and, asc, eq, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 
 import type {
@@ -89,7 +92,11 @@ interface RelatedUserTarget {
  * expired, and its family not ended. The family ends at its start plus the
  * realm's `sso_max_lifespan`, and no later than the browser session that
  * started it; a realm that sets no limit (`null`; the realm refuses 0) bounds
- * neither (`refreshFamilyEnd` in the auth server).
+ * neither (`refreshFamilyEnd` in the auth server). Nor was it issued before
+ * the user was last disabled (#748): the earlier of its family's start and
+ * its own is past `users.not_valid_before` by more than
+ * `NOT_VALID_BEFORE_MARGIN_MS`, or the account was never disabled. The token
+ * endpoint refuses any other once the account is enabled again.
  *
  * Access tokens are not stored, so one issued without a refresh token (no
  * stored consent) relates no one; nor does a consent's `resource_scopes`,
@@ -113,11 +120,17 @@ function relatedUserCondition(target: RelatedUserTarget, now: number): SQL {
       ) or exists (
         select 1 from ${refreshTokens}
         join ${realms} on ${realms.id} = ${realmId}
+        join ${users} on ${users.id} = ${refreshTokens.userId}
         join ${oauthClients} as "issuing_client"
           on "issuing_client"."id" = ${refreshTokens.oauthClientId}
         where ${refreshTokens.userId} = ${userId}
           and not ${refreshTokens.revoked}
           and ${refreshTokens.expiresAt} > ${now}
+          and (
+            ${users.notValidBefore} is null
+            or least(${refreshTokens.familyCreatedAt}, ${refreshTokens.createdAt})
+              > ${users.notValidBefore} + ${NOT_VALID_BEFORE_MARGIN_MS}
+          )
           and (
             ${realms.ssoMaxLifespan} is null
             or (

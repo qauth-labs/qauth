@@ -8,6 +8,8 @@ import {
   type EventEnvelope,
   QAUTH_KEY_EMERGENCY_RETIRED,
   QAUTH_TOKEN_REVOKED,
+  RISC_ACCOUNT_DISABLED,
+  RISC_ACCOUNT_ENABLED,
   ssfStreamVerificationRequested,
 } from '@qauth-labs/shared-events';
 import { describe, expect, it, vi } from 'vitest';
@@ -263,6 +265,8 @@ describe('createSsfDeliveryRoute', () => {
 describe('the SETs of mapped event types (#540)', () => {
   const typeOf = (name: string) => ({ type: `urn:qauth:event:${name}:v1-rc.0` });
   const userSignedOut = typeOf('user.signed_out');
+  const userDisabled = typeOf('user.disabled');
+  const userEnabled = typeOf('user.enabled');
   const consentRevoked = typeOf('consent.revoked');
   const tokenFamilyRevoked = typeOf('token.family_revoked');
   const tokenRevoked = typeOf('token.revoked');
@@ -297,6 +301,15 @@ describe('the SETs of mapped event types (#540)', () => {
    */
   const SAMPLES: Record<string, EventEnvelope> = {
     [userSignedOut.type]: event(userSignedOut.type),
+    // The `db:disable-user` operator tool switches an account (#748).
+    [userDisabled.type]: event(userDisabled.type, {
+      category: 'admin',
+      actor: { type: 'operator_cli', id: 'root' },
+    }),
+    [userEnabled.type]: event(userEnabled.type, {
+      category: 'admin',
+      actor: { type: 'operator_cli', id: 'root' },
+    }),
     [consentRevoked.type]: event(consentRevoked.type, {
       client: { id: 'receiver' },
       data: { consentId: '0192a000-0000-7000-8000-0000000000c1', revokedRefreshCount: 2 },
@@ -376,6 +389,25 @@ describe('the SETs of mapped event types (#540)', () => {
         [CAEP_SESSION_REVOKED]: { event_timestamp: SECONDS, initiating_entity: 'user' },
       },
     });
+  });
+
+  it('sends an operator’s switch of an account as RISC account-disabled and account-enabled about the user (#748)', async () => {
+    for (const [type, uri] of [
+      [userDisabled.type, RISC_ACCOUNT_DISABLED],
+      [userEnabled.type, RISC_ACCOUNT_ENABLED],
+    ] as const) {
+      const { outcome, claims, hasSubject } = await signed(SAMPLES[type]);
+      expect(outcome, type).toEqual({ ok: true, statusCode: 202 });
+      expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+      expect(claims, type).toEqual({
+        jti: EVENT_ID,
+        iat: SECONDS,
+        aud: 'receiver',
+        sub_id: { format: 'iss_sub', iss: ISSUER, sub: USER },
+        // No `reason`: RISC 1.0 names only hijacking and bulk-account.
+        events: { [uri]: { event_timestamp: SECONDS, initiating_entity: 'admin' } },
+      });
+    }
   });
 
   it('sends an API key change as CAEP credential-change about the key’s client, by its administrator', async () => {

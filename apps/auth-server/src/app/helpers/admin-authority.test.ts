@@ -44,7 +44,10 @@ const REALMS: Record<string, IssuerRealm> = {
   [REALM_B]: realmRow(REALM_B),
 };
 
-const USERS: Record<string, { id: string; realmId: string; enabled: boolean }> = {
+const USERS: Record<
+  string,
+  { id: string; realmId: string; enabled: boolean; notValidBefore?: number | null }
+> = {
   [OPERATOR_ADMIN]: { id: OPERATOR_ADMIN, realmId: OPERATOR, enabled: true },
   [ADMIN_OF_A]: { id: ADMIN_OF_A, realmId: REALM_A, enabled: true },
 };
@@ -284,6 +287,69 @@ describe('resolveAdminAuthority', () => {
         });
       }
       expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+    });
+
+    /** The stub with the operator admin disabled at `disabledAt` and enabled again since. */
+    function reenabledAt(disabledAt: number) {
+      return server([grant(OPERATOR_ADMIN, null, 'viewer')], {
+        users: {
+          ...USERS,
+          [OPERATOR_ADMIN]: { ...USERS[OPERATOR_ADMIN], notValidBefore: disabledAt },
+        },
+      });
+    }
+
+    it('refuses a token issued before the account was last disabled, as a disabled account’s (#748)', async () => {
+      const disabledAt = Date.now() - 60_000;
+      const fastify = reenabledAt(disabledAt);
+      const issuedBefore = await ask(fastify, {
+        iat: Math.floor((disabledAt - 60_000) / 1000),
+        targetRealmId: REALM_A,
+      });
+      expect(issuedBefore).toEqual({ allowed: false, refusal: 'account_inactive' });
+      expect(fastify.repositories.users.findById).toHaveBeenCalledWith(OPERATOR, OPERATOR_ADMIN);
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+
+      const disabled = server([grant(OPERATOR_ADMIN, null, 'viewer')], {
+        users: { ...USERS, [OPERATOR_ADMIN]: { ...USERS[OPERATOR_ADMIN], enabled: false } },
+      });
+      // One answer: the caller cannot tell the two apart.
+      await expect(
+        ask(disabled, { iat: Math.floor((disabledAt - 60_000) / 1000), targetRealmId: REALM_A })
+      ).resolves.toEqual(issuedBefore);
+    });
+
+    it('acts for a token issued after the account was enabled again (#748)', async () => {
+      const disabledAt = Date.now() - 600_000;
+      const fastify = reenabledAt(disabledAt);
+      await expect(
+        ask(fastify, { iat: Math.floor((disabledAt + 60_000) / 1000), targetRealmId: REALM_A })
+      ).resolves.toMatchObject({
+        allowed: true,
+        userId: OPERATOR_ADMIN,
+        targetRealm: { id: REALM_A },
+        permissions: new Set(BUILT_IN_ROLES.viewer.permissionIds),
+      });
+    });
+
+    it('refuses a token without iat once the account has been disabled, and acts for one of an account never disabled (#748)', async () => {
+      const fastify = reenabledAt(Date.now() - 600_000);
+      await expect(ask(fastify, { targetRealmId: REALM_A })).resolves.toEqual({
+        allowed: false,
+        refusal: 'account_inactive',
+      });
+      expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
+
+      for (const notValidBefore of [undefined, null]) {
+        const never = server([grant(OPERATOR_ADMIN, null, 'viewer')], {
+          users: { ...USERS, [OPERATOR_ADMIN]: { ...USERS[OPERATOR_ADMIN], notValidBefore } },
+        });
+        await expect(ask(never, { targetRealmId: REALM_A })).resolves.toMatchObject({
+          allowed: true,
+          userId: OPERATOR_ADMIN,
+          targetRealm: { id: REALM_A },
+        });
+      }
     });
   });
 

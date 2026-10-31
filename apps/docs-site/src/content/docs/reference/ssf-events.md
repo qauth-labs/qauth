@@ -52,20 +52,25 @@ stream of the realm that requested it receives. An event marked as going to the 
 reaches only the stream whose receiver is that client: it tells of the user's dealings with that
 one client, which another receiver has no need to see.
 
-A receiver may add a user only when the user is related to the receiver's client: the user has an
-active consent for it, or holds a live refresh token it was issued. Any other user, and a user id
-that does not exist, is refused with `403`, as SSF 1.0 §8.1.3.2 prescribes for a subject the
-receiver may not add. So the receiver is the client the users sign in through, given the
-`client_credentials` grant and the `ssf:stream` scope as well: a client of its own, which no
-user signs in to, can add no user. The relation is checked when the subject is added; the subject
-then stays on the stream until the receiver removes it, also after the user withdraws the consent
-or the refresh token ends.
+A receiver may add a user only when the user is related to it: the user has an active consent for
+the receiver's client or a live refresh token it was issued, or, for a receiver that serves as a
+resource server, a live refresh token whose audience names it. Any other user, and a user id that
+does not exist, is refused with `403`, as SSF 1.0 §8.1.3.2 prescribes for a subject the receiver
+may not add. A user subject lasts as long as its relation: the hourly `ssf-subject-sweep` job
+deletes it once the relation has ended and every event about the user has reached the stream, so
+the SET that tells of the end still arrives. A disabled user is related to no receiver, so after
+`account-disabled` reaches a stream the sweep deletes the user's subject there, and
+`account-enabled` reaches only a stream the sweep has not cleared yet: once the user is enabled,
+the receiver adds them again. The [SSF transmitter](/operate/ssf-transmitter/) guide gives the
+whole rule.
 
 ## Mapping
 
 | QAuth event type                                                          | SSF event                                                 | Subject                               | Delivered to                                                | Members besides `event_timestamp`                                                                                                                              |
 | ------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`user.signed_out`](/reference/events/#usersigned_out-v1-rc0)             | `session-revoked` (CAEP 1.0 §3.1)                         | the user, `iss_sub`                   | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
+| [`user.disabled`](/reference/events/#userdisabled-v1-rc0)                 | `account-disabled` (RISC 1.0 §2.3)                        | the user, `iss_sub`                   | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
+| [`user.enabled`](/reference/events/#userenabled-v1-rc0)                   | `account-enabled` (RISC 1.0 §2.4)                         | the user, `iss_sub`                   | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
 | [`consent.revoked`](/reference/events/#consentrevoked-v1-rc0)             | `token-claims-change` (CAEP 1.0 §3.2)                     | the user, `iss_sub`                   | the stream of the event’s client, when it added the subject | `claims`: `{"scope":""}`; `initiating_entity` from the actor                                                                                                   |
 | [`token.family_revoked`](/reference/events/#tokenfamily_revoked-v1-rc0)   | `session-revoked` (CAEP 1.0 §3.1)                         | the user, `iss_sub`                   | the stream of the event’s client, when it added the subject | `reason_admin`: by `data.reason`; `initiating_entity`: `"policy"`                                                                                              |
 | [`token.revoked`](/reference/events/#tokenrevoked-v1-rc0)                 | [`token-revoked`](#token-revoked) (QAuth)                 | the user, `iss_sub`                   | the stream of the event’s client, when it added the subject | `token_type_hint`: `data.typeHint`; `initiating_entity` from the actor                                                                                         |
@@ -77,6 +82,7 @@ or the refresh token ends.
 
 Notes on the mapping:
 
+- [`user.disabled`](/reference/events/#userdisabled-v1-rc0): Sent without `reason`: RISC 1.0 names only `hijacking` and `bulk-account`, and QAuth records no reason for the switch.
 - [`consent.revoked`](/reference/events/#consentrevoked-v1-rc0): A withdrawn consent covered every scope the client held for the user, so the `scope` of its tokens for that user is now empty, and QAuth revoked the refresh tokens the consent covered.
 - [`token.family_revoked`](/reference/events/#tokenfamily_revoked-v1-rc0): A refresh family is the client’s standing session for the user, so its revocation is `session-revoked`. The replay policy revoked it, so `initiating_entity` is `policy`.
 - [`token.revoked`](/reference/events/#tokenrevoked-v1-rc0): Sent only when the revoked token was a user’s: the event’s subject. A revocation that matched no token of the client, or a refresh token whose family was revoked already, records the event without one, and no stream receives it.
@@ -93,9 +99,6 @@ Notes on the mapping:
 | [`client.deleted`](/reference/events/#clientdeleted-v1-rc0)                     | No CAEP 1.0 or RISC 1.0 event describes a client’s suspension or deletion: RISC `account-disabled` is about an account a person signs in to.                                                                                                                                                                                                                  |
 | [`client.suspended`](/reference/events/#clientsuspended-v1-rc0)                 | No CAEP 1.0 or RISC 1.0 event describes a client’s suspension or deletion: RISC `account-disabled` is about an account a person signs in to.                                                                                                                                                                                                                  |
 | [`client.suspension_lifted`](/reference/events/#clientsuspension_lifted-v1-rc0) | No CAEP 1.0 or RISC 1.0 event describes a client’s suspension or deletion: RISC `account-disabled` is about an account a person signs in to.                                                                                                                                                                                                                  |
-
-RISC 1.0 `account-disabled` and `account-enabled` map the disabling and enabling of a user,
-which has no event type yet: they arrive with that feature, under the same rule.
 
 ## QAuth-defined events
 
