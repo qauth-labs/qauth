@@ -67,9 +67,9 @@ export interface RealmPolicyStorage<Row, Tx> {
   list(tx?: Tx): Promise<readonly RealmPolicyRecord[]>;
   /**
    * The record of the realm `realmId` with its row locked until `tx` ends
-   * (`SELECT ... FOR UPDATE`), or `undefined` when there is none. A write of
-   * the policies reads the realm through it: a write of the row that commits
-   * first is in what the store reads, and one that comes later waits.
+   * (`SELECT ... FOR NO KEY UPDATE`), or `undefined` when there is none. A
+   * write of the policies reads the realm through it: a write of the row that
+   * commits first is in what the store reads, and one that comes later waits.
    */
   readLocked(realmId: string, tx: Tx): Promise<RealmPolicyRecord | undefined>;
   /**

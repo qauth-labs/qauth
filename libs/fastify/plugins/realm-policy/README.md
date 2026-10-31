@@ -24,9 +24,10 @@ await fastify.policyStore.seedRealms(tx); // the default realm's boot step
 The storage (`createRealmPolicyStorage`) reads a row through `realmPolicyRecord`, which joins the
 four policy columns and `realms.policies` into one document, and writes through the realms
 repository's `writePolicies`, which splits it again with `UPDATE ... WHERE policies_version =
-<expected>`. A write first reads the row locked (`lockPolicyRecord`, `SELECT ... FOR UPDATE`): the
-counter of a realm with no policies stays 0 through a plain write of its row, which the fill must
-not overwrite.
+<expected>`. A write first reads the row locked (`lockPolicyRecord`, `SELECT ... FOR NO KEY
+UPDATE`): the counter of a realm with no policies stays 0 through a plain write of its row, which
+the fill must not overwrite. The lock holds off every other write of the row but not a foreign key
+check, so inserts that reference the realm do not wait for it.
 
 ## Tests
 

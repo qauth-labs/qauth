@@ -343,11 +343,16 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
 
   /**
    * A realm's policies with its row locked until `tx` ends (`SELECT ... FOR
-   * UPDATE`, #516), or `undefined` when there is no such realm. The boot step
-   * reads a realm through it before computing the realm's fill: the trigger
-   * keeps the counter of a realm with no policies at 0 through a plain write
-   * (a previous release's node during a rolling upgrade), so the counter
+   * NO KEY UPDATE`, #516), or `undefined` when there is no such realm. The
+   * boot step reads a realm through it before computing the realm's fill: the
+   * trigger keeps the counter of a realm with no policies at 0 through a plain
+   * write (a previous release's node during a rolling upgrade), so the counter
    * compare alone would let the fill overwrite such a write.
+   *
+   * `NO KEY UPDATE`, not `UPDATE`: it still waits for, and holds off, any
+   * other write of the row, but not the `FOR KEY SHARE` lock a foreign key
+   * check takes, so a session, code, token or client inserted for the realm
+   * does not wait while the fill or a policy update holds the row.
    */
   lockPolicyRecord(realmId: string, tx: DbClient): Promise<RealmPolicyRecord | undefined>;
 
@@ -889,7 +894,11 @@ export function createRealmsRepository(
     },
 
     async lockPolicyRecord(realmId: string, tx: DbClient): Promise<RealmPolicyRecord | undefined> {
-      const [realm] = await tx.select().from(realms).where(eq(realms.id, realmId)).for('update');
+      const [realm] = await tx
+        .select()
+        .from(realms)
+        .where(eq(realms.id, realmId))
+        .for('no key update');
       return realm === undefined ? undefined : realmPolicyRecord(realm);
     },
 

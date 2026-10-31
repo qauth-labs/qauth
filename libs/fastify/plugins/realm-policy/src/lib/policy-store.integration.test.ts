@@ -395,6 +395,35 @@ describe('policy store over the realms table (integration)', () => {
       expect(stored?.policies.posture.maxEnvironmentLaxity).toBe('production');
     });
 
+    it('holds off writes of the row it locks, but not a row that references the realm', async () => {
+      if (!second) throw new Error('no second pool');
+      const id = await insertPreviousRealm('referenced');
+      const realms = createRealmsRepository(db().db);
+      const client = await second.pool.connect();
+      try {
+        await db().db.transaction(async (tx) => {
+          expect(await realms.lockPolicyRecord(id, tx)).toMatchObject({ realmId: id });
+          // A foreign key check takes FOR KEY SHARE on the realm row, which
+          // FOR NO KEY UPDATE does not conflict with: the insert goes through
+          // while the fill holds the row. FOR UPDATE would hold it off.
+          await client.query(`SET lock_timeout = '2s'`);
+          await client.query(
+            `INSERT INTO realm_hosts (host, realm_id, kind) VALUES ('referenced.example.com', $1, 'endpoint')`,
+            [id]
+          );
+          // A plain write of the realm row still waits for the lock.
+          await expect(
+            client.query(`UPDATE realms SET max_environment_laxity = 'production' WHERE id = $1`, [
+              id,
+            ])
+          ).rejects.toThrow(/lock timeout/);
+        });
+      } finally {
+        await client.query(`RESET lock_timeout`).catch(() => undefined);
+        client.release();
+      }
+    });
+
     it('leaves one consistent document over many concurrent rounds', async () => {
       if (!second) throw new Error('no second pool');
       const nodeA = storeOn(db(), seedsA);

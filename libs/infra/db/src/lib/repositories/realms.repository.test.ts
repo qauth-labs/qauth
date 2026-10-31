@@ -238,3 +238,18 @@ describe('createRealmsRepository — sso_idle_timeout (#552)', () => {
     expect(queries).toHaveLength(2);
   });
 });
+
+describe('createRealmsRepository — the locked policy read (#516)', () => {
+  it('locks the row FOR NO KEY UPDATE, which a foreign key check does not wait for', async () => {
+    const { db, queries } = createRecordingDb();
+    const id = '0192e000-0000-7000-8000-000000000001';
+
+    expect(await createRealmsRepository(db).lockPolicyRecord(id, db)).toBeUndefined();
+
+    expect(queries).toHaveLength(1);
+    const text = queries[0].text.toLowerCase();
+    expect(text).toMatch(/ for no key update$/);
+    expect(text).not.toMatch(/ for update$/);
+    expect(queries[0].values).toEqual([id]);
+  });
+});
