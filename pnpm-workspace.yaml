@@ -11,46 +11,10 @@ packages:
 verifyDepsBeforeRun: warn
 # Supply-chain cooldown: a version is resolved only once it has been on the
 # registry for 7 days (10080 minutes), long enough for a hijacked release to be
-# reported and pulled. The exclusions are exact versions: fixes for an open
-# advisory against this tree, plus the Nx block below, taken before they are 7
-# days old; remove each once it matures.
+# reported and pulled. A fix for an open advisory against this tree may be taken
+# before it is 7 days old by listing its exact version under
+# minimumReleaseAgeExclude; remove each once it matures.
 minimumReleaseAge: 10080
-minimumReleaseAgeExclude:
-  - fast-uri@3.1.9
-  - nodemailer@10.1.4
-  # Nx 24.0.1 (published 23 Oct 2026), taken early by the owner's decision of
-  # 24 Oct 2026 so the CI speed-up (Nx 24, then oxlint/oxfmt and tsgo) does not
-  # wait out the cooldown. Every package below carries npm provenance from
-  # nrwl/nx's publish workflow at tag 24.0.1, and no advisory names 24.0.1.
-  # The family moves as one: the plugins pin nx and each other exactly, and
-  # nx lists one platform binary per OS/CPU as an optional dependency, all of
-  # which the lockfile records. Remove the whole block on 30 Oct 2026, once
-  # 24.0.1 is 7 days old.
-  - nx@24.0.1
-  - '@nx/devkit@24.0.1'
-  - '@nx/docker@24.0.1'
-  - '@nx/esbuild@24.0.1'
-  - '@nx/eslint@24.0.1'
-  - '@nx/eslint-plugin@24.0.1'
-  - '@nx/jest@24.0.1'
-  - '@nx/js@24.0.1'
-  - '@nx/node@24.0.1'
-  - '@nx/oxlint@24.0.1'
-  - '@nx/react@24.0.1'
-  - '@nx/vite@24.0.1'
-  - '@nx/vitest@24.0.1'
-  - '@nx/web@24.0.1'
-  - '@nx/workspace@24.0.1'
-  - '@nx/nx-darwin-arm64@24.0.1'
-  - '@nx/nx-darwin-x64@24.0.1'
-  - '@nx/nx-freebsd-x64@24.0.1'
-  - '@nx/nx-linux-arm-gnueabihf@24.0.1'
-  - '@nx/nx-linux-arm64-gnu@24.0.1'
-  - '@nx/nx-linux-arm64-musl@24.0.1'
-  - '@nx/nx-linux-x64-gnu@24.0.1'
-  - '@nx/nx-linux-x64-musl@24.0.1'
-  - '@nx/nx-win32-arm64-msvc@24.0.1'
-  - '@nx/nx-win32-x64-msvc@24.0.1'
 # Workspace deps are linked into consumers as injected (hard-linked) COPIES
 # rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
 # only self-contained when the workspace injects, and `--legacy` instead emits
@@ -343,8 +307,7 @@ catalog:
   # @nx/module-federation even as optional peers (23.2 made them optional) and
   # depends on neither @nx/rollup nor @svgr/webpack, which keeps the express
   # subtree (proxy-addr, body-parser), the http-proxy-middleware path to braces
-  # and @svgr's svgo 3.x out of the tree. 24.0.1 is younger than
-  # minimumReleaseAge, hence its minimumReleaseAgeExclude block above.
+  # and @svgr's svgo 3.x out of the tree.
   # Bump with `pnpm nx migrate <version>`, which rewrites these pins in place,
   # then `pnpm install` and `pnpm nx migrate --run-migrations`. Review what
   # each migration changes before committing it, then delete migrations.json
