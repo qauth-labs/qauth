@@ -222,7 +222,7 @@ export const realms = pgTable(
     /**
      * A counter of the realm's policy writes, the admin API's `ETag` and the
      * `If-Match` a policy update compares (#516). 0 means the realm has no
-     * policies yet: it was created before migration 0045, or by a release
+     * policies yet: it was created before migration 0046, or by a release
      * that predates it, and the boot step fills it from the environment,
      * with `UPDATE ... WHERE policies_version = 0` so the first node wins.
      *

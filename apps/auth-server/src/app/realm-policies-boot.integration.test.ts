@@ -25,7 +25,7 @@ import {
  * issue #516).
  *
  * The environment only seeds: a fresh database's default realm gets
- * `defaultsFromEnv`, a default realm from before migration 0045 gets the
+ * `defaultsFromEnv`, a default realm from before migration 0046 gets the
  * environment's values at the first boot after the upgrade and keeps the
  * settings its row held, and no later boot changes the realm, whatever the
  * environment says. The boot warns once for each set key whose policy the
@@ -33,7 +33,7 @@ import {
  * environment gets an info line (the harness passes warnings only), since the
  * server still applies it.
  *
- * The upgrade case rebuilds the schema through migration 0044, writes the
+ * The upgrade case rebuilds the schema through migration 0045, writes the
  * default realm as the previous release leaves it, and applies the rest, as
  * the migration runner of the new release does.
  *
@@ -64,7 +64,7 @@ describe('realm policies at boot on the auth server (#516)', () => {
   let admin: FastifyInstance | undefined;
   let jwt: PemKeyPair | undefined;
   let dockerUp = false;
-  const throughPrevious = qauthMigrationsFolderWithFirst(45);
+  const throughPrevious = qauthMigrationsFolderWithFirst(46);
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();

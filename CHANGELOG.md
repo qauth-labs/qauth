@@ -66,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policies** page (`reference/realm-policies`) is generated from the schema.
   Nothing reads the policies from the realm row yet.
 - **Realm policies on the realm row** ([#516], ADR-019 Decision 10, ADR-020
-  §2). Migration 0045 adds `realms.policies` (jsonb), `policy_schema_version`
+  §2). Migration 0046 adds `realms.policies` (jsonb), `policy_schema_version`
   and `policies_version`, the counter the admin API will use as `ETag` and
   `If-Match`. Four existing columns stay the storage of their fields
   (`access_token_lifespan`, `refresh_token_lifespan`,

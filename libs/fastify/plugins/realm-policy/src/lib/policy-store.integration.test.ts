@@ -95,7 +95,7 @@ describe('policy store over the realms table (integration)', () => {
     });
   }
 
-  /** A realm as a release before 0045 left it: no policies, the settings an operator made. */
+  /** A realm as a release before 0046 left it: no policies, the settings an operator made. */
   async function insertPreviousRealm(
     name: string,
     scopes: readonly string[] = ['openid']

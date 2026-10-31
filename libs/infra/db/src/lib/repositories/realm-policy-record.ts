@@ -11,7 +11,7 @@ type RealmRowModel = InferSelectModel<typeof realms>;
  * is a member of `realms.policies`.
  *
  * `keptOnFill` says what a realm that has no policies yet (created before
- * migration 0045) keeps when the boot step fills them from the environment.
+ * migration 0046) keeps when the boot step fills them from the environment.
  * Before the policies existed the server read two of these columns, so their
  * value is the realm's policy today:
  *

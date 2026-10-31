@@ -272,7 +272,7 @@ environment only seeds a new realm
 [#516](https://github.com/qauth-labs/qauth/issues/516)): the token lifetimes,
 the verified-account requirement, the password and brute-force policy, client
 registration, the mail sender and the environment ceiling, the fields of
-[Realm policies](/reference/realm-policies/). Migration 0045 adds three columns
+[Realm policies](/reference/realm-policies/). Migration 0046 adds three columns
 to `realms` and writes no row, so every realm starts the upgrade with no
 policies.
 

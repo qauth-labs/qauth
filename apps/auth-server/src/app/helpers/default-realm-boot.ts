@@ -40,7 +40,7 @@ import {
  * 3. give every realm that has no policies yet its policies from the
  *    environment, and every realm whose policies lack fields of this release
  *    those fields' seeds (ADR-019 Decision 10, #516): a realm created before
- *    migration 0045 gets its fill here once, the first node to boot winning,
+ *    migration 0046 gets its fill here once, the first node to boot winning,
  *    and a realm that has its policies is not written, so changing an
  *    environment key later changes no realm. A new realm got its policies
  *    when step 1 created it;

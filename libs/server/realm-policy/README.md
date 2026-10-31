@@ -125,7 +125,7 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
 - A secret field in a patch goes to the `RealmSecretStore` in the same transaction (`put`, `isSet`,
   `getForUse`; implemented by #529), never into the stored document. With no secret store the write
   is refused (`PolicySecretStoreUnavailableError`).
-- A realm with no policies yet (`version` 0, created before migration 0045) reads as its fill: the
+- A realm with no policies yet (`version` 0, created before migration 0046) reads as its fill: the
   seeds, with the values of its row the server read before (the environment ceiling, a non-empty
   dynamic registration allowlist). A field missing from a stored document, which a later release
   added, reads as its seed; `seedRealms` writes both once, with `UPDATE ... WHERE policies_version

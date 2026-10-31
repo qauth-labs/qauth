@@ -126,7 +126,7 @@ function realmWithPolicies(overrides: Partial<MemoryRealm> = {}): MemoryRealm {
   };
 }
 
-/** A realm created before migration 0045: no policies, and a ceiling an operator set. */
+/** A realm created before migration 0046: no policies, and a ceiling an operator set. */
 function realmWithoutPolicies(overrides: Partial<MemoryRealm> = {}): MemoryRealm {
   return {
     id: 'realm-old',

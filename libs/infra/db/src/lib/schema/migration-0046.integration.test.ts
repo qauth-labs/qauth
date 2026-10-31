@@ -1,5 +1,5 @@
 /**
- * Seed-then-migrate test for migration 0045: the realm policies on the realm
+ * Seed-then-migrate test for migration 0046: the realm policies on the realm
  * row (#516).
  *
  * The migration applies to a schema that holds the data of the previous
@@ -13,7 +13,7 @@
  * CHECKs keep the three columns consistent.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
- * and upgraded through 0044, then 0045, so a later migration cannot change
+ * and upgraded through 0045, then 0046, so a later migration cannot change
  * what this test sees.
  */
 import { rmSync } from 'node:fs';
@@ -28,7 +28,7 @@ import {
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const MIGRATION_IDX = 45;
+const MIGRATION_IDX = 46;
 
 interface PolicyColumns {
   policies: unknown;
@@ -36,7 +36,7 @@ interface PolicyColumns {
   policies_version: number;
 }
 
-describe('migration 0045 — realm policies (seed-then-migrate)', () => {
+describe('migration 0046 — realm policies (seed-then-migrate)', () => {
   let container: StartedPostgres | undefined;
   let pool: Pool | undefined;
   let dockerUp = false;
