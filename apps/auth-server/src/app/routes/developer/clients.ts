@@ -310,10 +310,14 @@ export function registerDeveloperClientRoutes(fastify: FastifyInstance): void {
       const patch = request.body;
 
       // Read, compare and write under the row's lock, so no other update
-      // lands between the version `If-Match` names and this write.
+      // lands between the version `If-Match` names and this write. Every read
+      // in it goes through `tx`, so it never waits for a second connection.
       const { client, fields } = await fastify.db.transaction(async (tx) => {
         const existing = await resolveOwnedClient(fastify, request, developerId, clientId, tx);
-        const current = toDeveloperClient(existing, await resolveClientPolicy(fastify, existing));
+        const current = toDeveloperClient(
+          existing,
+          await resolveClientPolicy(fastify, existing, tx)
+        );
         if (
           !ifMatchAllows(
             request.headers['if-match'],

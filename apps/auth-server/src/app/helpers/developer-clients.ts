@@ -128,10 +128,26 @@ export async function resolveOwnedClient(
  */
 export async function resolveClientPolicy(
   fastify: FastifyInstance,
-  client: OAuthClientRow
+  client: OAuthClientRow,
+  tx?: DbTransaction
 ): Promise<EnvironmentPolicy> {
-  const realm = await fastify.repositories.realms.findById(client.realmId);
-  return resolveEnvironmentPolicy(client, realm ?? null);
+  return resolveEnvironmentPolicy(client, (await findRealm(fastify, client.realmId, tx)) ?? null);
+}
+
+/**
+ * The realm row, read inside `tx` when there is one. A transaction that holds
+ * a client's row lock reads through it, never through a second pool
+ * connection: with every connection held by a transaction waiting on the
+ * same lock, the lock holder could wait for one until the pool times out.
+ */
+async function findRealm(
+  fastify: FastifyInstance,
+  realmId: string,
+  tx?: DbTransaction
+): Promise<RealmRowOrMissing> {
+  return tx === undefined
+    ? fastify.repositories.realms.findById(realmId)
+    : fastify.repositories.realms.findById(realmId, tx);
 }
 
 /**
@@ -226,9 +242,10 @@ function assertGrantResponseConsistency(input: {
  */
 async function resolveRealmAllowedScopes(
   fastify: FastifyInstance,
-  realmId: string
+  realmId: string,
+  tx?: DbTransaction
 ): Promise<string[]> {
-  const realm = await fastify.repositories.realms.findById(realmId);
+  const realm = await findRealm(fastify, realmId, tx);
   if (!realm) return [];
   return dynamicRegistrationScopesOf(fastify.policyStore, realm);
 }
@@ -512,7 +529,7 @@ export async function applyClientChange(
   if (scopes !== undefined) {
     const added = scopes.filter((scope) => !existing.scopes.includes(scope));
     if (added.length > 0) {
-      const allowedScopes = await resolveRealmAllowedScopes(fastify, existing.realmId);
+      const allowedScopes = await resolveRealmAllowedScopes(fastify, existing.realmId, tx);
       assertScopesAllowed(added, allowedScopes);
     }
   }
