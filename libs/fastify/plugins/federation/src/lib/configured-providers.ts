@@ -1,6 +1,7 @@
 import {
   assertCredentialStatusProvisioned,
   assertKeyStorageAssuranceProvisioned,
+  type AuthMethod,
   createPasswordProvider,
   createWalletProvider,
   type CredentialProvider,
@@ -92,6 +93,19 @@ export interface VerifierCryptoCapabilities {
  * the only one whose omission is itself the fail-closed answer; see its doc.
  */
 export interface ConfiguredProvidersOptions {
+  /**
+   * The AuthMethods to register beside the built-in providers (#599,
+   * EXPERIMENTAL): the plugin runtime (#600) loads them. They are appended
+   * after the password and wallet providers, and the registry holds each to
+   * the whole contract, so a broken one, or one whose `type` is taken, fails
+   * the boot.
+   *
+   * Optional, like {@link provisionedVerifierMaterial} and for the same
+   * reason: leaving it out is the closed answer, no method beyond the
+   * built-in ones.
+   */
+  authMethods?: readonly AuthMethod[];
+
   /**
    * `WALLET_FEDERATION_ENABLED` (#232). When `false` — the default posture of
    * the env schema — the wallet provider is not constructed and not registered,
@@ -431,5 +445,6 @@ export function createConfiguredProviders(
     providers.push(createWalletProvider());
   }
 
+  providers.push(...(options.authMethods ?? []));
   return providers;
 }

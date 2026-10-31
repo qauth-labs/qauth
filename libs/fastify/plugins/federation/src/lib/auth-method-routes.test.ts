@@ -1,0 +1,241 @@
+import {
+  AUTH_METHOD_CONTRACT,
+  type AuthMethod,
+  AuthMethodContractError,
+  type AuthMethodRoute,
+  createPasswordProvider,
+  UPSTREAM_STEP_URN,
+} from '@qauth-labs/server-federation';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  type AuthMethodRouteHost,
+  authMethodRoutesPlugin,
+  mountAuthMethodRoutes,
+} from './auth-method-routes';
+import { createConfiguredProviders } from './configured-providers';
+import { federationPlugin } from './federation-plugin';
+
+/**
+ * The route mount (#599): a method's routes go under `/upstream/<type>` on the
+ * realm host and nowhere else. The method is a minimal inline one; the
+ * contract's own sample and its kit are tested in `server-federation`.
+ */
+
+const callbackHandle = vi.fn(async (request: { transaction: unknown; query: unknown }) =>
+  request.transaction === undefined
+    ? ({ kind: 'failed', reason: 'transaction_mismatch' } as const)
+    : ({ kind: 'result', result: { query: request.query } } as const)
+);
+
+function method(type = 'oidc_corp', routes?: readonly AuthMethodRoute[]): AuthMethod {
+  return {
+    contract: AUTH_METHOD_CONTRACT,
+    type,
+    id: 'corp',
+    display: { name: 'Corp' },
+    // A schema with the one member the registry checks; this lib does not
+    // depend on zod.
+    configSchema: {
+      safeParse: (value: unknown) => ({ success: true, data: value }),
+    } as unknown as AuthMethod['configSchema'],
+    steps: [UPSTREAM_STEP_URN],
+    start: async () => ({ redirectTo: 'https://idp.example/authorize', transaction: {} }),
+    verify: async () => Promise.reject(new Error('not a result of this method')),
+    extractAttributes: () => [],
+    routes: routes ?? [
+      { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
+      {
+        kind: 'bounce',
+        method: 'POST',
+        path: '/callback',
+        handle: async (request) => ({
+          to: '/callback',
+          query: { code: String(request.form['code']), state: String(request.form['state']) },
+        }),
+      },
+    ],
+  };
+}
+
+function host(): AuthMethodRouteHost & {
+  complete: ReturnType<typeof vi.fn>;
+  takeTransaction: ReturnType<typeof vi.fn>;
+} {
+  return {
+    contextFor: vi.fn(async () => ({}) as never),
+    takeTransaction: vi.fn(async () => ({ state: 'kept' })),
+    complete: vi.fn(async (_method, outcome, _request, reply) => reply.send({ handed: outcome })),
+  };
+}
+
+describe('AuthMethod routes', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+    callbackHandle.mockClear();
+  });
+
+  async function boot(
+    methods: readonly AuthMethod[],
+    routeHost: AuthMethodRouteHost = host()
+  ): Promise<{ app: FastifyInstance; urls: string[] }> {
+    const urls: string[] = [];
+    app = Fastify({ logger: false });
+    app.addContentTypeParser(
+      'application/x-www-form-urlencoded',
+      { parseAs: 'string' },
+      (_request, body, done) => done(null, Object.fromEntries(new URLSearchParams(String(body))))
+    );
+    app.addHook('onRoute', (route) => {
+      urls.push(`${String(route.method)} ${route.url} ${JSON.stringify(route.config)}`);
+    });
+    await app.register(federationPlugin, {
+      providers: createConfiguredProviders({
+        walletFederationEnabled: false,
+        verifierProfileId: undefined,
+        cryptoCapabilities: { signingAlgs: ['EdDSA'], responseEncryption: false },
+        authMethods: methods,
+      }),
+    });
+    await app.register(authMethodRoutesPlugin, { host: routeHost });
+    await app.ready();
+    return { app, urls };
+  }
+
+  it("mounts a method's routes under /upstream/<type> on the realm host, and nothing else", async () => {
+    const booted = await boot([method('oidc_corp'), method('oidc_other')]);
+    expect(booted.urls).toEqual([
+      'GET /upstream/oidc_corp/callback {"surface":"browser"}',
+      'POST /upstream/oidc_corp/callback {"surface":"browser"}',
+      'GET /upstream/oidc_other/callback {"surface":"browser"}',
+      'POST /upstream/oidc_other/callback {"surface":"browser"}',
+    ]);
+    // The password provider sits beside them in the registry, with no route.
+    expect(booted.app.providerRegistry.resolve('password')).toBeDefined();
+    expect(booted.app.providerRegistry.authMethods().map((m) => m.type)).toEqual([
+      'oidc_corp',
+      'oidc_other',
+    ]);
+  });
+
+  it('mounts nothing when no method is registered', async () => {
+    const booted = await boot([]);
+    expect(booted.urls).toEqual([]);
+  });
+
+  it('refuses at mount a method whose route would leave its prefix, even one that skipped the registry', () => {
+    const fastify = Fastify({ logger: false });
+    for (const path of ['/../../oauth/token', '/%2e%2e/oauth/token', '/:param', 'callback']) {
+      const escaping = method('oidc_corp', [
+        { kind: 'callback', method: 'GET', path, handle: callbackHandle },
+      ]);
+      expect(() => mountAuthMethodRoutes(fastify, escaping, host())).toThrow(
+        AuthMethodContractError
+      );
+    }
+  });
+
+  it('fails the boot when a registered method breaks the contract', async () => {
+    const broken = method('oidc_corp', [
+      { kind: 'callback', method: 'GET', path: '/../admin', handle: callbackHandle },
+    ]);
+    await expect(boot([broken])).rejects.toThrow(AuthMethodContractError);
+  });
+
+  it('fails the boot when a method takes the type of another', async () => {
+    await expect(boot([method('oidc_corp'), method('oidc_corp')])).rejects.toThrow(
+      /already registered/
+    );
+  });
+
+  it('hands the callback the query and the taken transaction, and the engine its outcome', async () => {
+    const routeHost = host();
+    const booted = await boot([method()], routeHost);
+
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: '/upstream/oidc_corp/callback?code=c1&state=s1&state=s2',
+      headers: { cookie: '__Host-qauth_flow=secret-flow', authorization: 'Bearer token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routeHost.takeTransaction).toHaveBeenCalledTimes(1);
+    const [request] = callbackHandle.mock.calls[0];
+    // The method sees parameters only: no header, no cookie.
+    expect(Object.keys(request).sort()).toEqual(['form', 'method', 'query', 'transaction']);
+    expect(request).toEqual({
+      method: 'GET',
+      query: { code: 'c1', state: ['s1', 's2'] },
+      form: {},
+      transaction: { state: 'kept' },
+    });
+    expect(response.json()).toEqual({
+      handed: { kind: 'result', result: { query: { code: 'c1', state: ['s1', 's2'] } } },
+    });
+  });
+
+  it("bounces a form_post to the method's own GET route on the same origin, with no transaction taken", async () => {
+    const routeHost = host();
+    const booted = await boot([method()], routeHost);
+
+    const response = await booted.app.inject({
+      method: 'POST',
+      url: '/upstream/oidc_corp/callback',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'code=c1&state=s1',
+    });
+
+    expect(response.statusCode).toBe(303);
+    expect(response.headers['location']).toBe('/upstream/oidc_corp/callback?code=c1&state=s1');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(routeHost.takeTransaction).not.toHaveBeenCalled();
+    expect(routeHost.complete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an absolute URL', { to: 'https://evil.example/', query: {} }],
+    ['a path outside the prefix', { to: '/../../oauth/authorize', query: {} }],
+    ['a route the method does not have', { to: '/elsewhere', query: {} }],
+    ['its own POST route', { to: '/start', query: {} }],
+    ['a query that is not strings', { to: '/callback', query: { code: 1 } }],
+    ['nothing', undefined],
+  ])('never bounces to %s', async (_label, bounce) => {
+    const routes: AuthMethodRoute[] = [
+      { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
+      { kind: 'bounce', method: 'POST', path: '/start', handle: async () => bounce as never },
+    ];
+    const booted = await boot([method('oidc_corp', routes)]);
+    const response = await booted.app.inject({ method: 'POST', url: '/upstream/oidc_corp/start' });
+    expect(response.statusCode).toBe(500);
+    expect(response.headers['location']).toBeUndefined();
+  });
+
+  it('keeps a parameter named __proto__ a parameter', async () => {
+    const booted = await boot([method()]);
+    await booted.app.inject({
+      method: 'GET',
+      url: '/upstream/oidc_corp/callback?__proto__=x&state=s',
+    });
+    const [request] = callbackHandle.mock.calls[0];
+    expect(Object.getPrototypeOf(request.query)).toBeNull();
+    expect(request.query).toEqual(
+      Object.assign(Object.create(null), { ['__proto__']: 'x', state: 's' })
+    );
+  });
+
+  it('registers a method beside the password provider through the single registration point', () => {
+    const corp = method();
+    const providers = createConfiguredProviders({
+      walletFederationEnabled: false,
+      verifierProfileId: undefined,
+      cryptoCapabilities: { signingAlgs: ['EdDSA'], responseEncryption: false },
+      authMethods: [corp],
+    });
+    expect(providers.map((provider) => provider.type)).toEqual(['password', 'oidc_corp']);
+    expect(providers[1]).toBe(corp);
+    expect(createPasswordProvider().type).toBe(providers[0].type);
+  });
+});
