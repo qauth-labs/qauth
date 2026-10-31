@@ -199,4 +199,24 @@ export const REDIS_KEYS = {
    */
   SSF_VERIFICATION: (realmId: string, receiverClientId: string) =>
     `ssf:verification:${realmId}:${receiverClientId}`,
+  /**
+   * One interaction of the Interaction API (#592, ADR-019 Decision 6): the
+   * record of one browser ceremony, as JSON. Keyed by the realm and the
+   * SHA-256 (hex) of the interaction id: the id itself is never stored, so
+   * reading Redis gives no id a browser could present. Expires a short grace
+   * after the interaction's absolute expiry (`INTERACTION_SWEEP_GRACE_MS`),
+   * which the server checks on every read, so the expiry sweep still finds
+   * the record it audits.
+   */
+  INTERACTION: (realmId: string, idHash: string) => `interaction:${realmId}:${idHash}`,
+  /**
+   * Every live interaction, by its absolute expiry (#592): a sorted set whose
+   * score is the expiry in epoch milliseconds and whose member is
+   * `<realmId>:<reference>:<id hash>` ({@link REDIS_KEYS.INTERACTION}'s
+   * components and the interaction's audit reference). An interaction leaves
+   * it when it finishes or is cancelled; the expiry sweep takes the rest once
+   * they expire and audits each. One set for the deployment, so the sweep
+   * needs no list of realms.
+   */
+  INTERACTION_EXPIRY_INDEX: () => 'interaction-expiry',
 } as const;

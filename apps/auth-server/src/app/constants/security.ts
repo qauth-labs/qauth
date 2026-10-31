@@ -327,3 +327,23 @@ export const ASSERTED_IDENTIFIER_MAX_LENGTH = 320;
  * caches within that window.
  */
 export const JWKS_CACHE_CONTROL = 'public, max-age=300';
+
+/**
+ * Hard ceiling on one interaction record (#592), serialised: the bounded
+ * snapshot of the authorization request plus the current step and its
+ * personal data. The record is written BEFORE anyone signs in, into the Redis
+ * that also holds sessions and rate-limit counters, and lives for
+ * `INTERACTION_TTL`, so it must never be an unbounded write. The per-parameter
+ * bounds of the authorize request are the primary control (its largest legal
+ * form is about 30 KiB, ten 2048-character `resource` values included); this
+ * is the backstop.
+ */
+export const INTERACTION_MAX_RECORD_BYTES = 48 * 1024;
+
+/**
+ * How long an interaction record stays in Redis after its absolute expiry
+ * (#592). The server refuses an expired interaction on every read whatever
+ * Redis still holds; the grace only lets the expiry sweep find the record and
+ * audit the step it ended at. Longer than two sweep intervals.
+ */
+export const INTERACTION_SWEEP_GRACE_MS = 5 * 60 * 1000;
