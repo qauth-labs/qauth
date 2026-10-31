@@ -215,6 +215,8 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                  | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                        | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                          | admin    | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                          | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                  | user     | info     | v0.2.0 |
@@ -325,6 +327,28 @@ An account could not be created, for example because the address is in use.
 | ---------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `reason`         | string | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                                                                                                                |
 | `identifierHmac` | string | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
+
+### user.disabled v1-rc.0
+
+An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again.
+
+- Identifier: `urn:qauth:event:user.disabled:v1-rc.0`
+- Category: `admin` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.disabled.v1-rc.0.json](/schemas/events/user.disabled.v1-rc.0.json)
+
+`data` has no members: the envelope carries the event.
+
+### user.enabled v1-rc.0
+
+An operator enabled a disabled account again. The person signs in again: what was issued before the account was disabled stays refused.
+
+- Identifier: `urn:qauth:event:user.enabled:v1-rc.0`
+- Category: `admin` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.enabled.v1-rc.0.json](/schemas/events/user.enabled.v1-rc.0.json)
+
+`data` has no members: the envelope carries the event.
 
 ### authorization.completed v1-rc.0
 

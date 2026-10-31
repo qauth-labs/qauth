@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { defineEventType } from '../definition';
 import { FIRST_RELEASE, identifierHmac, reason, signInMethod, verifierProfile } from './fields';
 
-/** A person's own account activity: sign-in, sign-out and registration. */
+/**
+ * A person's own account activity: sign-in, sign-out and registration; and an
+ * operator's switch of the account.
+ */
 
 export const userSignedIn = defineEventType({
   name: 'user.signed_in',
@@ -93,6 +96,38 @@ export const userRegistrationFailed = defineEventType({
   }),
 });
 
+/**
+ * An operator's switch of an account (#748). Until the admin API has user
+ * operations (#681), the `db:disable-user` operator tool is the one path that
+ * emits these, in the transaction of the change.
+ */
+
+export const userDisabled = defineEventType({
+  name: 'user.disabled',
+  version: 1,
+  rc: 0,
+  description:
+    'An operator disabled an account: it can no longer sign in or obtain tokens, and every browser session and token issued to it before now stays refused, also after it is enabled again.',
+  category: 'admin',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({}),
+});
+
+export const userEnabled = defineEventType({
+  name: 'user.enabled',
+  version: 1,
+  rc: 0,
+  description:
+    'An operator enabled a disabled account again. The person signs in again: what was issued before the account was disabled stays refused.',
+  category: 'admin',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({}),
+});
+
 export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
@@ -100,4 +135,6 @@ export const USER_EVENT_TYPES = [
   userSignOutFailed,
   userRegistered,
   userRegistrationFailed,
+  userDisabled,
+  userEnabled,
 ] as const;
