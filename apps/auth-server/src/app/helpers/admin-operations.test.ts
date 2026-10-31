@@ -1093,6 +1093,7 @@ const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
         'posture-loosening'
       ),
       '/firstParty': unless('/firstParty', (next) => next === false, 'token-content'),
+      '/verifiedDomain': securityWith('token-content'),
       '/environment': unless('/environment', (next) => next === 'production', 'posture-loosening'),
     },
     unchanged: WRITE,
@@ -1155,6 +1156,7 @@ describe('the reserved security cases (#508)', () => {
         'switches PKCE off',
         'switches DPoP binding off',
         'makes the client first-party',
+        'sets the verified domain',
       ])
     );
   });

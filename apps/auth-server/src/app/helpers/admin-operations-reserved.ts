@@ -158,6 +158,7 @@ const CLIENT_STATE = {
   dpopBoundAccessTokens: true,
   firstParty: false,
   environment: 'production',
+  verifiedDomain: null,
 };
 
 const policyCase = (
@@ -400,6 +401,9 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
         'posture-loosening',
       ]),
       clientCase('makes the client first-party', { firstParty: true }, ['token-content']),
+      // ADR-019 Decision 6 (#593): the domain every screen shows first for the
+      // client, above the name it declares.
+      clientCase('sets the verified domain', { verifiedDomain: 'app.example' }, ['token-content']),
       clientCase('loosens the environment', { environment: 'development' }, ['posture-loosening']),
     ]
   ),
