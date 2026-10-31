@@ -34,10 +34,13 @@ publishes cannot drift apart.
   `StepAnswer<N>`, `StepPersonal<N>`, `StepError<N>` are inferred from the Zod schemas.
 - `STEP_URNS`: each step's name on the wire, `urn:qauth:ia:<name>:v1-rc.0`, typed as its literal.
 - `STEP_ERRORS`, `STEP_ERROR_CODES`: each step's closed error set, and their union.
-- `STEP_AMR`: the RFC 8176 values a successful answer adds (`password` `pwd`, `webauthn_get`
-  `pop` and `mfa`, `totp` `otp`, none for the others).
+- `STEP_AMR`: the `amr` values a successful answer adds, from RFC 8176 §2 and the IANA-registered
+  `pop` (`password` `pwd`, `webauthn_get` `pop` and `mfa`, `totp` `otp`, none for the others).
 - `FIPA_STEP_NAMES`, `INTERACTION_ONLY_STEP_NAMES`: the nine steps ADR-017 lists, which the FiPA
   endpoint may serve, and the eight only the Interaction API serves.
+- The steps, their lists, the constants above, the mapper tables and `FIPA_SERVES_ALL` are frozen.
+  The freeze is shallow: the Zod schemas a step holds are Zod's own objects and are not frozen, so
+  no code may change them.
 
 ## The mappers
 
@@ -61,7 +64,7 @@ createInteractionMapper().stepView(offer);
 
 createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).challenge(offer, {
   issuer: 'https://auth.example.com',
-  authSession, // the round's new handle
+  newAuthSession, // makes the round's new handle, called only when the body carries it
   interactionTypesSupported, // the client's list, parsed
 });
 // { status: 403, body: { error: 'insufficient_authorization', iss, auth_session,
@@ -74,9 +77,24 @@ createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).chall
   ADR-017 lists, in the type check and at run time.
 - **The FiPA mapper never serialises a step only the Interaction API serves.** As the required
   step, such a step (or one this deployment does not serve, or one the client did not list in
-  `interaction_types_supported`) gives `403 redirect_to_web`; as an alternative it is left out. A
-  bot challenge is the one exception: it never becomes `redirect_to_web` (ADR-017 Decisions 4 and
-  7), so the mapper throws and the engine throttles instead.
+  `interaction_types_supported`) gives `403 redirect_to_web`; as an alternative it is left out.
+- **A preferred step gives way; a required one does not.** The offer's `required` says whether the
+  current step is required or only preferred, and an offer without it is required (fail closed).
+  When the FiPA endpoint cannot serve a current step that is not required, and the client can
+  answer one of the alternatives, the first such alternative becomes `interaction_type_required`,
+  with its own params and no error carried over: in ADR-017 Decision 4's passkey-first round, a
+  client that cannot do passkeys gets `password`. A required step (a second factor, or any step
+  the engine marks required) still gives `redirect_to_web`. The Interaction API serves every step,
+  so it puts nothing of the flag on the wire.
+- **A bot challenge never becomes `redirect_to_web`** (ADR-017 Decisions 4 and 7). The engine asks
+  `negotiates('captcha', listing)` before it offers one, and answers a client that cannot answer it
+  with its own delay and 429. An offer of one to such a client is refused with `not_negotiated`,
+  a fault of the engine like every `StepMappingError`.
+- **Passkey enrolment on the FiPA endpoint** (`webauthn_create`) is offered only to an account
+  that already holds a recovery-code set: a first enrolment issues the set, and only the hosted
+  pages show it (`recovery_codes` is the Interaction API's alone). Any other account gets
+  `redirect_to_web`. That is the engine's rule (#614, #665); the offer does not say whether the
+  account holds a set, so the mapper cannot check it.
 - **No prose.** No output carries `error_description` or a sentence the server writes: every string
   is a step name, an error code, an envelope value or a bounded token (a `const`, an `enum` or a
   token pattern). The only params that hold words are text the realm's admin set, under the display
@@ -98,9 +116,13 @@ createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).chall
 - **What may be answered next** is what the output names: the step read's `step` and
   `alternatives`, or the FiPA body's `qauth_interaction_types_offered` (none after
   `redirect_to_web`). A transport accepts an answer only to one of those.
-- **The FiPA round** carries the realm's issuer (no query or fragment; `http` only for a
-  development realm), the new `auth_session` (43 base64url characters) and the client's parsed
-  `interaction_types_supported`, at most 16 entries.
+- **The FiPA round** carries the realm's issuer (no query, fragment or userinfo; `http` only for a
+  development realm), `newAuthSession`, which makes the round's new handle (43 base64url
+  characters), and the client's parsed `interaction_types_supported`, at most 16 entries. The
+  mapper calls `newAuthSession` once, and only for an answer that carries the handle
+  (`insufficient_authorization`), after every check: a `redirect_to_web` or a refused offer makes
+  none. The endpoint burns the old handle first and binds the one the body carries (ADR-017
+  Decision 6).
 - **Exhaustive.** Each mapper has a table keyed by the step union, so a step added to `STEP_LIST`
   without an entry on both transports fails the type check; on the FiPA table a step only the
   Interaction API serves takes the `INTERACTION_ONLY` marker, and cannot take a mapper.

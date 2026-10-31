@@ -47,7 +47,7 @@ export interface GrammarStep<
   readonly answer: A;
   /** Why a rejected answer was rejected: a closed set, no prose. */
   readonly errors: E;
-  /** The RFC 8176 `amr` values a successful answer adds; none for a step that proves no authenticator. */
+  /** The `amr` values (IANA registry, RFC 8176) a successful answer adds; none for a step that proves no authenticator. */
   readonly amr: M;
 }
 
@@ -62,7 +62,11 @@ export type AnyGrammarStep = GrammarStep<
   readonly string[]
 >;
 
-/** The values RFC 8176 §2 registers: a step adds none other. */
+/**
+ * The values of the IANA Authentication Method Reference Values registry a
+ * step may add: those RFC 8176 §2 registers, and `pop`, registered later. A
+ * step adds none other.
+ */
 const AMR_VALUES = new Set([
   'face',
   'fpt',

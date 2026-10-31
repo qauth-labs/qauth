@@ -34,9 +34,11 @@ import {
  * And the mappers refuse an offer that tries to carry a sentence.
  */
 
+const AUTH_SESSION = 'YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE';
+
 const ROUND: FipaRoundContext = {
   issuer: 'https://auth.example.com',
-  authSession: 'YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE',
+  newAuthSession: () => AUTH_SESSION,
   // Every FiPA step, and seven of the eight only the Interaction API serves:
   // 16, the endpoint's limit. Listing those changes nothing.
   interactionTypesSupported: [...FIPA_STEP_NAMES, ...INTERACTION_ONLY_STEP_NAMES.slice(0, 7)].map(
@@ -217,7 +219,7 @@ describe('the mappers’ output', () => {
       }
       expect(body.error).toBe('insufficient_authorization');
       expect(body.iss).toBe(ROUND.issuer);
-      expect(body.auth_session).toBe(ROUND.authSession);
+      expect(body.auth_session).toBe(AUTH_SESSION);
       expect(Object.keys(body).sort()).toEqual(
         [
           'error',

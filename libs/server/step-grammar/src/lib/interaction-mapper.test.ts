@@ -228,6 +228,12 @@ describe('the Interaction API mapper', () => {
     expect(view.alternatives).toHaveLength(MAX_INTERACTION_ALTERNATIVES);
   });
 
+  it('puts nothing of the offer’s required flag on the wire: it serves every step', () => {
+    const offer = exampleOffer('webauthn_get');
+    expect(mapper.stepView({ ...offer, required: false })).toStrictEqual(mapper.stepView(offer));
+    expect(mapper.stepView({ ...offer, required: true })).toStrictEqual(mapper.stepView(offer));
+  });
+
   it('refuses a configuration that names an unknown step or a step twice', () => {
     expectRefusal(
       () => createInteractionMapper({ serves: ['sms_code' as never] }),

@@ -127,6 +127,12 @@
 > that fails a check is refused for that check and revokes nothing. The revocation reaches the
 > access tokens issued from the code and in its family as well, through the `jti` denylist. Decision
 > 10 is edited in place.
+>
+> **Amended 2026-10-31** with the maintainer's decisions of that day on #894 (the step grammar,
+> #591). In Decision 4's passkey-first round the passkey is preferred, not required: a client that
+> did not list `webauthn_get` gets the password step it listed instead of `redirect_to_web`. The
+> engine marks each offered step required or preferred, and an unmarked step is required, so a
+> second factor or a bot challenge never gives way. Decision 4 is edited in place.
 
 ## Context
 
@@ -608,7 +614,11 @@ Any other rule that needs a step the client did not list answers `redirect_to_we
 - Passkey-first (F2b). With no `login_hint`, the first response requires a discoverable
   `webauthn_get` and offers `password` and `identifier`; with one, it is the same password-required
   shape for every account, with `webauthn_get` offered. A passkey is always one tap away, and the
-  response never says who holds one.
+  response never says who holds one. In that first response the passkey is preferred, not
+  required: a client that did not list `webauthn_get` gets `password` as
+  `interaction_type_required`, with `identifier` offered, instead of `redirect_to_web` (amended
+  2026-10-31). A step the engine requires, such as the passkey of a passkey-bound account after its
+  password, never gives way like this.
 - Downgrade rule (defined in F1 so the wire does not change; binding from F2b). A login completes
   only if the transaction proved the account's strongest bound authenticator (passkey above
   password). On the hosted pages a recovery code may stand in for it (Decision 8); it adds no `amr`
@@ -660,7 +670,8 @@ Any other rule that needs a step the client did not list answers `redirect_to_we
   dangerous scope answers `redirect_to_web` in every environment, so the browser's consent screen
   and fresh login apply.
 
-`redirect_to_web` answers a step the client did not list (except a bot challenge), a missing
+`redirect_to_web` answers a step the client did not list (except a bot challenge, and a preferred
+step beside an alternative the client listed, which that alternative replaces), a missing
 negotiation, a dangerous scope, `prompt=consent`, a passkey-bound account whose client cannot do
 passkeys, reset or registration under `max_age` or `prompt=login`, and a risk decision (FiPA §9.2
 "Phishing": the AS "MAY decide to require that the user go through a redirect-based flow at any

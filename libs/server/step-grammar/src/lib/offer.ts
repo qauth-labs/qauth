@@ -35,6 +35,15 @@ export type CurrentStep<N extends StepName = StepName> = {
 export interface StepOffer {
   readonly current: CurrentStep;
   readonly alternatives: readonly OfferedStep[];
+  /**
+   * Whether the current step is required, or only preferred: `false` lets a
+   * transport that cannot serve it offer an alternative it can serve in its
+   * place (the FiPA mapper does). Absent means required, so an offer that
+   * says nothing fails closed. A bot challenge is offered alone, so it never
+   * has an alternative to give way to; a second factor the transaction needs
+   * is required.
+   */
+  readonly required?: boolean;
 }
 
 /** An offer after the grammar's checks: every params object parsed by its step's schema. */
@@ -45,6 +54,8 @@ export interface ReadOffer {
     readonly error?: StepErrorCode;
   };
   readonly alternatives: readonly { readonly step: StepName; readonly params: unknown }[];
+  /** Whether the current step is required: `true` unless the offer said `false`. */
+  readonly required: boolean;
 }
 
 /** Refuse a member `allowed` does not name: no prose can ride along on an undeclared member. */
@@ -119,9 +130,12 @@ const BOT_CHALLENGE: StepName = 'captcha';
  * after it, so no other answer may skip it.
  */
 export function readOffer(offer: StepOffer): ReadOffer {
-  refuseUnknownMembers(offer, ['current', 'alternatives'], 'offer');
+  refuseUnknownMembers(offer, ['current', 'alternatives', 'required'], 'offer');
   if (!Array.isArray(offer.alternatives)) {
     throw new StepMappingError('unknown_member', 'offer.alternatives is not an array');
+  }
+  if (offer.required !== undefined && typeof offer.required !== 'boolean') {
+    throw new StepMappingError('unknown_member', 'offer.required is not a boolean');
   }
   const current = readStep(offer.current, 'offer.current', true);
   checkStepRules(current.name, current.params, current.error);
@@ -146,5 +160,6 @@ export function readOffer(offer: StepOffer): ReadOffer {
       ...(current.error === undefined ? {} : { error: current.error }),
     },
     alternatives,
+    required: offer.required !== false,
   };
 }

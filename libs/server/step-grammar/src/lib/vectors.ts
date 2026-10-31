@@ -104,7 +104,7 @@ export function stepVectorExpected(input: StepVectorInput): StepVectorExpected {
     interaction: createInteractionMapper().stepView(offer),
     fipa: createFipaMapper(FIPA_SERVES_ALL).challenge(offer, {
       issuer: input.fipa.iss,
-      authSession: input.fipa.auth_session,
+      newAuthSession: () => input.fipa.auth_session,
       interactionTypesSupported: input.fipa.interaction_types_supported,
     }),
   };

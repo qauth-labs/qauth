@@ -4,6 +4,7 @@ export {
   FIPA_STEP_MAPPERS,
   type FipaChallengeResponse,
   type FipaInsufficientAuthorization,
+  type FipaListing,
   type FipaMapper,
   type FipaMapperTable,
   type FipaRedirectToWeb,

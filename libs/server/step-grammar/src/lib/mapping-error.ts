@@ -20,7 +20,13 @@ export const STEP_MAPPING_ERROR_CODES = [
   'too_many_alternatives',
   /** The current step, or a value of its params, is one this transport does not serve. */
   'not_served',
-  /** A bot challenge the client did not list: answered by the engine's delay and 429, never by `redirect_to_web`. */
+  /**
+   * A bot challenge offered to a client that cannot answer it: it did not list
+   * it, or the deployment does not serve it. The engine asks the FiPA mapper's
+   * `negotiates` first and answers such a client with its own delay and 429
+   * (ADR-017 Decisions 4 and 7), never with `redirect_to_web`; reaching this
+   * code means it did not.
+   */
   'not_negotiated',
   /** A bot challenge offered with alternatives, or as one: it is required, and the pending step resumes after it. */
   'bot_challenge_not_alone',

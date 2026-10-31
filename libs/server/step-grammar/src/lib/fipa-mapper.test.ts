@@ -33,7 +33,7 @@ const MOST_URNS = [
 
 const round = (supported: readonly string[] = FIPA_URNS): FipaRoundContext => ({
   issuer: ISS,
-  authSession: AUTH_SESSION,
+  newAuthSession: () => AUTH_SESSION,
   interactionTypesSupported: supported,
 });
 
@@ -291,8 +291,11 @@ describe('the FiPA round context', () => {
     for (const context of [
       { ...round(), issuer: 'auth.acme.example' },
       { ...round(), issuer: 'javascript:alert(1)' },
-      { ...round(), authSession: 'short' },
-      { ...round(), authSession: `${AUTH_SESSION}=` },
+      { ...round(), newAuthSession: () => 'short' },
+      { ...round(), newAuthSession: () => `${AUTH_SESSION}=` },
+      { ...round(), newAuthSession: AUTH_SESSION },
+      { ...round(), issuer: 'https://user:secret@auth.acme.example' },
+      { ...round(), issuer: 'https://user@auth.acme.example' },
       { ...round(), interactionTypesSupported: 'urn:qauth:ia:password:v1-rc.0' },
       { ...round(), error_description: 'Enter your password' },
       { ...round(), issuer: 'https://auth.acme.example/?realm=b' },
@@ -320,5 +323,184 @@ describe('the FiPA round context', () => {
       'invalid_configuration'
     );
     expectRefusal(() => createFipaMapper({ serves: [], phase: 'F1' } as never), 'unknown_member');
+  });
+});
+
+describe('the FiPA round’s new auth_session', () => {
+  // ADR-017 Decision 6: burn first, then bind. The endpoint binds the handle
+  // the body carries, so the mapper makes one only for a body that carries it.
+  function counting() {
+    const calls: string[] = [];
+    const context: FipaRoundContext = {
+      ...round(),
+      newAuthSession: () => {
+        calls.push(AUTH_SESSION);
+        return AUTH_SESSION;
+      },
+    };
+    return { calls, context };
+  }
+
+  it('is made once for insufficient_authorization, and the body carries it', () => {
+    const { calls, context } = counting();
+    const answer = mapper.challenge(offerOf('password'), context).body;
+    expect(calls).toHaveLength(1);
+    expect(answer).toMatchObject({
+      error: 'insufficient_authorization',
+      auth_session: AUTH_SESSION,
+    });
+  });
+
+  it('is not made for redirect_to_web, a refused offer or a bot challenge the client did not list', () => {
+    const { calls, context } = counting();
+    expect(mapper.challenge(offerOf('consent'), context).body.error).toBe('redirect_to_web');
+    expectRefusal(
+      () =>
+        mapper.challenge(
+          { current: { step: 'totp', params: { digits: 8 } as never }, alternatives: [] },
+          context
+        ),
+      'invalid_params'
+    );
+    expectRefusal(
+      () =>
+        mapper.challenge(offerOf('captcha'), {
+          ...context,
+          interactionTypesSupported: [STEP_URNS.password],
+        }),
+      'not_negotiated'
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('whether the FiPA endpoint can offer a step', () => {
+  it('is true for a step ADR-017 lists, that the deployment serves and the client listed', () => {
+    expect(mapper.negotiates('captcha', { interactionTypesSupported: FIPA_URNS })).toBe(true);
+    expect(mapper.negotiates('password', round())).toBe(true);
+  });
+
+  it('is false for a step the client did not list, the deployment does not serve or only the Interaction API serves', () => {
+    expect(mapper.negotiates('captcha', { interactionTypesSupported: [STEP_URNS.password] })).toBe(
+      false
+    );
+    const f1 = createFipaMapper({ serves: ['identifier', 'password'] });
+    expect(f1.negotiates('captcha', round())).toBe(false);
+    expect(mapper.negotiates('consent', { interactionTypesSupported: [STEP_URNS.consent] })).toBe(
+      false
+    );
+  });
+
+  it('lets the engine keep a bot challenge from a client that cannot answer one', () => {
+    // The engine's side of ADR-017 Decision 7: ask first, then throttle that
+    // client with its delay and 429 instead of offering the challenge.
+    const listing = { interactionTypesSupported: [STEP_URNS.password] };
+    expect(mapper.negotiates('captcha', listing)).toBe(false);
+    expectRefusal(
+      () => challenge(offerOf('captcha'), round(listing.interactionTypesSupported)),
+      'not_negotiated'
+    );
+  });
+
+  it('refuses an unknown step and a malformed listing', () => {
+    expectRefusal(() => mapper.negotiates('sms_code' as never, round()), 'unknown_step');
+    expectRefusal(
+      () => mapper.negotiates('captcha', { interactionTypesSupported: Array(17).fill('x') }),
+      'invalid_configuration'
+    );
+    expectRefusal(() => mapper.negotiates('captcha', null as never), 'invalid_configuration');
+  });
+});
+
+describe('a current step that is only preferred', () => {
+  // ADR-017 Decision 4's passkey-first round: with no login_hint the engine
+  // prefers a discoverable passkey and offers the password and the
+  // identifier beside it.
+  const passkeyFirst = (required?: boolean): StepOffer =>
+    ({
+      current: { step: 'webauthn_get', params: paramsOf('webauthn_get') },
+      alternatives: [
+        { step: 'password', params: {} },
+        { step: 'identifier', params: {} },
+      ],
+      ...(required === undefined ? {} : { required }),
+    }) as StepOffer;
+  const passwordOnly = [STEP_URNS.identifier, STEP_URNS.password];
+
+  it('gives way to the first alternative the client can answer, with its own params', () => {
+    expect(body(passkeyFirst(false), round(passwordOnly))).toStrictEqual({
+      error: 'insufficient_authorization',
+      iss: ISS,
+      auth_session: AUTH_SESSION,
+      interaction_type_required: STEP_URNS.password,
+      qauth_interaction_types_offered: [STEP_URNS.password, STEP_URNS.identifier],
+      qauth_interaction_params: { [STEP_URNS.password]: {}, [STEP_URNS.identifier]: {} },
+    });
+    // A deployment that does not serve passkeys yet: the same.
+    const f1 = createFipaMapper({ serves: ['identifier', 'password'] });
+    expect(
+      (f1.challenge(passkeyFirst(false), round()).body as FipaInsufficientAuthorization)
+        .interaction_type_required
+    ).toBe(STEP_URNS.password);
+  });
+
+  it('carries no error over from the step it replaces', () => {
+    const offer = passkeyFirst(false);
+    const refused = {
+      ...offer,
+      current: { ...offer.current, error: 'invalid_credentials' },
+    } as StepOffer;
+    const answer = body(refused, round(passwordOnly));
+    expect(answer.interaction_type_required).toBe(STEP_URNS.password);
+    expect(answer).not.toHaveProperty('qauth_interaction_error');
+  });
+
+  it('is still served as it is when the client listed it', () => {
+    expect(body(passkeyFirst(false)).interaction_type_required).toBe(STEP_URNS.webauthn_get);
+  });
+
+  it('gives redirect_to_web when the client can answer no alternative', () => {
+    expect(challenge(passkeyFirst(false), round([STEP_URNS.totp])).body).toStrictEqual({
+      error: 'redirect_to_web',
+      iss: ISS,
+    });
+  });
+
+  it('keeps today’s answer when the step is required, or the offer does not say', () => {
+    for (const required of [true, undefined]) {
+      expect(challenge(passkeyFirst(required), round(passwordOnly)).body).toStrictEqual({
+        error: 'redirect_to_web',
+        iss: ISS,
+      });
+    }
+  });
+
+  it('never applies to a bot challenge: it has no alternative to give way to', () => {
+    expectRefusal(
+      () =>
+        challenge(
+          {
+            current: { step: 'captcha', params: paramsOf('captcha') },
+            alternatives: [],
+            required: false,
+          },
+          round(passwordOnly)
+        ),
+      'not_negotiated'
+    );
+  });
+
+  it('is refused unless the flag is a boolean', () => {
+    expectRefusal(
+      () => challenge({ ...passkeyFirst(), required: 'no' } as never, round(passwordOnly)),
+      'unknown_member'
+    );
+  });
+});
+
+describe('the configuration that serves every step', () => {
+  it('is frozen', () => {
+    expect(Object.isFrozen(FIPA_SERVES_ALL)).toBe(true);
+    expect(Object.isFrozen(FIPA_SERVES_ALL.serves)).toBe(true);
   });
 });

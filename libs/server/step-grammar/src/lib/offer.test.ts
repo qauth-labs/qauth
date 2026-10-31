@@ -15,7 +15,7 @@ import { FIPA_STEP_NAMES, STEP_GRAMMAR, STEP_NAMES } from './steps';
 
 const ROUND = {
   issuer: 'https://auth.example.com',
-  authSession: 'YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE',
+  newAuthSession: () => 'YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE',
   interactionTypesSupported: FIPA_STEP_NAMES.map((name) => STEP_GRAMMAR[name].urn),
 };
 
