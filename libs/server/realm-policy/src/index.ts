@@ -1,7 +1,13 @@
 export type * from './lib/direction';
 export * from './lib/direction';
+export type * from './lib/docs';
+export * from './lib/docs';
 export type * from './lib/field';
 export * from './lib/field';
+export type * from './lib/groups';
+export * from './lib/groups';
+export type * from './lib/realm-policies';
+export * from './lib/realm-policies';
 export type * from './lib/registry';
 export * from './lib/registry';
 export type * from './lib/version';
