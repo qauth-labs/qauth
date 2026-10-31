@@ -4,19 +4,22 @@ import type { KeyFactory, RealmKeyBootStore } from '@qauth-labs/server-keys/cust
 /**
  * TEST SUPPORT: one rotation of a realm's `token_signing` keys, the step the
  * rotation job (#542) and manual rotation (#544) will take, for tests that
- * check what a rotation leaves verifiable (issue #492). Never exported from
- * the package entry point.
+ * check what a rotation leaves verifiable (issue #492), and its first half,
+ * the publication of the `next` key before it signs (#494). Never exported
+ * from the package entry point.
  *
- * A new key is created as `next`, the realm's active key of its algorithm
- * moves from `active` to `retired`, and the new key becomes `active`, in one
+ * A rotation activates the realm's `next` key of the algorithm: one
+ * {@link prepublishTokenKeys} published earlier, or else a new one it creates
+ * as `next` itself. The realm's active key of the algorithm moves from
+ * `active` to `retired`, and the `next` key becomes `active`, in one
  * transaction under the realm's key lock. With hybrid signing on, an EdDSA
  * rotation brings a new ML-DSA-65 key with it, and both keys of the old pair
  * retire together (ADR-005). The retired keys stay published, and so in the
  * realm's verification set, until `unpublishAt`: their retention.
  *
- * It skips the wait a real rotation makes between publishing the `next` key
- * and activating it (ADR-019, 7 days by default): a test has no relying party
- * whose cache needs it.
+ * It does not wait between publishing the `next` key and activating it, as a
+ * real rotation does (ADR-019, 7 days by default): a test that needs a relying
+ * party to see the key first pre-publishes it and reads the JWKS itself.
  */
 
 const DAY_MS = 86_400_000;
@@ -42,6 +45,24 @@ export interface RotatedTokenKey {
   readonly algorithm: string;
 }
 
+/** What to pre-publish. */
+export interface TokenKeyPrepublicationOptions {
+  /**
+   * The algorithm of the `next` key: `EdDSA` by default, with its ML-DSA-65
+   * partner when hybrid signing is on, or `RS256`.
+   */
+  readonly algorithm?: 'EdDSA' | 'RS256';
+}
+
+/** What one pre-publication created. */
+export interface TokenKeyPrepublication {
+  /**
+   * The `next` keys, published and signing nothing yet: the requested one,
+   * then its hybrid partner.
+   */
+  readonly prepublished: readonly RotatedTokenKey[];
+}
+
 /** What one rotation changed. */
 export interface TokenKeyRotation {
   /** The keys that sign from now on: the requested one, then its hybrid partner. */
@@ -53,15 +74,92 @@ export interface TokenKeyRotation {
 }
 
 /**
- * Rotate the realm's `token_signing` keys of one algorithm through `store`,
- * creating the new keys with `factory`.
+ * The realm's `next` `token_signing` key of `algorithm`, with its hybrid
+ * partner: the requested algorithm first. Empty when it has none.
+ *
+ * @throws Error when the realm has more than one `next` key of `algorithm`:
+ *   activating both would break the one-active-key index
+ */
+async function nextTokenKeys<Tx>(
+  store: RealmKeyBootStore<Tx>,
+  realmId: string,
+  algorithm: string,
+  tx: Tx
+): Promise<RotatedTokenKey[]> {
+  const next = await store.listByRealm(
+    realmId,
+    { purpose: 'token_signing', scopeId: null, status: 'next' },
+    tx
+  );
+  const requested = next.filter((key) => key.algorithm === algorithm);
+  if (requested.length > 1) {
+    throw new Error(`The realm has ${requested.length} next ${algorithm} keys; activate one`);
+  }
+  const pairs = new Set(requested.map((key) => key.pairId).filter((pairId) => pairId !== null));
+  const partners = next.filter(
+    (key) => key.algorithm !== algorithm && key.pairId !== null && pairs.has(key.pairId)
+  );
+  return [...requested, ...partners].map(({ kid, algorithm: keyAlgorithm }) => ({
+    kid,
+    algorithm: keyAlgorithm,
+  }));
+}
+
+/**
+ * Publish a new `next` `token_signing` key of one algorithm in the realm,
+ * through `store`, creating it with `factory`: the first half of a rotation.
+ * The key is in the realm's JWKS from now on and signs nothing until
+ * {@link rotateTokenKeys} activates it. With hybrid signing on, an EdDSA key
+ * comes with its ML-DSA-65 partner.
+ *
+ * A signer reads key lists at most once per refresh interval, so one that
+ * read the realm's keys before sees the new key only after that interval.
+ *
+ * @throws Error when the realm already has a `next` key of the algorithm;
+ *   nothing changes then
+ */
+export async function prepublishTokenKeys<Tx>(
+  store: RealmKeyBootStore<Tx>,
+  factory: KeyFactory<Tx>,
+  realmId: string,
+  options: TokenKeyPrepublicationOptions = {}
+): Promise<TokenKeyPrepublication> {
+  const algorithm = options.algorithm ?? 'EdDSA';
+  return store.transaction(async (tx) => {
+    await store.lockRealm(realmId, tx);
+    if ((await nextTokenKeys(store, realmId, algorithm, tx)).length > 0) {
+      throw new Error(`The realm already has a next ${algorithm} key`);
+    }
+    const created = await factory.createKey({
+      realmId,
+      purpose: 'token_signing',
+      algorithm,
+      status: 'next',
+      tx,
+    });
+    return Object.freeze({
+      prepublished: Object.freeze(
+        created.map(({ kid, algorithm: keyAlgorithm }) =>
+          Object.freeze({ kid, algorithm: keyAlgorithm })
+        )
+      ),
+    });
+  });
+}
+
+/**
+ * Rotate the realm's `token_signing` keys of one algorithm through `store`:
+ * activate its `next` keys of the algorithm, or new ones created with
+ * `factory` when it has none.
  *
  * A signer reads key lists at most once per refresh interval, so one that
  * read the realm's keys before the rotation sees it only after that interval:
  * a test reads with a signer whose interval is `0`, or one created after the
  * rotation.
  *
- * @throws Error when a key moved meanwhile; nothing changes then
+ * @throws Error when a key moved meanwhile, when the realm has two `next`
+ *   keys of the algorithm, or when its `next` key lacks the hybrid partner
+ *   the active pair has; nothing changes then
  */
 export async function rotateTokenKeys<Tx>(
   store: RealmKeyBootStore<Tx>,
@@ -73,21 +171,38 @@ export async function rotateTokenKeys<Tx>(
   const retentionMs = options.retiredRetentionMs ?? DEFAULT_KEY_RETIRED_RETENTION_DAYS * DAY_MS;
   return store.transaction(async (tx) => {
     await store.lockRealm(realmId, tx);
-    const created = await factory.createKey({
-      realmId,
-      purpose: 'token_signing',
-      algorithm,
-      status: 'next',
-      tx,
-    });
+    const prepublished = await nextTokenKeys(store, realmId, algorithm, tx);
+    const created: readonly RotatedTokenKey[] =
+      prepublished.length > 0
+        ? prepublished
+        : await factory.createKey({
+            realmId,
+            purpose: 'token_signing',
+            algorithm,
+            status: 'next',
+            tx,
+          });
     const algorithms = new Set<string>(created.map((key) => key.algorithm));
-    const active = (
-      await store.listByRealm(
-        realmId,
-        { purpose: 'token_signing', scopeId: null, status: 'active' },
-        tx
-      )
-    ).filter((key) => algorithms.has(key.algorithm));
+    const allActive = await store.listByRealm(
+      realmId,
+      { purpose: 'token_signing', scopeId: null, status: 'active' },
+      tx
+    );
+    const active = allActive.filter((key) => algorithms.has(key.algorithm));
+    // A hybrid pair retires whole (ADR-005): a pre-published key without the
+    // partner the old pair has would leave half of the old pair active.
+    const retiringKids = new Set(active.map((key) => key.kid));
+    const retiringPairs = new Set(
+      active.map((key) => key.pairId).filter((pairId) => pairId !== null)
+    );
+    const stranded = allActive.filter(
+      (key) => !retiringKids.has(key.kid) && key.pairId !== null && retiringPairs.has(key.pairId)
+    );
+    if (stranded.length > 0) {
+      throw new Error(
+        `The next ${algorithm} key has no ${stranded.map((key) => key.algorithm).join(', ')} partner: the rotation would split the active pair`
+      );
+    }
 
     const at = Date.now();
     const unpublishAt = at + retentionMs;

@@ -1635,6 +1635,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guards (`requireFamilyToken`) name the request realm's issuer, which since
   [#491] is the `iss` of every token the realm issues (below).
 
+- **Discovery and the JWKS are the same on every node** ([#494], ADR-019
+  Decisions 1, 8 and 9). `/.well-known/oauth-authorization-server`,
+  `/.well-known/openid-configuration` and `/.well-known/jwks.json`, served per
+  realm since [#490] and [#491], are built from the realm's row, its published
+  keys (`realm_public_keys`) and the deployment's settings, and from nothing
+  else a node holds. So every node that serves them (the `api` role), with the
+  signer or without ([#495]), answers the same bytes for the same realm under
+  the same settings; after a key change a node may serve its previous key list
+  for up to a minute. The JWKS lists the realm's active keys, a next key from
+  its publication, before it signs, and a retired key while it stays published
+  ([#492]); `id_token_signing_alg_values_supported` follows its active keys. A
+  host that names no realm gets 421 for all three ([#486]). An endpoint host
+  gets its realm's documents unchanged, with the realm's issuer inside: a
+  server-side caller that fetches them there must configure that issuer
+  explicitly, since RFC 8414 §3.3 expects the issuer of the URL it fetched.
+  `CIMD_ENABLED`, `ID_JAG_ENABLED` and `DPOP_ENABLED` stay deployment
+  settings, which every realm advertises alike. The caching is unchanged:
+  `public, max-age=300` on the JWKS and `public, max-age=3600` on the
+  discovery documents.
+
 - **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
   The lookups by an id that a request, a token or a code carries now take the
   realm of the request's host: users, clients, consents, API keys,
@@ -1983,6 +2003,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#490]: https://github.com/qauth-labs/qauth/issues/490
 [#491]: https://github.com/qauth-labs/qauth/issues/491
 [#493]: https://github.com/qauth-labs/qauth/issues/493
+[#494]: https://github.com/qauth-labs/qauth/issues/494
 [#495]: https://github.com/qauth-labs/qauth/issues/495
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508

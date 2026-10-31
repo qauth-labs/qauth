@@ -794,6 +794,139 @@ describe('verifying across a rotation (#492)', () => {
   });
 });
 
+describe('publishing a next key before it signs (#494)', () => {
+  async function jwksOf(app: FastifyInstance, realm: TokenRealm): Promise<JSONWebKeySet> {
+    return (await app.jwtUtils.getJwks(realm)) as JSONWebKeySet;
+  }
+
+  function kidsOf(jwks: JSONWebKeySet): unknown[] {
+    return jwks.keys.map((key) => key.kid);
+  }
+
+  it("lists a pre-published key in its realm's JWKS only, signs with it once activated, and a JWKS read before verifies it", async () => {
+    // The signer reads the store on every call, so each change shows at once.
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const sign = () =>
+        app.jwtUtils.signAccessToken(realms.a, { sub: 'user-1', clientId: 'client-1' });
+      const oldKid = header(await sign())['kid'];
+
+      const { prepublished } = await realms.signer.prepublishTokenKeys(realms.a.id);
+      expect(prepublished.map((key) => key.algorithm)).toEqual(['EdDSA']);
+      const [{ kid: nextKid }] = prepublished;
+
+      // Published at once, in its realm's JWKS only, and signing nothing yet.
+      const cached = await jwksOf(app, realms.a);
+      expect(kidsOf(cached)).toEqual(expect.arrayContaining([oldKid, nextKid]));
+      expect(kidsOf(await jwksOf(app, realms.b))).not.toContain(nextKid);
+      expect(header(await sign())['kid']).toBe(oldKid);
+      expect(await app.jwtUtils.getIdTokenSigningAlgValuesSupported(realms.a)).toEqual(['EdDSA']);
+
+      // The rotation activates it rather than creating another key.
+      const rotation = await realms.signer.rotateTokenKeys(realms.a.id);
+      expect(rotation.activated).toEqual([{ kid: nextKid, algorithm: 'EdDSA' }]);
+      expect(rotation.retired.map((key) => key.kid)).toEqual([oldKid]);
+
+      const after = await sign();
+      expect(header(after)['kid']).toBe(nextKid);
+      await expect(
+        jwtVerify(after, createLocalJWKSet(cached), { issuer: ISSUER_A })
+      ).resolves.toBeDefined();
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, after)).resolves.toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a second next key of the same algorithm, and changes nothing', async () => {
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      await realms.signer.prepublishTokenKeys(realms.a.id);
+      const before = kidsOf(await jwksOf(app, realms.a));
+      await expect(realms.signer.prepublishTokenKeys(realms.a.id)).rejects.toThrow(
+        'The realm already has a next EdDSA key'
+      );
+      expect(kidsOf(await jwksOf(app, realms.a))).toEqual(before);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('advertises RS256 for ID tokens only once its pre-published key is active', async () => {
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const { prepublished } = await realms.signer.prepublishTokenKeys(realms.a.id, {
+        algorithm: 'RS256',
+      });
+      const [{ kid: rs256Kid }] = prepublished;
+      expect(kidsOf(await jwksOf(app, realms.a))).toContain(rs256Kid);
+      expect(await app.jwtUtils.getIdTokenSigningAlgValuesSupported(realms.a)).toEqual(['EdDSA']);
+
+      const rotation = await realms.signer.rotateTokenKeys(realms.a.id, { algorithm: 'RS256' });
+      expect(rotation.activated).toEqual([{ kid: rs256Kid, algorithm: 'RS256' }]);
+      expect(rotation.retired).toEqual([]);
+      expect(await app.jwtUtils.getIdTokenSigningAlgValuesSupported(realms.a)).toEqual([
+        'RS256',
+        'EdDSA',
+      ]);
+      // Realm B never had an RS256 key.
+      expect(await app.jwtUtils.getIdTokenSigningAlgValuesSupported(realms.b)).toEqual(['EdDSA']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('pre-publishes and activates both keys of a hybrid pair together', async () => {
+    const realms = await createRealms({ hybridSigning: true, refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms, {
+      hybridSigningEnabled: true,
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      const { prepublished } = await realms.signer.prepublishTokenKeys(realms.a.id);
+      expect(prepublished.map((key) => key.algorithm)).toEqual(['EdDSA', 'ML-DSA-65']);
+      expect(kidsOf(await jwksOf(app, realms.a))).toEqual(
+        expect.arrayContaining(prepublished.map((key) => key.kid))
+      );
+
+      const rotation = await realms.signer.rotateTokenKeys(realms.a.id);
+      expect(rotation.activated).toEqual(prepublished);
+      const after = await app.jwtUtils.signHybridAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      expect(header(after.token)).toMatchObject({
+        kid: prepublished[0].kid,
+        pqc_kid: prepublished[1].kid,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses to activate a next key that would split the active hybrid pair', async () => {
+    const realms = await createRealms({ hybridSigning: true, refreshIntervalMs: 0 });
+    const { prepublished } = await realms.signer.prepublishTokenKeys(realms.a.id);
+    // Only the EdDSA half is still `next`, as for a key created without
+    // hybrid signing: its activation would leave the old ML-DSA-65 key active.
+    realms.signer.setKeyStatus(realms.a.id, prepublished[1].kid, 'retired');
+    const before = await realms.signer.signer.getVerificationKeys(
+      'local',
+      realms.a.id,
+      'token_signing'
+    );
+    await expect(realms.signer.rotateTokenKeys(realms.a.id)).rejects.toThrow(
+      'the rotation would split the active pair'
+    );
+    expect(
+      await realms.signer.signer.getVerificationKeys('local', realms.a.id, 'token_signing')
+    ).toEqual(before);
+  });
+});
+
 describe('the plugin holds no private key (#491)', () => {
   it('takes no key option and imports only public verification keys', async () => {
     const realms = await createRealms({ rs256: true });
