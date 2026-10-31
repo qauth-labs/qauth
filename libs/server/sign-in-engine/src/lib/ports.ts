@@ -148,8 +148,10 @@ export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 /**
  * One audit record of a round: what happened to one step. It never holds a
  * password, a code or the identifier: the person is named by the user id once
- * a factor resolved one, and by the identifier's keyed HMAC before. Exactly
- * one of the two is set.
+ * a factor fixed the transaction's subject, and by the identifier's keyed
+ * HMAC before. At most one of the two is set; a step refused before the
+ * transaction holds any identifier (a bot challenge, a discoverable passkey)
+ * names nobody.
  */
 export type SignInAuditRecord = {
   /** `passed`: the step's answer was accepted. `refused`: it was not. `ended`: the transaction ended. */
@@ -160,6 +162,7 @@ export type SignInAuditRecord = {
 } & (
   | { readonly userId: string; readonly identifierHmac?: undefined }
   | { readonly identifierHmac: string; readonly userId?: undefined }
+  | { readonly userId?: undefined; readonly identifierHmac?: undefined }
 );
 
 /** Where a round's audit records go: the transport's event writer, in order. A write that fails fails the round. */

@@ -24,7 +24,7 @@ import {
 import type { LadderHook, SignInHooks } from './hooks';
 import { type Clock, type MfaPolicy, type SignInAccount, SYSTEM_CLOCK } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
-import type { AnyStepHandler, StepHandler } from './steps/handler';
+import type { AnyStepHandler, StepHandler, StepVerdict } from './steps/handler';
 import type { SignInTransaction } from './transaction';
 
 const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
@@ -1006,6 +1006,114 @@ describe('what the review of #614 pinned', () => {
     const next = context();
     await built.engine.advance(result.transaction as SignInTransaction, null, next);
     expect(next.records).toEqual([]);
+  });
+});
+
+describe('what the second review of #614 pinned', () => {
+  const discoverablePasskey = (verify: () => Promise<StepVerdict>): AnyStepHandler =>
+    ({
+      ...fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER),
+      verify,
+    }) as AnyStepHandler;
+
+  it('ends the transaction on another user’s proof, even when that user is disabled', async () => {
+    const passkey = discoverablePasskey(async () => ({
+      kind: 'proved',
+      account: { userId: OTHER_USER, enabled: false, verified: true },
+    }));
+    const built = build({ [IDENTIFIER]: kindAccount('passwordAndPasskey') }, { steps: [passkey] });
+    const { second } = await signIn(built, PASSWORD);
+    expect(second).toMatchObject({ kind: 'step', offer: { current: { step: 'webauthn_get' } } });
+    const ctx = context();
+    const result = await built.engine.advance(
+      second.transaction as SignInTransaction,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      ctx
+    );
+    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(ctx.records).toEqual([
+      { outcome: 'ended', step: 'webauthn_get', reason: 'subject_mismatch', userId: USER },
+    ]);
+  });
+
+  it('audits a factor refused before any identifier, naming nobody', async () => {
+    const passkey = discoverablePasskey(async () => ({
+      kind: 'refused',
+      error: 'invalid_credentials',
+      audit: { reason: 'invalid_credentials' },
+    }));
+    const built = build({}, { steps: [passkey] });
+    const ctx = context();
+    const result = await built.engine.advance(
+      null,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      ctx
+    );
+    // A refused preferred step stays preferred.
+    expect(result).toMatchObject({
+      kind: 'step',
+      offer: {
+        current: { step: 'webauthn_get', error: 'invalid_credentials' },
+        alternatives: [{ step: 'password' }, { step: 'identifier' }],
+        required: false,
+      },
+    });
+    expect(ctx.records).toEqual([
+      { outcome: 'refused', step: 'webauthn_get', reason: 'invalid_credentials' },
+    ]);
+  });
+
+  it('offers the password with the identifier step when the transport cannot serve the passkey', async () => {
+    const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER);
+    const built = build(undefined, { steps: [passkey] });
+    const result = await built.engine.advance(
+      null,
+      null,
+      context({ serves: ['identifier', 'password'] })
+    );
+    expect(result).toMatchObject({
+      kind: 'step',
+      offer: {
+        current: { step: 'password' },
+        alternatives: [{ step: 'identifier' }],
+        required: false,
+      },
+    });
+  });
+
+  it('ends a transaction whose subject has no identifier unless a discoverable factor proved it', async () => {
+    const built = build();
+    const forged = {
+      v: 1,
+      subject: USER,
+      verified: [{ step: 'password', params: {} }],
+      authTime: 1,
+    } as unknown as SignInTransaction;
+    expect(await built.engine.advance(forged, null, context())).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+    });
+  });
+
+  it('keeps no identifier from a round that failed before its record was written', async () => {
+    let failing = true;
+    const built = build(undefined, {
+      identifierDigest: async (input) => {
+        if (failing) throw new Error('signer down');
+        return fakeIdentifierDigest(input);
+      },
+    });
+    const first = await built.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+    expect(first).toEqual({
+      kind: 'refused',
+      reason: 'unavailable',
+      transaction: { v: 1, verified: [] },
+    });
+    failing = false;
+    const ctx = context({ loginHint: IDENTIFIER });
+    await built.engine.advance(first.transaction as SignInTransaction, null, ctx);
+    expect(ctx.records).toMatchObject([{ outcome: 'passed', step: 'identifier' }]);
   });
 });
 

@@ -276,6 +276,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const found = stored === null ? newSignInTransaction() : readSignInTransaction(stored);
     // A transaction the engine did not write ends: nothing in it can be trusted.
     if (found === null) return TRANSACTION_ENDED;
+    // A subject without an identifier comes only from a discoverable factor.
+    if (
+      found.subject !== undefined &&
+      found.identifier === undefined &&
+      !found.verified.some((step) => handlers.byStep.get(step.step)?.discoverable === true)
+    ) {
+      return TRANSACTION_ENDED;
+    }
     const state: RoundState = { transaction: found };
     try {
       return await rules(state, answer, context);
@@ -334,8 +342,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     /**
      * Write one audit record. The person is named by the transaction's
      * subject once a factor fixed one, by the identifier's HMAC before; with
-     * neither, nobody can be named and nothing is written (a bot challenge or
-     * a discoverable factor refused before any identifier).
+     * neither (a bot challenge or a discoverable factor refused before any
+     * identifier), the record names nobody, and is still written.
      */
     const audit = async (
       outcome: SignInAuditRecord['outcome'],
@@ -348,7 +356,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (subject !== undefined) record = { ...base, userId: subject };
       else if (identifier !== undefined)
         record = { ...base, identifierHmac: await identifierHmac() };
-      else return;
+      else record = base;
       await context.audit(Object.freeze(record));
     };
 
@@ -437,6 +445,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const refused = all.find((offered) => offered.step === step);
       if (refused === undefined) throw new Error(`sign-in engine: ${step} was not offered`);
       const others = all.filter((offered) => offered.step !== step);
+      // A preferred step refused stays preferred: its alternatives may still replace it.
+      const preferred = offer.required === false && offer.current.step === step;
       return Object.freeze({
         current: Object.freeze({
           step: refused.step,
@@ -445,6 +455,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         alternatives: Object.freeze(
           others.map((offered) => Object.freeze({ step: offered.step, params: offered.params }))
         ) as StepOffer['alternatives'],
+        ...(preferred && others.length > 0 ? { required: false } : {}),
       });
     };
     const refuseAnswer = async (
@@ -469,15 +480,16 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       account: ProvedAccount,
       read: ReadAnswer
     ): Promise<RoundResult | null> => {
+      // Another user's proof ends the transaction, whatever that user's state.
+      const { subject } = state.transaction;
+      if (subject !== undefined && subject !== account.userId) {
+        return ended(read.step, 'subject_mismatch');
+      }
       if (!account.enabled) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_disabled');
       }
       if (!account.verified && deps.requireVerifiedAccount) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'email_not_verified');
-      }
-      const { subject } = state.transaction;
-      if (subject !== undefined && subject !== account.userId) {
-        return ended(read.step, 'subject_mismatch');
       }
       state.transaction = {
         ...state.transaction,
@@ -599,7 +611,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return invalidAnswer();
       }
     }
-    const heldBefore = state.transaction.identifier;
+    const beforeIdentifier = state.transaction;
+    const heldBefore = beforeIdentifier.identifier;
     for (const { identifier, step } of brought) {
       if (state.transaction.identifier === undefined) {
         // A discoverable factor fixed the subject without an identifier: one
@@ -618,10 +631,20 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // a discoverable first factor before it, with the identifier step and
         // the other first factors beside it (ADR-017 Decision 4).
         const discoverable = handlers.discoverable.filter((handler) => served.has(handler.step));
-        if (discoverable.length === 0) return offerStep(await offerOf([handlers.identifier]));
         const others = handlers.firstFactors.filter(
           (handler) => handler.discoverable !== true && served.has(handler.step)
         );
+        if (discoverable.length === 0) {
+          // No discoverable factor is registered (this issue's shape): the
+          // identifier step alone. One is registered, but this transport cannot
+          // serve it: the password it can serve, with the identifier step
+          // beside it (ADR-017 Decision 4, amended 2026-10-31).
+          const steps =
+            handlers.discoverable.length === 0
+              ? [handlers.identifier]
+              : [...others, handlers.identifier];
+          return offerStep(await offerOf(steps, { preferred: true }));
+        }
         // A password offered here is answered with its login_hint, which
         // the identifier rule above has already taken.
         const offer = await offerOf([...discoverable, ...others, handlers.identifier], {
@@ -633,25 +656,38 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         if (result !== null) return result;
       } else {
         if (heldBefore === undefined) {
-          if (turn.pending?.name === 'identifier') {
-            // The identifier step was the one asked for: its answer is read by
-            // the grammar like any other, and its handler confirms it.
-            const offer = await offerOf([handlers.identifier]);
-            const read = readPending(offer);
-            if (read === null) return invalidAnswer();
-            turn.pending = null;
-            const verdict = await handlers.identifier.verify(stepRound(), {
-              params: {},
-              answer: read.answer as { login_hint: string },
-            });
-            if (
-              verdict.kind !== 'identified' ||
-              verdict.identifier !== state.transaction.identifier
-            ) {
-              throw new Error('sign-in engine: the identifier step disagrees with the identifier');
+          // The identifier is fixed together with its audit record: a round
+          // that fails before the record is written keeps no identifier, so
+          // the next round records it.
+          try {
+            if (turn.pending?.name === 'identifier') {
+              // The identifier step was the one asked for: its answer is read
+              // by the grammar like any other, and its handler confirms it.
+              const offer = await offerOf([handlers.identifier]);
+              const read = readPending(offer);
+              if (read === null) {
+                state.transaction = beforeIdentifier;
+                return invalidAnswer();
+              }
+              turn.pending = null;
+              const verdict = await handlers.identifier.verify(stepRound(), {
+                params: {},
+                answer: read.answer as { login_hint: string },
+              });
+              if (
+                verdict.kind !== 'identified' ||
+                verdict.identifier !== state.transaction.identifier
+              ) {
+                throw new Error(
+                  'sign-in engine: the identifier step disagrees with the identifier'
+                );
+              }
             }
+            await audit('passed', 'identifier');
+          } catch (error) {
+            state.transaction = beforeIdentifier;
+            throw error;
           }
-          await audit('passed', 'identifier');
         }
         // The same identifier again: nothing more to do with that answer.
         if (turn.pending?.name === 'identifier') turn.pending = null;

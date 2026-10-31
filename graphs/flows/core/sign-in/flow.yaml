@@ -61,7 +61,13 @@ scope:
     - 'an answer to a step the engine did not ask for, a password_reset answer included, is ignored with its
       login_hint; only the identifier and password answers carry one'
     - "a failure of the password verifier or of the identifier key refuses the round as unavailable, alike for every
-      identifier; a failure to settle the ladder's reservation is reported and changes no answer"
+      identifier; a failure to settle the ladder's reservation is reported and changes no answer; a failure to write
+      the identifier's audit record leaves the identifier unfixed, so the next round records it"
+    - "a later round of a transaction whose subject is fixed reads the account again: one that is gone, belongs to
+      another user or was disabled since ends the transaction, audited under the subject; another user's proof does
+      too, whatever that user's state"
+    - 'a step refused before the transaction holds any identifier (a bot challenge, a discoverable passkey from #651)
+      is audited naming nobody'
 
 context:
   # The transport's authorization request carries a login_hint. It is frozen at round 0, so every round sees the same.
@@ -341,8 +347,9 @@ states:
   choosingFirstFactor:
     title: Pick the first factor (rule 7)
     description: >-
-      The password in this issue; a passkey comes before it from #651. An answer is verified only when its step is
-      the one the engine asks for next: here, a password answer.
+      The password in this issue, required; from #651 a passkey is offered beside it (ADR-017 Decision 4: the same
+      password-required shape for every account, with webauthn_get offered). An answer is verified only when its step
+      is the one the engine asks for next: here, a password answer.
     always:
       - guard: passwordAnswered
         target: reservingAttempt
@@ -579,6 +586,7 @@ states:
       body:
         transaction: null
         subject: "the account's user id"
+        identifier: "the transaction's identifier, normalised"
         amr: '["pwd"], from the step grammar''s transactionAmr over the verified steps'
         authTime: 'when the password was verified, in epoch milliseconds'
 

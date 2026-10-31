@@ -41,14 +41,15 @@ export function createCookieSecretIdentifierDigest(
   return async ({ realmId, identifier }) => {
     const { current, previous } = await signer.getCookieSecrets(caller, realmId);
     previous?.secret.fill(0);
-    const key = Buffer.from(
-      hkdfSync('sha256', current.secret, Buffer.alloc(0), IDENTIFIER_HMAC_LABEL, 32)
-    );
-    current.secret.fill(0);
-    const digest = createHmac('sha256', key)
-      .update(`${realmId}\u0000${identifier}`)
-      .digest('base64url');
-    key.fill(0);
-    return digest;
+    let key: Buffer | undefined;
+    try {
+      key = Buffer.from(
+        hkdfSync('sha256', current.secret, Buffer.alloc(0), IDENTIFIER_HMAC_LABEL, 32)
+      );
+      return createHmac('sha256', key).update(`${realmId}\u0000${identifier}`).digest('base64url');
+    } finally {
+      current.secret.fill(0);
+      key?.fill(0);
+    }
   };
 }

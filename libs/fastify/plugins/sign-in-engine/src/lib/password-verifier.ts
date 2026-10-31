@@ -21,7 +21,8 @@ export interface PasswordVerifierLog {
  * random secret nobody holds, made once by the hasher itself, so its cost
  * parameters are the ones real hashes are stored with. Argon2id runs on the
  * libuv thread pool, one queue for the whole process, so a miss must queue
- * for and cost what a hit does.
+ * for and cost what a hit does. The dummy hash is made when the verifier is
+ * built, so the first miss after a start costs no more than a hit.
  *
  * The two paths fail alike, so a failure tells no account from another: the
  * verification itself throws the same way on both (an outage the engine
@@ -34,13 +35,21 @@ export function createArgon2PasswordVerifier(
   hasher: Argon2Hasher,
   log: PasswordVerifierLog
 ): PasswordVerifier {
-  let dummyHash: Promise<string> | undefined;
+  const makeDummyHash = (): Promise<string> => {
+    const made = hasher.hashPassword(randomBytes(32).toString('hex'));
+    // Awaited, and its failure handled, by the first miss.
+    made.catch(() => undefined);
+    return made;
+  };
+  // Made now, so the first miss after the server starts costs one
+  // verification, as every other miss does, and not a hash on top.
+  let dummyHash: Promise<string> | undefined = makeDummyHash();
   return Object.freeze({
     verify: (hash: string, presented: string) => hasher.verifyPassword(hash, presented),
     async verifyDecoy(presented: string): Promise<void> {
       let hash: string;
       try {
-        dummyHash ??= hasher.hashPassword(randomBytes(32).toString('hex'));
+        dummyHash ??= makeDummyHash();
         hash = await dummyHash;
       } catch (err) {
         dummyHash = undefined;

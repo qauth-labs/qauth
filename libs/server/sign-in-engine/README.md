@@ -104,8 +104,10 @@ authentication, run before the call). The first unmet rule produces the answer.
 
 Each processed step writes one record through the round's `audit` sink: `passed`, `refused` or
 `ended`, the step, the reason, and the person by the transaction's subject once a factor fixed one,
-by the identifier's keyed HMAC before; a refused answer never names a user it happened to resolve. A record never holds a password, a code or the identifier. A sink that fails
-fails the round. The adapters map them onto `user.sign_in_step_passed` and `user.sign_in_failed`.
+by the identifier's keyed HMAC before; a refused answer never names a user it happened to resolve,
+and a step refused before the transaction holds any identifier names nobody. A record never holds a
+password, a code or the identifier. A sink that fails fails the round. The adapters map them onto
+`user.sign_in_step_passed` and `user.sign_in_failed`.
 
 ## Adding a step
 
