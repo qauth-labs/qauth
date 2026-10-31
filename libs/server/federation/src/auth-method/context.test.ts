@@ -1,25 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSampleAuthMethod, SAMPLE_CONFIG } from '../../testing/sample-auth-method.fixture';
-import { createAuthMethodContext } from './context';
+import { type AuthMethodContextParts, createAuthMethodContext } from './context';
 import { AuthMethodConfigError } from './errors';
 
 /**
  * What a method is handed (ADR-019 Decision 12): its config, the egress client,
- * the signer role and a logger. These tests hand the builder the WHOLE objects a
- * host has (an egress client with its checks and counters, a signer with
- * decrypt and the cookie secrets, a logger with `child`, and stray handles) and
- * check that only the contract's members come out.
+ * the signer role and a logger. These tests hand the builder objects shaped like
+ * the WHOLE ones a host has (an egress client that takes a realm and caps, a
+ * signer whose calls name caller, realm and provider, with decrypt beside them,
+ * a logger with `child`) and check that only the contract's members come out,
+ * with the realm, the provider and the caller fixed by the host.
  */
-function wholeObjects() {
+function hostObjects() {
   const egress = {
-    request: vi.fn(async () => ({ status: 200, headers: {}, body: new Uint8Array(), url: 'x' })),
+    request: vi.fn(async (_request: unknown) => ({
+      status: 200,
+      headers: {},
+      body: new Uint8Array(),
+      url: 'https://provider.example/token',
+    })),
     validateDestination: vi.fn(),
     counts: vi.fn(),
   };
   const signer = {
-    signClientAssertion: vi.fn(async () => 'a.b.c'),
-    getUpstreamJwks: vi.fn(async () => ({ keys: [] })),
+    signClientAssertion: vi.fn(async (_caller: string, _request: unknown) => 'a.b.c'),
+    getUpstreamJwks: vi.fn(async (_caller: string, _realmId: string, _providerId: string) => ({
+      keys: [{ kty: 'RSA' }],
+    })),
     decrypt: vi.fn(),
     encrypt: vi.fn(),
     signJws: vi.fn(),
@@ -36,22 +44,30 @@ function wholeObjects() {
   return { egress, signer, log };
 }
 
+function parts(overrides: Partial<AuthMethodContextParts> = {}) {
+  const host = hostObjects();
+  const all = {
+    config: SAMPLE_CONFIG,
+    origin: 'https://auth.example.com',
+    realmName: 'acme',
+    realmId: '0190a5c4-0000-7000-8000-000000000001',
+    providerId: 'oidc_sample',
+    signerCaller: 'api',
+    ...host,
+    ...overrides,
+  };
+  return { host, parts: all };
+}
+
 describe('createAuthMethodContext', () => {
   it('hands a method exactly its config, egress, signer, logger and route URLs', () => {
-    const { egress, signer, log } = wholeObjects();
-    const context = createAuthMethodContext(createSampleAuthMethod(), {
-      config: SAMPLE_CONFIG,
-      origin: 'https://auth.example.com',
-      egress,
-      signer,
-      log,
-    });
+    const { parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
 
     expect(Object.keys(context).sort()).toEqual(['config', 'egress', 'log', 'routeUrl', 'signer']);
     expect(Object.keys(context.egress)).toEqual(['request']);
     expect(Object.keys(context.signer).sort()).toEqual(['getUpstreamJwks', 'signClientAssertion']);
     expect(Object.keys(context.log).sort()).toEqual(['debug', 'error', 'info', 'warn']);
-    // Nothing reachable through the copies: no decrypt, no child logger, no pool.
     for (const value of [context, context.egress, context.signer, context.log]) {
       expect(Object.isFrozen(value)).toBe(true);
       expect(value).not.toHaveProperty('decrypt');
@@ -61,70 +77,124 @@ describe('createAuthMethodContext', () => {
     }
   });
 
-  it('calls through to the objects it was given', async () => {
-    const { egress, signer, log } = wholeObjects();
-    const context = createAuthMethodContext(createSampleAuthMethod(), {
-      config: SAMPLE_CONFIG,
-      origin: 'https://auth.example.com',
-      egress,
-      signer,
-      log,
-    });
+  it("passes on only the contract's egress members and adds the realm itself", async () => {
+    const { host, parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
+    // A method that tries to pick another realm, lift the caps or add a member.
     await context.egress.request({
-      method: 'GET',
-      url: 'https://provider.example/.well-known/openid-configuration',
-      purpose: 'upstream-discovery',
+      method: 'POST',
+      url: 'https://provider.example/token',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'code=x',
+      purpose: 'upstream-token',
       source: 'admin',
-    });
-    await context.signer.signClientAssertion({ audience: 'https://provider.example', claims: {} });
-    context.log.warn({ a: 1 }, 'message');
+      realm: 'other-realm',
+      limits: { maxResponseBytes: 1e12 },
+      extra: true,
+    } as never);
 
-    expect(egress.request).toHaveBeenCalledTimes(1);
-    expect(signer.signClientAssertion).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith({ a: 1 }, 'message');
+    expect(host.egress.request).toHaveBeenCalledTimes(1);
+    expect(host.egress.request.mock.calls[0]).toEqual([
+      {
+        method: 'POST',
+        url: 'https://provider.example/token',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'code=x',
+        purpose: 'upstream-token',
+        source: 'admin',
+        realm: 'acme',
+      },
+    ]);
   });
 
-  it('parses the config with the method schema and freezes it', () => {
-    const { egress, signer, log } = wholeObjects();
-    const context = createAuthMethodContext(createSampleAuthMethod(), {
-      config: { ...SAMPLE_CONFIG, unknownMember: 'dropped' },
-      origin: 'https://auth.example.com',
-      egress,
-      signer,
-      log,
-    });
+  it('refuses an egress method or source the contract does not name, without calling out', async () => {
+    const { host, parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
+    const base = { url: 'https://provider.example/', purpose: 'upstream-token' };
+    await expect(
+      context.egress.request({ ...base, method: 'DELETE', source: 'admin' } as never)
+    ).rejects.toThrow(TypeError);
+    await expect(
+      context.egress.request({ ...base, method: 'GET', source: 'client' } as never)
+    ).rejects.toThrow(TypeError);
+    await expect(
+      context.egress.request({ ...base, method: 'GET', source: 'end_user' } as never)
+    ).rejects.toThrow(TypeError);
+    expect(host.egress.request).not.toHaveBeenCalled();
+  });
+
+  it('signs for this realm, this provider and the host caller role only', async () => {
+    const { host, parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
+    await context.signer.signClientAssertion({
+      audience: 'https://provider.example',
+      claims: { exp: 1, jti: 'j' },
+      algorithm: 'ES256',
+      realmId: 'other-realm',
+      providerId: 'other-provider',
+    } as never);
+    await (context.signer.getUpstreamJwks as (...args: unknown[]) => Promise<unknown>)(
+      'local',
+      'other-realm',
+      'other-provider'
+    );
+
+    expect(host.signer.signClientAssertion.mock.calls[0]).toEqual([
+      'api',
+      {
+        realmId: '0190a5c4-0000-7000-8000-000000000001',
+        providerId: 'oidc_sample',
+        audience: 'https://provider.example',
+        claims: { exp: 1, jti: 'j' },
+        algorithm: 'ES256',
+      },
+    ]);
+    expect(host.signer.getUpstreamJwks.mock.calls[0]).toEqual([
+      'api',
+      '0190a5c4-0000-7000-8000-000000000001',
+      'oidc_sample',
+    ]);
+    await expect(
+      context.signer.signClientAssertion({ audience: 'x', claims: {}, algorithm: 'HS256' } as never)
+    ).rejects.toThrow(TypeError);
+  });
+
+  it('logs through the four levels with a fields object and a message only', () => {
+    const { host, parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
+    (context.log.warn as (...args: unknown[]) => void)({ a: 1 }, 'message', 'extra');
+    expect(host.log.warn.mock.calls[0]).toEqual([{ a: 1 }, 'message']);
+  });
+
+  it('parses the config with the method schema, and freezes a copy', () => {
+    const config = { ...SAMPLE_CONFIG, unknownMember: 'dropped' };
+    const { parts: given } = parts({ config });
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
     expect(context.config).toEqual(SAMPLE_CONFIG);
     expect(Object.isFrozen(context.config)).toBe(true);
+    expect(Object.isFrozen(config)).toBe(false);
   });
 
   it('refuses a config the schema refuses, naming members and never their values', () => {
-    const { egress, signer, log } = wholeObjects();
+    const { parts: given } = parts({
+      config: { ...SAMPLE_CONFIG, clientSecret: '', tokenEndpoint: 'not a url' },
+    });
     try {
-      createAuthMethodContext(createSampleAuthMethod(), {
-        config: { ...SAMPLE_CONFIG, clientSecret: '', tokenEndpoint: 'not a url' },
-        origin: 'https://auth.example.com',
-        egress,
-        signer,
-        log,
-      });
+      createAuthMethodContext(createSampleAuthMethod(), given);
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(AuthMethodConfigError);
-      const issues = (error as AuthMethodConfigError).issues;
-      expect(issues).toEqual(['tokenEndpoint: invalid_format', 'clientSecret: too_small']);
+      expect((error as AuthMethodConfigError).issues).toEqual([
+        'tokenEndpoint: invalid_format',
+        'clientSecret: too_small',
+      ]);
       expect(JSON.stringify(error)).not.toContain('not a url');
     }
   });
 
   it("builds route URLs under the method's prefix on the realm origin, and nowhere else", () => {
-    const { egress, signer, log } = wholeObjects();
-    const context = createAuthMethodContext(createSampleAuthMethod({ type: 'oidc_corp' }), {
-      config: SAMPLE_CONFIG,
-      origin: 'https://auth.example.com',
-      egress,
-      signer,
-      log,
-    });
+    const { parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod({ type: 'oidc_corp' }), given);
     expect(context.routeUrl('/callback')).toBe(
       'https://auth.example.com/upstream/oidc_corp/callback'
     );
@@ -134,21 +204,13 @@ describe('createAuthMethodContext', () => {
   });
 
   it('refuses an origin that is not a bare origin', () => {
-    const { egress, signer, log } = wholeObjects();
     for (const origin of [
       'https://auth.example.com/',
       'https://auth.example.com/x',
       'auth.example.com',
     ]) {
-      expect(() =>
-        createAuthMethodContext(createSampleAuthMethod(), {
-          config: SAMPLE_CONFIG,
-          origin,
-          egress,
-          signer,
-          log,
-        })
-      ).toThrow();
+      const { parts: given } = parts({ origin });
+      expect(() => createAuthMethodContext(createSampleAuthMethod(), given)).toThrow();
     }
   });
 });

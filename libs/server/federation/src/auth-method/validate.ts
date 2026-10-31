@@ -73,7 +73,7 @@ export function authMethodProblems(value: unknown): string[] {
   const problems: string[] = [];
 
   problems.push(...contractProblems(method['contract']));
-  problems.push(...typeProblems(method['type']));
+  problems.push(...authMethodTypeProblems(method['type']));
 
   if (typeof method['id'] !== 'string' || !AUTH_METHOD_ID_PATTERN.test(method['id'])) {
     problems.push(`id must match ${AUTH_METHOD_ID_PATTERN.source}`);
@@ -153,7 +153,13 @@ function contractProblems(contract: unknown): string[] {
   return [`contract must be ${AUTH_METHOD_CONTRACT}`];
 }
 
-function typeProblems(type: unknown): string[] {
+/**
+ * The problems of `type` as an AuthMethod's type: its pattern, and not one of
+ * the reserved types.
+ *
+ * @experimental
+ */
+export function authMethodTypeProblems(type: unknown): string[] {
   if (typeof type !== 'string' || !AUTH_METHOD_TYPE_PATTERN.test(type)) {
     return [`type must match ${AUTH_METHOD_TYPE_PATTERN.source}`];
   }

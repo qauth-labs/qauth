@@ -15,7 +15,7 @@ import { AUTH_METHOD_CONTRACT, AUTH_METHOD_STABILITY } from './contract';
  * extractors show), and in the docs (the registry item names its page, which
  * `@qauth-labs/shared-stability` checks carries `experimental: true`).
  */
-const MODULE_DIRECTORY = __dirname;
+const MODULE_DIRECTORIES = [__dirname, join(__dirname, '..', 'testing')];
 
 /** Each exported declaration of a module, with the doc comment right above it. */
 function exportedDeclarations(source: string): { name: string; doc: string }[] {
@@ -41,19 +41,22 @@ function exportedDeclarations(source: string): { name: string; doc: string }[] {
 }
 
 describe('the AuthMethod contract is marked experimental', () => {
-  const files = readdirSync(MODULE_DIRECTORY).filter(
-    (file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && file !== 'index.ts'
+  const files = MODULE_DIRECTORIES.flatMap((directory) =>
+    readdirSync(directory)
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts') && file !== 'index.ts')
+      .map((file) => join(directory, file))
   );
 
   it('finds the modules it is asserting about', () => {
-    expect(files.sort()).toEqual([
-      'auth-method.interface.ts',
-      'context.ts',
-      'contract-kit.ts',
-      'contract.ts',
-      'engine.ts',
-      'errors.ts',
-      'validate.ts',
+    expect(files.map((file) => file.slice(file.lastIndexOf('src'))).sort()).toEqual([
+      'src/auth-method/auth-method.interface.ts',
+      'src/auth-method/context.ts',
+      'src/auth-method/contract.ts',
+      'src/auth-method/engine.ts',
+      'src/auth-method/errors.ts',
+      'src/auth-method/validate.ts',
+      'src/testing/contract-kit.ts',
+      'src/testing/fetch-guard.ts',
     ]);
   });
 
@@ -61,9 +64,7 @@ describe('the AuthMethod contract is marked experimental', () => {
     const unmarked: string[] = [];
     let declarations = 0;
     for (const file of files) {
-      for (const { name, doc } of exportedDeclarations(
-        readFileSync(join(MODULE_DIRECTORY, file), 'utf8')
-      )) {
+      for (const { name, doc } of exportedDeclarations(readFileSync(file, 'utf8'))) {
         declarations += 1;
         if (!/@experimental\b/.test(doc)) unmarked.push(`${file}: ${name}`);
       }

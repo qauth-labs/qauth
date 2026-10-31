@@ -4,7 +4,12 @@ import {
 } from '@qauth-labs/shared-errors';
 
 import type { AuthMethod } from '../auth-method/auth-method.interface';
-import { assertAuthMethod, declaresAuthMethodContract } from '../auth-method/validate';
+import { AuthMethodContractError } from '../auth-method/errors';
+import {
+  assertAuthMethod,
+  authMethodTypeProblems,
+  declaresAuthMethodContract,
+} from '../auth-method/validate';
 import type { CredentialProvider } from './credential-provider.interface';
 
 /**
@@ -43,6 +48,14 @@ export interface ProviderRegistry {
    * @experimental
    */
   resolveAuthMethod(type: string): AuthMethod;
+  /**
+   * The AuthMethod registered for `type`, or `undefined`: for a type that
+   * comes from a request, such as the provider a person picked, where an
+   * unknown type is the request's fault and not a server invariant.
+   *
+   * @experimental
+   */
+  findAuthMethod(type: string): AuthMethod | undefined;
   /** Whether a provider is registered for `type`. */
   has(type: string): boolean;
   /**
@@ -77,12 +90,20 @@ export function createProviderRegistry(
       // The contract first, so a broken method reports its own problems
       // rather than a clash its broken `type` may cause.
       const method = declaresAuthMethodContract(provider) ? provider : undefined;
-      if (method !== undefined) assertAuthMethod(method);
-      if (providers.has(provider.type)) {
-        throw new ProviderAlreadyRegisteredError(provider.type);
+      // Read once: the type checked is the type the entry is stored under.
+      const type = provider.type;
+      if (method !== undefined) {
+        assertAuthMethod(method);
+        const typeProblems = authMethodTypeProblems(type);
+        if (typeProblems.length > 0) {
+          throw new AuthMethodContractError(`The AuthMethod ${String(type)}`, typeProblems);
+        }
       }
-      providers.set(provider.type, provider);
-      if (method !== undefined) methods.set(method.type, method as AuthMethod);
+      if (providers.has(type)) {
+        throw new ProviderAlreadyRegisteredError(type);
+      }
+      providers.set(type, provider);
+      if (method !== undefined) methods.set(type, method as AuthMethod);
     },
     resolve(type: string): CredentialProvider {
       const provider = providers.get(type);
@@ -97,6 +118,9 @@ export function createProviderRegistry(
         throw new ProviderNotRegisteredError(type);
       }
       return method;
+    },
+    findAuthMethod(type: string): AuthMethod | undefined {
+      return methods.get(type);
     },
     has(type: string): boolean {
       return providers.has(type);

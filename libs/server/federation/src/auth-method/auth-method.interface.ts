@@ -33,15 +33,19 @@ import type {
  *    interaction and its flow cookie; it never reaches the browser.
  * 3. The provider sends the browser back to one of the method's callback
  *    routes, under `/upstream/<type>/`. The host takes the pending
- *    transaction (single use) and hands it to the route's handler, which
- *    checks the answer against it and returns an outcome.
+ *    transaction (single use). With none (no flow cookie, another
+ *    interaction, a replay) the host answers `transaction_mismatch` itself
+ *    and the method never runs. Otherwise the route's handler gets the
+ *    transaction, checks the answer against it (`state` first, before it
+ *    spends the code) and returns an outcome.
  * 4. The engine turns a `result` outcome into a `VerifiedIdentity` by calling
  *    `verify(result)`, checks it, and takes the attributes from
  *    `extractAttributes()`. Every attribute's `source` must equal `type`.
  *
  * `verify()` of an AuthMethod receives only what its own callback returned;
- * the engine calls it, and nothing else does. It still rejects anything that
- * is not such a result: the contract test kit checks that it does.
+ * the engine calls it, once per result, and nothing else does. It still
+ * rejects anything that is not such a result, a copy of a real result and a
+ * result already used among them: the contract test kit checks that it does.
  *
  * ## What a method is handed (ADR-019 Decision 12)
  *
@@ -142,8 +146,10 @@ export interface AuthMethodContext<TConfig = unknown> {
 }
 
 /**
- * The egress client as a method sees it. The host binds the realm, so an
- * allowlist entry of another realm never applies.
+ * The egress client as a method sees it. `createAuthMethodContext` builds it
+ * over the host's client: it passes on only the members below and adds the
+ * realm itself, so an allowlist entry of another realm never applies and a
+ * method cannot lift the client's caps.
  *
  * @experimental
  */
@@ -200,7 +206,8 @@ export interface AuthMethodEgressResponse {
 
 /**
  * The signer role as a method sees it: signatures and public keys, never a
- * key. The host binds the realm, the provider and the caller role, so a
+ * key. `createAuthMethodContext` binds the realm, the provider and the caller
+ * role, and passes on only the members below, so a
  * method cannot sign for another provider or another realm.
  *
  * @experimental
@@ -361,12 +368,12 @@ export interface AuthMethodRouteRequest {
 export interface AuthMethodCallbackRequest<TTransaction = unknown> extends AuthMethodRouteRequest {
   /**
    * The transaction `start()` returned for this method, which the request's
-   * flow cookie names, taken: a second request never sees it again.
-   * `undefined` when the request carries no flow cookie, its interaction has
-   * no pending transaction of this method, or it was taken already. A
-   * callback with no transaction must answer `transaction_mismatch`.
+   * flow cookie names, taken: a second request never sees it again. Always
+   * present: without one the host answers `transaction_mismatch` and never
+   * calls the handler. It may still belong to another start than the answer
+   * does, so the handler compares `state` before anything else.
    */
-  readonly transaction: TTransaction | undefined;
+  readonly transaction: TTransaction;
 }
 
 /**

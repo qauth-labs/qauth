@@ -17,6 +17,10 @@ function contextOf<TConfig>(method: AuthMethod<TConfig>): AuthMethodContext<TCon
   return createAuthMethodContext(method, {
     config: SAMPLE_CONFIG,
     origin: 'https://auth.example.com',
+    realmName: 'acme',
+    realmId: '0190a5c4-0000-7000-8000-000000000001',
+    providerId: method.type,
+    signerCaller: 'api',
     egress: { request: async (request) => sampleProviderEgress(request) },
     signer: {
       signClientAssertion: async () => 'a.b.c',
@@ -44,6 +48,17 @@ describe('startUpstreamStep', () => {
     expect(url.searchParams.get('state')).toBe((start.transaction as { state: string }).state);
     expect(Object.isFrozen(start)).toBe(true);
     expect(Object.isFrozen(start.transaction)).toBe(true);
+  });
+
+  it('answers the redirect as parsed, so what is sent is what was checked', async () => {
+    const method = withMembers({
+      start: async () => ({
+        redirectTo: ' https://provider.example/authorize?q=a b\n',
+        transaction: {},
+      }),
+    });
+    const start = await startUpstreamStep(method, contextOf(method), { uiLocales: [] });
+    expect(start.redirectTo).toBe('https://provider.example/authorize?q=a%20b');
   });
 
   it.each([
@@ -128,6 +143,21 @@ describe('completeUpstreamStep', () => {
       ],
     });
     expect(Object.isFrozen(completion)).toBe(true);
+    const identity = (completion as { identity: { rawClaims: object } }).identity;
+    expect(Object.isFrozen(identity.rawClaims)).toBe(true);
+  });
+
+  it('keeps tab and line breaks in an attribute value, as a postal address holds them', async () => {
+    const method = createSampleAuthMethod();
+    const extract = method.extractAttributes.bind(method);
+    const lenient = withMembers({
+      verify: method.verify.bind(method),
+      extractAttributes: (identity: Parameters<typeof extract>[0]) =>
+        extract(identity).map((attribute) => ({ ...attribute, attrValue: 'Street 1\r\n\tCity' })),
+    });
+    await expect(completeUpstreamStep(lenient, await signedIn(method))).resolves.toMatchObject({
+      kind: 'identity',
+    });
   });
 
   it('passes declined and failed outcomes through', async () => {
@@ -168,6 +198,18 @@ describe('completeUpstreamStep', () => {
     ['a control character', { externalSub: 'a\u0000b', assuranceLevel: 'low', rawClaims: {} }],
     ['an unknown level', { externalSub: 's', assuranceLevel: 'maximal', rawClaims: {} }],
     ['claims that are a list', { externalSub: 's', assuranceLevel: 'low', rawClaims: [] }],
+    [
+      'claims holding a function',
+      { externalSub: 's', assuranceLevel: 'low', rawClaims: { f: () => 1 } },
+    ],
+    [
+      'claims holding a BigInt',
+      { externalSub: 's', assuranceLevel: 'low', rawClaims: { n: BigInt(1) } },
+    ],
+    [
+      'claims over the cap',
+      { externalSub: 's', assuranceLevel: 'low', rawClaims: { big: 'x'.repeat(64 * 1024) } },
+    ],
     ['no object', 'person'],
   ])('refuses an identity with %s', async (_label, identity) => {
     const method = withMembers({ verify: async () => identity });
@@ -182,6 +224,8 @@ describe('completeUpstreamStep', () => {
     ['a key outside its pattern', { attrKey: 'Email' }],
     ['a value that is not a string', { attrValue: 1 }],
     ['a long value', { attrValue: 'v'.repeat(8193) }],
+    ['a NUL in its value', { attrValue: `a${String.fromCharCode(0)}b` }],
+    ['an escape in its value', { attrValue: `a${String.fromCharCode(0x1b)}[31m` }],
     ['a verified flag that is not a boolean', { verified: 'yes' }],
     ['an invalid expiry', { expiresAt: new Date(Number.NaN) }],
   ])('refuses an attribute with %s', async (_label, change) => {

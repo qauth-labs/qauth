@@ -13,6 +13,7 @@ import {
   AUTH_METHOD_ATTRIBUTE_KEY_PATTERN,
   MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH,
   MAX_AUTH_METHOD_EXTERNAL_SUB_LENGTH,
+  MAX_AUTH_METHOD_RAW_CLAIMS_BYTES,
   MAX_UPSTREAM_REDIRECT_LENGTH,
   MAX_UPSTREAM_TRANSACTION_BYTES,
   UPSTREAM_FAILURE_REASONS,
@@ -33,6 +34,14 @@ import { AuthMethodFaultError } from './errors';
  */
 
 const ASSURANCE_LEVELS: readonly AssuranceLevel[] = ['low', 'substantial', 'high'];
+
+/**
+ * A control character an attribute value may not hold: NUL (which Postgres
+ * `text` refuses) and the other C0 controls and DEL, but tab, line feed and
+ * carriage return, which a postal address may hold.
+ */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const VALUE_CONTROL_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
 /** A C0 or C1 control character, or DEL. */
 // eslint-disable-next-line no-control-regex -- matching control characters is the point
@@ -104,7 +113,8 @@ export async function startUpstreamStep<TConfig, TTransaction>(
     );
   }
   return Object.freeze({
-    redirectTo: redirectTo as string,
+    // The URL as parsed, so what the engine sends is what it checked.
+    redirectTo: new URL(redirectTo as string).href,
     transaction: stored as TTransaction,
   });
 }
@@ -198,9 +208,14 @@ export function upstreamRedirectProblem(value: unknown): string | undefined {
  * @experimental
  */
 export function storableTransaction(value: unknown): unknown {
+  return frozenJsonCopy(value, MAX_UPSTREAM_TRANSACTION_BYTES);
+}
+
+/** A frozen copy of `value` when it is JSON data of at most `maxBytes`; `undefined` otherwise. */
+function frozenJsonCopy(value: unknown, maxBytes: number): unknown {
   if (!isJsonData(value, 0)) return undefined;
   const json = JSON.stringify(value);
-  if (Buffer.byteLength(json, 'utf8') > MAX_UPSTREAM_TRANSACTION_BYTES) return undefined;
+  if (Buffer.byteLength(json, 'utf8') > maxBytes) return undefined;
   return deepFreeze(JSON.parse(json) as unknown);
 }
 
@@ -241,13 +256,19 @@ function checkedIdentity(type: string, identity: unknown): VerifiedIdentity {
   if (!(ASSURANCE_LEVELS as readonly unknown[]).includes(assuranceLevel)) {
     throw fault(`an assuranceLevel outside ${ASSURANCE_LEVELS.join(', ')}`);
   }
-  if (typeof rawClaims !== 'object' || rawClaims === null || Array.isArray(rawClaims)) {
-    throw fault('rawClaims that are not an object');
+  const claims =
+    typeof rawClaims === 'object' && rawClaims !== null && !Array.isArray(rawClaims)
+      ? frozenJsonCopy(rawClaims, MAX_AUTH_METHOD_RAW_CLAIMS_BYTES)
+      : undefined;
+  if (claims === undefined) {
+    throw fault(
+      `rawClaims that are not an object of JSON data of at most ${MAX_AUTH_METHOD_RAW_CLAIMS_BYTES} bytes`
+    );
   }
   return Object.freeze({
     externalSub,
     assuranceLevel: assuranceLevel as AssuranceLevel,
-    rawClaims: rawClaims as Record<string, unknown>,
+    rawClaims: claims as Record<string, unknown>,
   });
 }
 
@@ -275,10 +296,11 @@ function checkedAttributes(type: string, attributes: unknown): readonly UserAttr
       }
       if (
         typeof attrValue !== 'string' ||
-        attrValue.length > MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH
+        attrValue.length > MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH ||
+        VALUE_CONTROL_CHARACTER.test(attrValue)
       ) {
         throw fault(
-          `an attribute [${index}] whose value is not a string of at most ${MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH} characters`
+          `an attribute [${index}] whose value is not a string of at most ${MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH} characters without control characters other than tab and line breaks`
         );
       }
       if (typeof verified !== 'boolean') {

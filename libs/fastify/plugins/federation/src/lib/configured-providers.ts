@@ -103,6 +103,8 @@ export interface ConfiguredProvidersOptions {
    * Optional, like {@link provisionedVerifierMaterial} and for the same
    * reason: leaving it out is the closed answer, no method beyond the
    * built-in ones.
+   *
+   * @experimental
    */
   authMethods?: readonly AuthMethod[];
 

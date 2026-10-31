@@ -23,11 +23,12 @@ import { federationPlugin } from './federation-plugin';
  * contract's own sample and its kit are tested in `server-federation`.
  */
 
-const callbackHandle = vi.fn(async (request: { transaction: unknown; query: unknown }) =>
-  request.transaction === undefined
-    ? ({ kind: 'failed', reason: 'transaction_mismatch' } as const)
-    : ({ kind: 'result', result: { query: request.query } } as const)
-);
+// A careless callback: it hands back a result for anything. The host's own
+// checks are what these tests are about.
+const callbackHandle = vi.fn(async (request: { transaction: unknown; query: unknown }) => ({
+  kind: 'result' as const,
+  result: { query: request.query },
+}));
 
 function method(type = 'oidc_corp', routes?: readonly AuthMethodRoute[]): AuthMethod {
   return {
@@ -177,6 +178,57 @@ describe('AuthMethod routes', () => {
     });
   });
 
+  it('answers transaction_mismatch itself when no transaction is pending, and never runs the method', async () => {
+    const routeHost = host();
+    routeHost.takeTransaction.mockResolvedValue(undefined);
+    const booted = await boot([method()], routeHost);
+
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: '/upstream/oidc_corp/callback?code=attacker&state=forged',
+    });
+
+    expect(response.json()).toEqual({ handed: { kind: 'failed', reason: 'transaction_mismatch' } });
+    expect(callbackHandle).not.toHaveBeenCalled();
+    expect(routeHost.contextFor).not.toHaveBeenCalled();
+  });
+
+  it('hands a POST callback only a urlencoded form, never a JSON body', async () => {
+    const routes: AuthMethodRoute[] = [
+      { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
+      { kind: 'callback', method: 'POST', path: '/post', handle: callbackHandle },
+    ];
+    const booted = await boot([method('oidc_corp', routes)]);
+    await booted.app.inject({
+      method: 'POST',
+      url: '/upstream/oidc_corp/post',
+      headers: { 'content-type': 'application/json' },
+      payload: { code: 'c1', state: 's1' },
+    });
+    await booted.app.inject({
+      method: 'POST',
+      url: '/upstream/oidc_corp/post',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'code=c2&state=s2',
+    });
+    expect(
+      callbackHandle.mock.calls.map(([request]) => (request as unknown as { form: unknown }).form)
+    ).toEqual([{}, { code: 'c2', state: 's2' }]);
+  });
+
+  it('drops parameters past the caps', async () => {
+    const booted = await boot([method()]);
+    const many = Array.from({ length: 80 }, (_, i) => `p${i}=v`).join('&');
+    await booted.app.inject({
+      method: 'GET',
+      url: `/upstream/oidc_corp/callback?long=${'x'.repeat(8193)}&${many}`,
+    });
+    const [request] = callbackHandle.mock.calls[0];
+    const query = (request as { query: Record<string, unknown> }).query;
+    expect(query['long']).toBeUndefined();
+    expect(Object.keys(query)).toHaveLength(64);
+  });
+
   it("bounces a form_post to the method's own GET route on the same origin, with no transaction taken", async () => {
     const routeHost = host();
     const booted = await boot([method()], routeHost);
@@ -200,12 +252,14 @@ describe('AuthMethod routes', () => {
     ['a path outside the prefix', { to: '/../../oauth/authorize', query: {} }],
     ['a route the method does not have', { to: '/elsewhere', query: {} }],
     ['its own POST route', { to: '/start', query: {} }],
+    ['its own GET bounce route', { to: '/loop', query: {} }],
     ['a query that is not strings', { to: '/callback', query: { code: 1 } }],
     ['nothing', undefined],
   ])('never bounces to %s', async (_label, bounce) => {
     const routes: AuthMethodRoute[] = [
       { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
       { kind: 'bounce', method: 'POST', path: '/start', handle: async () => bounce as never },
+      { kind: 'bounce', method: 'GET', path: '/loop', handle: async () => bounce as never },
     ];
     const booted = await boot([method('oidc_corp', routes)]);
     const response = await booted.app.inject({ method: 'POST', url: '/upstream/oidc_corp/start' });

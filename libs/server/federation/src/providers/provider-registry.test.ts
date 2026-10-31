@@ -226,6 +226,29 @@ describe('AuthMethod entries (#599)', () => {
     }
   });
 
+  it('finds a method by a type from a request without throwing for an unknown one', () => {
+    const method = createSampleAuthMethod({ type: 'oidc_sample' });
+    const registry = createProviderRegistry([createPasswordProvider(), method]);
+    expect(registry.findAuthMethod('oidc_sample')).toBe(method);
+    expect(registry.findAuthMethod(PASSWORD_PROVIDER_TYPE)).toBeUndefined();
+    expect(registry.findAuthMethod('oidc_unknown')).toBeUndefined();
+  });
+
+  it('stores a method under the type it checked, even when its type getter shifts', () => {
+    for (const reads of [
+      ['wallet', 'oidc_x'],
+      ['oidc_x', 'wallet'],
+    ]) {
+      let read = 0;
+      const shifting = Object.defineProperty({ ...createSampleAuthMethod() }, 'type', {
+        get: () => reads[Math.min(read++, reads.length - 1)],
+      });
+      const registry = createProviderRegistry([createPasswordProvider()]);
+      expect(() => registry.register(shifting)).toThrow(AuthMethodContractError);
+      expect(registry.has(WALLET_PROVIDER_TYPE)).toBe(false);
+    }
+  });
+
   it('keeps WalletProvider a plain provider whose verify() still rejects', async () => {
     const wallet = createWalletProvider();
     const registry = createProviderRegistry([createPasswordProvider(), wallet]);

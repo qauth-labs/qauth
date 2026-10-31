@@ -230,6 +230,14 @@ export const MAX_UPSTREAM_REDIRECT_LENGTH = 8192;
 export const MAX_AUTH_METHOD_EXTERNAL_SUB_LENGTH = 255;
 
 /**
+ * The largest `rawClaims` a method's `verify()` may resolve, in bytes of its
+ * JSON form. The engine keeps a frozen copy.
+ *
+ * @experimental
+ */
+export const MAX_AUTH_METHOD_RAW_CLAIMS_BYTES = 64 * 1024;
+
+/**
  * An attribute key a method may extract: lower-case ASCII letters, digits
  * and `_`, starting with a letter, at most 64 characters (`email`,
  * `given_name`).

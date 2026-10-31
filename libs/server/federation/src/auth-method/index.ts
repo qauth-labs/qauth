@@ -3,7 +3,6 @@
 export type * from './auth-method.interface';
 export * from './context';
 export * from './contract';
-export * from './contract-kit';
 export * from './engine';
 export * from './errors';
 export * from './validate';

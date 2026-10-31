@@ -6,13 +6,13 @@ import type {
   AuthMethod,
   AuthMethodEgressRequest,
   AuthMethodEgressResponse,
-  AuthMethodKitScenario,
   AuthMethodParameters,
   UpstreamCallbackOutcome,
   UserAttribute,
   VerifiedIdentity,
 } from '../src';
 import { AUTH_METHOD_CONTRACT, UPSTREAM_STEP_URN } from '../src/auth-method/contract';
+import type { AuthMethodKitScenario } from '../src/testing';
 
 /**
  * A sample AuthMethod for the contract's own tests (#599): a small
@@ -23,8 +23,9 @@ import { AUTH_METHOD_CONTRACT, UPSTREAM_STEP_URN } from '../src/auth-method/cont
  * What it shows:
  *
  * - `start()` makes a fresh `state` and keeps it in the transaction;
- * - the callback refuses a missing transaction and a `state` that differs,
- *   compared in constant time, before it spends the code;
+ * - the callback refuses a `state` that differs from its transaction's,
+ *   missing, empty or repeated, compared in constant time, before it spends
+ *   the code (the host refuses a callback with no transaction at all);
  * - the code is redeemed through `context.egress`, never `fetch`;
  * - `verify()` accepts only results its own callback produced (a `WeakSet`
  *   of them), so nothing else can sign anyone in through it;
@@ -104,11 +105,9 @@ export function createSampleAuthMethod(
         method: 'GET',
         path: '/callback',
         async handle(request, context): Promise<UpstreamCallbackOutcome> {
-          const transaction = request.transaction;
-          if (
-            transaction === undefined ||
-            !sameState(transaction.state, single(request.query, 'state'))
-          ) {
+          // State first, before anything is spent: a callback that does not
+          // belong to this transaction never reaches the provider.
+          if (!sameState(request.transaction.state, single(request.query, 'state'))) {
             return { kind: 'failed', reason: 'transaction_mismatch' };
           }
           const error = single(request.query, 'error');
