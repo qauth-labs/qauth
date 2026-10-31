@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 
 import { isSecurityEffect, type SecurityEffect } from '@qauth-labs/shared-validation';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 /**
  * One realm policy field and its annotations (ADR-019 Decision 10, issue
@@ -249,6 +249,19 @@ function isOneSentence(text: unknown): boolean {
   );
 }
 
+/** Whether `value` is plain JSON, as a stored policy document holds it. */
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value !== 'object') return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return (
+    (prototype === Object.prototype || prototype === null) &&
+    Object.values(value).every(isJsonValue)
+  );
+}
+
 function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null) {
     for (const member of Object.values(value)) deepFreeze(member);
@@ -263,14 +276,20 @@ function deepFreeze<T>(value: T): T {
  *
  * Refuses, with a {@link PolicyDefinitionError}, a definition that
  *
+ * - has a schema that is not a Zod type, or one with no JSON Schema in a form
+ *   a view exports (a transform, a `Date`);
  * - leaves out an annotation, or has one this module does not know;
  * - names an unknown direction, an unknown `securityWhen` or an effect outside
  *   the closed list, or lists effects for a field that is never a security
  *   operation, or none for one that can be;
  * - gives an `opaque` field the rule `loosening`, which could never apply;
- * - has a default its type refuses or rewrites, or one that does not fit the
- *   direction (a number for `lower-is-stricter`, a value of the order for
- *   `ordered`, a list of strings for a set);
+ * - is not secret and has a type that accepts `undefined`, which would let a
+ *   member of the representation go missing;
+ * - has a default that is not plain JSON, that its type refuses or rewrites,
+ *   or that does not fit the direction (a number for `lower-is-stricter`, a
+ *   value of the order for `ordered`, a list of strings for a set);
+ * - is `ordered` over a type that accepts a value outside the order, or
+ *   refuses one in it;
  * - is secret without being `opaque`, `any-change` and default `null`;
  * - has a `doc` that is not one sentence plus a docs.qauth.dev link.
  */
@@ -321,7 +340,9 @@ export function assertPolicyField(value: unknown): asserts value is PolicyField 
 
 /** The rules of {@link policyField}, over a type and its annotations. */
 function checkDefinition(schema: z.ZodType, annotations: unknown): void {
-  if (typeof (schema as { safeParse?: unknown } | null)?.safeParse !== 'function') {
+  // `instanceof` holds for a Zod type of another copy of Zod too: Zod checks
+  // the type's traits, not its prototype.
+  if (!(schema instanceof z.ZodType)) {
     throw new PolicyDefinitionError('a policy field needs a Zod type');
   }
   if (typeof annotations !== 'object' || annotations === null) {
@@ -396,6 +417,20 @@ function checkDefinition(schema: z.ZodType, annotations: unknown): void {
     );
   }
 
+  // Every view is exported as JSON Schema: the input form of every field, and
+  // the output form (the representation) of a field that is not secret. A
+  // type with none, such as a transform or a Date, is refused here rather
+  // than when a view is exported.
+  for (const io of secret ? (['input'] as const) : (['input', 'output'] as const)) {
+    try {
+      z.toJSONSchema(schema, { target: 'draft-2020-12', unrepresentable: 'throw', io });
+    } catch (error) {
+      throw new PolicyDefinitionError(
+        `the type has no JSON Schema (${io}): ${error instanceof Error ? error.message : 'not representable'}`
+      );
+    }
+  }
+
   if (secret) {
     if (direction !== 'opaque' || securityWhen !== 'any-change' || defaultValue !== null) {
       throw new PolicyDefinitionError(
@@ -403,6 +438,16 @@ function checkDefinition(schema: z.ZodType, annotations: unknown): void {
       );
     }
   } else {
+    // The representation has every member, so its type must not let one be
+    // absent, or fill one in.
+    if (schema.safeParse(undefined).success) {
+      throw new PolicyDefinitionError(
+        'a field that is not secret refuses undefined: the representation has every member'
+      );
+    }
+    if (!isJsonValue(defaultValue)) {
+      throw new PolicyDefinitionError('the default is plain JSON, as the policy document is');
+    }
     const parsed = schema.safeParse(defaultValue);
     if (!parsed.success || !isDeepStrictEqual(parsed.data, defaultValue)) {
       throw new PolicyDefinitionError('the default must be a value of the type, unchanged by it');
@@ -416,13 +461,18 @@ function checkDefinition(schema: z.ZodType, annotations: unknown): void {
           );
         }
       }
-      // An enum value the order leaves out could never be compared.
-      const options = (schema as { options?: unknown }).options;
-      if (Array.isArray(options)) {
-        for (const option of options) {
-          if (!direction.order.includes(option as string)) {
-            throw new PolicyDefinitionError(`the order leaves out the value "${String(option)}"`);
-          }
+      // A value the type accepts outside the order could never be compared, so
+      // the type must accept a known, finite set of values (an enum or
+      // literals), all of them in the order.
+      const values = schema._zod.values;
+      if (values === undefined) {
+        throw new PolicyDefinitionError(
+          'an ordered field has an enum type, which accepts only the values of its order'
+        );
+      }
+      for (const value of values) {
+        if (!direction.order.includes(value as string)) {
+          throw new PolicyDefinitionError(`the order leaves out the value "${String(value)}"`);
         }
       }
     }

@@ -64,6 +64,53 @@ describe('policyField', () => {
 
   it('refuses something that is not a Zod type', () => {
     expect(() => policyField({} as never, NUMBER as never)).toThrow(/needs a Zod type/);
+    const lookalike = { safeParse: (data: unknown) => ({ success: true, data }) };
+    expect(() => policyField(lookalike as never, NUMBER as never)).toThrow(/needs a Zod type/);
+  });
+
+  // An opaque string or object field, which the checks below vary.
+  const OPAQUE = { direction: 'opaque', securityWhen: 'never', effects: [] };
+
+  it('refuses a type with no JSON Schema in a form a view exports', () => {
+    expect(() =>
+      define(
+        { ...OPAQUE, default: 'a' },
+        z.string().transform((value) => value)
+      )
+    ).toThrow(/no JSON Schema \(output\): Transforms/);
+    expect(() => define({ ...OPAQUE, default: new Date(0) }, z.date())).toThrow(
+      /no JSON Schema \(input\): Date/
+    );
+    // The representation leaves a secret out, so only its input form is exported.
+    expect(
+      define(
+        {
+          ...OPAQUE,
+          securityWhen: 'any-change',
+          effects: ['credential-path'],
+          secret: true,
+          default: null,
+        },
+        z.string().transform((value) => value)
+      ).secret
+    ).toBe(true);
+  });
+
+  it('refuses a type that lets a member of the representation be absent', () => {
+    for (const schema of [z.number().int().optional(), z.number().int().default(5), z.any()]) {
+      expect(() => define({}, schema)).toThrow(/refuses undefined/);
+    }
+    expect(define({ ...OPAQUE, default: null }, z.string().nullable()).default).toBeNull();
+  });
+
+  it('refuses a default that is not plain JSON', () => {
+    const at = new Date(0);
+    expect(() => define({ ...OPAQUE, default: { at } }, z.record(z.string(), z.unknown()))).toThrow(
+      /plain JSON/
+    );
+    expect(
+      define({ ...OPAQUE, default: { at: 'noon' } }, z.record(z.string(), z.unknown())).default
+    ).toEqual({ at: 'noon' });
   });
 
   it.each([
@@ -144,6 +191,17 @@ describe('policyField', () => {
       kind: 'ordered',
       order: ['low', 'mid', 'high'],
     });
+  });
+
+  it('refuses an ordered field whose type accepts a value outside the order', () => {
+    const direction = ordered(['low', 'high']);
+    expect(() => define({ default: 'low', direction }, z.string())).toThrow(/enum type/);
+    expect(() => define({ default: 'low', direction }, z.enum(['low', 'high']).nullable())).toThrow(
+      /leaves out the value "null"/
+    );
+    expect(
+      define({ default: 'low', direction }, z.union([z.literal('low'), z.literal('high')])).default
+    ).toBe('low');
   });
 
   it('refuses a secret that has a default, an order or a rule other than any-change', () => {
