@@ -65,18 +65,18 @@ export interface AccountDirectoryLog {
  *   `user_credentials.disabled_at` comes with the ladder's hard action (#615).
  */
 export function createRepositoryAccountDirectory(
-  repositories: AccountDirectoryRepositories,
+  stores: AccountDirectoryRepositories,
   log: AccountDirectoryLog
 ): AccountDirectory {
   return Object.freeze({
     async findByIdentifier(realmId: string, identifier: string): Promise<SignInAccount | null> {
-      const credential = await repositories.userCredentials.findByRealmProviderSub(
+      const credential = await stores.userCredentials.findByRealmProviderSub(
         realmId,
         PASSWORD_PROVIDER_TYPE,
         identifier
       );
       if (credential === undefined) return null;
-      const user = await repositories.users.findById(realmId, credential.userId);
+      const user = await stores.users.findById(realmId, credential.userId);
       if (user === undefined) {
         // The foreign key makes this impossible; answered as no account.
         log.error({ credentialId: credential.id }, 'password credential without a users row');
@@ -90,9 +90,9 @@ export function createRepositoryAccountDirectory(
         );
       }
       const passkeys = (
-        await repositories.userCredentials.findAllByUserIdAndType(user.id, WEBAUTHN_PROVIDER_TYPE)
+        await stores.userCredentials.findAllByUserIdAndType(user.id, WEBAUTHN_PROVIDER_TYPE)
       ).filter((row) => row.realmId === realmId);
-      const grants = await repositories.adminGrants.listLive(realmId, user.id);
+      const grants = await stores.adminGrants.listLive(realmId, user.id);
       const factors: BoundFactor[] = [
         { type: 'password', disabled: false, hash: data.success ? data.data.password_hash : null },
         ...passkeys.map(() => ({ type: 'passkey' as const, disabled: false })),

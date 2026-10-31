@@ -27,7 +27,7 @@ const OTHER_REALM = '0199fa20-0000-7000-8000-00000000bbbb';
 const USER = '0199fa20-5e1a-7000-8000-000000000001';
 const IDENTIFIER = 'alice@example.com';
 
-function repositories(
+function stubStores(
   overrides: Partial<{
     credential: Record<string, unknown> | undefined;
     user: { id: string; enabled: boolean } | undefined;
@@ -83,14 +83,14 @@ const log = () => ({ error: vi.fn<(details: Record<string, unknown>, message: st
 
 describe('the repository account directory', () => {
   it('names no account when the identifier has no password credential in the realm', async () => {
-    const { repos, calls } = repositories({ credential: undefined });
+    const { repos, calls } = stubStores({ credential: undefined });
     const directory = createRepositoryAccountDirectory(repos, log());
     expect(await directory.findByIdentifier(REALM, IDENTIFIER)).toBeNull();
     expect(calls).toEqual([`credential:${REALM}:password:${IDENTIFIER}`]);
   });
 
   it('reads the user, the password, the passkeys and the admin grants of an account', async () => {
-    const { repos } = repositories({
+    const { repos } = stubStores({
       passkeys: [{ realmId: REALM }, { realmId: OTHER_REALM }],
       grants: [{ grant: {} }],
     });
@@ -109,7 +109,7 @@ describe('the repository account directory', () => {
   });
 
   it('reports a disabled, unverified account as such', async () => {
-    const { repos } = repositories({
+    const { repos } = stubStores({
       credential: { password_hash: 'hash', email_verified: false },
       user: { id: USER, enabled: false },
     });
@@ -119,7 +119,7 @@ describe('the repository account directory', () => {
   });
 
   it('gives an unreadable credential no hash, and logs it without its data', async () => {
-    const { repos } = repositories({ credential: { password_hash: 42 } });
+    const { repos } = stubStores({ credential: { password_hash: 42 } });
     const logger = log();
     const account = await createRepositoryAccountDirectory(repos, logger).findByIdentifier(
       REALM,
@@ -133,7 +133,7 @@ describe('the repository account directory', () => {
   });
 
   it('names no account for a credential without a users row', async () => {
-    const { repos } = repositories({ user: undefined });
+    const { repos } = stubStores({ user: undefined });
     const logger = log();
     expect(
       await createRepositoryAccountDirectory(repos, logger).findByIdentifier(REALM, IDENTIFIER)
