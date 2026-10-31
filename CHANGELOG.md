@@ -1231,11 +1231,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unverified app", never the client's own name, which now appears below,
   labelled as declared by the app. Every client an operator provisioned shows
   as unverified until its `verified_domain` is set. A loopback redirect warns
-  for every client, not only CIMD ones. Dynamic registration, `/api/clients`,
-  CIMD documents and the seed manifest refuse a redirect URI the screen cannot
-  show (a host that is not a DNS name of valid labels, an IPv6 address that is
-  not loopback, a scheme over 64 characters) with `invalid_redirect_uri`; an
-  existing client that holds one gets `invalid_request` at the consent screen.
+  for every client, not only CIMD ones.
+- **BREAKING (clients): a redirect URI the consent screen cannot show is
+  refused** ([#593]). Dynamic registration, `/api/clients`, CIMD documents and
+  the seed manifest refuse one (a host that is not a DNS name of valid labels,
+  such as one with an underscore; an IPv6 address that is not loopback; a
+  scheme over 64 characters) with `invalid_redirect_uri`. A client stored
+  before the upgrade that holds one breaks in three ways. A CIMD client whose
+  document lists one no longer resolves once the server fetches the document
+  again, at the consent screen and at the token endpoint alike, where its
+  refresh answers `invalid_client`. A seed manifest that names one is refused
+  whole, so running it again changes no client. A client registered
+  dynamically, through `/api/clients` or by the manifest keeps working for a
+  user whose stored consent covers the request, but the consent screen answers
+  a new user `invalid_request` (400). The upgrade guide (`operate/upgrades`)
+  gives a query that finds such clients before you upgrade.
 - **A process binds a second port only once the admin listener is turned
   on** ([#511]). An existing deployment binds nothing new: the listener is off
   by default. A process with `ADMIN_API_ENABLED=true` and the `admin` role

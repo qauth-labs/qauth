@@ -347,6 +347,47 @@ before. A realm such a node creates during the roll has no policies (counter 0)
 until a node of this release boots again, since only the boot fills them, so
 restart one node of this release once the roll is complete.
 
+### Redirect URIs the consent screen cannot show
+
+From this release the consent screen always says where the authorization code
+goes, by the host of the redirect URI, "this device" for a loopback address,
+or the app's own scheme
+([#593](https://github.com/qauth-labs/qauth/issues/593)). Every registration
+path refuses a redirect URI it cannot show: a host that is not a DNS name of
+valid labels (an underscore, an empty label, a label with a hyphen at either
+end), an IPv6 address that is not loopback, or a scheme longer than 64
+characters. A client stored before the upgrade with such a URI breaks:
+
+- **A CIMD client** whose document lists one no longer resolves once the
+  server fetches its document again: the consent screen refuses it, and so does
+  the token endpoint, where its next refresh answers `invalid_client`. Its
+  owner changes the document; nothing on the server side fixes it.
+- **A seed manifest** that names one is refused whole, so running
+  `db:seed-oauth-clients` again changes no client until the URI is fixed or
+  removed from the manifest.
+- **A client registered dynamically, through `/api/clients` or by the
+  manifest** keeps working for a user whose stored consent covers the
+  request, but the consent screen answers a new user, or one whose request
+  needs the screen, with `invalid_request` (400).
+
+Before you upgrade, find the redirect URIs that break with this query. It
+finds the usual cases (an underscore in the host, an IPv6 address that is not
+`[::1]`, a long scheme). A host with an empty label or an outer hyphen is
+rarer, and the consent screen refuses it with `invalid_request` and the
+description `redirect_uri cannot be shown`.
+
+```sql
+SELECT realm_id, client_id, u AS redirect_uri
+FROM oauth_clients, jsonb_array_elements_text(redirect_uris) AS u
+WHERE u ~* '^https?://[^/?#]*_'
+   OR (u ~* '^https?://\[' AND u !~* '^https?://\[::1\]')
+   OR length(split_part(u, ':', 1)) > 64;
+```
+
+Replace each URI with one the client can receive its code on, through the
+client's own registration path, the seed manifest or, for a CIMD client, its
+document.
+
 ### The delivery role reads `realms.issuer`
 
 From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user
