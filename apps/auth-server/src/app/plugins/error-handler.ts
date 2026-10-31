@@ -23,6 +23,7 @@ import {
 } from '../api-conventions/oauth-error';
 import {
   codeForStatus,
+  isBareProblem,
   PROBLEM_CODES,
   PROBLEM_MEDIA_TYPE,
   type ProblemCode,
@@ -325,6 +326,11 @@ export function problemDocument(
   status: number
 ): ProblemDocument {
   const { code, type, title } = describeProblem(problemCodeOf(error, status));
+  // The Interaction API's documents, and `interaction_expired` anywhere, name
+  // nothing about the request: see `isBareProblem`.
+  if (isBareProblem(code, request.url, request.routeOptions?.url)) {
+    return { type, title, status, code, trace_id: request.id };
+  }
   const document: ProblemDocument = {
     type,
     title,

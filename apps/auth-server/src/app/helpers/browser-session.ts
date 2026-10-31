@@ -156,7 +156,7 @@ async function trackBrowserSession(
 }
 
 /** Revoke one session through the service and drop its side record. */
-async function endBrowserSession(
+export async function endBrowserSession(
   fastify: FastifyInstance,
   realmId: string,
   sid: string,

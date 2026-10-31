@@ -157,9 +157,33 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
 );
 
 /**
+ * An interaction id in a path of the Interaction API (#592, ADR-019 Decision
+ * 6): the segment after `/interaction/<version>/`, as in
+ * `/interaction/v1-rc.0/<id>/answer`. The id is a secret: with it the
+ * ceremony app's server reads the current step, so it never reaches a log.
+ *
+ * - Matched anywhere in the URL, so a path quoted inside a query value is
+ *   censored too, and with each `/` plain or percent-encoded (`%2F`), as a
+ *   `return_to` value carries one.
+ * - Empty and `.` segments after the version (`//<id>`, `/./<id>`) are
+ *   skipped, so the id behind them is censored.
+ * - The document path (`openapi.json`) and the reserved wallet prefix
+ *   (`wallet/`) are not ids and stay readable.
+ */
+const SLASH = '(?:/|%2[Ff])';
+const INTERACTION_ID_IN_PATH_PATTERN = new RegExp(
+  `(${SLASH}interaction${SLASH}v[1-9][0-9]*(?:-rc\\.(?:0|[1-9][0-9]*))?${SLASH}(?:\\.?${SLASH})*)` +
+    `(?!(?:openapi\\.json|wallet)(?:${SLASH}|[?#&]|$))` +
+    `(?:(?!%2[Ff])[^/?#&])+`,
+  'g'
+);
+
+/**
  * Censor the value of every {@link LOG_REDACTED_QUERY_PARAMETERS} entry in a
- * request URL, leaving everything else byte-for-byte as it was — including the
- * spelling of the censored parameter's name, encoded or not.
+ * request URL, and the interaction id of an Interaction API path
+ * ({@link INTERACTION_ID_IN_PATH_PATTERN}), leaving everything else
+ * byte-for-byte as it was — including the spelling of the censored
+ * parameter's name, encoded or not.
  *
  * A string rewrite rather than `new URL(...)` round-tripping deliberately: the
  * logged URL is the request-target as the client sent it, and re-serialising it
@@ -174,7 +198,79 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
  * @param url - the raw request-target (`req.url`), path plus query string.
  */
 export function redactLoggedUrl(url: string): string {
-  return url.replace(REDACTED_QUERY_VALUE_PATTERN, `$1${LOG_REDACT_CENSOR}`);
+  const redacted = url
+    .replace(REDACTED_QUERY_VALUE_PATTERN, `$1${LOG_REDACT_CENSOR}`)
+    .replace(INTERACTION_ID_IN_PATH_PATTERN, `$1${LOG_REDACT_CENSOR}`);
+  return keepsAnInteractionSegment(redacted) ? LOG_REDACT_CENSOR : redacted;
+}
+
+/** An Interaction API path prefix in a decoded URL, wherever it is. */
+const INTERACTION_PREFIX_ANYWHERE = /\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?\//g;
+
+/** The segments an Interaction API path may hold besides the censored id. */
+const NAMED_INTERACTION_SEGMENTS: ReadonlySet<string> = new Set([
+  '',
+  '.',
+  '..',
+  LOG_REDACT_CENSOR,
+  'personal',
+  'answer',
+  'cancel',
+]);
+
+/** How many times {@link percentDecodedForCheck} decodes a URL at most. */
+const CHECK_DECODE_PASSES = 4;
+
+/** One `%XX` escape, in either hex case. */
+const PERCENT_ESCAPE = /%([0-9A-Fa-f]{2})/g;
+
+/**
+ * `url` with every `%XX` escape decoded on its own, as one byte, and again on
+ * the result (a `return_to` value may carry its path encoded twice: `%252F`
+ * → `%2F` → `/`), until nothing changes or after {@link CHECK_DECODE_PASSES}
+ * passes, so the work stays linear in the URL.
+ *
+ * Never throws: what is not an escape (`%zz`, a lone `%`) is left as it is.
+ * `decodeURIComponent` throws on the first malformed escape ANYWHERE in the
+ * URL, and a check that fell back to the raw URL then would let one
+ * `?x=%zz` keep an id in the clear. Only for the check: the decoded string
+ * is never logged.
+ */
+function percentDecodedForCheck(url: string): string {
+  let decoded = url;
+  for (let pass = 0; pass < CHECK_DECODE_PASSES; pass += 1) {
+    const next = decoded.replace(PERCENT_ESCAPE, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16))
+    );
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+/**
+ * Whether a URL the id censor has seen still names an Interaction API path
+ * with a segment it may not show: a spelling the censor does not know, such
+ * as a percent-encoded letter (`/%69nteraction/…`), an encoded dot segment
+ * (`/%2E/<id>`), a path encoded twice inside a query value, or a `..` that
+ * leads to the id. The check reads the URL percent-decoded
+ * ({@link percentDecodedForCheck}), as the router and the querystring parser
+ * do, whatever else in the URL is malformed. Such a URL is logged as
+ * `[Redacted]` whole: only a client that holds the id sends one, and the
+ * method and status still say what happened. The document path
+ * (`openapi.json`) and the reserved wallet prefix are not ids.
+ */
+function keepsAnInteractionSegment(url: string): boolean {
+  const decoded = percentDecodedForCheck(url);
+  for (const match of decoded.matchAll(INTERACTION_PREFIX_ANYWHERE)) {
+    const rest = decoded.slice(match.index + match[0].length);
+    const end = rest.search(/[?#&\s]/);
+    const segments = (end === -1 ? rest : rest.slice(0, end)).split('/');
+    const first = segments.find((segment) => segment !== '' && segment !== '.');
+    if (first === 'openapi.json' || first === 'wallet') continue;
+    if (segments.some((segment) => !NAMED_INTERACTION_SEGMENTS.has(segment))) return true;
+  }
+  return false;
 }
 
 /**
@@ -295,6 +391,11 @@ interface SerializedErrorForLog {
  * included. Copied as an own field, a malformed request would put the
  * caller's session cookie or access token in the log.
  *
+ * A Redis error's `command` keeps its name only, for the same reason: ioredis
+ * puts the arguments of the failed command there, and those are the values
+ * written, such as a whole interaction record (#592). The `previousErrors`
+ * of a failed `MULTI` are serialized the same way, one by one.
+ *
  * A duplicate registration was the everyday case: every second
  * `POST /auth/register` for an address fails inside the credential insert,
  * AFTER the password was hashed — and when it is the account holder retrying,
@@ -316,12 +417,44 @@ export function serializeErrorForLog(err: Error): SerializedErrorForLog {
 }
 
 /**
+ * What an error's `command` field may show: the command's name and nothing
+ * else.
+ *
+ * ioredis attaches `command = { name, args }` to every error a command
+ * replies with or is aborted by, and `args` are the values sent: the key and
+ * the whole value of a `SET`, which for an interaction record is its personal
+ * data, `login_hint`, `id_token_hint`, `state`, `nonce` and the browser
+ * session's `sid`. Any other shape (a command line as a string, say) is left
+ * out, since it may carry its arguments the same way.
+ */
+function loggableCommand(command: unknown): { name: string } | undefined {
+  if (typeof command !== 'object' || command === null) return undefined;
+  const { name } = command as { name?: unknown };
+  return typeof name === 'string' ? { name } : undefined;
+}
+
+/**
+ * A list of errors as it may be logged: each error-like entry serialized as
+ * {@link serializeErrorLike} serializes the error it hangs from, anything else
+ * as it is. An entry already serialized on this call is `[Circular]` rather
+ * than copied out raw.
+ */
+function serializeErrorList(entries: readonly unknown[], visited: Set<object>): unknown[] {
+  return entries.map((entry) => {
+    if (!isErrorLike(entry)) return entry;
+    return visited.has(entry) ? '[Circular]' : serializeErrorLike(entry, visited);
+  });
+}
+
+/**
  * {@link serializeErrorForLog} for one error. Mirrors pino-std-serializers'
  * `err`: it serializes `AggregateError#errors` into `aggregateErrors` and
  * error-valued fields recursively, so a failed query nested in either place
- * loses its parameters too, instead of being copied out raw. `visited`
- * (errors already serialized on this call) ends cycles, as pino's `seen` tag
- * does.
+ * loses its parameters too, instead of being copied out raw. So are the
+ * errors in any other list-valued field, such as the `previousErrors` that
+ * ioredis gives the `EXECABORT` of a `MULTI` (one per command that failed to
+ * queue, each with its own `command`). `visited` (errors already serialized
+ * on this call) ends cycles, as pino's `seen` tag does.
  */
 function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErrorForLog {
   visited.add(err);
@@ -339,9 +472,7 @@ function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErr
   const errors = (err as { errors?: unknown }).errors;
   const fields: Record<string, unknown> = {};
   if (Array.isArray(errors)) {
-    fields['aggregateErrors'] = errors.map((entry) =>
-      isErrorLike(entry) && !visited.has(entry) ? serializeErrorLike(entry, visited) : entry
-    );
+    fields['aggregateErrors'] = serializeErrorList(errors, visited);
   }
   for (const [key, value] of Object.entries(err)) {
     // `cause` is already folded into `message` and `stack`; `errors` into
@@ -355,13 +486,19 @@ function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErr
     ) {
       continue;
     }
+    // A Redis command's arguments are the values it wrote.
+    if (key === 'command') {
+      const command = loggableCommand(value);
+      if (command !== undefined) fields[key] = command;
+      continue;
+    }
     if (isErrorLike(value)) {
       if (!visited.has(value)) {
         fields[key] = serializeErrorLike(value, visited);
       }
       continue;
     }
-    fields[key] = value;
+    fields[key] = Array.isArray(value) ? serializeErrorList(value, visited) : value;
   }
 
   return {

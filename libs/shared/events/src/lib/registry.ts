@@ -14,6 +14,7 @@ import { type PayloadFinding, scanJsonSchema, scanPayload, scanValues } from './
 import { validateSsfMapping } from './ssf-mapping';
 import { ADMIN_EVENT_TYPES } from './types/admin';
 import { CLIENT_EVENT_TYPES } from './types/client';
+import { INTERACTION_EVENT_TYPES } from './types/interaction';
 import { KEY_EVENT_TYPES } from './types/key';
 import { OAUTH_EVENT_TYPES } from './types/oauth';
 import { REQUEST_EVENT_TYPES } from './types/request';
@@ -30,6 +31,7 @@ export const EVENT_TYPES = [
   ...OAUTH_EVENT_TYPES,
   ...CLIENT_EVENT_TYPES,
   ...WALLET_EVENT_TYPES,
+  ...INTERACTION_EVENT_TYPES,
   ...REQUEST_EVENT_TYPES,
   ...SSF_EVENT_TYPES,
   ...KEY_EVENT_TYPES,

@@ -928,6 +928,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test vectors, `test-vectors/interaction/steps.json`, with each transport's
   answer.
 
+- **The interaction record and the flow cookie** ([#592], ADR-019 Decision 6,
+  ADR-017 Decision 6). The server side of one browser ceremony of the
+  Interaction API, for its routes to build on ([#616], [#628]); no route serves
+  it yet. An interaction is a Redis record keyed by the realm and the SHA-256 of
+  a 32-byte random id, so the id is stored nowhere, holding a bounded snapshot of
+  the validated authorization request (at most 16 KiB, as the
+  pending-authorization stash holds, and at most 32 KiB with the first step;
+  refused with `invalid_request` above), the engine transaction, the current
+  step and its personal data, the hash of the flow secret, the creation time and
+  an absolute expiry: `INTERACTION_TTL`, a new advanced key, 30 minutes by
+  default (60 to 7200 seconds). Starting an interaction takes no account, so one
+  nobody answers lives only 10 minutes: its record, turn and expiry-index entry
+  are written with that deadline, and the first answer the server processes
+  (which needs the flow cookie) moves them to the absolute expiry, which never
+  moves. The `__Host-qauth_flow` cookie (`HttpOnly`, `Secure`,
+  `SameSite=Lax`, `Path=/`, no `Domain`) carries the flow secret; a browser
+  holds up to four, one per ceremony. The id alone reads the step's display
+  data. The personal data, an answer, a cancel and a user switch need the
+  cookie. An answer takes the interaction's turn with `GETDEL`, now in the cache
+  utilities (`takeValue`, `takeSession`, `takeCache`), reads the record again
+  and writes the next state, so of two concurrent answers exactly one is
+  processed while the step stays readable; a failure before the next state is
+  written gives the turn back. Authentication creates a new browser session (a
+  new `sid`) and rotates the flow secret; a browser that loses that response
+  retries with the old secret and gets `interaction_expired`, so the ceremony
+  transport ([#616]) must submit credential steps by `fetch` or guard a form
+  against a double submit. A user switch ends the interaction and
+  starts a new one for the same request at the identifier step, with nothing
+  proved carried over and the request's absolute expiry kept. An unknown,
+  expired or finished interaction and a wrong cookie get one
+  `interaction_expired` answer (410), the same bytes whatever the cause. Every
+  problem document on an `/interaction/<version>/` path, `404` included, carries
+  no `instance`, `detail` or `errors`. Four new events, `interaction.created`,
+  `.answered`, `.cancelled` and `.expired`, name an interaction by a random
+  reference, never by its id or cookie; a sweep job on the `web` role audits
+  each expiry once, the 10-minute one of an unanswered interaction included,
+  claiming each in one Redis transaction so a dropped connection cannot lose
+  one, and a finish or cancel the sweep beat is answered as expired. The
+  request log now censors the interaction id in an `/interaction/<version>/`
+  path, plain or percent-encoded (once or twice), whatever else in the URL is
+  malformed, and a Redis error in the log names its command but no longer
+  carries the command's arguments.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -1881,9 +1923,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
 [#591]: https://github.com/qauth-labs/qauth/issues/591
+[#592]: https://github.com/qauth-labs/qauth/issues/592
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
+[#628]: https://github.com/qauth-labs/qauth/issues/628
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ### Fixed

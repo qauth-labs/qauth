@@ -107,6 +107,20 @@ await SessionUtils.extendSession('user123', 7200); // 2 hours
 await SessionUtils.deleteSession('user123');
 ```
 
+### Single-use values
+
+`takeSession`, `takeCache` and the unprefixed `takeValue` read a key and delete it in one Redis
+`GETDEL` (Redis 6.2 or later). Of two concurrent callers only the first gets the value, so a
+single-use value (a handle, a step's state) can never be acted on twice. The key is deleted even
+when its value does not parse or fails the schema, which then reads as a miss.
+
+```typescript
+import { takeValue } from '@qauth-labs/infra-cache';
+
+const state = await SessionUtils.takeSession('pending:abc', stateSchema); // null for the loser
+const raw = await takeValue(redis, 'interaction:realm:hash', console, recordSchema);
+```
+
 ### Rate Limiting
 
 ```typescript

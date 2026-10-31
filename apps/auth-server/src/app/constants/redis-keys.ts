@@ -199,4 +199,37 @@ export const REDIS_KEYS = {
    */
   SSF_VERIFICATION: (realmId: string, receiverClientId: string) =>
     `ssf:verification:${realmId}:${receiverClientId}`,
+  /**
+   * One interaction of the Interaction API (#592, ADR-019 Decision 6): the
+   * record of one browser ceremony, as JSON. Keyed by the realm and the
+   * SHA-256 (hex) of the interaction id: the id itself is never stored, so
+   * reading Redis gives no id a browser could present. Expires a short grace
+   * (`INTERACTION_SWEEP_GRACE_MS`) after the interaction's deadline, which the
+   * server checks on every read, so the expiry sweep still finds the record it
+   * audits: ten minutes after creation while nobody has answered it
+   * (`INTERACTION_UNANSWERED_TTL_MS`), its absolute expiry from the first
+   * processed answer on.
+   */
+  INTERACTION: (realmId: string, idHash: string) => `interaction:${realmId}:${idHash}`,
+  /**
+   * The turn of one interaction (#592): the revision of
+   * {@link REDIS_KEYS.INTERACTION} that may be answered next, as a decimal
+   * string. An answer, a cancel and a user switch take it with `GETDEL`
+   * before they act, so of two concurrent requests only one acts; the answer
+   * writes the next turn with the next state. Same components and deadline as
+   * the record.
+   */
+  INTERACTION_TURN: (realmId: string, idHash: string) => `interaction-turn:${realmId}:${idHash}`,
+  /**
+   * Every live interaction, by its deadline (#592): a sorted set whose score
+   * is the deadline in epoch milliseconds (the short one of an unanswered
+   * interaction, moved to the absolute expiry by the first processed answer)
+   * and whose member is
+   * `<realmId>:<reference>:<id hash>` ({@link REDIS_KEYS.INTERACTION}'s
+   * components and the interaction's audit reference). An interaction leaves
+   * it when it finishes or is cancelled; the expiry sweep takes the rest once
+   * they expire and audits each. One set for the deployment, so the sweep
+   * needs no list of realms.
+   */
+  INTERACTION_EXPIRY_INDEX: () => 'interaction-expiry',
 } as const;

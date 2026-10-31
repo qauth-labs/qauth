@@ -268,6 +268,32 @@ describe('authEnvSchema SESSION_LAST_SEEN_INTERVAL', () => {
 });
 
 /**
+ * INTERACTION_TTL (ADR-019 Decision 6, issue #592): how long an interaction
+ * of the Interaction API lives. Thirty minutes by default, as the issue
+ * decides; the operator may change it within a minute and two hours.
+ */
+describe('authEnvSchema INTERACTION_TTL', () => {
+  const parse = (raw?: string) =>
+    authEnvSchema.parse(raw === undefined ? {} : { INTERACTION_TTL: raw }).INTERACTION_TTL;
+
+  it('defaults to 30 minutes', () => {
+    expect(parse()).toBe(1800);
+  });
+
+  it('accepts whole seconds from a minute to two hours', () => {
+    expect(parse('60')).toBe(60);
+    expect(parse('900')).toBe(900);
+    expect(parse('7200')).toBe(7200);
+  });
+
+  it('refuses less than a minute, more than two hours, a fraction or a non-number', () => {
+    for (const raw of ['0', '59', '-60', '90.5', '7201', 'long']) {
+      expect(() => parse(raw), raw).toThrow();
+    }
+  });
+});
+
+/**
  * The ID-JAG issuer key cache and its two bounds (#433, ADR-011 §4). The cache
  * TTL has a hard ceiling of an hour, as `CIMD_CACHE_MAX_TTL` is for CIMD, and a
  * larger value fails validation instead of being clamped. The refresh cooldown

@@ -36,6 +36,7 @@ import {
 } from '@qauth-labs/shared-errors';
 
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
+import { InteractionExpiredError } from '../helpers/interaction-expired';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import type { OAuthErrorCode } from './oauth-error';
@@ -225,6 +226,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // The approval engine (#512): a move an approval cannot make from where it
   // stands.
   { errorClass: ApprovalStateError, code: 'conflict', oauthError: 'invalid_request' },
+  // The Interaction API's one refusal of a request at an interaction (#592):
+  // unknown, expired, finished or not bound to the browser's flow cookie.
+  {
+    errorClass: InteractionExpiredError,
+    code: 'interaction_expired',
+    oauthError: 'invalid_request',
+  },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },
