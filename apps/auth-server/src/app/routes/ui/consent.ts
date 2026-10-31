@@ -140,7 +140,7 @@ function clientTitle(client: ClientDisplay): string {
 function clientBlock(client: ClientDisplay) {
   const verifiedLine =
     client.kind === 'cimd'
-      ? html`<p class="verified">Verified: the app publishes its details at this address.</p>`
+      ? html`<p class="verified">The app's details are published at this address.</p>`
       : client.kind === 'admin_registered'
         ? html`<p class="verified">Verified by the operator of this server.</p>`
         : html`<div class="badge">
@@ -176,7 +176,7 @@ function clientBlock(client: ClientDisplay) {
 
   const declaredName = client.declaredName
     ? html`<p class="declared">
-        Name declared by the app: <span class="declared-name">${client.declaredName}</span>
+        Name declared by the app: <bdi class="declared-name">${client.declaredName}</bdi>
       </p>`
     : safe('');
 
@@ -268,6 +268,10 @@ function consentPage(opts: {
             .declared-name {
               color: #1a1a1a;
               overflow-wrap: anywhere;
+              display: inline-block;
+              max-width: 100%;
+              overflow: hidden;
+              vertical-align: bottom;
             }
             ul.scopes {
               padding-left: 20px;

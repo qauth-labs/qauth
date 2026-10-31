@@ -20,6 +20,13 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+// The CIMD document fetch, so a test can render a CIMD client through the real
+// resolver (#593). Every other test keeps the real fetch.
+vi.mock('../../helpers/cimd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/cimd')>();
+  return { ...actual, fetchAndValidateCimdDocument: vi.fn(actual.fetchAndValidateCimdDocument) };
+});
+
 vi.mock('../../helpers/user-events', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../helpers/user-events')>();
   const { checkedEmitUserEvent } = await import('../../../testing/user-events');
@@ -35,6 +42,7 @@ import {
 } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
+import { fetchAndValidateCimdDocument } from '../../helpers/cimd';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import { emitUserEvent } from '../../helpers/user-events';
 import consentRoute from './consent';
@@ -657,10 +665,57 @@ describe('UI /ui/consent GET — who the client is (ADR-019 Decision 6, #593)', 
     });
     await run;
     const html = state.body as string;
-    expect(html).toContain('<span class="declared-name">Bankppa.live</span>');
+    expect(html).toContain('<bdi class="declared-name">Bankppa.live</bdi>');
     expect(html).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/u);
     expect(html).not.toContain('cdn.example.net');
     expect(html).not.toContain('<img');
+  });
+
+  it('leads with the host of a CIMD client id URL, from the resolved document', async () => {
+    const clientId = 'https://notes.example.com/client.json';
+    const redirectUri = 'https://notes.example.com/cb';
+    const row = {
+      ...CLIENT,
+      clientId,
+      redirectUris: [redirectUri],
+      provisionedByOperator: false,
+      // Ignored for a CIMD client: only its client id URL is verified.
+      verifiedDomain: 'bank.example',
+      metadata: { registrationType: 'cimd', client_id_metadata_url: clientId },
+    };
+    vi.mocked(fetchAndValidateCimdDocument).mockResolvedValueOnce({
+      client_id: clientId,
+      client_name: 'Example Notes',
+      redirect_uris: [redirectUri],
+      logo_uri: 'https://cdn.example.net/logo.png',
+    });
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-display-cimd' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(row);
+    Object.assign(fastify.repositories.oauthClients, {
+      upsertCimdClient: vi.fn().mockResolvedValue(row),
+    });
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, client_id: clientId, redirect_uri: redirectUri },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const html = state.body as string;
+    expect(html).toContain(
+      '<h1><span class="domain">notes.<strong>example.com</strong></span> wants to access your account</h1>'
+    );
+    expect(html).toContain("The app's details are published at this address.");
+    expect(html).not.toContain('bank.example');
+    expect(html).not.toContain('cdn.example.net');
+    const text = cardText(html);
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('notes.example.com'));
   });
 
   it('refuses the screen, binding nothing, when it cannot show where the code goes', async () => {

@@ -77,6 +77,11 @@ name the client declared comes after all of this, labelled as declared, cut to
 64 characters and stripped of control and bidirectional characters. No logo or
 link the client supplied is shown.
 
+Since the screen always says where the code goes, registration refuses a
+redirect URI it could not show: a host that is not a DNS name of valid labels
+(an underscore, an empty label), an IPv6 address other than loopback, or a
+private-use scheme longer than 64 characters.
+
 ## `/ui/resume/{handle}`
 
 `GET /ui/resume/{handle}` is where a login round-trip lands after a

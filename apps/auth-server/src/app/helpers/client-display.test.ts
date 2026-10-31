@@ -4,6 +4,13 @@ import {
   componentValidator,
   describeErrors,
 } from '@qauth-labs/shared-interaction-contract/src/testing/schema-validator';
+import {
+  DISPLAY_HOST_MAX_LENGTH,
+  DISPLAY_HOST_PATTERN,
+  DISPLAY_SCHEME_MAX_LENGTH,
+  DISPLAY_SCHEME_PATTERN,
+  isLoopbackHost,
+} from '@qauth-labs/shared-validation';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config/env', () => ({
@@ -17,9 +24,6 @@ import {
   type ClientDisplaySource,
   DECLARED_NAME_MAX_LENGTH,
   declaredText,
-  DISPLAY_HOST_PATTERN,
-  DISPLAY_SCHEME_PATTERN,
-  isLoopbackHost,
 } from './client-display';
 
 /** The contract's ClientDisplay schema, which every result must meet. */
@@ -184,6 +188,17 @@ describe('clientDisplay (ADR-019 Decision 6, #593)', () => {
       expect(display(adminClient({ verifiedDomain: null })).kind).toBe('unverified');
     });
 
+    it('reads a stored public suffix as no verified domain', () => {
+      for (const verifiedDomain of ['co.uk', 'eu.org']) {
+        expect(display(adminClient({ verifiedDomain })).kind, verifiedDomain).toBe('unverified');
+      }
+      expect(display(adminClient({ verifiedDomain: 'alice.eu.org' })).verifiedDomain).toEqual({
+        host: 'alice.eu.org',
+        registrableDomain: 'alice.eu.org',
+        sharedHosting: true,
+      });
+    });
+
     it('reads a stored value in any other form as no verified domain', () => {
       for (const verifiedDomain of [
         'Notes.example.com',
@@ -236,10 +251,14 @@ describe('clientDisplay (ADR-019 Decision 6, #593)', () => {
       });
     });
 
-    it('refuses to describe a redirect host the contract cannot carry', () => {
-      expect(() =>
-        clientDisplay(dynamicClient(), { redirectUri: 'https://[2001:db8::1]/cb' })
-      ).toThrow(InvalidRequestError);
+    // Registration refuses these since #593; a client registered before can hold one.
+    it.each([
+      'https://[2001:db8::1]/cb',
+      'https://my_app.example.com/cb',
+      'https://a..b.example/cb',
+      `com.example.${'a'.repeat(60)}:/cb`,
+    ])('refuses to describe %s, which the contract cannot carry', (redirectUri) => {
+      expect(() => clientDisplay(dynamicClient(), { redirectUri })).toThrow(InvalidRequestError);
     });
 
     it('omits the redirect where no code goes', () => {
@@ -331,6 +350,24 @@ describe('clientDisplay (ADR-019 Decision 6, #593)', () => {
       expect(declaredText('n'.repeat(64), 64)).toBe('n'.repeat(64));
     });
 
+    it('keeps at most four combining marks on a character, and none before the first', () => {
+      // A stack of marks draws over the lines above the name.
+      const stacked = `G\u0300\u0301\u0302\u0303\u0304\u0305\u0306\u0307\u0308\u0309\u030A\u030B\u030C\u030D\u030E\u030F\u0310\u0311\u0312\u0313\u0314\u0315\u0316\u0317\u0318\u0319\u031A\u031B\u031C\u031D\u031E\u031F\u0320\u0321\u0322\u0323\u0324\u0325\u0326\u0327\u0328\u0329\u032A\u032B\u032C\u032D\u032E\u032F\u0330\u0331\u0332\u0333\u0334\u0335\u0336\u0337\u0338\u0339\u033A\u033B\u033C\u033Do`;
+      const kept = declaredText(stacked, 64) ?? '';
+      // NFC puts the marks in canonical order first; four of them stay.
+      expect([...kept]).toHaveLength(6);
+      expect(kept.startsWith('G') && kept.endsWith('o')).toBe(true);
+      expect([...kept.slice(1, -1)].every((char) => /\p{M}/u.test(char))).toBe(true);
+      // Natural text keeps its marks: a Devanagari conjunct with a virama and a vowel sign.
+      expect(declaredText('\u0915\u094D\u0937\u093F', 64)).toBe('\u0915\u094D\u0937\u093F');
+      expect(declaredText('\u0336\u0301Notes', 64)).toBe('Notes');
+    });
+
+    it('removes the blank braille pattern, which renders as nothing', () => {
+      expect(declaredText('\u2800\u2800\u2800', 64)).toBeUndefined();
+      expect(declaredText('Notes\u2800Helper', 64)).toBe('NotesHelper');
+    });
+
     it('puts the name in NFC', () => {
       expect(declaredText('Cafe\u0301', 64)).toBe('Caf\u00E9');
     });
@@ -376,8 +413,12 @@ describe('clientDisplay (ADR-019 Decision 6, #593)', () => {
       properties: Record<string, { pattern: string }>;
     };
     expect(verifiedDomain.properties['host'].pattern).toBe(DISPLAY_HOST_PATTERN);
-    const redirect = properties['redirect'] as { properties: Record<string, { pattern: string }> };
+    const redirect = properties['redirect'] as {
+      properties: Record<string, { pattern: string; maxLength: number }>;
+    };
     expect(redirect.properties['host'].pattern).toBe(DISPLAY_HOST_PATTERN);
     expect(redirect.properties['scheme'].pattern).toBe(DISPLAY_SCHEME_PATTERN);
+    expect(redirect.properties['host']['maxLength']).toBe(DISPLAY_HOST_MAX_LENGTH);
+    expect(redirect.properties['scheme']['maxLength']).toBe(DISPLAY_SCHEME_MAX_LENGTH);
   });
 });
