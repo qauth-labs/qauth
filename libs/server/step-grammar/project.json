@@ -1,0 +1,35 @@
+{
+  "name": "server-step-grammar",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/step-grammar/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "typescript", "ajv", "ajv-formats"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/apps/docs-site/public/interaction/**/*",
+        "{workspaceRoot}/tsconfig.base.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which cover only this project's files; the first six entries are the inferred defaults re-declared, because setting `inputs` replaces them. The tests read files elsewhere: they compare the JSON Schema generated from the Zod schemas with the step schemas the Interaction API contract publishes under apps/docs-site/public/interaction, they validate with the contract's Ajv set-up (hence `ajv` and `ajv-formats`), and the exhaustiveness test compiles a sample with the TypeScript compiler and the base tsconfig (hence `typescript` and tsconfig.base.json). The shared test vectors arrive through ^default (shared-test-vectors' `default` input). Without these entries a change to one of those files would replay a cached pass."
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project server-step-grammar --web"
+}

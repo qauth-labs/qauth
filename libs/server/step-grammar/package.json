@@ -1,0 +1,15 @@
+{
+  "name": "@qauth-labs/server-step-grammar",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/shared-interaction-contract": "workspace:*",
+    "tslib": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/shared-test-vectors": "workspace:*",
+    "tsx": "catalog:"
+  }
+}
