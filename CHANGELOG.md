@@ -80,8 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an environment key changes no existing realm. Each boot names every seed key
   still set, once: a warning ("only seeds new realms and is ignored") for a
   policy the server reads from the row (the dynamic registration allowlist, the
-  environment ceiling), and an info line that the server still applies the key
-  for any other. `/oauth/register` and the clients API no longer copy
+  environment ceiling), and an info line for any other: the server still
+  applies the key, a change of it never reaches the stored value, and the
+  stored value applies once that area reads the row. `/oauth/register` and the
+  clients API no longer copy
   `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies. The new
   `fastify.policyStore` (`@qauth-labs/fastify-plugin-realm-policy`) reads a
   realm's policies off its row with no query and updates them only with the

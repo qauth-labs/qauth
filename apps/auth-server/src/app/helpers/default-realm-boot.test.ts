@@ -551,7 +551,7 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
         'tokens.accessTokenLifespanSeconds'
       )
     ).toBe(
-      'ACCESS_TOKEN_LIFESPAN only seeds new realms and is ignored by the stored policies of the realm "master", whose tokens.accessTokenLifespanSeconds stays as stored; the server still applies ACCESS_TOKEN_LIFESPAN to every realm until it reads that policy from the realm row, so keep it set'
+      'ACCESS_TOKEN_LIFESPAN only seeds new realms and is ignored by the stored policies of the realm "master", whose tokens.accessTokenLifespanSeconds stays as stored: a change of ACCESS_TOKEN_LIFESPAN never reaches it. The server still applies ACCESS_TOKEN_LIFESPAN to every realm until it reads that policy from the realm row, so keep it set; once it does, the stored tokens.accessTokenLifespanSeconds applies and ACCESS_TOKEN_LIFESPAN is ignored, so change the stored policy along with ACCESS_TOKEN_LIFESPAN'
     );
   });
 

@@ -307,9 +307,18 @@ key that is still set, once:
 
 - for a key whose policy the server reads from the row, a warning such as
   `DEFAULT_DYNAMIC_REGISTRATION_SCOPES only seeds new realms and is ignored`;
-- for any other key, an info line that the stored policies ignore it and that
+- for any other key, an info line that the stored policies ignore it, that
   the server still applies it to every realm until it reads that policy from
-  the row.
+  the row, and that the stored value applies from then on.
+
+**A key changed after this upgrade never reaches the stored policies.** The
+first boot stored the value each key had then. Change a key whose area has not
+moved yet, and the server applies the new value while it reads the area from
+the environment; the release that moves the area to the row applies the
+stored value instead, whatever the key says by then. A key tightened in the
+meantime, such as a shorter `REFRESH_TOKEN_LIFESPAN` or `CIMD_ENABLED=false`,
+would loosen again at that upgrade. So change the stored policy along with
+the key, not the key alone.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
