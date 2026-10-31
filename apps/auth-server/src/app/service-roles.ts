@@ -98,8 +98,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   web: {
     summary:
       'the browser-session endpoints: authorize, the ceremony pages, consents and wallet linking',
-    // The session purge job goes here when it lands.
-    plugins: [],
+    // The session purge job (#550) runs through the session service.
+    plugins: ['sessions'],
     repositories: [],
   },
   api: {

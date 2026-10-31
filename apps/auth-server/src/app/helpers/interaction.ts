@@ -534,12 +534,15 @@ interface Settlement {
  * End a browser session that an answer created but whose interaction state
  * was never written: no browser holds its cookie. Ended as `sign_out`, the
  * closest of the recorded reasons: the session ends before anyone used it.
+ * QAuth ends it, not the user: the `system` actor (#550).
  */
 async function endUnusedSession(
   request: FastifyRequest,
   session: { readonly realmId: string; readonly sid: string }
 ): Promise<void> {
-  await endBrowserSession(request.server, session.realmId, session.sid, 'sign_out');
+  await endBrowserSession(request.server, session.realmId, session.sid, 'sign_out', {
+    type: 'system',
+  });
 }
 
 /** {@link answerInteraction} once the turn is taken: decide, then write what was decided. */

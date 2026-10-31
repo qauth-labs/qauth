@@ -237,6 +237,7 @@ describe('resolveBrowserSession', () => {
       realmId: REALM.id,
       sid: session.sid,
       reason: 'admin',
+      actor: { type: 'system' },
     });
     expect(sessions.service.sessions.has(session.sid)).toBe(false);
     expect(sessions.redis.hashes.size).toBe(0);
@@ -259,6 +260,7 @@ describe('resolveBrowserSession', () => {
       realmId: REALM.id,
       sid: session.sid,
       reason: 'admin',
+      actor: { type: 'system' },
     });
     expect(sessions.redis.hashes.size).toBe(0);
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
@@ -313,6 +315,7 @@ describe('endBrowserSessions (logout ends every session)', () => {
         realmId: REALM.id,
         sid,
         reason: 'sign_out_everywhere',
+        actor: { type: 'user', id: USER_ID },
       });
     }
     expect(sessions.service.sessions.size).toBe(0);
@@ -353,6 +356,7 @@ describe('endBrowserSessions (logout ends every session)', () => {
       realmId: REALM.id,
       sid: older.sid,
       reason: 'sign_out_everywhere',
+      actor: { type: 'user', id: USER_ID },
     });
   });
 

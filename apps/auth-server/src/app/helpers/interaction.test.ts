@@ -555,7 +555,7 @@ describe('answers (#592)', () => {
     // The session created for the answer was ended: no browser holds it.
     expect(harness.sessions.service.create).toHaveBeenCalledTimes(1);
     expect(harness.sessions.service.revoke).toHaveBeenCalledWith(
-      expect.objectContaining({ realmId: REALM.id, reason: 'sign_out' })
+      expect.objectContaining({ realmId: REALM.id, reason: 'sign_out', actor: { type: 'system' } })
     );
     expect(harness.sessions.service.sessions.size).toBe(0);
   });

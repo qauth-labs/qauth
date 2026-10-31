@@ -24,6 +24,12 @@ import {
   PURGE_EXPIRED_ROLE,
 } from './purge-expired';
 import {
+  createSessionPurgeJob,
+  DEFAULT_SESSION_RETENTION_DAYS,
+  SESSION_PURGE_JOB_NAME,
+  SESSION_PURGE_ROLE,
+} from './session-purge';
+import {
   createSsfSubjectSweepJob,
   SSF_SUBJECT_SWEEP_JOB_NAME,
   SSF_SUBJECT_SWEEP_ROLE,
@@ -34,6 +40,7 @@ export * from './event-retention';
 export * from './interaction-expiry';
 export * from './job-runner';
 export * from './purge-expired';
+export * from './session-purge';
 export * from './ssf-subject-sweep';
 
 /** What the server's jobs need beside the Fastify instance. */
@@ -50,6 +57,11 @@ export interface ServerJobSettings {
    * realm gets. Defaults to 90 days of user events and 365 of admin events.
    */
   readonly eventRetentionFallback?: EventRetentionPolicy;
+  /**
+   * `SESSION_RETENTION_DAYS` (#550): how long the session purge keeps an
+   * ended session's row. Defaults to 30.
+   */
+  readonly sessionRetentionDays?: number;
 }
 
 /**
@@ -58,8 +70,7 @@ export interface ServerJobSettings {
  * only the jobs of its roles, so it never builds a job over a repository it
  * does not load.
  *
- * The key jobs (rotation, #542) go on `signer` and the session purge on `web`
- * when they land.
+ * The key jobs (rotation, #542) go on `signer` when they land.
  */
 export interface ServerJobPlacement {
   readonly name: string;
@@ -103,6 +114,18 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
     repositories: ['events'],
     create: (fastify) =>
       createInteractionExpiryJob({ redis: fastify.redis, events: fastify.repositories.events }),
+  },
+  {
+    // Ends the sessions past an end and deletes old ended rows (#550),
+    // through the session service, which reads `sessions` and `realms`.
+    name: SESSION_PURGE_JOB_NAME,
+    role: SESSION_PURGE_ROLE,
+    repositories: [],
+    create: (fastify, settings) =>
+      createSessionPurgeJob({
+        sessions: fastify.sessionService,
+        retentionDays: settings.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS,
+      }),
   },
 ];
 
