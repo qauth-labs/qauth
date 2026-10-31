@@ -306,7 +306,7 @@ const result = await bootRealmKeys({
 | `JWT_PRIVATE_KEY` (or `_PATH`)                     | The active Ed25519 `token_signing` key.                                                     |
 | `JWT_RS256_PRIVATE_KEY` (or `_PATH`)               | The active RS256 `token_signing` key.                                                       |
 | `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`)               | With hybrid signing on only: the ML-DSA-65 key, in one hybrid pair with the Ed25519 key.    |
-| `SESSION_COOKIE_SECRET`                            | The active `cookie_hmac` key. Its UTF-8 bytes, so HMACs stay the same.                      |
+| `SESSION_COOKIE_SECRET`                            | The active `cookie_hmac` key, the secret's UTF-8 bytes.                                     |
 | `JWT_PUBLIC_KEY`, `JWT_RS256_PUBLIC_KEY` (`_PATH`) | Nothing: the public key is derived with `node:crypto`, and one that differs stops the boot. |
 
 - The `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, else the RFC 7638 thumbprint, as for a
