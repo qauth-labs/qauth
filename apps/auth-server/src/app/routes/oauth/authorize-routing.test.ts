@@ -131,6 +131,9 @@ async function buildServer(): Promise<FastifyInstance> {
     verifyAccessToken: vi.fn(),
   } as never);
   fastify.decorate('sessionService', sessions.service as never);
+  // The session cookie is verified with the realm cookie key the signer
+  // hands out (#493).
+  fastify.decorate('signer', sessions.signer as never);
   fastify.decorate('redis', sessions.redis as never);
   fastify.decorate('sessionUtils', {
     getSession: vi.fn().mockResolvedValue(null),
