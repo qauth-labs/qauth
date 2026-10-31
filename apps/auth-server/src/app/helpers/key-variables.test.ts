@@ -74,7 +74,10 @@ describe('keyVariableSettings', () => {
       keyVariableSettings({ HYBRID_SIGNING_ENABLED: false }, { SESSION_COOKIE_SECRET: '' })
         .cookieSecret
     ).toBeUndefined();
-    for (const published of PUBLISHED_SESSION_COOKIE_SECRETS) {
+    for (const published of PUBLISHED_SESSION_COOKIE_SECRETS.flatMap((value) => [
+      value,
+      `${value}\n`,
+    ])) {
       expect(
         keyVariableSettings(
           { ...BASE, SESSION_COOKIE_SECRET: published },

@@ -16,6 +16,7 @@ export {
   type AuthEnv,
   authEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
+  isPublishedSessionCookieSecret,
   PUBLISHED_SESSION_COOKIE_SECRETS,
 } from './auth';
 export { type BaseEnv, baseEnvSchema } from './base';

@@ -256,7 +256,13 @@ describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
       'change-me-to-a-strong-secret-at-least-32-characters',
     ]);
     try {
-      for (const secret of PUBLISHED_SESSION_COOKIE_SECRETS) {
+      // A published value around whitespace, as a secrets file often ends, is
+      // just as public.
+      for (const secret of PUBLISHED_SESSION_COOKIE_SECRETS.flatMap((value) => [
+        value,
+        `${value}\n`,
+        ` ${value} `,
+      ])) {
         for (const roles of ['all', 'web', 'api', 'signer', 'signer,delivery']) {
           setEnv({
             NODE_ENV: 'production',

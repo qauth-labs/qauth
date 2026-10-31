@@ -4,7 +4,7 @@ import type {
   EnvironmentKeySettings,
   EnvironmentKeySource,
 } from '@qauth-labs/fastify-plugin-signer';
-import { PUBLISHED_SESSION_COOKIE_SECRETS } from '@qauth-labs/server-config';
+import { isPublishedSessionCookieSecret } from '@qauth-labs/server-config';
 import { calculateJwkThumbprint, type JWK } from 'jose';
 
 /**
@@ -76,7 +76,7 @@ export function keyVariableSettings(
   const mlDsaKid = source(config.JWT_MLDSA_KID, 'JWT_MLDSA_KID');
   const cookieSecret =
     config.SESSION_COOKIE_SECRET === undefined ||
-    PUBLISHED_SESSION_COOKIE_SECRETS.includes(config.SESSION_COOKIE_SECRET)
+    isPublishedSessionCookieSecret(config.SESSION_COOKIE_SECRET)
       ? undefined
       : source(config.SESSION_COOKIE_SECRET, 'SESSION_COOKIE_SECRET');
 

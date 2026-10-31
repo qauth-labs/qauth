@@ -30,6 +30,15 @@ export const PUBLISHED_SESSION_COOKIE_SECRETS: readonly string[] = Object.freeze
 ]);
 
 /**
+ * Whether `value` is one of {@link PUBLISHED_SESSION_COOKIE_SECRETS}, around
+ * whitespace too: a published value with a trailing newline, as a secrets
+ * file often ends, is just as public.
+ */
+export function isPublishedSessionCookieSecret(value: string): boolean {
+  return PUBLISHED_SESSION_COOKIE_SECRETS.includes(value.trim());
+}
+
+/**
  * A `'true'` / `'false'` flag. Unset and blank both take `defaultValue`.
  *
  * Uses `z.enum(['true', 'false'])`, NOT `z.coerce.boolean()`. `coerce.boolean`

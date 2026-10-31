@@ -13,12 +13,12 @@ import {
   eventRetentionEnvSchema,
   eventTelemetryEnvSchema,
   federationEnvSchema,
+  isPublishedSessionCookieSecret,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
   observabilityEnvSchema,
   otlpExporterProblems,
   passwordEnvSchema,
-  PUBLISHED_SESSION_COOKIE_SECRETS,
   rateLimitEnvSchema,
   redisEnvSchema,
   serviceRolesEnvSchema,
@@ -187,7 +187,7 @@ export const envSchema = z
     if (
       env.NODE_ENV === 'production' &&
       env.SESSION_COOKIE_SECRET !== undefined &&
-      PUBLISHED_SESSION_COOKIE_SECRETS.includes(env.SESSION_COOKIE_SECRET)
+      isPublishedSessionCookieSecret(env.SESSION_COOKIE_SECRET)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
