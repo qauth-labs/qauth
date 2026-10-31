@@ -1,13 +1,15 @@
 import { BadRequestError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
+import { readPage } from '../api-conventions/cursor';
+import type { Page } from '../api-conventions/paging';
 import { emitUserEvent } from './user-events';
 
 /**
  * Consent listing and revocation, shared by the two surfaces that expose it
  * (issue #150, issue #366).
  *
- * There are two, and they authenticate differently on purpose:
+ * There are four since #524, and they authenticate differently on purpose:
  *
  *   - `routes/consents` — the auth-server's OWN hosted UI. Authenticated by the
  *     `__Host-qauth_session` browser cookie, which is ambient credentials, so it
@@ -16,6 +18,10 @@ import { emitUserEvent } from './user-events';
  *     its TanStack Start server functions. Authenticated by a developer Bearer
  *     access token, exactly like `/api/clients`. A Bearer token is not ambient,
  *     so there is no CSRF token to check and none is required.
+ *   - `/developer/v1-rc.0/consents` and `/account/v1-rc.0/consents` (#524),
+ *     which replace the two above: a token for the developer or the account
+ *     API family, and the API conventions' representation and paging. The
+ *     first two are deprecated aliases until their callers have moved.
  *
  * What must NOT differ between them is the authorization: a caller may only
  * ever see and revoke consents whose `user_id` is their own, and every
@@ -54,6 +60,40 @@ export async function listConsentsForUser(
     scopes: row.scopes,
     grantedAt: row.grantedAt,
   }));
+}
+
+/** One active consent with its client, as the repository reads it. */
+export type ConsentWithClient = Awaited<
+  ReturnType<FastifyInstance['repositories']['oauthConsents']['listActiveForUserWithClient']>
+>[number];
+
+/**
+ * One page of the active consents of `userId` in the realm, newest first
+ * (#524), by `grantedAt` and then id. `list` names the list in its cursors,
+ * so a cursor of another list is refused (`invalid_cursor`).
+ */
+export async function pageConsentsForUser<Item>(
+  fastify: FastifyInstance,
+  realmId: string,
+  userId: string,
+  page: {
+    readonly list: string;
+    readonly limit: number;
+    readonly cursor: string | undefined;
+    readonly item: (row: ConsentWithClient) => Item;
+  }
+): Promise<Page<Item>> {
+  return readPage(
+    {
+      list: page.list,
+      limit: page.limit,
+      cursor: page.cursor,
+      position: (row) => ({ at: row.grantedAt, id: row.id }),
+      item: page.item,
+    },
+    (keyset) =>
+      fastify.repositories.oauthConsents.pageActiveForUserWithClient(realmId, userId, keyset)
+  );
 }
 
 /**
