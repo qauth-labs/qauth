@@ -119,7 +119,10 @@ const approvalSchema = z
     createdAt: isoTime,
     expiresAt: isoTime,
     usedAt: isoTime.nullable(),
-    approvalUrl: z.url().meta({ description: "The approval page, on the requester's realm." }),
+    approvalUrl: z.url().meta({
+      description:
+        "The approval page, on the requester's realm: `/approvals/{realmId}/{approvalId}` under its issuer, `realmId` naming the realm the approval acts on.",
+    }),
     display: z
       .object({
         operation: z.string(),
@@ -179,7 +182,7 @@ async function approvalUrlFor(
           adminTransaction(request)
         );
   if (realm === undefined) throw new Error("The approval's requester realm is gone");
-  return approvalUrlOf(realm, approval.id);
+  return approvalUrlOf(realm, approval);
 }
 
 /** The approval of the path, in the caller's realm, or 404 when the caller may not read it. */
@@ -330,7 +333,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         .header('location', `/admin/v1-rc.0/realms/${realmId}/approvals/${approval.id}`);
       return approvalResource(approval, {
         now,
-        approvalUrl: approvalUrlOf(caller.issuerRealm, approval.id),
+        approvalUrl: approvalUrlOf(caller.issuerRealm, approval),
         display,
       });
     }

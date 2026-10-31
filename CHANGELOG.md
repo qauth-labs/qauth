@@ -1134,7 +1134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin route. Neither the passkey factor nor the approval page has shipped,
   so no code a deployment runs gives an approval; the one factor that exists is
   for tests and refuses to be built under `NODE_ENV=production`. The answer
-  carries `approvalUrl`, built from the requester realm's row. Every security
+  carries `approvalUrl`, `/approvals/{realmId}/{approvalId}` on the requester
+  realm's issuer, built from its row. Every security
   operation registers a renderer, and the admin listener refuses to boot one
   without it: the approver sees typed display data rendered from the stored
   request, every string length-capped with its control, bidirectional, format

@@ -51,20 +51,31 @@ import { approvalStanding, shownStatus } from './standing';
 export const APPROVAL_LIFETIME_MS = 5 * 60 * 1000;
 
 /**
- * The path of the approval page on the auth server: `/approvals/{approvalId}`
- * under the issuer of the requester's realm. A link to the auth server, not
- * to `/ui/*` (ADR-019 Decision 6): opening it starts the interaction of the
- * approval step, which #617 serves.
+ * The path of the approval page on the auth server:
+ * `/approvals/{realmId}/{approvalId}` under the issuer of the requester's
+ * realm, `realmId` being the realm the approval acts on. A link to the auth
+ * server, not to `/ui/*` (ADR-019 Decision 6): opening it starts the
+ * interaction of the approval step, which #617 serves.
+ *
+ * The page finds the approval in the realm the URL names, as every read of an
+ * approval does: an operator-realm admin's approval for a tenant realm lives
+ * in the tenant realm, not in the realm whose issuer serves the page.
  */
 export const APPROVAL_PAGE_PATH_PREFIX = '/approvals/';
 
 /**
- * The approval page of `approvalId`, on the realm the requester's account
+ * The approval page of `approval`, on the realm the requester's account
  * lives in, where the requester's own step-up is given. Built from the realm
  * row (ADR-019 Decision 1), never from the request.
  */
-export function approvalUrlOf(requesterRealm: RealmUrlSource, approvalId: string): string {
-  return buildRealmUrl(requesterRealm, `${APPROVAL_PAGE_PATH_PREFIX}${approvalId}`);
+export function approvalUrlOf(
+  requesterRealm: RealmUrlSource,
+  approval: Pick<AdminApproval, 'realmId' | 'id'>
+): string {
+  return buildRealmUrl(
+    requesterRealm,
+    `${APPROVAL_PAGE_PATH_PREFIX}${approval.realmId}/${approval.id}`
+  );
 }
 
 /**
@@ -248,7 +259,7 @@ async function appendAudit(
 
 /** One approver's decision on one approval, as the approval page hands it over. */
 export interface ApprovalDecision {
-  /** The realm the approval acts on, as its URL names it. */
+  /** The realm the approval acts on, as the approval page's URL names it ({@link approvalUrlOf}). */
   readonly realmId: string;
   readonly approvalId: string;
   /** The account signed in on the approval page. */

@@ -222,7 +222,9 @@ Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approv
 2. It files an approval: `POST /admin/v1-rc.0/realms/{realmId}/approvals` with the operation's id,
    its path parameters other than `realmId`, its query and its body, and an optional `reason`. The
    answer, 201, is the approval, `pending`, with `approvalUrl`: the approval page, on the auth
-   server of the realm the requester's account lives in, built from that realm's row.
+   server of the realm the requester's account lives in, built from that realm's row. Its path is
+   `/approvals/{realmId}/{approvalId}`, naming the realm the approval acts on, where the page finds
+   it: an operator-realm admin's approval for a tenant realm lives in the tenant realm.
 3. An approver confirms on that page with a factor, or declines. There is no admin route for it.
    The passkey factor is the only one a deployment will use. Neither it nor the approval page has
    shipped yet, so no code a deployment runs gives an approval; the one factor that exists is for

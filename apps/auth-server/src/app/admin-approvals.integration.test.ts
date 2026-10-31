@@ -401,7 +401,7 @@ describe('approvals for security operations (#512, real containers)', () => {
       approvalsRequired: 1,
       approvals: [],
       usedAt: null,
-      approvalUrl: `${operator.issuer}/approvals/${filed.id}`,
+      approvalUrl: `${operator.issuer}/approvals/${realmId}/${filed.id}`,
       display: {
         operation: 'fixtureKeys.rotate',
         title: 'Rotate the signing key signing-1',
