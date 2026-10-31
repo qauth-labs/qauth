@@ -299,9 +299,10 @@ flows move to the stored values one area at a time: the token lifetimes
 ([#529](https://github.com/qauth-labs/qauth/issues/529)) and CIMD
 ([#534](https://github.com/qauth-labs/qauth/issues/534)). The dynamic
 registration allowlist and the environment ceiling already come from the row:
-`/oauth/register` and the clients API no longer copy
-`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies, even
-when its list is empty. Until an area has moved, the server still applies its
+`/oauth/register` and the clients API no longer write
+`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm's list. A realm that has its
+policies is held to its own list, even an empty one; a realm with none yet, to
+the list its fill will hold, which the first boot stores. Until an area has moved, the server still applies its
 keys to every realm, so keep them set. At every boot the server names each seed
 key that is still set, once:
 

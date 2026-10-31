@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../db';
 import { REALM_POLICY_COLUMNS, realmPolicyRecord, splitRealmPolicies } from './realm-policy-record';
-import { createRealmsRepository, type NewRealm, type Realm } from './realms.repository';
+import {
+  createRealmsRepository,
+  type NewRealm,
+  type Realm,
+  type UpdateRealm,
+} from './realms.repository';
 
 /**
  * The two storage forms of a realm's policies (#516): four fields in the
@@ -255,16 +260,61 @@ describe('createRealmsRepository — the policy seed (#516)', () => {
     expect(insertedValue(queries[0], 'policies_version')).toBe(1);
   });
 
-  it('keeps a column-backed field the creator sets, as for every other seed', async () => {
+  it('stores the seed of the four column-backed fields whatever the creator passes', async () => {
+    const { db, queries } = createRecordingDb();
+    // A caller the types do not bind: values the policy schema refuses, which
+    // would make every later read of the realm's policies throw.
+    const forged = {
+      name: 'lax',
+      accessTokenLifespan: 0,
+      refreshTokenLifespan: 0,
+      dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'],
+      maxEnvironmentLaxity: 'development',
+    } as unknown as NewRealm;
+
+    await createRealmsRepository(db, { seeds }).create(forged);
+    await createRealmsRepository(db).create(forged);
+
+    expect(insertedValue(queries[0], 'access_token_lifespan')).toBe(900);
+    expect(insertedValue(queries[0], 'refresh_token_lifespan')).toBe(604800);
+    expect(insertedValue(queries[0], 'dynamic_registration_allowed_scopes')).toEqual([
+      'openid',
+      'profile',
+    ]);
+    expect(insertedValue(queries[0], 'max_environment_laxity')).toBe('production');
+    expect(insertedValue(queries[0], 'policies_version')).toBe(1);
+    // Without the policy seed, the column defaults, until the boot step fills them.
+    for (const column of [
+      'access_token_lifespan',
+      'refresh_token_lifespan',
+      'dynamic_registration_allowed_scopes',
+      'max_environment_laxity',
+    ]) {
+      expect(insertedValue(queries[1], column), column).toBe('default');
+    }
+  });
+
+  it('drops every policy column from a plain update, the four column-backed ones among them', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createRealmsRepository(db, { seeds }).create({
-      name: 'lax',
-      maxEnvironmentLaxity: 'development',
-    });
+    // The recording database has no such realm, so the update finds none.
+    await expect(
+      createRealmsRepository(db).update('00000000-0000-7000-8000-000000000001', {
+        enabled: false,
+        accessTokenLifespan: 0,
+        refreshTokenLifespan: 0,
+        dynamicRegistrationAllowedScopes: ['qauth:admin:read'],
+        maxEnvironmentLaxity: 'development',
+        policies: { password: { minScore: 0 } },
+        policySchemaVersion: '9',
+        policiesVersion: 0,
+      } as unknown as UpdateRealm)
+    ).rejects.toThrow('not found');
 
-    expect(insertedValue(queries[0], 'max_environment_laxity')).toBe('development');
-    expect(insertedValue(queries[0], 'policies_version')).toBe(1);
+    expect(queries).toHaveLength(1);
+    expect(queries[0].text).toMatch(
+      /^update "realms" set "enabled" = \$1, "updated_at" = \$2 where/
+    );
   });
 
   it('leaves a realm without the policy seed with no policies (counter 0)', async () => {

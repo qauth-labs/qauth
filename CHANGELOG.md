@@ -83,8 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment ceiling), and an info line for any other: the server still
   applies the key, a change of it never reaches the stored value, and the
   stored value applies once that area reads the row. `/oauth/register` and the
-  clients API no longer copy
-  `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies. The new
+  clients API no longer write `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a
+  realm's allowlist: they read the realm's list, or for a realm with no
+  policies yet the list its fill will hold. A plain realm create or update
+  writes no policy, the four column-backed fields included. The new
   `fastify.policyStore` (`@qauth-labs/fastify-plugin-realm-policy`) reads a
   realm's policies off its row with no query and updates them only with the
   expected `policies_version`; the trigger `realms_policies_version` raises the

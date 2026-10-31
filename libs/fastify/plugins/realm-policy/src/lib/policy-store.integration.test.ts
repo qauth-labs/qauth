@@ -212,8 +212,13 @@ describe('policy store over the realms table (integration)', () => {
     const realm = await realms.create({ name: 'trigger' });
     const read = await store.get(realm.id);
 
-    // A writer from before the policies existed, such as /oauth/register's.
-    await realms.update(realm.id, { dynamicRegistrationAllowedScopes: ['openid'] });
+    // A writer from before the policies existed, such as /oauth/register's on
+    // a node of the previous release during a rolling upgrade. This release's
+    // repository writes no policy column (below).
+    await db().pool.query(
+      `UPDATE realms SET dynamic_registration_allowed_scopes = '["openid"]'::jsonb WHERE id = $1`,
+      [realm.id]
+    );
 
     await expect(
       store.update(realm.id, { password: { minScore: 4 } }, { expectedVersion: read?.version ?? 0 })
@@ -221,6 +226,40 @@ describe('policy store over the realms table (integration)', () => {
     expect(
       (await store.get(realm.id))?.policies.registration.dynamicRegistrationAllowedScopes
     ).toEqual(['openid']);
+  });
+
+  it("writes no policy column through the repository's plain update", async () => {
+    const realms = createRealmsRepository(db().db, {
+      seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
+    });
+    const realm = await realms.create({ name: 'plain-update' });
+    const before = await row(realm.id);
+
+    // A caller the types do not bind: every policy column is dropped, the
+    // rest is written.
+    await realms.update(realm.id, {
+      enabled: false,
+      accessTokenLifespan: 0,
+      refreshTokenLifespan: 0,
+      dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'],
+      maxEnvironmentLaxity: 'development',
+      policies: { password: { minScore: 0 } },
+      policySchemaVersion: '9',
+      policiesVersion: 0,
+    } as never);
+
+    const after = await row(realm.id);
+    expect(after).toMatchObject({
+      enabled: false,
+      access_token_lifespan: before.access_token_lifespan,
+      refresh_token_lifespan: before.refresh_token_lifespan,
+      dynamic_registration_allowed_scopes: before.dynamic_registration_allowed_scopes,
+      max_environment_laxity: before.max_environment_laxity,
+      policies: before.policies,
+      policy_schema_version: before.policy_schema_version,
+      policies_version: before.policies_version,
+    });
+    expect((await storeOn(db()).get(realm.id))?.version).toBe(1);
   });
 
   it('fills a realm with no policies once, keeping the row values the server read before', async () => {

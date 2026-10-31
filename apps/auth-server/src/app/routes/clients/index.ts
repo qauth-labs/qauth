@@ -18,6 +18,7 @@ import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { createRequireManagementJwt } from '../../helpers/management-token';
+import { dynamicRegistrationScopesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
@@ -245,20 +246,18 @@ function assertGrantResponseConsistency(input: {
 }
 
 /**
- * Resolve the realm's effective dynamic-registration scope allowlist, seeding
- * it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` on first use exactly as
- * `/oauth/register` does. The REST create/update paths reuse this same policy
- * so a developer cannot self-grant a scope through the management API that the
- * realm would refuse at dynamic registration — keeping the two
- * client-creation paths consistent. Seeding is best-effort: a racing write
- * never blocks the request.
+ * Resolve the realm's effective dynamic-registration scope allowlist exactly
+ * as `/oauth/register` does. The REST create/update paths reuse this same
+ * policy so a developer cannot self-grant a scope through the management API
+ * that the realm would refuse at dynamic registration — keeping the two
+ * client-creation paths consistent.
  *
  * The list is read from the database, not from the realm resolver's row
- * (`request.realm`), which can be up to its cache time old (#487): the seed
- * must see a list an operator set since then, or it would overwrite it. A
- * realm that no longer exists permits no scope. A realm that has its policies
- * (#516) is never seeded here: the boot step seeded its list from the
- * environment, and an empty list is the realm's own policy.
+ * (`request.realm`), which can be up to its cache time old (#487): a list an
+ * operator set since then must apply. A realm that no longer exists permits
+ * no scope. A realm with no policies yet (#516) reads as its fill will leave
+ * it, and nothing is written: the boot step stores the fill, the first node
+ * to boot winning.
  */
 async function resolveRealmAllowedScopes(
   fastify: FastifyInstance,
@@ -266,25 +265,7 @@ async function resolveRealmAllowedScopes(
 ): Promise<string[]> {
   const realm = await fastify.repositories.realms.findById(realmId);
   if (!realm) return [];
-  let allowedScopes = realm.dynamicRegistrationAllowedScopes ?? [];
-  if (
-    allowedScopes.length === 0 &&
-    (realm.policiesVersion ?? 0) === 0 &&
-    env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0
-  ) {
-    allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
-    try {
-      await fastify.repositories.realms.update(realm.id, {
-        dynamicRegistrationAllowedScopes: allowedScopes,
-      });
-    } catch (err) {
-      fastify.log.warn(
-        { err, realmId: realm.id },
-        'Failed to persist default dynamic_registration_allowed_scopes'
-      );
-    }
-  }
-  return allowedScopes;
+  return dynamicRegistrationScopesOf(fastify.policyStore, realm);
 }
 
 /**
@@ -296,8 +277,8 @@ async function resolveRealmAllowedScopes(
  * A scope in QAuth's reserved `qauth:` namespace (#507) is never in the
  * allowlist, so it gets the same refusal as any other scope the realm does not
  * allow. The allowlist cannot hold one, and the namespace is left out of it
- * here too, since the list may come from the environment when the realm's
- * seed write failed.
+ * here too, since the list of a realm with no policies yet comes from the
+ * environment's seed.
  */
 function assertScopesAllowed(requested: string[], realmAllowedScopes: string[]): void {
   const disallowed = requested.filter(
