@@ -35,7 +35,7 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
-import { ApprovalRequiredError } from '../helpers/approval-required';
+import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import type { OAuthErrorCode } from './oauth-error';
@@ -207,8 +207,9 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * error handler, each with the code it answers (#513): the refusal of a
  * cookie-authenticated route without a browser session, and the Shared Signals
  * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
- * routes answer problem documents), and the admin pipeline's refusal of a
- * security operation that carries no approval. Each code is one the problem types page
+ * routes answer problem documents), the admin pipeline's refusal of a
+ * security operation that carries no approval, and an approval's refused
+ * move. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -221,6 +222,9 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   // The admin pipeline's approval gate (#511): a security operation that
   // carries no approval never runs.
   { errorClass: ApprovalRequiredError, code: 'approval_required', oauthError: 'access_denied' },
+  // The approval engine (#512): a move an approval cannot make from where it
+  // stands.
+  { errorClass: ApprovalStateError, code: 'conflict', oauthError: 'invalid_request' },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },

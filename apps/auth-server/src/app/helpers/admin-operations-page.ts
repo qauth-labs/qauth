@@ -20,7 +20,7 @@ export const SECURITY_OPERATIONS_PAGE_PATH =
   'apps/docs-site/src/content/docs/reference/security-operations.md';
 
 /** The date the page's hand-written prose was last checked; change it with the prose. */
-export const SECURITY_OPERATIONS_PAGE_LAST_VERIFIED = '2026-10-26';
+export const SECURITY_OPERATIONS_PAGE_LAST_VERIFIED = '2026-10-31';
 
 /** Where the registry lives, as the page names it. */
 const REGISTRY_PATH = 'apps/auth-server/src/app/helpers/admin-operations.ts';
@@ -186,6 +186,13 @@ operation of the OpenAPI document as \`x-qauth-effects\`
   \`x-qauth-two-admin\` differs from the registry. The classification stage is registered before
   every route, and checks each route again on its first request. In CI, the API conventions check
   fails when an admin operation of the OpenAPI document disagrees with the registry.
+- A security operation runs only with a fresh approval bound to that exact request
+  ([API conventions](/reference/api-conventions/#approvals)). So each one an admin route performs
+  registers a renderer (\`render\`): what its approver is shown of one request, typed display data
+  built from the stored request alone. The admin listener refuses to boot such a route without
+  one. Filing an approval (\`approvals.create\`) and withdrawing one (\`approvals.cancel\`) need
+  what the operation it is for needs, so they declare every effect and permission and decide per
+  request; they are the only security operations that run without an approval.
 
 These are not security operations:
 

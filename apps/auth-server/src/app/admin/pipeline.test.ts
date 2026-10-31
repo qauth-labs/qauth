@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import {
   type AdminOperation,
+  createAdminOperationRegistry,
   createOperationRegistry,
   defineOperation,
   operationSchemaExtensions,
@@ -171,6 +172,104 @@ describe('the admin pipeline at boot', () => {
     });
     expect(handler).toBeTypeOf('function');
     expect(handler).not.toBe(own);
+  });
+});
+
+describe('the routes of security operations at boot (#512)', () => {
+  const rotate = (render?: () => { title: string }) =>
+    defineOperation({
+      id: 'fixtureKeys.rotate',
+      class: 'security',
+      effects: ['key-custody'],
+      permissions: ['realms.policies.security'],
+      description: 'A security operation (fixture).',
+      ...(render === undefined ? {} : { render }),
+    });
+
+  /** Boot `routes` behind the pipeline, with a registry of `operation` and the approval operations. */
+  async function bootSecurity(
+    operation: AdminOperation,
+    routes: (scope: FastifyInstance, extensions: object) => void
+  ): Promise<FastifyInstance> {
+    const app = Fastify({ logger: false });
+    instance = app;
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    const registry = createAdminOperationRegistry([operation], { reserved: [] });
+    await app.register(adminPipeline, {
+      registry,
+      refusalsByAddress: UNCOUNTED,
+      callsBySubject: UNCOUNTED,
+      routes: (scope) =>
+        routes(scope, operationSchemaExtensions(registry.get(operation.id) as AdminOperation)),
+    });
+    await app.ready();
+    return app;
+  }
+
+  const path = '/admin/v1-rc.0/realms/:realmId/keys/rotate';
+
+  // Acceptance criterion: the boot fails for a security operation without a
+  // renderer (also against the real listener, admin-listener.integration.test.ts).
+  it('refuses the route of a security operation without a renderer', async () => {
+    await expect(
+      bootSecurity(rotate(), (scope, schema) => {
+        scope.post(path, { config: { operation: 'fixtureKeys.rotate' }, schema }, async () => ({}));
+      })
+    ).rejects.toThrow(/fixtureKeys.rotate, which has no renderer/);
+  });
+
+  it('boots it with a renderer, and keeps its route for the approvals filed against it', async () => {
+    const params = z.object({ realmId: z.uuid() });
+    let context: FastifyInstance['adminApi'] | undefined;
+    await bootSecurity(rotate(() => ({ title: 'Rotate' })), (scope, schema) => {
+      context = scope.adminApi;
+      scope.post(
+        path,
+        { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params } },
+        async () => ({})
+      );
+    });
+    expect(context?.routeOf('fixtureKeys.rotate')).toEqual({ method: 'POST', url: path, params });
+    expect(context?.routeOf('realms.get')).toBeUndefined();
+  });
+
+  it('refuses a second route of one operation, and a security route under several methods', async () => {
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    await expect(
+      bootSecurity(operation, (scope, schema) => {
+        const options = { config: { operation: 'fixtureKeys.rotate' }, schema };
+        scope.post(path, options, async () => ({}));
+        scope.put(path, options, async () => ({}));
+      })
+    ).rejects.toThrow(/an operation has one route/);
+    await instance?.close();
+    await expect(
+      bootSecurity(operation, (scope, schema) => {
+        scope.route({
+          method: ['POST', 'PUT'],
+          url: path,
+          config: { operation: 'fixtureKeys.rotate' },
+          schema,
+          handler: async () => ({}),
+        });
+      })
+    ).rejects.toThrow(/under several methods/);
+  });
+
+  it('refuses a security route whose body schema a filed request cannot be parsed with', async () => {
+    await expect(
+      bootSecurity(rotate(() => ({ title: 'Rotate' })), (scope, schema) => {
+        scope.post(
+          path,
+          {
+            config: { operation: 'fixtureKeys.rotate' },
+            schema: { ...schema, body: { type: 'object' } },
+          },
+          async () => ({})
+        );
+      })
+    ).rejects.toThrow(/body schema of the security operation fixtureKeys.rotate is not a Zod schema/);
   });
 });
 

@@ -3,7 +3,7 @@ title: Security operations
 description: What makes an admin operation a security operation, the effect tags, every admin operation with its class and effects, and the reserved operation ids, generated from the registry in apps/auth-server.
 sidebar:
   order: 7
-lastVerified: '2026-10-26'
+lastVerified: '2026-10-31'
 ---
 
 <!-- Generated from apps/auth-server/src/app/helpers/admin-operations.ts by its tests. Do not edit by hand: change the registry and run `pnpm nx test auth-server -- -u`. -->
@@ -13,9 +13,6 @@ the screen it sits on ([ADR-019](/reference/records/adr/019-deployment-topology-
 Decision 7). Each admin operation is defined once, in the registry in `apps/auth-server/src/app/helpers/admin-operations.ts`, with
 its class, the effects that make it a security operation and the
 [permissions](/reference/admin-permissions/) it needs. This page is generated from that registry.
-
-No admin operation is registered yet, so no admin route can pass the boot check below: the
-rules are in place for the operations to come.
 
 ## Effects
 
@@ -79,6 +76,13 @@ operation of the OpenAPI document as `x-qauth-effects`
   `x-qauth-two-admin` differs from the registry. The classification stage is registered before
   every route, and checks each route again on its first request. In CI, the API conventions check
   fails when an admin operation of the OpenAPI document disagrees with the registry.
+- A security operation runs only with a fresh approval bound to that exact request
+  ([API conventions](/reference/api-conventions/#approvals)). So each one an admin route performs
+  registers a renderer (`render`): what its approver is shown of one request, typed display data
+  built from the stored request alone. The admin listener refuses to boot such a route without
+  one. Filing an approval (`approvals.create`) and withdrawing one (`approvals.cancel`) need
+  what the operation it is for needs, so they declare every effect and permission and decide per
+  request; they are the only security operations that run without an approval.
 
 These are not security operations:
 
@@ -91,7 +95,11 @@ These are not security operations:
 
 ## Operations
 
-No admin operation is registered yet.
+| Operation          | Class    | Effects                                                                                                                                                                                                    | Permissions                                                                                                                                      | Description                                                                                                                |
+| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `approvals.create` | security | `credential-path`, `token-content`, `issue-for-other`, `administration`, `import`, `federation-operator`, `key-custody`, `realm-lifecycle`, `authority-tree-power`, `posture-loosening`, `bulk-revocation` | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `realms.policies.security`, `approvals.read`, `approvals.approve` | File an approval request for one request of a security operation: it needs what that operation needs. Decided per request. |
+| `approvals.get`    | read     | none                                                                                                                                                                                                       | `approvals.read`                                                                                                                                 | Read an approval request: its requester, an approver of it, or an admin who may approve it.                                |
+| `approvals.cancel` | security | `credential-path`, `token-content`, `issue-for-other`, `administration`, `import`, `federation-operator`, `key-custody`, `realm-lifecycle`, `authority-tree-power`, `posture-loosening`, `bulk-revocation` | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `realms.policies.security`, `approvals.read`, `approvals.approve` | Withdraw an approval request the caller filed: it needs what the operation it is for needs. Decided per request.           |
 
 ## Reserved operations
 

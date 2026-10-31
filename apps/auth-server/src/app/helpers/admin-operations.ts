@@ -12,8 +12,10 @@
  *   - `permissions`, the permissions of the admin catalog
  *     (`admin-permissions.ts`) a caller needs;
  *   - `description`, one sentence for the docs page;
- *   - and, when the request decides what the operation needs, `classify`
- *     (with `loadState` to read the current state it compares against).
+ *   - when the request decides what the operation needs, `classify` (with
+ *     `loadState` to read the current state it compares against);
+ *   - and, on a security operation, `render`: what an approver is shown of
+ *     one request (#512).
  *
  * THE STATIC RULE. An operation is of class `security` if and only if its
  * `effects` are not empty, and its class is the strictest class among its
@@ -79,6 +81,7 @@ import {
 } from '@qauth-labs/shared-validation';
 import type { FastifyRequest } from 'fastify';
 
+import { approvalOperationDefinitions } from '../admin/approvals/operations';
 import {
   RESERVED_OPERATIONS,
   type ReservedOperation,
@@ -126,6 +129,38 @@ export interface ClassifyInput {
   readonly body: unknown;
 }
 
+/**
+ * What `render` sees of a request an approval was filed for: the stored
+ * canonical request's operation id, method, path parameters, query and body,
+ * frozen. Nothing the requester wrote about it (the reason) is in it.
+ */
+export interface RenderInput {
+  readonly operationId: string;
+  readonly method: string;
+  readonly params: unknown;
+  readonly query: unknown;
+  readonly body: unknown;
+}
+
+/** One line of a rendered operation: a label and its value, with the value it replaces. */
+export interface RenderedField {
+  readonly label: string;
+  readonly value: string;
+  /** The value the operation replaces, for a change shown side by side (ADR-020 §5). */
+  readonly before?: string;
+}
+
+/**
+ * What an approver is shown of one request of a security operation: typed
+ * display data, never HTML. The approval engine (`admin/approvals/display.ts`)
+ * applies the display rules of ADR-019 Decision 6 to every string.
+ */
+export interface RenderedOperation {
+  /** What the operation does, in one line. */
+  readonly title: string;
+  readonly fields?: readonly RenderedField[];
+}
+
 /** A definition, as {@link defineOperation} takes it. */
 export interface AdminOperationDefinition<State = unknown> {
   /** The published operation id, also the route's `operationId`. */
@@ -167,6 +202,13 @@ export interface AdminOperationDefinition<State = unknown> {
    * state it was made against.
    */
   stateVersion?(state: State): string;
+  /**
+   * What an approver is shown of one request (#512), from the stored request
+   * alone: pure and synchronous. Required on every security operation an
+   * admin route performs: the admin pipeline refuses to boot such a route
+   * without it. Only a security operation renders.
+   */
+  render?(request: RenderInput): RenderedOperation;
 }
 
 /** A registered operation: a definition that {@link defineOperation} accepted, frozen. */
@@ -182,6 +224,7 @@ const DEFINITION_KEYS: ReadonlySet<string> = new Set([
   'classify',
   'loadState',
   'stateVersion',
+  'render',
 ]);
 
 /** A definition refused by {@link defineOperation} or {@link createOperationRegistry}. */
@@ -251,7 +294,8 @@ function snapshotOperation(operation: AdminOperationDefinition): AdminOperationD
  */
 function assertOperation(operation: AdminOperationDefinition): void {
   const where = `operation ${JSON.stringify(operation.id)}`;
-  const { id, effects, permissions, description, classify, loadState, stateVersion } = operation;
+  const { id, effects, permissions, description, classify, loadState, stateVersion, render } =
+    operation;
   if (typeof id !== 'string' || !OPERATION_ID_PATTERN.test(id)) {
     throw new OperationDefinitionError(
       `${where}: an id is <resource>.<verb>, lower camelCase segments joined by dots, such as realms.get`
@@ -325,6 +369,16 @@ function assertOperation(operation: AdminOperationDefinition): void {
   }
   if (stateVersion !== undefined && loadState === undefined) {
     throw new OperationDefinitionError(`${where}: stateVersion is read only with loadState`);
+  }
+  if (render !== undefined && typeof render !== 'function') {
+    throw new OperationDefinitionError(`${where}: render is a function`);
+  }
+  // Only a security operation is ever approved, so only one is ever shown to
+  // an approver.
+  if (render !== undefined && operation.class !== 'security') {
+    throw new OperationDefinitionError(
+      `${where}: only a security operation renders; render shows an approver the operation`
+    );
   }
   // A request whose classification fails closed gets the declaration, which
   // must therefore be a security classification: otherwise a broken
@@ -1094,11 +1148,33 @@ export function operationSchemaExtensions(operation: AdminOperation): OperationS
 }
 
 /**
- * Every admin operation. None is registered yet: the admin API's first
- * operations, reading a realm and patching its policies (#517), register here
- * with the admin listener (#511).
+ * A registry of `operations` and the approval engine's own operations
+ * (`approvals.create`, `approvals.get`, `approvals.cancel`, #512), which every
+ * admin listener serves: a security operation runs only with an approval
+ * filed through them. Filing and cancelling an approval need what the
+ * operation it is for needs, so their `classify` looks that operation up in
+ * the registry built here.
+ *
+ * @throws {OperationDefinitionError} as {@link createOperationRegistry} does
+ */
+export function createAdminOperationRegistry(
+  operations: readonly AdminOperation[],
+  options: OperationRegistryOptions = {}
+): OperationRegistry {
+  const built: { registry?: OperationRegistry } = {};
+  const engine = approvalOperationDefinitions(options.permissions ?? PERMISSION_REGISTRY, (id) =>
+    built.registry?.get(id)
+  );
+  built.registry = createOperationRegistry([...operations, ...engine], options);
+  return built.registry;
+}
+
+/**
+ * Every admin operation, but the approval engine's own. None is registered
+ * yet: the admin API's first operations, reading a realm and patching its
+ * policies (#517), register here with the admin listener (#511).
  */
 export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze([]);
 
-/** The registry the admin pipeline classifies against. */
-export const OPERATION_REGISTRY: OperationRegistry = createOperationRegistry(ADMIN_OPERATIONS);
+/** The registry the admin pipeline classifies against: {@link ADMIN_OPERATIONS} and the approval operations. */
+export const OPERATION_REGISTRY: OperationRegistry = createAdminOperationRegistry(ADMIN_OPERATIONS);
