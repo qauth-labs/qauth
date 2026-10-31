@@ -301,7 +301,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'oauth/userinfo',
     prefix: '/oauth',
     roles: ['api'],
-    plugins: ['jwt', 'password'],
+    plugins: ['jwt'],
     repositories: ['events', 'oauthClients', 'realms', 'userAttributes', 'users'],
     load: () => import('./routes/oauth/userinfo'),
   },
