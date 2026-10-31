@@ -343,7 +343,9 @@ secret store takes them once it ships
 ([#529](https://github.com/qauth-labs/qauth/issues/529)), and until then the
 server reads them from the environment. During a rolling upgrade a node of the
 previous release reads none of the new columns and runs on the environment as
-before.
+before. A realm such a node creates during the roll has no policies (counter 0)
+until a node of this release boots again, since only the boot fills them, so
+restart one node of this release once the roll is complete.
 
 ### The delivery role reads `realms.issuer`
 
