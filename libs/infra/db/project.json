@@ -87,6 +87,15 @@
         "forwardAllArgs": true
       },
       "description": "Operator-only client suspension (ANT-2026-DR5XI3LV): pass `-- --realm=<name> --client-id=<client_id> [--lift]`"
+    },
+    "db:disable-user": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/disable-user.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "Disable a user account and end every session and token it holds, or enable it again (#748): pass `-- --realm=<name> --user-id=<user id> [--enable]`"
     }
   }
 }
