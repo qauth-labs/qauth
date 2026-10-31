@@ -650,6 +650,50 @@ describe('approvals for security operations (#512, real containers)', () => {
     ]);
   });
 
+  it('takes an approver whose ids come in upper case as the account they name', async () => {
+    const realmId = await tenant('alpha');
+    const requester = await adminWith(realmId, 'security-admin');
+    const filed = await file(realmId, requester.token);
+    await app().dbPool.query('UPDATE admin_approvals SET approvals_required = 2 WHERE id = $1', [
+      filed.id,
+    ]);
+    const engine = await import('./admin/approvals/engine');
+    const shouted = {
+      realmId: requester.approver.realmId.toUpperCase(),
+      accountId: requester.approver.accountId.toUpperCase(),
+    };
+    // The page hands the ids over as it got them; the authenticator answers
+    // with the account's own credential.
+    const approveAs = async (approver: { realmId: string; accountId: string }) => {
+      const decision = { realmId, approvalId: filed.id, approver };
+      const { challenge } = await engine.startApproval(
+        app(),
+        test.factor,
+        decision,
+        engineOptions()
+      );
+      return engine.completeApproval(
+        app(),
+        test.factor,
+        { ...decision, response: test.answer(challenge, requester.approver) },
+        engineOptions()
+      );
+    };
+
+    // The requester's own step-up, stored as the database names the account.
+    const first = await approveAs(shouted);
+    expect(first.status).toBe('pending');
+    expect(first.approvals.map((given) => [given.approverRealmId, given.approverId])).toEqual([
+      [requester.approver.realmId, requester.userId],
+    ]);
+    // Neither case gives the approval that needs a different account.
+    await expect(approveAs(requester.approver)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(approveAs(shouted)).rejects.toMatchObject({ statusCode: 403 });
+    expect((await storedApproval(filed.id))?.status).toBe('pending');
+    const row = (await auditRows(realmId)).at(-1);
+    expect(row).toMatchObject({ operation_id: 'approvals.approve', actor_id: requester.userId });
+  });
+
   it('refuses an answer the factor made for another approval', async () => {
     const realmId = await tenant('alpha');
     const requester = await adminWith(realmId, 'security-admin');

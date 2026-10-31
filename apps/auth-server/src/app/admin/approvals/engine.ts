@@ -293,12 +293,18 @@ export async function approverAuthority(
  * has expired, is a conflict; one it may read but not approve (its own
  * request once its step-up is in, an approval it already gave, an admin
  * without `approvals.approve`) is forbidden.
+ *
+ * With it, the approver as the database names its account. The page may hand
+ * over a UUID in upper case, which finds the same account: compared as it
+ * came, it would pass for another approver, and the requester could give an
+ * approval that needs a different account. Every later step (the standing,
+ * the factor's challenge, the stored approval, the audit row) uses this one.
  */
 async function approvalTheApproverMayDecide(
   fastify: FastifyInstance,
   decision: ApprovalDecision,
   now: number
-): Promise<AdminApproval> {
+): Promise<{ readonly approval: AdminApproval; readonly approver: Approver }> {
   const notFound = () => new NotFoundError('Approval', decision.approvalId);
   const approval = await fastify.repositories.adminApprovals.findById(
     decision.realmId,
@@ -307,9 +313,10 @@ async function approvalTheApproverMayDecide(
   if (approval === undefined) throw notFound();
   const authority = await approverAuthority(fastify, decision.approver, approval.realmId);
   if (!authority.allowed) throw notFound();
+  const approver: Approver = { realmId: authority.issuerRealm.id, accountId: authority.userId };
   const standing = approvalStanding(
     approval,
-    { ...decision.approver, kind: 'human' },
+    { ...approver, kind: 'human' },
     authority.rolePermissions.has('approvals.approve')
   );
   if (!standing.mayRead) throw notFound();
@@ -317,7 +324,7 @@ async function approvalTheApproverMayDecide(
   if (!standing.mayApprove) {
     throw new ForbiddenError('This account cannot give this approval an approval');
   }
-  return approval;
+  return { approval, approver };
 }
 
 /**
@@ -337,9 +344,9 @@ export async function startApproval(
   readonly expiresAt: number;
 }> {
   const now = (options.now ?? Date.now)();
-  const approval = await approvalTheApproverMayDecide(fastify, decision, now);
+  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, now);
   const display = renderOperation(approval, options.registry ?? OPERATION_REGISTRY);
-  const challenge = await factor.createChallenge(approvalForFactor(approval), decision.approver);
+  const challenge = await factor.createChallenge(approvalForFactor(approval), approver);
   return { challenge, display, expiresAt: approval.expiresAt };
 }
 
@@ -362,13 +369,14 @@ export async function completeApproval(
   options: ApprovalEngineOptions = {}
 ): Promise<AdminApproval> {
   const clock = options.now ?? Date.now;
-  const approval = await approvalTheApproverMayDecide(fastify, decision, clock());
+  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, clock());
+  const decided = { ...decision, approver };
 
   let credentialId: string;
   try {
     credentialId = await factor.verify({
       approval: approvalForFactor(approval),
-      approver: decision.approver,
+      approver,
       response: decision.response,
     });
     if (typeof credentialId !== 'string' || credentialId === '') {
@@ -384,7 +392,7 @@ export async function completeApproval(
         appendAudit(
           fastify,
           tx,
-          decisionEntry(approval, decision, 'approvals.approve', 'denied', null, null)
+          decisionEntry(approval, decided, 'approvals.approve', 'denied', null, null)
         )
       );
     } catch (auditError) {
@@ -398,8 +406,8 @@ export async function completeApproval(
 
   const now = clock();
   const given: AdminApprovalEntry = {
-    approverRealmId: decision.approver.realmId,
-    approverId: decision.approver.accountId,
+    approverRealmId: approver.realmId,
+    approverId: approver.accountId,
     credentialId,
     factor: factor.name,
     approvedAt: now,
@@ -417,7 +425,7 @@ export async function completeApproval(
       tx,
       decisionEntry(
         updated,
-        decision,
+        decided,
         'approvals.approve',
         'succeeded',
         { before: approval, after: updated },
@@ -442,7 +450,7 @@ export async function denyApproval(
   options: ApprovalEngineOptions = {}
 ): Promise<AdminApproval> {
   const now = (options.now ?? Date.now)();
-  const approval = await approvalTheApproverMayDecide(fastify, decision, now);
+  const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, now);
   return fastify.db.transaction(async (tx) => {
     const updated = await fastify.repositories.adminApprovals.deny(
       approval.realmId,
@@ -456,7 +464,7 @@ export async function denyApproval(
       tx,
       decisionEntry(
         updated,
-        decision,
+        { ...decision, approver },
         'approvals.deny',
         'succeeded',
         { before: approval, after: updated },
