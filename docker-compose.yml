@@ -48,6 +48,15 @@ services:
     container_name: qauth-migration-runner
     environment:
       DATABASE_URL: postgresql://qauth:${DB_PASSWORD:-qauth_dev_password}@postgres:5432/qauth
+      # The system client (ADR-017 phase F0): with the developer portal's
+      # callback set, the runner provisions it after the migrations as a
+      # private_key_jwt client with the first-party profile web_redirect. Blank
+      # leaves it alone. The realm and client id are the auth server's.
+      SYSTEM_CLIENT_REDIRECT_URI: ${SYSTEM_CLIENT_REDIRECT_URI:-}
+      SYSTEM_CLIENT_JWKS_URI: ${SYSTEM_CLIENT_JWKS_URI:-}
+      SYSTEM_CLIENT_JWKS: ${SYSTEM_CLIENT_JWKS:-}
+      SYSTEM_CLIENT_ID: ${SYSTEM_CLIENT_ID:-system}
+      DEFAULT_REALM_NAME: ${DEFAULT_REALM_NAME:-master}
     depends_on:
       postgres:
         condition: service_healthy

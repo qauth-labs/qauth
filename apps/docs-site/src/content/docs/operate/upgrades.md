@@ -64,8 +64,9 @@ for the first, then finds nothing to do.
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                |
 | `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending. |
-| `2`       | Usage error: an unknown flag, or `DATABASE_URL` is not set.                                                                                         |
+| `2`       | Usage error: an unknown flag, `DATABASE_URL` is not set, or the system-client variables are incomplete or invalid. Nothing was done.                |
 | `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                      |
+| `4`       | Every migration is applied, but the system client set by `SYSTEM_CLIENT_REDIRECT_URI` could not be provisioned. The error names why.                |
 
 `--check` reports the pending migrations and changes nothing: it takes no lock
 and creates nothing, so a read-only database role can run it.
@@ -405,6 +406,31 @@ error: run it again. A lock taken at the start of 0047 would not change the
 order, since `realms` is held by then. To avoid the retry, run the migration
 runner when no client is being registered, such as before the first node of
 the new release starts and with open registration quiet.
+
+### The operator provisions the system client
+
+From this release the auth server no longer creates the developer portal's
+system client as a secret-based client
+([#631](https://github.com/qauth-labs/qauth/issues/631),
+[ADR-017](/reference/records/adr/017-first-party-login/) phase F0). The operator
+provisions it: a `private_key_jwt` client with the portal's public keys, the
+first-party profile `web_redirect` and the portal's callback. Give the
+migration runner `SYSTEM_CLIENT_REDIRECT_URI` and one of
+`SYSTEM_CLIENT_JWKS_URI` and `SYSTEM_CLIENT_JWKS`, with the auth server's
+`SYSTEM_CLIENT_ID` and `DEFAULT_REALM_NAME`, and the run that applies the
+migrations provisions it too (see
+[The system client](/operate/docker/#the-system-client)). The seed manifest's
+`system_client` section does the same.
+
+Nothing breaks if you do not, yet. An existing system client row is read as it
+is, and the portal's sign-in keeps working through it; a realm that has none
+gets a placeholder that holds no secret and no key. The portal's move to the
+redirect flow needs the provisioned row.
+
+Migration 0048 adds `oauth_clients.first_party_profile`,
+`first_party_policy` and `first_party_reason`, nullable with no default, and
+four CHECKs that every existing row passes. The previous release keeps
+creating and updating clients on the new schema.
 
 ### The delivery role reads `realms.issuer`
 

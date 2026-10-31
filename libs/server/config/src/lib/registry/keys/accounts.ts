@@ -25,7 +25,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: 'system',
     since: '0.1.0',
-    docs: 'The client id of the system client that direct logins, outside an OAuth flow, are issued under; it is created on first use.',
+    docs: "The client id of the system client, the developer portal's client that direct logins are issued under; the operator provisions it from the migration runner's `SYSTEM_CLIENT_*` variables or the seed manifest's `system_client` section, and until then a placeholder that holds no secret is created on first use; set the same value on the migration runner.",
   },
   {
     name: 'PASSWORD_MIN_SCORE',

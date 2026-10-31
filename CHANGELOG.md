@@ -1212,9 +1212,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
+- **Operator-set first-party client profiles** ([#631], ADR-017 Decision 2).
+  Migration 0048 adds `oauth_clients.first_party_profile` (`web_redirect`,
+  `native_backend`), `first_party_policy` and `first_party_reason`, nullable
+  with no default, and four CHECKs: no profile on a dynamic, CIMD, agent or
+  developer-owned client; a profile only with `private_key_jwt`; a policy
+  exactly on `native_backend`; `native_backend` only with the
+  `authorization_code` grant. `resolveFirstPartyProfile` in shared-validation
+  reads a row and fails closed on an unknown profile or a policy that does not
+  parse; the strict policy is `flows` (default `login`),
+  `email_code_after_password` (default `false`) and `pkce_required` (default
+  `true`). The `db:seed-oauth-clients` manifest sets the three fields, the
+  reason required; a native profile also needs the backend's keys, the
+  `authorization_code` grant and an `https`, private-use or loopback browser-leg
+  redirect URI. Dynamic registration, `/api/clients` and CIMD never write them.
+  A change is recorded as the new `client.first_party_changed` event, and
+  removing a profile revokes every live refresh token of the client. Nothing
+  reads the profile yet: the consent waiver and the authorization challenge
+  endpoint come later.
+- **The system client is provisioned from operator configuration** ([#631],
+  ADR-017 phase F0). The migration runner reads `SYSTEM_CLIENT_REDIRECT_URI`,
+  `SYSTEM_CLIENT_JWKS_URI` or `SYSTEM_CLIENT_JWKS`, `SYSTEM_CLIENT_ID` and
+  `DEFAULT_REALM_NAME`, and after the migrations makes the system client a
+  `private_key_jwt` client with the `web_redirect` profile and the portal's
+  callback, keeping its id, scopes, audience and suspension. A realm the auth
+  server has not created yet is reported and skipped; a row that cannot be
+  first party exits `4`. The seed manifest's new `system_client` section does
+  the same.
 
 ### Changed
 
+- **The auth server no longer creates a secret-based system client** ([#631],
+  ADR-017 phase F0). When a realm has no system client yet, the first sign-in
+  creates a placeholder that holds no secret and no key (`private_key_jwt`
+  with no key set, no redirect URI, no first-party profile), instead of a
+  `client_secret_post` row with a random secret nobody held. An existing row is
+  read as it is, so management tokens keep working.
 - **An agent client always sees the consent screen** ([#845], ADR-015
   Decision 11, ADR-014 §11). A stored consent that covers the request no
   longer skips `/ui/consent` for a client with `is_agent`: every browser
@@ -2021,6 +2054,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
+[#631]: https://github.com/qauth-labs/qauth/issues/631
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 
