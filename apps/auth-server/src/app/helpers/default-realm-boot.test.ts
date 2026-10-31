@@ -15,6 +15,7 @@ import {
   JWT_ISSUER_PATH_WARNING,
   JWT_ISSUER_TRAILING_SLASH_WARNING,
   seedKeyIgnoredWarning,
+  seedKeyStillAppliedNote,
 } from './default-realm-boot';
 import type { RealmRow } from './request-realm';
 
@@ -159,6 +160,7 @@ function emptyDatabase(): {
       seedRealms: vi.fn(async (): Promise<RealmPolicySeedReport> => ({
         filled: [],
         completed: [],
+        skipped: [],
       })),
     },
     log: { warn, info },
@@ -417,17 +419,27 @@ describe('bootDefaultRealm and the passkey RP ID (#467, #553)', () => {
 
 describe('bootDefaultRealm and the realm policies (#516)', () => {
   const REALM_ID = '019a0000-0000-7000-8000-000000000001';
+  const NOTHING: RealmPolicySeedReport = { filled: [], completed: [], skipped: [] };
   const settings = {
     realmName: 'master',
     jwtIssuer: 'https://auth.example.com',
     endpointHosts: [],
     seedKeysSet: [
-      { key: 'ACCESS_TOKEN_LIFESPAN', path: 'tokens.accessTokenLifespanSeconds' },
-      { key: 'PASSWORD_MIN_SCORE', path: 'password.minScore' },
+      {
+        key: 'ACCESS_TOKEN_LIFESPAN',
+        path: 'tokens.accessTokenLifespanSeconds',
+        readFromRealmRow: false,
+      },
+      {
+        key: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
+        path: 'registration.dynamicRegistrationAllowedScopes',
+        readFromRealmRow: true,
+      },
+      { key: 'PASSWORD_MIN_SCORE', path: 'password.minScore', readFromRealmRow: true },
     ],
   };
 
-  /** The dependencies over a database whose default realm exists, as the realm resolver sees it. */
+  /** The dependencies over a database whose default realm exists. */
   function existingRealm(report: RealmPolicySeedReport) {
     const { deps, warn, info } = emptyDatabase();
     const realm = realmRow({ issuer: 'https://auth.example.com', isOperator: true });
@@ -448,6 +460,16 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
     return { deps, warn, info, realm };
   }
 
+  /** The lines about seed keys, as `[fields, message]`. */
+  function seedKeyLines(log: ReturnType<typeof vi.fn>): unknown[][] {
+    return log.mock.calls.filter(([fields]) => typeof fields?.variable === 'string');
+  }
+
+  /** The variables of the lines about seed keys. */
+  function variablesOf(log: ReturnType<typeof vi.fn>): string[] {
+    return seedKeyLines(log).map(([fields]) => (fields as { variable: string }).variable);
+  }
+
   it('fills the policies in the provisioning transaction, after the realm exists', async () => {
     const { deps } = emptyDatabase();
     const tx = { transaction: 'provisioning' };
@@ -463,32 +485,33 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
     );
   });
 
-  it('logs no ignored key for a realm this boot created, which they seeded', async () => {
-    const { deps, warn } = emptyDatabase();
+  it('names no seed key for a realm this boot created, which they seeded', async () => {
+    const { deps, warn, info } = emptyDatabase();
 
     const result = await bootDefaultRealm(deps, settings);
 
     expect(result.created).toBe(true);
-    expect(warn).not.toHaveBeenCalled();
+    expect(seedKeyLines(warn)).toEqual([]);
+    expect(seedKeyLines(info)).toEqual([]);
   });
 
-  it('logs each seed key still set, once, when the realm already has its policies', async () => {
-    const { deps, warn } = existingRealm({ filled: [], completed: [] });
+  it('warns once for each set key whose policy the server reads from the realm row', async () => {
+    const { deps, warn } = existingRealm(NOTHING);
 
     const result = await bootDefaultRealm(deps, settings);
 
     expect(result.created).toBe(false);
-    expect(warn.mock.calls).toEqual([
+    expect(seedKeyLines(warn)).toEqual([
       [
         {
-          variable: 'ACCESS_TOKEN_LIFESPAN',
+          variable: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
           realm: 'master',
-          policy: 'tokens.accessTokenLifespanSeconds',
+          policy: 'registration.dynamicRegistrationAllowedScopes',
         },
         seedKeyIgnoredWarning(
-          'ACCESS_TOKEN_LIFESPAN',
+          'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
           'master',
-          'tokens.accessTokenLifespanSeconds'
+          'registration.dynamicRegistrationAllowedScopes'
         ),
       ],
       [
@@ -497,19 +520,51 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
       ],
     ]);
     expect(seedKeyIgnoredWarning('PASSWORD_MIN_SCORE', 'master', 'password.minScore')).toBe(
-      'PASSWORD_MIN_SCORE only seeds new realms and is ignored: the realm "master" already has its policies, so its password.minScore stays as stored, and changes through the admin API'
+      'PASSWORD_MIN_SCORE only seeds new realms and is ignored: the realm "master" already has its policies, and its password.minScore stays as stored'
     );
   });
 
-  it('logs no ignored key when this boot filled the realm, and says it filled it', async () => {
+  it('says a key whose policy is not read from the row yet still applies, and does not warn', async () => {
+    const { deps, warn, info } = existingRealm(NOTHING);
+
+    await bootDefaultRealm(deps, settings);
+
+    expect(variablesOf(warn)).not.toContain('ACCESS_TOKEN_LIFESPAN');
+    expect(seedKeyLines(info)).toEqual([
+      [
+        {
+          variable: 'ACCESS_TOKEN_LIFESPAN',
+          realm: 'master',
+          policy: 'tokens.accessTokenLifespanSeconds',
+        },
+        seedKeyStillAppliedNote(
+          'ACCESS_TOKEN_LIFESPAN',
+          'master',
+          'tokens.accessTokenLifespanSeconds'
+        ),
+      ],
+    ]);
+    expect(
+      seedKeyStillAppliedNote(
+        'ACCESS_TOKEN_LIFESPAN',
+        'master',
+        'tokens.accessTokenLifespanSeconds'
+      )
+    ).toBe(
+      'ACCESS_TOKEN_LIFESPAN only seeds new realms and is ignored by the stored policies of the realm "master", whose tokens.accessTokenLifespanSeconds stays as stored; the server still applies ACCESS_TOKEN_LIFESPAN to every realm until it reads that policy from the realm row, so keep it set'
+    );
+  });
+
+  it('names no seed key when this boot filled the realm, and says it filled it', async () => {
     const { deps, warn, info, realm } = existingRealm({
+      ...NOTHING,
       filled: [{ realmId: REALM_ID, realmName: 'master' }],
-      completed: [],
     });
 
     const result = await bootDefaultRealm(deps, settings);
 
-    expect(warn).not.toHaveBeenCalled();
+    expect(seedKeyLines(warn)).toEqual([]);
+    expect(seedKeyLines(info)).toEqual([]);
     expect(info).toHaveBeenCalledWith(
       { realm: 'master', realmId: realm.id },
       'realm policies filled from the environment: the realm row owns them from now on'
@@ -518,31 +573,46 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
     expect(result.realm.policiesVersion).toBe(2);
   });
 
-  it('logs no ignored key for a field this boot completed, and the others', async () => {
+  it('names no seed key whose field this boot completed, and the others', async () => {
     const { deps, warn, info, realm } = existingRealm({
-      filled: [],
+      ...NOTHING,
       completed: [{ realmId: REALM_ID, realmName: 'master', paths: ['password.minScore'] }],
     });
 
     await bootDefaultRealm(deps, settings);
 
-    expect(warn.mock.calls.map(([fields]) => fields.variable)).toEqual(['ACCESS_TOKEN_LIFESPAN']);
+    expect(variablesOf(warn)).toEqual(['DEFAULT_DYNAMIC_REGISTRATION_SCOPES']);
     expect(info).toHaveBeenCalledWith(
       { realm: 'master', realmId: realm.id, policies: ['password.minScore'] },
       'realm policies of this release filled from the environment'
     );
   });
 
-  it('logs no ignored key when the environment sets none', async () => {
-    const { deps, warn } = existingRealm({ filled: [], completed: [] });
+  it('warns for a realm whose policies another schema version wrote, which it left as they are', async () => {
+    const { deps, warn } = existingRealm({
+      ...NOTHING,
+      skipped: [{ realmId: REALM_ID, realmName: 'master', schemaVersion: '1-rc.7' }],
+    });
 
     await bootDefaultRealm(deps, { ...settings, seedKeysSet: [] });
 
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      { realm: 'master', realmId: REALM_ID, schemaVersion: '1-rc.7' },
+      'realm policies of another schema version left as they are: a node of this release does not complete them'
+    );
+  });
+
+  it('names no seed key when the environment sets none', async () => {
+    const { deps, warn, info } = existingRealm(NOTHING);
+
+    await bootDefaultRealm(deps, { ...settings, seedKeysSet: [] });
+
+    expect(seedKeyLines(warn)).toEqual([]);
+    expect(seedKeyLines(info)).toEqual([]);
   });
 
   it('refuses the boot when stored values cannot be filled, naming the realm and the paths', async () => {
-    const { deps } = existingRealm({ filled: [], completed: [] });
+    const { deps } = existingRealm(NOTHING);
     vi.mocked(deps.policies.seedRealms).mockRejectedValue(
       new RealmPolicySeedRefusedError('master', [
         { path: 'registration.dynamicRegistrationAllowedScopes', message: 'is not valid' },

@@ -57,6 +57,7 @@ import {
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
@@ -144,8 +145,12 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
     },
     // The realm policy keys this deployment sets (#516), read from the raw
     // environment: a value the env schema filled in was not set. A realm
-    // that already has its policies ignores each, and the step says so.
-    seedKeysSet: seedKeysSetIn(process.env),
+    // that already has its policies ignores each, and the step says so, and
+    // whether the server still applies the key until its area reads the row.
+    seedKeysSet: seedKeysSetIn(process.env).map((seedKey) => ({
+      ...seedKey,
+      readFromRealmRow: POLICIES_READ_FROM_REALM_ROW.has(seedKey.path),
+    })),
   };
 }
 

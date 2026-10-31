@@ -28,7 +28,10 @@ import {
  * `defaultsFromEnv`, a default realm from before migration 0045 gets the
  * environment's values at the first boot after the upgrade and keeps the
  * settings its row held, and no later boot changes the realm, whatever the
- * environment says; the boot names each key it ignores, once.
+ * environment says. The boot warns once for each set key whose policy the
+ * server reads from the realm row; a key whose area still reads the
+ * environment gets an info line (the harness passes warnings only), since the
+ * server still applies it.
  *
  * The upgrade case rebuilds the schema through migration 0044, writes the
  * default realm as the previous release leaves it, and applies the rest, as
@@ -174,6 +177,14 @@ describe('realm policies at boot on the auth server (#516)', () => {
       [realm.id]
     );
     await pool.query(`INSERT INTO users (realm_id, first_name) VALUES ($1, 'Ada')`, [realm.id]);
+    // A second realm whose allowlist an earlier release copied from an
+    // environment value with a repeat, as `/oauth/register` wrote it.
+    const {
+      rows: [legacy],
+    } = await pool.query<{ id: string }>(
+      `INSERT INTO realms (name, dynamic_registration_allowed_scopes)
+       VALUES ('legacy', '["openid", "email", "openid"]'::jsonb) RETURNING id`
+    );
     const users = async () => (await pool.query('SELECT * FROM users ORDER BY id')).rows;
     const usersBefore = await users();
     await applyQauthMigrations(url);
@@ -194,6 +205,11 @@ describe('realm policies at boot on the auth server (#516)', () => {
       const snapshot = await app.policyStore.get(realm.id);
       expect(snapshot).toMatchObject({ version: 1, hasPolicies: true });
       expect(snapshot?.policies).toEqual(expected);
+      // The repeat is dropped, as defaultsFromEnv drops one, and the boot goes on.
+      expect(
+        (await app.policyStore.get(legacy.id))?.policies.registration
+          .dynamicRegistrationAllowedScopes
+      ).toEqual(['openid', 'email']);
     });
     expect(firstWarnings.filter((line) => line.msg.includes(IGNORED))).toEqual([]);
     const filled = await defaultRealmRow();
@@ -210,28 +226,25 @@ describe('realm policies at boot on the auth server (#516)', () => {
     // A later boot with other values changes nothing, and names each key once.
     const second = environment({
       ACCESS_TOKEN_LIFESPAN: '1200',
-      REFRESH_TOKEN_LIFESPAN: '7200',
       PASSWORD_MIN_SCORE: '1',
-      FAILED_LOGIN_MAX_ATTEMPTS: '9',
+      DEFAULT_DYNAMIC_REGISTRATION_SCOPES: 'openid email offline_access',
     });
     const secondWarnings = await boot(second, async (app) => {
       expect((await app.policyStore.get(realm.id))?.policies).toEqual(expected);
     });
     expect(await defaultRealmRow()).toEqual(filled);
     const ignored = secondWarnings.filter((line) => line.msg.includes(IGNORED));
-    for (const [variable, policy] of [
-      ['ACCESS_TOKEN_LIFESPAN', 'tokens.accessTokenLifespanSeconds'],
-      ['REFRESH_TOKEN_LIFESPAN', 'tokens.refreshTokenLifespanSeconds'],
-      ['PASSWORD_MIN_SCORE', 'password.minScore'],
-      ['FAILED_LOGIN_MAX_ATTEMPTS', 'bruteForce.maxAttempts'],
-    ]) {
-      expect(ignored.filter((line) => line.variable === variable)).toEqual([
-        expect.objectContaining({ variable, policy, realm: 'master' }),
-      ]);
-    }
-    // A key the second environment no longer sets is not named.
-    expect(ignored.map((line) => line.variable)).not.toContain(
-      'DEFAULT_DYNAMIC_REGISTRATION_SCOPES'
-    );
+    // The allowlist's area reads the realm row: its key is ignored, once.
+    expect(ignored).toEqual([
+      expect.objectContaining({
+        variable: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
+        policy: 'registration.dynamicRegistrationAllowedScopes',
+        realm: 'master',
+      }),
+    ]);
+    // The token lifetimes and the password policy still read the
+    // environment (#527, #528): no warning tells the operator to drop them.
+    expect(ignored.map((line) => line.variable)).not.toContain('ACCESS_TOKEN_LIFESPAN');
+    expect(ignored.map((line) => line.variable)).not.toContain('PASSWORD_MIN_SCORE');
   });
 });

@@ -54,8 +54,11 @@ import {
  *    where `resolveRpId(realm)` reads it for every ceremony;
  * 7. log one line naming the realm, its issuer and host, the operator flag,
  *    the passkey RP ID and its policy version, and, when the realm already had
- *    its policies, one warning for each seed key the environment still sets:
- *    the key only seeds new realms and is ignored.
+ *    its policies, one line for each seed key the environment still sets: a
+ *    warning that the key only seeds new realms and is ignored when the server
+ *    reads its policy from the realm row, and otherwise a line that the
+ *    stored policy ignores it but the server still applies it to every realm
+ *    until that policy moves to the row (`realm-policy-readers.ts`).
  *
  * All of it runs in one transaction under the realm provisioning lock, so nodes
  * that start together do it one at a time: the first creates the realm, the
@@ -161,12 +164,29 @@ export function defaultRealmIssuerFrom(jwtIssuer: string): DefaultRealmIssuer {
 }
 
 /**
- * Logged once per boot for each seed key the environment sets while the
- * default realm already has its policies (#516): the realm row owns the
- * value, and the key only seeds a realm created from then on.
+ * Logged once per boot, as a warning, for each seed key the environment sets
+ * while the default realm already has its policies and the server reads the
+ * key's policy from the realm row (#516): the row owns the value, and the key
+ * only seeds a realm created from then on.
  */
 export function seedKeyIgnoredWarning(key: string, realmName: string, path: string): string {
-  return `${key} only seeds new realms and is ignored: the realm "${realmName}" already has its policies, so its ${path} stays as stored, and changes through the admin API`;
+  return `${key} only seeds new realms and is ignored: the realm "${realmName}" already has its policies, and its ${path} stays as stored`;
+}
+
+/**
+ * Logged once per boot for each seed key the environment sets while the
+ * default realm already has its policies, but whose policy the server does
+ * not read from the realm row yet (#516): the stored policy ignores the key,
+ * and the server still applies it to every realm, so it must stay set.
+ */
+export function seedKeyStillAppliedNote(key: string, realmName: string, path: string): string {
+  return `${key} only seeds new realms and is ignored by the stored policies of the realm "${realmName}", whose ${path} stays as stored; the server still applies ${key} to every realm until it reads that policy from the realm row, so keep it set`;
+}
+
+/** A seed key the environment sets, and whether the server reads its policy from the realm row. */
+export interface SeedKeyInEnvironment extends SetSeedKey {
+  /** Whether the server reads the policy from the realm row (`POLICIES_READ_FROM_REALM_ROW`). */
+  readonly readFromRealmRow: boolean;
 }
 
 /** The configuration the boot step reads. */
@@ -185,10 +205,11 @@ export interface DefaultRealmBootSettings {
   readonly passkeys?: PasskeyRelyingPartySettings;
   /**
    * The seed keys of realm policies the environment sets (`seedKeysSetIn` of
-   * `process.env`, #516). Each one a realm that already has its policies
-   * ignores is logged once. Absent, none.
+   * `process.env`, #516), each with whether the server reads its policy from
+   * the realm row. Each one a realm that already has its policies ignores is
+   * logged once. Absent, none.
    */
-  readonly seedKeysSet?: readonly SetSeedKey[];
+  readonly seedKeysSet?: readonly SeedKeyInEnvironment[];
 }
 
 /**
@@ -277,11 +298,22 @@ export async function bootDefaultRealm(
       'realm policies of this release filled from the environment'
     );
   }
-  for (const { key, path } of ignoredSeedKeys(result, settings.seedKeysSet ?? [])) {
+  for (const skipped of result.policySeeding.skipped) {
     deps.log.warn(
-      { variable: key, realm: result.realm.name, policy: path },
-      seedKeyIgnoredWarning(key, result.realm.name, path)
+      { realm: skipped.realmName, realmId: skipped.realmId, schemaVersion: skipped.schemaVersion },
+      'realm policies of another schema version left as they are: a node of this release does not complete them'
     );
+  }
+  for (const { key, path, readFromRealmRow } of ignoredSeedKeys(
+    result,
+    settings.seedKeysSet ?? []
+  )) {
+    const fields = { variable: key, realm: result.realm.name, policy: path };
+    if (readFromRealmRow) {
+      deps.log.warn(fields, seedKeyIgnoredWarning(key, result.realm.name, path));
+    } else {
+      deps.log.info(fields, seedKeyStillAppliedNote(key, result.realm.name, path));
+    }
   }
 
   deps.log.info(
@@ -332,8 +364,8 @@ async function seedRealmPolicies(
  */
 function ignoredSeedKeys(
   result: Pick<DefaultRealmBootResult, 'realm' | 'created' | 'policySeeding'>,
-  seedKeysSet: readonly SetSeedKey[]
-): SetSeedKey[] {
+  seedKeysSet: readonly SeedKeyInEnvironment[]
+): SeedKeyInEnvironment[] {
   const realmId = result.realm.id;
   if (result.created || result.policySeeding.filled.some((realm) => realm.realmId === realmId)) {
     return [];

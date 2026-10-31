@@ -292,18 +292,28 @@ first node to boot decides the stored values. The log says
 `realm policies filled from the environment` for each realm it filled.
 
 **Later changes of the environment change no realm.** Once a realm has its
-policies, its row owns them: a seed key only seeds a realm created later. At
-every boot the server warns once for each seed key that is still set, such as
-`ACCESS_TOKEN_LIFESPAN only seeds new realms and is ignored`; remove the key, or
-keep it for the realms you create later. To change an existing realm's policy,
-use the admin API's realm policy update
-([#517](https://github.com/qauth-labs/qauth/issues/517)). The flows move to
-the stored values one area at a time: the token lifetimes
+policies, its row owns them: a seed key only seeds a realm created later. The
+flows move to the stored values one area at a time: the token lifetimes
 ([#527](https://github.com/qauth-labs/qauth/issues/527)), the sign-in policy
 ([#528](https://github.com/qauth-labs/qauth/issues/528)), mail
-([#529](https://github.com/qauth-labs/qauth/issues/529)) and client
-registration ([#534](https://github.com/qauth-labs/qauth/issues/534)). Until an
-area has moved, the server still applies its keys to every realm.
+([#529](https://github.com/qauth-labs/qauth/issues/529)) and CIMD
+([#534](https://github.com/qauth-labs/qauth/issues/534)). The dynamic
+registration allowlist and the environment ceiling already come from the row:
+`/oauth/register` and the clients API no longer copy
+`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies, even
+when its list is empty. Until an area has moved, the server still applies its
+keys to every realm, so keep them set. At every boot the server names each seed
+key that is still set, once:
+
+- for a key whose policy the server reads from the row, a warning such as
+  `DEFAULT_DYNAMIC_REGISTRATION_SCOPES only seeds new realms and is ignored`;
+- for any other key, an info line that the stored policies ignore it and that
+  the server still applies it to every realm until it reads that policy from
+  the row.
+
+Changing a realm's stored policies is the admin API's realm policy update
+([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
+this change: until it ships, no route changes them.
 
 **A value the policy schema refuses stops the boot.** The schema is stricter
 than some keys were, so the server refuses to start, naming the key and never
@@ -311,8 +321,9 @@ its value, when a seed key holds one it refuses: a `CIMD_TRUSTED_DOMAINS` entry
 that is a single label (`localhost`) or an IP address, an `EMAIL_FROM_NAME`
 longer than 100 characters, a `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` entry with a
 character a scope cannot have. Correct the value and start the server again. A
-value the row holds that the schema refuses, such as a scope written into the
-allowlist by hand, stops the boot too, naming the realm and the field.
+value the fill keeps from a realm's row that the schema refuses, such as a
+scope written into the allowlist by hand, stops the first boot too, naming the
+realm and the field; a scope listed twice is kept once.
 
 `SMTP_PASSWORD` and `RESEND_API_KEY` are never written to the row: the realm's
 secret store takes them once it ships

@@ -605,6 +605,28 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(state.realm.id).toBe('realm-1');
   });
 
+  it('keeps the empty allowlist of a realm that has its policies: the environment only seeds (#516)', async () => {
+    const { fastify, ctx } = createFastifyStub({ dynamicRegistrationAllowedScopes: [] });
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(
+      testRealm({ id: 'realm-1', dynamicRegistrationAllowedScopes: [], policiesVersion: 3 })
+    );
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    const result = (await ctx.handler!(
+      {
+        body: { redirect_uris: ['https://app.example/cb'], scope: 'openid profile' },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    // No scope is allowed, and the list is not rewritten from the environment.
+    expect(result.scope ?? '').toBe('');
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
+  });
+
   it("reads the request realm's allowlist from the database, not the resolver's row (#487)", async () => {
     // The resolver's row can be up to its cache time old: an allowlist an
     // operator set since must not be overwritten by the first-use seed.
