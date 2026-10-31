@@ -1,5 +1,5 @@
 {
-  "id": "f4860f1d-5bb0-4c51-a5bb-bd694b48331c",
+  "id": "03705647-0cc8-4309-92f6-918149bf2092",
   "prevId": "06cea761-f8fd-4721-bdbd-6053d5adce65",
   "version": "7",
   "dialect": "postgresql",
@@ -1785,7 +1785,7 @@
         },
         "oauth_clients_first_party_reason": {
           "name": "oauth_clients_first_party_reason",
-          "value": "(\"oauth_clients\".\"first_party_profile\" IS NULL) = (\"oauth_clients\".\"first_party_reason\" IS NULL) AND (\"oauth_clients\".\"first_party_reason\" IS NULL OR (char_length(\"oauth_clients\".\"first_party_reason\") <= 1000 AND btrim(\"oauth_clients\".\"first_party_reason\") <> ''))"
+          "value": "(\"oauth_clients\".\"first_party_profile\" IS NULL) = (\"oauth_clients\".\"first_party_reason\" IS NULL) AND (\"oauth_clients\".\"first_party_reason\" IS NULL OR (char_length(\"oauth_clients\".\"first_party_reason\") <= 1000 AND \"oauth_clients\".\"first_party_reason\" ~ '\\S'))"
         },
         "oauth_clients_first_party_policy_object": {
           "name": "oauth_clients_first_party_policy_object",

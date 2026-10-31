@@ -693,12 +693,14 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
 - With `pkce_required: false` the seed prints a warning naming the client. PKCE
   stays required on the redirect flow for every client.
 - A `--rotate` entry that sets a profile on a client a developer, dynamic
-  registration or a CIMD document created is refused by name before any secret
-  is issued; the seed exits `1` and leaves that client unchanged.
+  registration or a CIMD document created is refused by name before a secret
+  is issued for it, and that client is left unchanged. The other entries run
+  as usual, and the seed exits `1`.
 - The system client is provisioned only through `system_client` (or the
   migration runner): a `clients` entry with its id is refused before anything
-  is written. The seed reads that id from `SYSTEM_CLIENT_ID` (default
-  `system`), so set it for the seed too when the auth server uses another.
+  is written. The seed takes that id from the manifest's `system_client`, or
+  else from `SYSTEM_CLIENT_ID` (default `system`), so set one of them when the
+  auth server uses another id.
 - The database holds the rules on every path: no profile on a dynamic, CIMD,
   agent or developer-owned client, a profile only with `private_key_jwt`, a
   policy exactly on `native_backend`, `native_backend` only with the
@@ -707,7 +709,8 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
   CIMD document can never set one.
 - The seed skips a client that already exists. Changing or removing a profile
   goes through `--rotate`, which also issues a new secret. Removing it revokes
-  every live refresh token of the client, in every family and for every user.
+  every refresh token of the client not already revoked, in every family and
+  for every user.
   Each change of the profile, its policy or its reason is recorded as a
   `client.first_party_changed` event (see [Events](/reference/events/)).
 

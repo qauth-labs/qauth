@@ -10,8 +10,9 @@
 -- only with private_key_jwt; a policy exactly on native_backend (null-safe, so
 -- a policy on a row with no profile is refused too); native_backend only with
 -- the authorization_code grant. The stored forms: a written reason exactly
--- with a profile, not blank and at most 1000 characters (what the
--- client.first_party_changed event carries); a policy that is a JSON object.
+-- with a profile, holding a character that is not white space and at most
+-- 1000 characters long (what the client.first_party_changed event carries); a
+-- policy that is a JSON object.
 --
 -- No LOCK first, for the reason 0047 gives: run after it in one transaction,
 -- this already holds "oauth_clients".
@@ -23,5 +24,5 @@ ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_operator_o
 ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_private_key_jwt" CHECK ("oauth_clients"."first_party_profile" IS NULL OR "oauth_clients"."token_endpoint_auth_method" = 'private_key_jwt');--> statement-breakpoint
 ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_policy_native" CHECK (("oauth_clients"."first_party_profile" IS NOT DISTINCT FROM 'native_backend') = ("oauth_clients"."first_party_policy" IS NOT NULL));--> statement-breakpoint
 ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_native_authorization_code" CHECK ("oauth_clients"."first_party_profile" IS DISTINCT FROM 'native_backend' OR "oauth_clients"."grant_types" ? 'authorization_code');--> statement-breakpoint
-ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_reason" CHECK (("oauth_clients"."first_party_profile" IS NULL) = ("oauth_clients"."first_party_reason" IS NULL) AND ("oauth_clients"."first_party_reason" IS NULL OR (char_length("oauth_clients"."first_party_reason") <= 1000 AND btrim("oauth_clients"."first_party_reason") <> '')));--> statement-breakpoint
+ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_reason" CHECK (("oauth_clients"."first_party_profile" IS NULL) = ("oauth_clients"."first_party_reason" IS NULL) AND ("oauth_clients"."first_party_reason" IS NULL OR (char_length("oauth_clients"."first_party_reason") <= 1000 AND "oauth_clients"."first_party_reason" ~ '\S')));--> statement-breakpoint
 ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_policy_object" CHECK ("oauth_clients"."first_party_policy" IS NULL OR jsonb_typeof("oauth_clients"."first_party_policy") = 'object');

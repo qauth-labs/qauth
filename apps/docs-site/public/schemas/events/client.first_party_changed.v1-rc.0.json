@@ -203,7 +203,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 1000000,
-          "description": "How many refresh tokens the removal revoked: every live token of every family of the client. `0` when the profile was set or changed."
+          "description": "How many refresh tokens the removal revoked: every token of every family of the client that was not already revoked, expired ones included. `0` when the profile was set or changed."
         }
       },
       "required": [

@@ -4,7 +4,8 @@
  * provisioner both call {@link recordFirstPartyChange} in the transaction that
  * wrote the row, so the two can never record a change differently.
  *
- * - Removing a profile revokes every live refresh token of the client, in
+ * - Removing a profile revokes every refresh token of the client not already
+ *   revoked, in
  *   every family: tokens obtained while the client was trusted as first party
  *   (a waived consent, the authorization challenge endpoint) end with that
  *   trust.

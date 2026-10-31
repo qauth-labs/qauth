@@ -4,7 +4,7 @@
  *
  * Setting, changing and removing a profile through `db:seed-oauth-clients`
  * writes the three columns and a `client.first_party_changed` event in one
- * transaction, and removing it revokes every live refresh token of the client,
+ * transaction, and removing it revokes every refresh token of the client,
  * in every family and for every user, and no other client's.
  *
  * Requires Docker; skips locally without it, fails on CI (requireDockerOrSkip).
@@ -233,7 +233,7 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
     ]);
   });
 
-  it("removing the profile revokes every live refresh token of the client, and no other client's", async () => {
+  it("removing the profile revokes every refresh token of the client, and no other client's", async () => {
     const realmId = await realm('fp-4');
     await provisionClient(db(), realmId, spec(NATIVE), false);
     await provisionClient(

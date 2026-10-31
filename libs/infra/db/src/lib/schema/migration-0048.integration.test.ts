@@ -389,6 +389,10 @@ describe('migration 0048 — oauth_clients first-party profile (seed-then-migrat
       ],
       ['a blank reason', { first_party_profile: 'web_redirect', first_party_reason: '  \t ' }],
       [
+        'a reason of line breaks',
+        { first_party_profile: 'web_redirect', first_party_reason: '\n\r\n' },
+      ],
+      [
         'a reason over 1000 characters',
         { first_party_profile: 'web_redirect', first_party_reason: 'x'.repeat(1001) },
       ],

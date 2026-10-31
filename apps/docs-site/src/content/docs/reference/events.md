@@ -696,7 +696,7 @@ An operator set, changed or removed a client's first-party profile (ADR-017 Deci
 | `flows`             | array of one of `login`, `register`, `reset`, or a later value   | no       | A `native_backend` client's flows after the change: `login`, `register`, `reset`. Absent for any other profile.                                                                                             |
 | `pkceRequired`      | boolean                                                          | no       | Whether a `native_backend` client's policy requires PKCE at the authorization challenge endpoint after the change. `false` is a deviation the operator chose for this client. Absent for any other profile. |
 | `writtenReason`     | string                                                           | no       | The reason the operator wrote for the profile, as stored with the client. Absent when the profile was removed.                                                                                              |
-| `revokedTokenCount` | integer                                                          | yes      | How many refresh tokens the removal revoked: every live token of every family of the client. `0` when the profile was set or changed.                                                                       |
+| `revokedTokenCount` | integer                                                          | yes      | How many refresh tokens the removal revoked: every token of every family of the client that was not already revoked, expired ones included. `0` when the profile was set or changed.                        |
 
 ### api_key.created v1-rc.0
 

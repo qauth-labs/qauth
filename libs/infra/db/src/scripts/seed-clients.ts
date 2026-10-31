@@ -41,6 +41,9 @@ export type Issued = {
   revokedTokenCount?: number;
 };
 
+/** The isolation the operator transaction runs at (see its call). */
+const READ_COMMITTED = { isolationLevel: 'read committed' } as const;
+
 /** Any drizzle node-postgres database, whatever schema generic it was built with. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OperatorDb = NodePgDatabase<any>;
@@ -60,6 +63,9 @@ export async function provisionClient(
   spec: ClientSpec,
   rotate: boolean
 ): Promise<Issued> {
+  // READ COMMITTED whatever the database's default: the token revocation
+  // relies on its UPDATE taking a fresh snapshot after the client's token
+  // lock is granted, so it sees every token committed while it waited.
   return db.transaction(async (tx) => {
     // FOR NO KEY UPDATE, not FOR UPDATE: removing a first-party profile then
     // waits for the client's token lock (`revokeAllForClient`), which a token
@@ -144,7 +150,7 @@ export async function provisionClient(
       firstPartyChanged: change.changed,
       revokedTokenCount: change.revokedTokenCount,
     };
-  });
+  }, READ_COMMITTED);
 }
 
 /* ------------------------------------------------------------------------ */

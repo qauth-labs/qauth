@@ -770,7 +770,7 @@ export const oauthClients = pgTable(
     // carries (1000 characters); a policy that is a JSON object.
     check(
       'oauth_clients_first_party_reason',
-      sql`(${t.firstPartyProfile} IS NULL) = (${t.firstPartyReason} IS NULL) AND (${t.firstPartyReason} IS NULL OR (char_length(${t.firstPartyReason}) <= 1000 AND btrim(${t.firstPartyReason}) <> ''))`
+      sql`(${t.firstPartyProfile} IS NULL) = (${t.firstPartyReason} IS NULL) AND (${t.firstPartyReason} IS NULL OR (char_length(${t.firstPartyReason}) <= 1000 AND ${t.firstPartyReason} ~ '\\S'))`
     ),
     check(
       'oauth_clients_first_party_policy_object',

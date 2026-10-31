@@ -466,9 +466,12 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
-     * Revoke every live refresh token of one client, for every user: each
-     * family the client holds ends (#631, removing a client's first-party
-     * profile, ADR-017 Decision 2). Already-revoked rows keep their reason.
+     * Revoke every refresh token of one client not already revoked, for every
+     * user: each family the client holds ends (#631, removing a client's
+     * first-party profile, ADR-017 Decision 2). Already-revoked rows keep their
+     * reason. Expired rows are revoked too: a refresh that read a token just
+     * before it expired must still lose its compare-and-set, which checks only
+     * `revoked`.
      *
      * Takes the client's exclusive lock (`lockClientTokens`) before the
      * UPDATE, one lock however many users hold tokens: every rotation and
@@ -489,16 +492,11 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     ): Promise<number> {
       const run = async (invoker: DbClient): Promise<number> => {
         await lockClientTokens(invoker, 'revoke', oauthClientId);
-        const now = Date.now();
         const updated = await invoker
           .update(refreshTokens)
-          .set({ revoked: true, revokedAt: now, revokedReason: reason })
+          .set({ revoked: true, revokedAt: Date.now(), revokedReason: reason })
           .where(
-            and(
-              eq(refreshTokens.oauthClientId, oauthClientId),
-              eq(refreshTokens.revoked, false),
-              gt(refreshTokens.expiresAt, now)
-            )
+            and(eq(refreshTokens.oauthClientId, oauthClientId), eq(refreshTokens.revoked, false))
           )
           .returning({ id: refreshTokens.id });
         return updated.length;

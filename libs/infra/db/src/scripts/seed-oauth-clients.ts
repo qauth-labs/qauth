@@ -113,7 +113,8 @@ async function main(): Promise<void> {
   // an ordinary client on every --rotate, removing its profile and revoking
   // the portal's tokens, and the runner would flip it back. Refused before
   // anything is written.
-  const systemClientId = process.env['SYSTEM_CLIENT_ID']?.trim() || 'system';
+  const systemClientId =
+    manifest.system_client?.client_id ?? (process.env['SYSTEM_CLIENT_ID']?.trim() || 'system');
   if ((manifest.clients ?? []).some((spec) => spec.client_id === systemClientId)) {
     console.error(
       `"${systemClientId}" is the system client (SYSTEM_CLIENT_ID): provision it under ` +

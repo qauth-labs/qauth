@@ -138,6 +138,9 @@ export type SystemClientResult =
       readonly firstPartyChanged: boolean;
     };
 
+/** The isolation the operator transaction runs at (see its call). */
+const READ_COMMITTED = { isolationLevel: 'read committed' } as const;
+
 /** Any drizzle node-postgres database, whatever schema generic it was built with. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OperatorDb = NodePgDatabase<any>;
@@ -200,6 +203,9 @@ export async function provisionSystemClient(
   realm: string,
   spec: SystemClientSpec
 ): Promise<SystemClientResult> {
+  // READ COMMITTED whatever the database's default: the token revocation
+  // relies on its UPDATE taking a fresh snapshot after the client's token
+  // lock is granted, so it sees every token committed while it waited.
   return db.transaction(async (tx) => {
     const [realmRow] = await tx
       .select({ id: realms.id })
@@ -208,8 +214,10 @@ export async function provisionSystemClient(
       .limit(1);
     if (!realmRow) return { status: 'realm_not_found' as const, realm };
 
-    // FOR NO KEY UPDATE, as the seed takes it: a change of profile may revoke
-    // tokens under their holders' locks (`recordFirstPartyChange`).
+    // FOR NO KEY UPDATE, as the seed takes it: a change of profile may wait
+    // for the client's token lock (`recordFirstPartyChange`), which a token
+    // insert holds while its foreign-key check takes a key-share lock on this
+    // row, and this mode does not block that.
     const [existing] = await tx
       .select()
       .from(oauthClients)
@@ -295,7 +303,7 @@ export async function provisionSystemClient(
       id: existing.id,
       firstPartyChanged: change.changed,
     };
-  });
+  }, READ_COMMITTED);
 }
 
 /**

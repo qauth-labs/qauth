@@ -746,20 +746,31 @@ describe('repository integration (real Postgres)', () => {
     // #631: revokeAllForClient holds one exclusive lock on the client, which
     // every rotation and every insert of the client's tokens holds shared.
 
-    /** Run `body` in a transaction held open until `commit` is called. */
+    /**
+     * Run `body` in a transaction held open until `commit` is called. A body
+     * that throws rejects `holdOpen` itself, so a failing case fails instead
+     * of hanging.
+     */
     async function holdOpen<T>(body: (tx: DbClient) => Promise<T>) {
       let release!: () => void;
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
       let produced!: (value: T) => void;
-      const result = new Promise<T>((resolve) => {
+      let failed!: (error: unknown) => void;
+      const result = new Promise<T>((resolve, reject) => {
         produced = resolve;
+        failed = reject;
       });
-      const transaction = db().database.db.transaction(async (tx) => {
-        produced(await body(tx as unknown as DbClient));
-        await held;
-      });
+      const transaction = db()
+        .database.db.transaction(async (tx) => {
+          produced(await body(tx as unknown as DbClient));
+          await held;
+        })
+        .catch((error: unknown) => {
+          failed(error);
+          throw error;
+        });
       return {
         result: await result,
         commit: () => {
@@ -769,15 +780,33 @@ describe('repository integration (real Postgres)', () => {
       };
     }
 
-    /** Whether `promise` is still pending after the database had time to answer it. */
-    async function stillPending(promise: Promise<unknown>): Promise<boolean> {
+    /**
+     * Wait until `count` sessions wait for an advisory lock: proof that the
+     * requests reached Postgres and block on the lock, not merely that they
+     * have not answered yet.
+     */
+    async function untilWaitingOnAdvisoryLocks(count: number): Promise<void> {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const { rows } = await db().database.pool.query<{ waiting: string }>(
+          `SELECT count(*) AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`
+        );
+        if (Number(rows[0].waiting) >= count) return;
+        if (Date.now() > deadline) {
+          throw new Error(`expected ${count} sessions waiting on an advisory lock`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+
+    /** Whether `promise` has settled, without waiting for it. */
+    function tracked<T>(promise: Promise<T>): { promise: Promise<T>; settled: () => boolean } {
       let settled = false;
       void promise.then(
         () => (settled = true),
         () => (settled = true)
       );
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      return !settled;
+      return { promise, settled: () => settled };
     }
 
     function newToken(userId: string, clientId: string, tokenHash: string) {
@@ -801,11 +830,14 @@ describe('repository integration (real Postgres)', () => {
       const issuing = await holdOpen((tx) =>
         tokens.create(newToken(user.id, client.id, 'n'.repeat(64)), tx)
       );
-      const revocation = tokens.revokeAllForClient(client.id, 'first_party_profile_removed');
-      expect(await stillPending(revocation)).toBe(true);
+      const revocation = tracked(
+        tokens.revokeAllForClient(client.id, 'first_party_profile_removed')
+      );
+      await untilWaitingOnAdvisoryLocks(1);
+      expect(revocation.settled()).toBe(false);
       await issuing.commit();
 
-      expect(await revocation).toBe(1);
+      expect(await revocation.promise).toBe(1);
       const [row] = await db()
         .database.db.select()
         .from(refreshTokens)
@@ -828,18 +860,21 @@ describe('repository integration (real Postgres)', () => {
       );
       expect(revocation.result).toBe(1);
 
-      const rotation = db().database.db.transaction((tx) =>
-        tokens.revokeIfActive(parent.id, 'rotated', tx)
+      // Both wait on the client's lock: the rotation takes it before it
+      // touches its parent row, the insert before it inserts.
+      const rotation = tracked(
+        db().database.db.transaction((tx) => tokens.revokeIfActive(parent.id, 'rotated', tx))
       );
-      const issuing = tokens.create(newToken(other.id, client.id, 'q'.repeat(64)));
-      expect(await stillPending(rotation)).toBe(true);
-      expect(await stillPending(issuing)).toBe(true);
+      const issuing = tracked(tokens.create(newToken(other.id, client.id, 'q'.repeat(64))));
+      await untilWaitingOnAdvisoryLocks(2);
+      expect(rotation.settled()).toBe(false);
+      expect(issuing.settled()).toBe(false);
       await revocation.commit();
 
       // The rotation finds its parent revoked: the refresh is refused.
-      expect(await rotation).toBeUndefined();
+      expect(await rotation.promise).toBeUndefined();
       // The family started after the revocation committed is a new one.
-      expect(await issuing).toMatchObject({ revoked: false });
+      expect(await issuing.promise).toMatchObject({ revoked: false });
       const [stored] = await db()
         .database.db.select()
         .from(refreshTokens)
@@ -847,7 +882,7 @@ describe('repository integration (real Postgres)', () => {
       expect(stored.revokedReason).toBe('first_party_profile_removed');
     });
 
-    it('revokeAllForClient leaves another client and expired or revoked tokens alone', async () => {
+    it('revokeAllForClient revokes expired tokens too, and leaves revoked ones and another client alone', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm.id);
       const client = await seedClient(realm.id);
@@ -868,7 +903,9 @@ describe('repository integration (real Postgres)', () => {
         familyId: undefined,
       });
 
-      expect(await tokens.revokeAllForClient(client.id, 'first_party_profile_removed')).toBe(1);
+      // An expired token is revoked too: a refresh that read it just before it
+      // expired must still lose its compare-and-set.
+      expect(await tokens.revokeAllForClient(client.id, 'first_party_profile_removed')).toBe(2);
 
       const state = async (id: string) =>
         (
@@ -884,7 +921,10 @@ describe('repository integration (real Postgres)', () => {
         revoked: true,
         revokedReason: 'first_party_profile_removed',
       });
-      expect(await state(expired.id)).toEqual({ revoked: false, revokedReason: null });
+      expect(await state(expired.id)).toEqual({
+        revoked: true,
+        revokedReason: 'first_party_profile_removed',
+      });
       expect(await state(loggedOut.id)).toEqual({ revoked: true, revokedReason: 'logout' });
       expect(await state(elsewhere.id)).toEqual({ revoked: false, revokedReason: null });
     });

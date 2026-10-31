@@ -1228,7 +1228,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `authorization_code` grant and an `https`, private-use or loopback browser-leg
   redirect URI. Dynamic registration, `/api/clients` and CIMD never write them.
   A change is recorded as the new `client.first_party_changed` event, and
-  removing a profile revokes every live refresh token of the client. Nothing
+  removing a profile revokes every refresh token of the client not yet revoked. Nothing
   reads the profile yet: the consent waiver and the authorization challenge
   endpoint come later.
 - **The system client is provisioned from operator configuration** ([#631],

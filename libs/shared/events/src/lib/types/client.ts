@@ -208,7 +208,7 @@ export const clientFirstPartyChanged = defineEventType({
         'The reason the operator wrote for the profile, as stored with the client. Absent when the profile was removed.'
       ),
     revokedTokenCount: count(
-      'How many refresh tokens the removal revoked: every live token of every family of the client. `0` when the profile was set or changed.'
+      'How many refresh tokens the removal revoked: every token of every family of the client that was not already revoked, expired ones included. `0` when the profile was set or changed.'
     ),
   }),
   security: true,
