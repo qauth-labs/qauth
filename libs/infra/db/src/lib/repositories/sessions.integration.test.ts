@@ -542,7 +542,13 @@ describe('sessions integration (real Postgres)', () => {
       expect(revoked?.session.id).toBe(created.id);
       // The client the mint served is in the list back-channel logout reads.
       expect(revoked?.clients).toEqual([
-        { sessionId: created.id, oauthClientId: client, firstSeenAt: expect.any(Number) },
+        {
+          sessionId: created.id,
+          oauthClientId: client,
+          firstSeenAt: expect.any(Number),
+          clientId: expect.stringMatching(/^client-/),
+          clientName: 'app',
+        },
       ]);
 
       expect(await registry(created.id)).toEqual([]);
@@ -668,6 +674,259 @@ describe('sessions integration (real Postgres)', () => {
         [code]
       );
       expect(rows).toEqual([{ id: code, session_id: null }]);
+    });
+  });
+
+  describe('lists, bulk revocations and the purge (#550)', () => {
+    async function seedCode(clientId: string, userId: string, sessionId: string): Promise<string> {
+      return one(
+        `INSERT INTO authorization_codes
+           (code, oauth_client_id, user_id, redirect_uri, code_challenge, session_id, expires_at)
+         VALUES ($1, $2, $3, 'https://app.example.com/cb', 'c', $4, $5) RETURNING id`,
+        [
+          `code-${Math.random().toString(36).slice(2)}`,
+          clientId,
+          userId,
+          sessionId,
+          Date.now() + 60_000,
+        ]
+      );
+    }
+
+    async function used(codeId: string): Promise<boolean> {
+      const { rows } = await pool().query(`SELECT used FROM authorization_codes WHERE id = $1`, [
+        codeId,
+      ]);
+      return rows[0].used as boolean;
+    }
+
+    async function recordAt(sessionId: string, clientId: string, at: number): Promise<void> {
+      await pool().query(
+        `INSERT INTO session_clients (session_id, oauth_client_id, first_seen_at) VALUES ($1, $2, $3)`,
+        [sessionId, clientId, at]
+      );
+    }
+
+    it('lists a user’s sessions newest first across pages, ties broken by id, with their clients, and never another realm’s', async () => {
+      const realm = await seedRealm();
+      const other = await seedRealm();
+      const user = await seedUser(realm);
+      const app = await seedClient(realm);
+      const now = Date.now();
+      // Two sessions created in the same millisecond, an older one, and a
+      // revoked one.
+      const a = await repo.create(session(realm, user, { createdAt: now, lastSeenAt: now }));
+      const b = await repo.create(session(realm, user, { createdAt: now, lastSeenAt: now }));
+      const older = await repo.create(
+        session(realm, user, { createdAt: now - HOUR, lastSeenAt: now - HOUR })
+      );
+      const revoked = await repo.create(
+        session(realm, user, { createdAt: now - 2 * HOUR, lastSeenAt: now - 2 * HOUR })
+      );
+      await repo.revoke(realm, revoked.id, 'sign_out');
+      await recordAt(older.id, app, now - 30_000);
+
+      const [newest, second] = [a, b].sort((x, y) => (x.id < y.id ? 1 : -1));
+      const first = await repo.listForUser(realm, user, { limit: 2 });
+      expect(first.map((row) => row.session.id)).toEqual([newest.id, second.id]);
+      const last = first[first.length - 1].session;
+      const rest = await repo.listForUser(realm, user, {
+        limit: 10,
+        after: { createdAt: last.createdAt, id: last.id },
+      });
+      expect(rest.map((row) => row.session.id)).toEqual([older.id, revoked.id]);
+      expect(rest[0].clients).toEqual([
+        expect.objectContaining({ oauthClientId: app, clientName: 'app' }),
+      ]);
+      expect(rest[1].session.revokedReason).toBe('sign_out');
+      expect(rest[1].clients).toEqual([]);
+
+      expect(await repo.listForUser(other, user, { limit: 10 })).toEqual([]);
+      expect(
+        (await repo.listForClient(realm, app, { limit: 10 })).map((r) => r.session.id)
+      ).toEqual([older.id]);
+      expect(await repo.listForClient(other, app, { limit: 10 })).toEqual([]);
+    });
+
+    it('ends a user’s sessions but the one excepted and those created since the cut-off, returning their clients and spending their codes', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm);
+      const bystander = await seedUser(realm);
+      const app = await seedClient(realm);
+      const now = Date.now();
+      const old = await repo.create(session(realm, user, { createdAt: now - HOUR }));
+      const kept = await repo.create(session(realm, user, { createdAt: now - HOUR }));
+      const fresh = await repo.create(session(realm, user, { createdAt: now }));
+      const theirs = await repo.create(session(realm, bystander, { createdAt: now - HOUR }));
+      await recordAt(old.id, app, now - 1_000);
+      const code = await seedCode(app, user, old.id);
+
+      const ended = await repo.revokeForUser(realm, user, 'reset', {
+        exceptId: kept.id,
+        createdBefore: now - 1,
+      });
+
+      expect(ended.map((row) => row.session.id)).toEqual([old.id]);
+      expect(ended[0].session.revokedReason).toBe('reset');
+      expect(ended[0].clients.map((client) => client.oauthClientId)).toEqual([app]);
+      expect(await used(code)).toBe(true);
+      for (const live of [kept, fresh, theirs]) {
+        expect((await repo.findById(realm, live.id))?.revokedAt).toBeNull();
+      }
+      // A second call has nothing left to end.
+      expect(
+        await repo.revokeForUser(realm, user, 'reset', {
+          exceptId: kept.id,
+          createdBefore: now - 1,
+        })
+      ).toEqual([]);
+    });
+
+    it('ends a realm’s sessions batch after batch in id order, leaving sign-ins after the start and other realms', async () => {
+      const realm = await seedRealm();
+      const other = await seedRealm();
+      const user = await seedUser(realm);
+      const otherUser = await seedUser(other);
+      const now = Date.now();
+      const ids: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        ids.push((await repo.create(session(realm, user, { createdAt: now - HOUR }))).id);
+      }
+      const idle = await repo.create(
+        session(realm, user, { createdAt: now - 3 * HOUR, lastSeenAt: now - 3 * HOUR })
+      );
+      const later = await repo.create(session(realm, user, { createdAt: now + 1_000 }));
+      const elsewhere = await repo.create(session(other, otherUser, { createdAt: now - HOUR }));
+
+      const seen: string[] = [];
+      let after: string | undefined;
+      for (;;) {
+        const batch = await repo.revokeRealmBatch(realm, 'key_retired', {
+          ...(after === undefined ? {} : { after }),
+          createdThrough: now,
+          activeSince: now - 2 * HOUR,
+          limit: 2,
+        });
+        seen.push(...batch.ended.map((row) => row.session.id));
+        if (batch.selected < 2 || batch.last === null) break;
+        after = batch.last;
+      }
+
+      expect(seen).toEqual([...ids].sort());
+      for (const survivor of [idle, later]) {
+        expect((await repo.findById(realm, survivor.id))?.revokedAt).toBeNull();
+      }
+      expect((await repo.findById(other, elsewhere.id))?.revokedAt).toBeNull();
+    });
+
+    it('marks sessions past an end as idle or expired, at the time each ended, and leaves live ones', async () => {
+      const now = Date.now();
+      const strict = await one(
+        `INSERT INTO realms (name, sso_max_lifespan, sso_idle_timeout) VALUES ($1, 7200, 600) RETURNING id`,
+        [`realm-${Math.random().toString(36).slice(2)}`]
+      );
+      const lax = await seedRealm();
+      const user = await seedUser(strict);
+      const laxUser = await seedUser(lax);
+      const app = await seedClient(strict);
+      // Idle: last seen 11 minutes ago, against a 10-minute limit.
+      const idle = await repo.create(
+        session(strict, user, { createdAt: now - HOUR, lastSeenAt: now - 11 * 60_000 })
+      );
+      // Past the realm's 2-hour maximum lifespan, though `expires_at` is later.
+      const tooOld = await repo.create(
+        session(strict, user, {
+          createdAt: now - 3 * HOUR,
+          lastSeenAt: now - 60_000,
+          expiresAt: now + HOUR,
+        })
+      );
+      // Past `expires_at`, in a realm with no limits.
+      const expired = await repo.create(
+        session(lax, laxUser, { createdAt: now - 2 * HOUR, expiresAt: now - HOUR })
+      );
+      // Past SESSION_COOKIE_TTL (here 4 hours), in a realm with no limits.
+      const pastTtl = await repo.create(
+        session(lax, laxUser, { createdAt: now - 5 * HOUR, expiresAt: now + HOUR })
+      );
+      const live = await repo.create(
+        session(strict, user, { createdAt: now - 60_000, lastSeenAt: now - 60_000 })
+      );
+      await recordAt(idle.id, app, now - HOUR);
+      const code = await seedCode(app, user, idle.id);
+
+      const batch = await repo.revokeLapsedBatch({
+        now,
+        defaultMaxLifespanMs: 4 * HOUR,
+        limit: 100,
+      });
+
+      const byId = new Map(batch.ended.map((row) => [row.session.id, row]));
+      expect(byId.get(idle.id)?.session).toMatchObject({
+        revokedReason: 'idle',
+        revokedAt: now - 11 * 60_000 + 600_000,
+      });
+      expect(byId.get(idle.id)?.clients.map((client) => client.oauthClientId)).toEqual([app]);
+      expect(await used(code)).toBe(true);
+      expect(byId.get(tooOld.id)?.session).toMatchObject({
+        revokedReason: 'expired',
+        revokedAt: now - 3 * HOUR + 2 * HOUR,
+      });
+      expect(byId.get(expired.id)?.session).toMatchObject({
+        revokedReason: 'expired',
+        revokedAt: now - HOUR,
+      });
+      expect(byId.get(pastTtl.id)?.session).toMatchObject({
+        revokedReason: 'expired',
+        revokedAt: now - 5 * HOUR + 4 * HOUR,
+      });
+      expect(byId.has(live.id)).toBe(false);
+      expect((await repo.findById(strict, live.id))?.revokedAt).toBeNull();
+      // Marked once: a second batch finds nothing.
+      expect(
+        (await repo.revokeLapsedBatch({ now, defaultMaxLifespanMs: 4 * HOUR, limit: 100 })).ended
+      ).toEqual([]);
+    });
+
+    it('deletes rows revoked or expired before the cut-off and keeps the rest', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm);
+      const now = Date.now();
+      const day = 24 * HOUR;
+      const longRevoked = await repo.create(session(realm, user, { expiresAt: now + day }));
+      await pool().query(
+        `UPDATE sessions SET revoked_at = $2, revoked_reason = 'sign_out' WHERE id = $1`,
+        [longRevoked.id, now - 31 * day]
+      );
+      const longExpired = await repo.create(
+        session(realm, user, { createdAt: now - 32 * day, expiresAt: now - 31 * day })
+      );
+      const recentlyRevoked = await repo.create(session(realm, user));
+      await repo.revoke(realm, recentlyRevoked.id, 'sign_out');
+      const recentlyExpired = await repo.create(
+        session(realm, user, { createdAt: now - 2 * day, expiresAt: now - day })
+      );
+      const live = await repo.create(session(realm, user));
+
+      let deleted = 0;
+      let after: string | undefined;
+      for (;;) {
+        const batch = await repo.deleteEnded({
+          before: now - 30 * day,
+          ...(after === undefined ? {} : { after }),
+          limit: 1,
+        });
+        deleted += batch.deleted;
+        if (batch.selected < 1 || batch.last === null) break;
+        after = batch.last;
+      }
+
+      expect(deleted).toBe(2);
+      expect(await repo.findById(realm, longRevoked.id)).toBeUndefined();
+      expect(await repo.findById(realm, longExpired.id)).toBeUndefined();
+      for (const kept of [recentlyRevoked, recentlyExpired, live]) {
+        expect(await repo.findById(realm, kept.id)).toBeDefined();
+      }
     });
   });
 });
