@@ -20,6 +20,12 @@ import {
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
+import {
+  defaultsFromEnv,
+  REALM_POLICY_SCHEMA_VERSION,
+  realmPolicyPlugin,
+  seedKeysSetIn,
+} from '@qauth-labs/fastify-plugin-realm-policy';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import {
   createRepositoryPublishedKeyReader,
@@ -51,6 +57,7 @@ import {
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
@@ -136,6 +143,14 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
       rpId: env.WEBAUTHN_RP_ID,
       allowParentDomainRpId: env.WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN,
     },
+    // The realm policy keys this deployment sets (#516), read from the raw
+    // environment: a value the env schema filled in was not set. A realm
+    // that already has its policies ignores each, and the step says so, and
+    // whether the server still applies the key until its area reads the row.
+    seedKeysSet: seedKeysSetIn(process.env).map((seedKey) => ({
+      ...seedKey,
+      readFromRealmRow: POLICIES_READ_FROM_REALM_ROW.has(seedKey.path),
+    })),
   };
 }
 
@@ -572,6 +587,13 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     fastify.addHook('onClose', () => eventTelemetry.shutdown());
   }
 
+  // The realm policies the environment seeds (ADR-019 Decision 10, #516): a
+  // new realm stores them, and the default realm's boot step fills a realm
+  // that has none yet with them. A realm that has its policies owns them; a
+  // later change of a key here changes no realm. A value the server accepts
+  // but the policy schema refuses stops the boot here, naming its key.
+  const realmPolicySeeds = defaultsFromEnv(env);
+
   await fastify.register(databasePlugin, {
     eventTelemetry,
     // Only the repositories this process's roles use (#495): reading another
@@ -581,10 +603,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     // admin role and grant write is checked against (#510).
     adminRoleCatalog: ADMIN_ROLE_CATALOG,
     // Realm policies the environment seeds into a new realm (ADR-019
-    // Decision 10): the realm row owns them once it exists (#536).
+    // Decision 10): the realm row owns them once it exists (#536, #516).
     realmPolicySeeds: {
       userEventRetentionDays: env.EVENT_RETENTION_USER_DAYS,
       adminEventRetentionDays: env.EVENT_RETENTION_ADMIN_DAYS,
+      policies: { document: realmPolicySeeds, schemaVersion: REALM_POLICY_SCHEMA_VERSION },
     },
     config: {
       connectionString: env.DATABASE_URL,
@@ -595,6 +618,14 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
       },
     },
+  });
+
+  // The realm policy store (#516): `fastify.policyStore`, which the default
+  // realm's boot step below fills realms through, and the flows read a
+  // realm's policies from, off the realm row they already loaded.
+  await fastify.register(realmPolicyPlugin, {
+    seeds: realmPolicySeeds,
+    realms: fastify.repositories.realms,
   });
 
   // The default realm's boot step (ADR-019 Decision 1, #484): find or create

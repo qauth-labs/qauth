@@ -30,7 +30,7 @@ import {
   sslRequiredEnum,
   tokenEndpointAuthMethodEnum,
 } from './enums';
-import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
+import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY, JSONB_EMPTY_OBJECT } from './sql-helpers';
 
 /**
  * Password Policy Configuration
@@ -197,6 +197,43 @@ export const realms = pgTable(
      * for each realm that has receivers.
      */
     ssfTransmitterEnabled: boolean('ssf_transmitter_enabled').notNull().default(false),
+    /**
+     * The realm's policies (ADR-019 Decision 10, issue #516): one document of
+     * the realm policy schema (`@qauth-labs/server-realm-policy`), stored in
+     * two forms. Four fields keep the columns that held them before this
+     * column existed ({@link REALM_POLICY_COLUMNS}): the token lifetimes,
+     * the dynamic registration allowlist and the environment ceiling. Every
+     * other field is a member of this document. A secret field is never
+     * here: the realm's secret store holds it.
+     *
+     * Only the policy store writes it, and it writes whole documents, so a
+     * field missing here was added to the schema after the realm got its
+     * policies (the boot step fills it once from the environment).
+     */
+    policies: jsonb('policies')
+      .notNull()
+      .default(JSONB_EMPTY_OBJECT)
+      .$type<Record<string, unknown>>(),
+    /**
+     * The policy schema version the stored policies follow (`1-rc.0` before
+     * QAuth 1.0.0, ADR-018 §5); NULL while the realm has no policies.
+     */
+    policySchemaVersion: varchar('policy_schema_version', { length: 32 }),
+    /**
+     * A counter of the realm's policy writes, the admin API's `ETag` and the
+     * `If-Match` a policy update compares (#516). 0 means the realm has no
+     * policies yet: it was created before migration 0046, or by a release
+     * that predates it, and the boot step fills it from the environment,
+     * with `UPDATE ... WHERE policies_version = 0` so the first node wins.
+     *
+     * Every change of the policies raises it, whoever writes them: the
+     * trigger `realms_policies_version` raises it on an UPDATE that changes
+     * the document or one of the four policy columns and leaves the counter
+     * as it was, and refuses an UPDATE that lowers it, so an `ETag` never
+     * names two documents. 0 is no `ETag`: a realm without policies reads
+     * as its fill, which depends on the environment of the node reading it.
+     */
+    policiesVersion: integer('policies_version').notNull().default(0),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -260,6 +297,20 @@ export const realms = pgTable(
     check(
       'realms_dynamic_registration_scopes_not_qauth',
       sql`NOT jsonb_path_exists(${t.dynamicRegistrationAllowedScopes}, '$[*] ? (@ like_regex "^[qQ][aA][uU][tT][hH]:")')`
+    ),
+    // The realm's policies (#516): a JSON object, a counter that starts at 0,
+    // and a schema version written as `1-rc.<M>` or `<N>` once the realm has
+    // policies. The token lifetimes are policy fields from then on, so they
+    // are set, whoever writes the row.
+    check('realms_policies_object', sql`jsonb_typeof(${t.policies}) = 'object'`),
+    check('realms_policies_version_not_negative', sql`${t.policiesVersion} >= 0`),
+    check(
+      'realms_policy_schema_version_format',
+      sql`${t.policySchemaVersion} ~ '^[1-9][0-9]*(-rc\\.(0|[1-9][0-9]*))?$'`
+    ),
+    check(
+      'realms_policies_complete',
+      sql`${t.policiesVersion} = 0 OR (${t.policySchemaVersion} IS NOT NULL AND ${t.accessTokenLifespan} IS NOT NULL AND ${t.refreshTokenLifespan} IS NOT NULL)`
     ),
   ]
 );

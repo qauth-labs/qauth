@@ -20,15 +20,33 @@ import type { DbTransaction } from '../../types';
 import { DbClient } from '../db';
 import { realmHosts, realms } from '../schema/core';
 import { BaseRepository } from './base.repository';
+import {
+  type RealmPolicyRecord,
+  realmPolicyRecord,
+  splitRealmPolicies,
+} from './realm-policy-record';
 
 export type Realm = InferSelectModel<typeof realms>;
-export type NewRealm = InferInsertModel<typeof realms>;
+/**
+ * A new realm. Its policy document, schema version and counter are left out
+ * (#516): a new realm stores the repository's policy seed, and only
+ * `writePolicies` writes them afterwards, so nothing the policy store did not
+ * parse reaches `realms.policies`.
+ */
+export type NewRealm = Omit<
+  InferInsertModel<typeof realms>,
+  'policies' | 'policySchemaVersion' | 'policiesVersion'
+>;
 /**
  * Fields a realm update may change. The passkey RP ID columns are left out on
  * purpose (#467, #553): `setWebAuthnRpId` writes the RP ID, refusing it once
  * the realm is locked, and only `lockRpIdForEnrolment` writes the lock. The
  * operator flag is left out too (#510): the realm rule of admin grants rests
- * on it, and only `setOperator` writes it.
+ * on it, and only `setOperator` writes it. So are the policy document, its
+ * schema version and its counter (#516): only `writePolicies` writes them,
+ * comparing the counter. The four policy columns are still writable here,
+ * for the callers that wrote them before the policies existed; the trigger
+ * `realms_policies_version` raises the counter when such a write changes one.
  */
 export type UpdateRealm = Partial<
   Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId' | 'webauthnRpIdLockedAt' | 'isOperator'>
@@ -59,12 +77,47 @@ export interface RealmWithHost {
 export type NewRealmWithIssuer = NewRealm & { issuer: string };
 
 /**
+ * The policy document a new realm gets (#516): `defaultsFromEnv` of the
+ * environment the server runs with, and the schema version it follows.
+ */
+export interface RealmPolicyDocumentSeed {
+  /** A whole policy document of the realm policy schema, with no secret field. */
+  readonly document: Record<string, unknown>;
+  /** The policy schema version, `REALM_POLICY_SCHEMA_VERSION`. */
+  readonly schemaVersion: string;
+}
+
+/**
  * The realm policies the environment seeds into a new realm (ADR-019
  * Decision 10): the values a realm gets for the policies its creator leaves
  * out. The realm row owns them from then on; a later change of a seed leaves
  * existing realms as they are.
  */
-export type RealmPolicySeeds = Partial<EventRetentionPolicy>;
+export type RealmPolicySeeds = Partial<EventRetentionPolicy> & {
+  /**
+   * The policy document (#516), which every new realm stores; a
+   * column-backed field its creator sets keeps the creator's value. Without
+   * it a new realm has no policies (counter 0) until the boot step fills
+   * them.
+   */
+  readonly policies?: RealmPolicyDocumentSeed;
+};
+
+/** What {@link RealmsRepository.writePolicies} writes. */
+export interface RealmPoliciesWrite {
+  /** The whole policy document, parsed by the policy store; no secret field. */
+  readonly document: Record<string, unknown>;
+  /** The policy schema version the document follows. */
+  readonly schemaVersion: string;
+  /** The counter the realm must still have; the write sets it one higher. */
+  readonly expectedVersion: number;
+}
+
+/** The policy columns of a realm row, which only the repository's seed and `writePolicies` set. */
+type RealmPolicyColumnsOfRow = Pick<
+  InferInsertModel<typeof realms>,
+  'policies' | 'policySchemaVersion' | 'policiesVersion'
+>;
 
 /** Options of {@link createRealmsRepository}. */
 export interface RealmsRepositoryOptions {
@@ -233,6 +286,35 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
   lockProvisioning(tx: DbTransaction): Promise<void>;
 
   /**
+   * Write a realm's policies (#516): the four column-backed fields to their
+   * columns, every other field to `realms.policies`, the schema version, and
+   * the counter one higher than `expectedVersion`, in one `UPDATE ... WHERE
+   * policies_version = expectedVersion`. So of two writers that read the
+   * same counter one wins and the other changes nothing: a boot filling a
+   * realm with no policies (counter 0) races another node's boot, an update
+   * a concurrent one.
+   *
+   * The policy store is the only caller: it parses the document with the
+   * policy schema and keeps every secret out of it.
+   *
+   * @returns the realm as written, or `undefined` when the realm is gone or
+   *   its counter is no longer `expectedVersion`
+   * @throws BadRequestError if the allowlist holds a `qauth:` scope
+   * @throws TypeError if the document lacks a column-backed field
+   */
+  writePolicies(
+    realmId: string,
+    write: RealmPoliciesWrite,
+    tx?: DbClient
+  ): Promise<Realm | undefined>;
+
+  /**
+   * Every realm's policies, as the boot step reads them to fill a realm that
+   * has none and to complete one a later release added fields to (#516).
+   */
+  listPolicyRecords(tx?: DbClient): Promise<RealmPolicyRecord[]>;
+
+  /**
    * Add an endpoint host to a realm. An IP literal is allowed.
    *
    * @throws InvalidRealmHostError if the host cannot be a realm host
@@ -398,22 +480,45 @@ export function createRealmsRepository(
   defaultDb: DbClient,
   options: RealmsRepositoryOptions = {}
 ): RealmsRepository {
-  const seeds: RealmPolicySeeds = { ...options.seeds };
-  const seedProblems = eventRetentionProblems(seeds);
+  const { policies: policySeed, ...retentionSeeds } = { ...options.seeds };
+  const seedProblems = eventRetentionProblems(retentionSeeds);
   if (seedProblems.length > 0) {
     throw new TypeError(`createRealmsRepository: ${seedProblems.join('; ')}`);
   }
+  // Split once, so a seed without a column-backed field fails the boot rather
+  // than the first realm's creation.
+  const policyColumnsSeed =
+    policySeed === undefined ? undefined : splitRealmPolicies(policySeed.document);
 
-  /** A new realm's row: the seeds, overridden by what the creator set. */
-  function seeded<T extends NewRealm>(data: T): T {
-    const row = { ...data };
-    for (const [key, value] of Object.entries(seeds) as [keyof RealmPolicySeeds, number][]) {
+  /**
+   * A new realm's row: the seeds, overridden by what the creator set. The
+   * policy document, its schema version and its counter come from the seed
+   * alone, whatever the creator passed.
+   */
+  function seeded<T extends NewRealm>(data: T): T & RealmPolicyColumnsOfRow {
+    const row: T & Partial<RealmPolicyColumnsOfRow> = { ...data };
+    delete row.policies;
+    delete row.policySchemaVersion;
+    delete row.policiesVersion;
+    for (const [key, value] of Object.entries(retentionSeeds) as [
+      keyof EventRetentionPolicy,
+      number,
+    ][]) {
       if (row[key] === undefined) row[key] = value;
+    }
+    if (policySeed !== undefined && policyColumnsSeed !== undefined) {
+      const { columns, members } = structuredClone(policyColumnsSeed);
+      for (const [column, value] of Object.entries(columns) as [keyof typeof columns, never][]) {
+        if (row[column] === undefined) row[column] = value;
+      }
+      row.policies = members;
+      row.policySchemaVersion = policySeed.schemaVersion;
+      row.policiesVersion = 1;
     }
     assertEventRetention(row);
     assertSsoLimits(row);
     assertDynamicRegistrationScopes(row);
-    return row;
+    return row as T & RealmPolicyColumnsOfRow;
   }
 
   return {
@@ -713,6 +818,38 @@ export function createRealmsRepository(
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${PROVISIONING_LOCK}, 0))`
       );
+    },
+
+    async writePolicies(
+      realmId: string,
+      write: RealmPoliciesWrite,
+      tx?: DbClient
+    ): Promise<Realm | undefined> {
+      if (!Number.isSafeInteger(write.expectedVersion) || write.expectedVersion < 0) {
+        throw new TypeError('writePolicies: expectedVersion is a whole number, 0 or more');
+      }
+      const { columns, members } = splitRealmPolicies(write.document);
+      assertDynamicRegistrationScopes(columns);
+      const [realm] = await (tx ?? defaultDb)
+        .update(realms)
+        .set({
+          ...columns,
+          policies: members,
+          policySchemaVersion: write.schemaVersion,
+          policiesVersion: write.expectedVersion + 1,
+          updatedAt: Date.now(),
+        })
+        .where(and(eq(realms.id, realmId), eq(realms.policiesVersion, write.expectedVersion)))
+        .returning();
+      return realm;
+    },
+
+    async listPolicyRecords(tx?: DbClient): Promise<RealmPolicyRecord[]> {
+      const rows = await (tx ?? defaultDb)
+        .select()
+        .from(realms)
+        .orderBy(realms.createdAt, realms.id);
+      return rows.map(realmPolicyRecord);
     },
 
     async addEndpointHost(realmId: string, host: string, tx?: DbClient): Promise<RealmHost> {

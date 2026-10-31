@@ -1197,6 +1197,33 @@ describe('scope allowlist enforcement (#86/#88)', () => {
     expect(created.realmId).toBe('realm-2');
   });
 
+  it('keeps the empty allowlist of a realm that has its policies, and writes no seed (#516)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    const realm = testRealm({
+      id: 'realm-2',
+      dynamicRegistrationAllowedScopes: [],
+      policiesVersion: 2,
+    });
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(realm);
+
+    const { reply } = createReply();
+    await expect(
+      route(ctx, 'POST /').handler(
+        authedRequest({
+          realm,
+          body: {
+            name: 'Realm 2',
+            redirectUris: ['https://app.example.com/cb'],
+            scopes: ['openid'],
+          },
+        }),
+        reply
+      )
+    ).rejects.toThrow(InvalidClientMetadataError);
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a PATCH that widens scopes beyond the realm allowlist', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);

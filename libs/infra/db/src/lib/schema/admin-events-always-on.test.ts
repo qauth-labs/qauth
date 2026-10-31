@@ -32,8 +32,11 @@ type RealmRow = typeof realms.$inferSelect;
 /**
  * The members of each `jsonb` column of the realm tables, as the column's
  * type declares them. `metadata` is a free-form record and the two lists hold
- * strings, so they declare none. A member typed into a column must be listed
- * here (the type test below fails otherwise), and is then scanned as
+ * strings, so they declare none. Neither does `policies` (#516): its members
+ * are the fields of the realm policy schema, which the registry declares, not
+ * the column's type, and `fastify-plugin-realm-policy`'s twin of this test
+ * scans every one of them. A member typed into a column must be listed here
+ * (the type test below fails otherwise), and is then scanned as
  * `column.member`.
  */
 const REALM_JSONB_MEMBERS = {
@@ -49,6 +52,7 @@ const REALM_JSONB_MEMBERS = {
   ],
   supportedLocales: [],
   dynamicRegistrationAllowedScopes: [],
+  policies: [],
   metadata: [],
 } as const;
 

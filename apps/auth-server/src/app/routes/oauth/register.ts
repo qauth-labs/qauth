@@ -82,7 +82,10 @@ export default async function (fastify: FastifyInstance) {
       const realm = requestRealm(request);
 
       // Seed realm's allowlist on first use. We *only* do this when the
-      // realm has an empty list — never overwrite an operator's choice.
+      // realm has an empty list — never overwrite an operator's choice — and
+      // no policies yet (#516): once the realm row holds its policies, the
+      // boot step seeded the list from the environment, and an empty list is
+      // the realm's own policy, which the environment no longer changes.
       // Defaults are intentionally tight (OIDC core scopes). The list is read
       // from the database, not from the resolver's row, which can be up to its
       // cache time old (#487): the seed must see a list an operator set since.
@@ -95,7 +98,11 @@ export default async function (fastify: FastifyInstance) {
         throw new MisdirectedRequestError({ reason: 'realm_deleted', realmId: realm.id });
       }
       let allowedScopes = current.dynamicRegistrationAllowedScopes ?? [];
-      if (allowedScopes.length === 0 && env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0) {
+      if (
+        allowedScopes.length === 0 &&
+        (current.policiesVersion ?? 0) === 0 &&
+        env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0
+      ) {
         allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
         try {
           await fastify.repositories.realms.update(realm.id, {

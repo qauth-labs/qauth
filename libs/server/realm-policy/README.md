@@ -8,8 +8,9 @@ changes need `qauth:admin:security` all come from it, and so does the docs page
 [`reference/realm-policies`](../../../apps/docs-site/src/content/docs/reference/realm-policies.md).
 
 It is a plain library over Zod and `@qauth-labs/shared-validation` (for the closed list of security
-effects, `SECURITY_EFFECTS`). Nothing reads the policies from the realm row yet: storing them and
-seeding a new realm come next, and the flows read them after that.
+effects, `SECURITY_EFFECTS`). The policy store below keeps the policies on the realm row (#516),
+through a storage port the database library implements; the flows read them from there in the
+issues that follow (#527, #528, #529, #534).
 
 ## Fields
 
@@ -99,6 +100,43 @@ The three views:
 - `representation`: what the admin API returns. A secret `<name>` appears as `<name>Set`. Every
   member must be present: its Zod schema never fills a default, so a serialiser built on it cannot
   show a loosened realm as a strict one, and it strips any member it does not name.
+
+## The policy store
+
+`createPolicyStore` reads and writes one realm's policies as one document, over a
+`RealmPolicyStorage` port. The realm row keeps four fields in the columns that held them before
+(`access_token_lifespan`, `refresh_token_lifespan`, `dynamic_registration_allowed_scopes`,
+`max_environment_laxity`) and every other one in `realms.policies`; the port joins and splits the
+two forms, so the store sees one document. `@qauth-labs/fastify-plugin-realm-policy` builds it over
+the realms table as `fastify.policyStore`.
+
+```typescript
+const store = createPolicyStore({ storage, seeds: defaultsFromEnv(env), secrets });
+
+store.ofRealm(row); // the policies of a realm row already loaded: no query
+await store.get(realmId); // { version, hasPolicies, schemaVersion, policies }
+await store.update(realmId, { password: { minScore: 3 } }, { expectedVersion: 4, tx });
+await store.seedRealms(tx); // at boot: fill realms with no policies, complete missing fields
+```
+
+- `version` is the realm's `policies_version`: the admin API's `ETag`. `update` takes a JSON Merge
+  Patch (RFC 7396) and changes nothing unless the realm still has `expectedVersion`
+  (`PolicyVersionConflictError`); a refused merged document throws `PolicyValidationError`.
+- A secret field in a patch goes to the `RealmSecretStore` in the same transaction (`put`, `isSet`,
+  `getForUse`; implemented by #529), never into the stored document. With no secret store the write
+  is refused (`PolicySecretStoreUnavailableError`).
+- A realm with no policies yet (`version` 0, created before migration 0046) reads as its fill: the
+  seeds, with the values of its row the server read before (the environment ceiling, a non-empty
+  dynamic registration allowlist). A field missing from a stored document, which a later release
+  added, reads as its seed; `seedRealms` writes both once, with `UPDATE ... WHERE policies_version
+  = <read>`, so the first node to boot wins.
+- Members of a stored document this release does not know (a later release's) are skipped on read
+  and carried over on write, so a node of the previous release never drops them during a rolling
+  upgrade. A document of another schema version is not written: `update` refuses it
+  (`PolicySchemaVersionError`) and `seedRealms` leaves it as it is (`skipped`).
+- A list a fill keeps from the row loses its repeats, as `defaultsFromEnv` drops them.
+- `seedKeysSetIn(process.env)` names the seed keys the environment sets, which a realm with
+  policies ignores.
 
 ## Versions
 

@@ -256,7 +256,9 @@ function assertGrantResponseConsistency(input: {
  * The list is read from the database, not from the realm resolver's row
  * (`request.realm`), which can be up to its cache time old (#487): the seed
  * must see a list an operator set since then, or it would overwrite it. A
- * realm that no longer exists permits no scope.
+ * realm that no longer exists permits no scope. A realm that has its policies
+ * (#516) is never seeded here: the boot step seeded its list from the
+ * environment, and an empty list is the realm's own policy.
  */
 async function resolveRealmAllowedScopes(
   fastify: FastifyInstance,
@@ -265,7 +267,11 @@ async function resolveRealmAllowedScopes(
   const realm = await fastify.repositories.realms.findById(realmId);
   if (!realm) return [];
   let allowedScopes = realm.dynamicRegistrationAllowedScopes ?? [];
-  if (allowedScopes.length === 0 && env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0) {
+  if (
+    allowedScopes.length === 0 &&
+    (realm.policiesVersion ?? 0) === 0 &&
+    env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0
+  ) {
     allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
     try {
       await fastify.repositories.realms.update(realm.id, {

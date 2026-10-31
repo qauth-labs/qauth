@@ -1,4 +1,9 @@
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import {
+  defaultsFromEnv,
+  REALM_POLICY_SCHEMA_VERSION,
+  realmPolicyPlugin,
+} from '@qauth-labs/fastify-plugin-realm-policy';
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { requireDockerOrSkip, truncateDomainTablesStatement } from '@qauth-labs/shared-testing';
 import { resolveRpId } from '@qauth-labs/shared-validation';
@@ -119,9 +124,15 @@ describe('the passkey relying party on a real Postgres', () => {
     if (!infra) throw new Error('database not started');
     const app = Fastify({ logger: false });
     nodes.push(app);
+    // The realm policies as the app seeds them (#516).
+    const seeds = defaultsFromEnv({});
     await app.register(databasePlugin, {
       config: { connectionString: infra.postgres.connectionString, pool: { max: 2, min: 0 } },
+      realmPolicySeeds: {
+        policies: { document: seeds, schemaVersion: REALM_POLICY_SCHEMA_VERSION },
+      },
     });
+    await app.register(realmPolicyPlugin, { seeds, realms: app.repositories.realms });
     await app.register(defaultRealmPlugin, {
       realmName: 'master',
       jwtIssuer: ISSUER,
