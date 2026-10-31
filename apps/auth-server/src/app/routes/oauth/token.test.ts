@@ -2325,7 +2325,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     ]);
   });
 
-  describe('a second redemption of a code (OAuth 2.1 draft-16 §4.1.3, RFC 6749 §4.1.2, RFC 9700 §4.2.4)', () => {
+  describe('a second redemption of a code (OAuth 2.1 draft-17 §4.1.3, RFC 6749 §4.1.2, RFC 9700 §4.2.4)', () => {
     /** The refresh family the first redemption started. */
     const CODE_FAMILY_ID = '0199f2b4-7c3e-7a51-9d2b-3a6c8e1f0a42';
 
@@ -2447,18 +2447,18 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       ).toHaveBeenCalledWith(authCode.id, 'code_replay', expect.anything());
     });
 
-    // OAuth 2.1 draft-16 §7.5.3: whoever holds the code but not the client's
+    // OAuth 2.1 draft-17 §7.5.3: whoever holds the code but not the client's
     // credentials or the verifier must not be able to end the client's tokens.
     it.each([
       [
-        'a wrong code_verifier (OAuth 2.1 draft-16 §7.5.3)',
+        'a wrong code_verifier (OAuth 2.1 draft-17 §7.5.3)',
         'pkce_mismatch',
         {},
         (stub: ReturnType<typeof setupSpentCode>) =>
           (stub.fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(false),
       ],
       [
-        'another client (OAuth 2.1 draft-16 §7.5.3)',
+        'another client (OAuth 2.1 draft-17 §7.5.3)',
         'client_mismatch',
         {},
         (stub: ReturnType<typeof setupSpentCode>) =>
@@ -2488,7 +2488,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       }
     );
 
-    it('refuses a replay of a DPoP-bound code without its key and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+    it('refuses a replay of a DPoP-bound code without its key and revokes nothing (OAuth 2.1 draft-17 §7.5.3)', async () => {
       // DPoP is off in this stub, so a code bound to a key is refused outright
       // (`dpop_disabled`), the way a proof under another key is.
       const { fastify, ctx } = setupSpentCode({ dpopJkt: 'k'.repeat(43) });
@@ -2505,7 +2505,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       ]);
     });
 
-    it('refuses a replay without the proof a DPoP-bound code needs with invalid_grant, and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+    it('refuses a replay without the proof a DPoP-bound code needs with invalid_grant, and revokes nothing (OAuth 2.1 draft-17 §7.5.3)', async () => {
       // DPoP on: an unspent code would answer invalid_dpop_proof here; a spent
       // one answers invalid_grant, as it did before spent codes were read.
       const { fastify, ctx } = setupSpentCode({ dpopJkt: 'k'.repeat(43) });
@@ -2523,7 +2523,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       ]);
     });
 
-    it('refuses a replay naming a resource outside the code’s binding with invalid_grant, and revokes nothing (OAuth 2.1 draft-16 §7.5.3)', async () => {
+    it('refuses a replay naming a resource outside the code’s binding with invalid_grant, and revokes nothing (OAuth 2.1 draft-17 §7.5.3)', async () => {
       // An unspent code answers invalid_target here; a spent one invalid_grant.
       const { fastify, ctx } = setupSpentCode({ resource: ['https://api.example.com'] });
       await tokenRoute(fastify);

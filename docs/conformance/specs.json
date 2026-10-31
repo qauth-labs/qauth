@@ -86,12 +86,12 @@
     },
     {
       "id": "oauth-2_1",
-      "name": "The OAuth 2.1 Authorization Framework (draft-ietf-oauth-v2-1-16)",
-      "url": "https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-16",
-      "aliases": ["OAuth 2.1 draft-16", "draft-ietf-oauth-v2-1-16"],
+      "name": "The OAuth 2.1 Authorization Framework (draft-ietf-oauth-v2-1-17)",
+      "url": "https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-17",
+      "aliases": ["OAuth 2.1 draft-17", "draft-ietf-oauth-v2-1-17"],
       "increment": 4,
       "sealed": false,
-      "scopeNote": "The authorization-code replay rows of §4.1.3 and §7.5.3 only (#627). Registered under its draft revision because section numbers move between drafts: a test cites `OAuth 2.1 draft-16 §…`, and the bare `OAuth` token stays a foreign anchor, so the suite's older `OAuth 2.1 §…` citations neither prove nor orphan against these rows. Re-pinning to a later draft is a deliberate pass over these rows and the citing titles (docs/spec-pin-log.md)."
+      "scopeNote": "The authorization-code replay rows of §4.1.3 and §7.5.3 only (#627). Registered under its draft revision because section numbers move between drafts: a test cites `OAuth 2.1 draft-17 §…`, and the bare `OAuth` token stays a foreign anchor, so the suite's older `OAuth 2.1 §…` citations neither prove nor orphan against these rows. Re-pinning to a later draft is a deliberate pass over these rows and the citing titles (docs/spec-pin-log.md)."
     },
     {
       "id": "oid4vp-1_0",

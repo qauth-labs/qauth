@@ -249,7 +249,7 @@ version out; the bare-token citations stay foreign.
 ## Scope of increment 4 — authorization-code replay (#627)
 
 Registered: **OAuth 2.1**, as `oauth-2_1`, under its draft revision only —
-`OAuth 2.1 draft-16` and `draft-ietf-oauth-v2-1-16`. Section numbers move between
+`OAuth 2.1 draft-17` and `draft-ietf-oauth-v2-1-17` (re-pinned from `-16` on 2026-10-31). Section numbers move between
 drafts, so a citation names the revision it was checked against, the same rule
 that keeps `OID4VP 1.0` version-qualified. The bare `OAuth` token stays a foreign
 anchor: the suite's older `OAuth 2.1 §…` citations neither prove nor orphan
