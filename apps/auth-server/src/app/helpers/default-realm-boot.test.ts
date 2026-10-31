@@ -14,6 +14,7 @@ import {
   emailBaseUrlWarning,
   JWT_ISSUER_PATH_WARNING,
   JWT_ISSUER_TRAILING_SLASH_WARNING,
+  keptFromRowWarning,
   seedKeyIgnoredWarning,
   seedKeyStillAppliedNote,
 } from './default-realm-boot';
@@ -558,7 +559,7 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
   it('names no seed key when this boot filled the realm, and says it filled it', async () => {
     const { deps, warn, info, realm } = existingRealm({
       ...NOTHING,
-      filled: [{ realmId: REALM_ID, realmName: 'master' }],
+      filled: [{ realmId: REALM_ID, realmName: 'master', keptFromRow: [] }],
     });
 
     const result = await bootDefaultRealm(deps, settings);
@@ -566,11 +567,60 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
     expect(seedKeyLines(warn)).toEqual([]);
     expect(seedKeyLines(info)).toEqual([]);
     expect(info).toHaveBeenCalledWith(
-      { realm: 'master', realmId: realm.id },
+      { realm: 'master', realmId: realm.id, keptFromRow: [] },
       'realm policies filled from the environment: the realm row owns them from now on'
     );
     // The row as the fill left it.
     expect(result.realm.policiesVersion).toBe(2);
+  });
+
+  it('warns once for each field the fill kept from the row over a different seed', async () => {
+    const ALLOWLIST = 'registration.dynamicRegistrationAllowedScopes';
+    const CEILING = 'posture.maxEnvironmentLaxity';
+    const { deps, warn, info } = existingRealm({
+      ...NOTHING,
+      filled: [
+        {
+          realmId: REALM_ID,
+          realmName: 'master',
+          keptFromRow: [
+            { path: ALLOWLIST, differsFromSeed: true },
+            { path: CEILING, differsFromSeed: true },
+          ],
+        },
+        {
+          realmId: 'other-id',
+          realmName: 'other',
+          keptFromRow: [{ path: CEILING, differsFromSeed: false }],
+        },
+      ],
+    });
+
+    await bootDefaultRealm(deps, settings);
+
+    expect(info).toHaveBeenCalledWith(
+      { realm: 'master', realmId: REALM_ID, keptFromRow: [ALLOWLIST, CEILING] },
+      'realm policies filled from the environment: the realm row owns them from now on'
+    );
+    expect(warn.mock.calls.filter(([fields]) => 'policy' in (fields ?? {}))).toEqual([
+      [
+        {
+          realm: 'master',
+          realmId: REALM_ID,
+          policy: ALLOWLIST,
+          variable: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
+        },
+        keptFromRowWarning('master', ALLOWLIST),
+      ],
+      // The ceiling has no seed key: the line names none.
+      [
+        { realm: 'master', realmId: REALM_ID, policy: CEILING },
+        keptFromRowWarning('master', CEILING),
+      ],
+    ]);
+    expect(keptFromRowWarning('master', CEILING)).toBe(
+      'realm policies filled from the environment, but the realm "master" kept its posture.maxEnvironmentLaxity from its row, which differs from the environment\'s seed: the server read that value before, and the realm row owns it from now on'
+    );
   });
 
   it('names no seed key whose field this boot completed, and the others', async () => {

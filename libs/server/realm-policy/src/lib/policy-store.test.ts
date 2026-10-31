@@ -585,7 +585,13 @@ describe('createPolicyStore — seedRealms', () => {
     const report = await store.seedRealms();
 
     expect(report).toEqual({
-      filled: [{ realmId: 'realm-old', realmName: 'master' }],
+      filled: [
+        {
+          realmId: 'realm-old',
+          realmName: 'master',
+          keptFromRow: [{ path: 'posture.maxEnvironmentLaxity', differsFromSeed: true }],
+        },
+      ],
       completed: [],
       skipped: [],
     });
@@ -594,6 +600,52 @@ describe('createPolicyStore — seedRealms', () => {
       schemaVersion: REALM_POLICY_REGISTRY.version,
       document: { ...SEEDS, posture: { maxEnvironmentLaxity: 'development' } },
     });
+  });
+
+  it('reports each field the fill kept from the row, and whether it differs from the seed', async () => {
+    // The seed lists the scopes in another order: a set field's list is the
+    // same whatever its order and repeats.
+    const { store } = storeOver([
+      realmWithoutPolicies({
+        keptOnFill: {
+          posture: { maxEnvironmentLaxity: 'production' },
+          registration: {
+            dynamicRegistrationAllowedScopes: [
+              'offline_access',
+              'email',
+              'profile',
+              'openid',
+              'email',
+            ],
+          },
+        },
+      }),
+      realmWithoutPolicies({
+        id: 'realm-tenant',
+        name: 'tenant',
+        keptOnFill: { registration: { dynamicRegistrationAllowedScopes: ['openid'] } },
+      }),
+    ]);
+
+    const { filled } = await store.seedRealms();
+
+    expect(filled).toEqual([
+      {
+        realmId: 'realm-old',
+        realmName: 'master',
+        keptFromRow: [
+          { path: 'registration.dynamicRegistrationAllowedScopes', differsFromSeed: false },
+          { path: 'posture.maxEnvironmentLaxity', differsFromSeed: false },
+        ],
+      },
+      {
+        realmId: 'realm-tenant',
+        realmName: 'tenant',
+        keptFromRow: [
+          { path: 'registration.dynamicRegistrationAllowedScopes', differsFromSeed: true },
+        ],
+      },
+    ]);
   });
 
   it('computes a fill from the row read locked, in its transaction, not from the list', async () => {

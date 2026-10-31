@@ -125,10 +125,23 @@ export interface SeededRealm {
   readonly realmName: string;
 }
 
+/**
+ * A field a fill took from the realm's row rather than from the environment:
+ * a value the server read from the row before the policies existed, such as
+ * the environment ceiling or a dynamic registration allowlist that holds a
+ * scope.
+ */
+export interface KeptFromRow {
+  /** The field's path in the policy document. */
+  readonly path: string;
+  /** Whether the kept value differs from the environment's seed, which the fill left unused. */
+  readonly differsFromSeed: boolean;
+}
+
 /** What {@link RealmPolicyStore.seedRealms} did. */
 export interface RealmPolicySeedReport {
-  /** The realms that had no policies and got them. */
-  readonly filled: readonly SeededRealm[];
+  /** The realms that had no policies and got them, each with the fields its row kept. */
+  readonly filled: readonly (SeededRealm & { readonly keptFromRow: readonly KeptFromRow[] })[];
   /** The realms that lacked fields of this release, and the fields each got from the seeds. */
   readonly completed: readonly (SeededRealm & { readonly paths: readonly string[] })[];
   /**
@@ -436,6 +449,19 @@ function unknownMembersOf(
 }
 
 /**
+ * Whether two policy values are the same; a set field's lists in any order.
+ * The values are JSON: a list of a set field holds strings.
+ */
+function sameValue(a: unknown, b: unknown, set: boolean): boolean {
+  if (set && Array.isArray(a) && Array.isArray(b)) {
+    const members = (list: unknown[]) =>
+      [...new Set(list.map((entry) => JSON.stringify(entry)))].sort();
+    return JSON.stringify(members(a)) === JSON.stringify(members(b));
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
  * A list kept from a realm's row before its policies existed, with its
  * repeats dropped, first occurrence first: an earlier release copied an
  * environment value into the row as it was written, repeats included, which
@@ -475,6 +501,8 @@ interface EffectivePolicies {
   readonly unknown: Record<string, unknown>;
   /** The fields the stored document lacks, which took their seeds (a realm with policies only). */
   readonly missing: readonly string[];
+  /** The fields a fill kept from the realm's row (a realm with no policies only). */
+  readonly kept: readonly KeptFromRow[];
 }
 
 /**
@@ -506,21 +534,28 @@ export function createPolicyStore<Row, Tx>(
     const unknown = hasPolicies ? unknownMembersOf(layout, record.document) : {};
     const document: Record<string, unknown> = {};
     const missing: string[] = [];
+    const kept: KeptFromRow[] = [];
     for (const entry of layout.fields) {
       if (entry.field.secret) continue;
       if (hasAt(source, entry.segments)) {
         const value = structuredClone(valueAt(source, entry.segments));
-        setAt(
-          document,
-          entry.segments,
-          !hasPolicies && isSetDirection(entry.field.direction) ? withoutRepeats(value) : value
-        );
+        if (hasPolicies) {
+          setAt(document, entry.segments, value);
+          continue;
+        }
+        const set = isSetDirection(entry.field.direction);
+        const keptValue = set ? withoutRepeats(value) : value;
+        setAt(document, entry.segments, keptValue);
+        kept.push({
+          path: entry.path,
+          differsFromSeed: !sameValue(keptValue, valueAt(seeds, entry.segments), set),
+        });
         continue;
       }
       if (hasPolicies) missing.push(entry.path);
       setAt(document, entry.segments, structuredClone(valueAt(seeds, entry.segments)));
     }
-    return { document: registry.parse(document, 'document'), unknown, missing };
+    return { document: registry.parse(document, 'document'), unknown, missing, kept };
   }
 
   function snapshotOf(record: RealmPolicyRecord): RealmPolicySnapshot {
@@ -661,7 +696,7 @@ export function createPolicyStore<Row, Tx>(
 
     async seedRealms(tx?: Tx): Promise<RealmPolicySeedReport> {
       return storage.transaction(async (inner) => {
-        const filled: SeededRealm[] = [];
+        const filled: (SeededRealm & { keptFromRow: readonly KeptFromRow[] })[] = [];
         const completed: (SeededRealm & { paths: readonly string[] })[] = [];
         const skipped: (SeededRealm & { schemaVersion: string | null })[] = [];
         for (const listed of await storage.list(inner)) {
@@ -706,7 +741,7 @@ export function createPolicyStore<Row, Tx>(
           // the realm's, and a field it lacks is completed at the next boot.
           if (written === undefined) continue;
           const realm = { realmId: record.realmId, realmName: record.realmName };
-          if (record.version === 0) filled.push(realm);
+          if (record.version === 0) filled.push({ ...realm, keptFromRow: policies.kept });
           else completed.push({ ...realm, paths: policies.missing });
         }
         return { filled, completed, skipped };

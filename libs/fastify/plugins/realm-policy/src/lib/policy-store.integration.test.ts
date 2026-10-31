@@ -273,6 +273,14 @@ describe('policy store over the realms table (integration)', () => {
       'empty-scopes',
       'master',
     ]);
+    // What each row kept over the environment's seeds, which the boot warns about.
+    expect(report.filled.find((realm) => realm.realmId === kept)?.keptFromRow).toEqual([
+      { path: 'registration.dynamicRegistrationAllowedScopes', differsFromSeed: true },
+      { path: 'posture.maxEnvironmentLaxity', differsFromSeed: true },
+    ]);
+    expect(report.filled.find((realm) => realm.realmId === empty)?.keptFromRow).toEqual([
+      { path: 'posture.maxEnvironmentLaxity', differsFromSeed: true },
+    ]);
     const master = await storeOn(db()).get(kept);
     expect(master).toMatchObject({ version: 1, hasPolicies: true });
     expect(master?.policies).toEqual({
@@ -353,7 +361,7 @@ describe('policy store over the realms table (integration)', () => {
       const { report: reportA, b } = await a;
       await b;
 
-      expect(reportA.filled).toEqual([{ realmId: id, realmName: 'race' }]);
+      expect(reportA.filled).toMatchObject([{ realmId: id, realmName: 'race' }]);
       expect(reportB).toEqual({ filled: [], completed: [], skipped: [] });
       const stored = await storeOn(db()).get(id);
       expect(stored?.version).toBe(1);
@@ -381,7 +389,7 @@ describe('policy store over the realms table (integration)', () => {
         client.release();
       }
 
-      expect((await fill)?.filled).toEqual([{ realmId: id, realmName: 'tightened' }]);
+      expect((await fill)?.filled).toMatchObject([{ realmId: id, realmName: 'tightened' }]);
       const stored = await storeOn(db()).get(id);
       expect(stored).toMatchObject({ version: 1, hasPolicies: true });
       expect(stored?.policies.posture.maxEnvironmentLaxity).toBe('production');

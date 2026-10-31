@@ -289,7 +289,10 @@ take `ACCESS_TOKEN_LIFESPAN` and `REFRESH_TOKEN_LIFESPAN`. The fill is an
 together, the first one writes and the others find the realm filled. So give
 every node the same environment for the first boot after the upgrade; the
 first node to boot decides the stored values. The log says
-`realm policies filled from the environment` for each realm it filled.
+`realm policies filled from the environment` for each realm it filled, and
+warns for each value a realm's row kept that differs from the environment's
+seed (`... kept its posture.maxEnvironmentLaxity from its row ...`), so a
+ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
