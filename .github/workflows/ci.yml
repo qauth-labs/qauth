@@ -105,10 +105,12 @@ jobs:
   # SHA, never a branch or `latest` (scripts/action-refs). Not affected-scoped:
   # Nx sees no workflow file, and both checks take seconds.
   #
-  # The image is pinned to a version, as that rule requires of a Docker image.
-  # A newer actionlint can report findings this one does not, so moving it is a
-  # change of its own. The checkout keeps no credentials: the container sees
-  # the whole workspace.
+  # The image is pinned by digest (its version in the comment), not by tag: a
+  # tag can be pushed again, and the runner hands the container the cache
+  # token, so a replaced image could write cache entries on main. A newer
+  # actionlint can report findings this one does not, so moving it is a change
+  # of its own. The checkout keeps no credentials: the container sees the
+  # whole workspace.
   actionlint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -124,7 +126,7 @@ jobs:
 
       # `-color` keeps the findings readable in the log.
       - name: actionlint
-        uses: docker://rhysd/actionlint:1.7.7
+        uses: docker://rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 # 1.7.7
         with:
           args: -color
 

@@ -39,6 +39,7 @@ describe('referenceProblem', () => {
     ['an image with no tag', 'docker://rhysd/actionlint', /no image tag/],
     ['an image at latest', 'docker://rhysd/actionlint:latest', /image tag "latest"/],
     ['an image at a named tag', 'docker://node:lts-alpine', /image tag "lts-alpine"/],
+    ['an image at a rolling version tag', 'docker://some/tool:1-nightly', /image tag "1-nightly"/],
     ['an image whose only colon is a port', 'docker://registry.example:5000/tool', /no image tag/],
   ])('refuses %s', (_label, reference, message) => {
     expect(referenceProblem(reference)).toMatch(message);
@@ -101,6 +102,10 @@ describe('workflowReferences', () => {
     ['a comment and no value', '  - uses: # later'],
     ['an unclosed quote', "  - uses: 'actions/checkout@v7"],
     ['text after a quoted value', "  - uses: 'actions/checkout@v7' extra"],
+    ['a flow mapping', '  - { uses: actions/checkout@main }'],
+    ['a quoted key', '  - "uses": actions/checkout@main'],
+    ['a single-quoted key', "    'uses': actions/checkout@main"],
+    ['an anchor before the key', '  - &step uses: actions/checkout@main'],
   ])('refuses a uses: line it cannot read: %s', (_label, line) => {
     expect(workflowReferences(line)).toEqual([
       { line: 1, uses: line.trim(), problem: expect.stringMatching(/cannot be read/) },

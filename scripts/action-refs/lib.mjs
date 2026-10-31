@@ -13,14 +13,18 @@
  * names the version in a comment, as the release workflows do.
  *
  * A Docker image (`docker://image:tag`) has no major tags of its own, so it
- * must name a tag that starts with a version number, or a sha256 digest. A
- * local action or workflow (`./path`) comes from the same commit as the
- * workflow that calls it and names no ref.
+ * must name a tag that is a version number and nothing else (`:1.2.3`, not a
+ * rolling `:1-nightly`), or a sha256 digest. A local action or workflow
+ * (`./path`) comes from the same commit as the workflow that calls it and
+ * names no ref.
  *
  * The workflow is read line by line, not parsed as YAML: a line whose key is
  * `uses` must carry one reference, plain or quoted, with at most a comment
  * after it. A `uses:` line that cannot be read that way is refused rather than
- * skipped, so an unusual spelling cannot hide a reference.
+ * skipped, and so is any other line with a `uses` key on it (a flow mapping
+ * `- { uses: … }`, a quoted key `"uses":`), so an unusual spelling cannot hide
+ * a reference. This fails closed: an action input named `uses` under `with:`,
+ * or a `uses:` line inside a `run:` script, is refused too.
  *
  * Zero runtime dependencies — no imports at all.
  */
@@ -31,10 +35,12 @@ const VERSION_TAG = /^v\d+(\.\d+)+$/;
 const HEX = /^[0-9a-f]{7,40}$/i;
 const DOCKER_PREFIX = 'docker://';
 const DOCKER_DIGEST = /@sha256:[0-9a-f]{64}$/;
-const DOCKER_VERSION = /^v?\d/;
+const DOCKER_VERSION = /^v?\d+(\.\d+)*$/;
 
 /** A `uses` key, alone or as the first key of a list item; group 1 is the rest of the line. */
 const USES_KEY = /^\s*(?:-\s+)?uses\s*:(\s.*)?$/;
+/** A `uses` key anywhere else on a line: in a flow mapping, quoted, or after an anchor or tag. */
+const USES_ELSEWHERE = /(?:^|[\s{,?-])["']?uses["']?\s*:(?:\s|$)/;
 
 const PIN = 'pin a major tag (@v1) or a full commit SHA';
 const PIN_IMAGE = 'pin a version tag (:1.2.3) or a sha256 digest';
@@ -118,7 +124,12 @@ export function workflowReferences(text) {
   const references = [];
   for (const [index, content] of text.split(/\r?\n/).entries()) {
     const match = USES_KEY.exec(content);
-    if (match === null) continue;
+    if (match === null) {
+      if (!content.trimStart().startsWith('#') && USES_ELSEWHERE.test(content)) {
+        references.push({ line: index + 1, uses: content.trim(), problem: UNREADABLE });
+      }
+      continue;
+    }
     const reference = readReference(match[1] ?? '');
     if (reference === null) {
       references.push({ line: index + 1, uses: content.trim(), problem: UNREADABLE });
