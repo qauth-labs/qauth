@@ -535,6 +535,109 @@ describe('UI /ui/consent GET — rendering', () => {
   });
 });
 
+// ADR-014 §11 (#845): the page names an agent client as an AI agent, in
+// QAuth's words, and says how long it may keep working: until the person
+// revokes it, or, when the realm sets `sso_max_lifespan`, until that long
+// after the sign-in at the latest (#552).
+describe('UI /ui/consent GET — an agent client (ADR-014 §11, #845)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const AGENT_LINE = 'is an AI agent.';
+  const PERSISTENCE_LINE = 'It may keep working until you revoke it';
+
+  async function renderFor(
+    client: Record<string, unknown>,
+    realm = REALM
+  ): Promise<{ html: string; statusCode?: number }> {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-agent' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    const { reply, state } = createReply();
+    await ctx.get!(
+      { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1', realm },
+      reply
+    );
+    return { html: state.body as string, statusCode: state.statusCode };
+  }
+
+  it('names neither line for a client that is not an agent', async () => {
+    for (const client of [CLIENT, { ...CLIENT, isAgent: false }]) {
+      const { html } = await renderFor(client);
+      expect(html).toContain('Test App wants to access your account');
+      expect(html).not.toContain(AGENT_LINE);
+      expect(html).not.toContain(PERSISTENCE_LINE);
+    }
+  });
+
+  it('names an agent client as an AI agent that may keep working until revoked', async () => {
+    const { html } = await renderFor({ ...CLIENT, name: 'Release Bot', isAgent: true });
+    expect(html).toContain('<p>Release Bot is an AI agent.</p>');
+    expect(html).toContain('<p>It may keep working until you revoke it.</p>');
+    expect(html).not.toContain('whichever comes first');
+  });
+
+  it('names the realm’s sso_max_lifespan as a duration from the sign-in', async () => {
+    const realm = testRealm({ id: 'realm-1', ssoMaxLifespan: 8 * 3600 });
+    const { html } = await renderFor({ ...CLIENT, name: 'Release Bot', isAgent: true }, realm);
+    expect(html).toContain('<p>Release Bot is an AI agent.</p>');
+    expect(html).toContain(
+      '<p>It may keep working until you revoke it, or until 8 hours after you signed in, ' +
+        'whichever comes first.</p>'
+    );
+  });
+
+  it('escapes markup in the client name on the agent line', async () => {
+    const { html } = await renderFor({
+      ...CLIENT,
+      name: '<img src=x onerror=alert(1)>&"\'',
+      isAgent: true,
+    });
+    expect(html).toContain(
+      '<p>&lt;img src=x onerror=alert(1)&gt;&amp;&quot;&#39; is an AI agent.</p>'
+    );
+    expect(html).not.toContain('<img src=x');
+  });
+
+  it('keeps the dynamic-client badge and the agent cap for an agent client', async () => {
+    // An agent registered through open registration a day ago: the
+    // newly-registered badge still shows beside the agent lines.
+    const { html } = await renderFor({
+      ...CLIENT,
+      isAgent: true,
+      dynamicRegisteredAt: Date.now() - 24 * 60 * 60 * 1000,
+      provisionedByOperator: false,
+    });
+    expect(html).toContain('Test App is an AI agent.');
+    expect(html).toContain('Newly registered application');
+
+    // An agent scope above the cap is still refused before any page.
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-agent-cap' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+      scopes: ['agent:exec'],
+    });
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, scope: 'agent:exec' },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.body).toBeUndefined();
+  });
+});
+
 describe('UI /ui/consent POST — allow/deny', () => {
   beforeEach(() => {
     vi.clearAllMocks();

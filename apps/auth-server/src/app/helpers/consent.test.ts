@@ -7,7 +7,9 @@ vi.mock('../../config/env', () => ({
 }));
 
 import {
+  agentPersistenceLine,
   canSkipConsent,
+  describeDuration,
   describeScope,
   filterRequestedScopes,
   isDynamicClientWithinBadgeWindow,
@@ -21,6 +23,7 @@ function client(overrides: Partial<OAuthClientLike> = {}): OAuthClientLike {
   return {
     scopes: ['read:foo', 'write:foo', 'email'],
     dynamicRegisteredAt: null,
+    isAgent: false,
     ...overrides,
   };
 }
@@ -152,6 +155,58 @@ describe('canSkipConsent', () => {
 
   it('matches a resource exactly, never through the prototype', () => {
     expect(canSkipConsent(consent(), client(), [], ['constructor'])).toBe(false);
+  });
+
+  // ADR-015 Decision 11 (#845): every authorization of an agent shows the
+  // screen, which names it as an agent and says how long it may keep working.
+  it('never skips the screen for an agent client, even under a covering consent', () => {
+    const covering = consent({ scopes: ['read:foo', 'email'], resourceScopes: { [A]: ['email'] } });
+    const agent = client({ isAgent: true });
+    expect(canSkipConsent(covering, client(), ['email'], [])).toBe(true);
+    expect(canSkipConsent(covering, agent, ['email'], [])).toBe(false);
+    expect(canSkipConsent(covering, agent, [], [])).toBe(false);
+    expect(canSkipConsent(covering, client(), ['email'], [A])).toBe(true);
+    expect(canSkipConsent(covering, agent, ['email'], [A])).toBe(false);
+  });
+});
+
+describe('describeDuration', () => {
+  it('names a whole unit alone', () => {
+    expect(describeDuration(1)).toBe('1 second');
+    expect(describeDuration(60)).toBe('1 minute');
+    expect(describeDuration(3600)).toBe('1 hour');
+    expect(describeDuration(86_400)).toBe('1 day');
+    expect(describeDuration(30 * 86_400)).toBe('30 days');
+    expect(describeDuration(2 * 3600)).toBe('2 hours');
+  });
+
+  it('names every unit it holds, never rounding', () => {
+    expect(describeDuration(90)).toBe('1 minute and 30 seconds');
+    expect(describeDuration(90_000)).toBe('1 day and 1 hour');
+    expect(describeDuration(90_061)).toBe('1 day, 1 hour, 1 minute and 1 second');
+    expect(describeDuration(86_400 + 1)).toBe('1 day and 1 second');
+    expect(describeDuration(7 * 86_400 + 12 * 3600)).toBe('7 days and 12 hours');
+  });
+
+  it('drops a fraction of a second', () => {
+    expect(describeDuration(3600.9)).toBe('1 hour');
+  });
+});
+
+describe('agentPersistenceLine', () => {
+  it('says only "until you revoke it" without a realm limit', () => {
+    expect(agentPersistenceLine(null)).toBe('It may keep working until you revoke it.');
+  });
+
+  it('names the realm limit as a duration from the sign-in when the realm sets one', () => {
+    expect(agentPersistenceLine(86_400)).toBe(
+      'It may keep working until you revoke it, or until 1 day after you signed in, ' +
+        'whichever comes first.'
+    );
+    expect(agentPersistenceLine(5400)).toBe(
+      'It may keep working until you revoke it, or until 1 hour and 30 minutes after you ' +
+        'signed in, whichever comes first.'
+    );
   });
 });
 

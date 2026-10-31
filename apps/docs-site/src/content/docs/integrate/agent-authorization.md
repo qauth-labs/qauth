@@ -412,6 +412,12 @@ instead of silently elevating (OIDC Core §3.1.2.1):
 A fresh-login requirement takes precedence over a pending consent — the user
 cannot consent before re-authenticating.
 
+An agent client never skips the consent screen, even when a stored consent
+covers the request: the screen names it as an AI agent and says how long it may
+keep working ([Hosted UI](/integrate/hosted-ui/#an-ai-agent-client)). So
+`prompt=none` from an agent answers `consent_required` whenever no fresh login
+is needed (ADR-015 Decision 11).
+
 For a client no operator provisioned (one registered through
 `POST /oauth/register`, a Client ID Metadata Document or `POST /api/clients`),
 these errors are shown on an issuer page with a link back to the client rather

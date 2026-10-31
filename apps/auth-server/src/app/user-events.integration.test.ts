@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  allowConsentScreen,
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
@@ -177,7 +178,10 @@ describe('user events go to the event store (real containers)', () => {
     return realm.id;
   }
 
-  /** Seed a client with a stored consent for `userId`, so the code flow skips the screen. */
+  /**
+   * Seed a client with a stored consent for `userId`, so the code flow skips
+   * the screen; an agent client still gets it (ADR-015 Decision 11).
+   */
   async function seedConsentedClient(
     app: FastifyInstance,
     userId: string,
@@ -239,8 +243,12 @@ describe('user events go to the event store (real containers)', () => {
       headers: { cookie: jar.header() as string },
     });
     expect(authorize.statusCode).toBe(302);
-    const location = authorize.headers['location'];
+    let location = authorize.headers['location'];
     if (typeof location !== 'string') throw new Error('authorize did not redirect');
+    // An agent client never skips the consent screen (ADR-015 Decision 11).
+    if (location.startsWith('/ui/consent?')) {
+      location = await allowConsentScreen(app, jar.header() as string, location);
+    }
     const code = new URL(location).searchParams.get('code');
     if (code === null) throw new Error(`authorize returned no code: ${location}`);
     secrets.add(code);

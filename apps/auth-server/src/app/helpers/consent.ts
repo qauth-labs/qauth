@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import { isAgentClient } from './client-resolution';
 
 /**
  * Minimal view of an oauth_clients row consumed by the consent-screen
@@ -9,6 +10,12 @@ import { env } from '../../config/env';
 export interface OAuthClientLike {
   scopes: string[];
   dynamicRegisteredAt: number | null;
+  /**
+   * `oauth_clients.is_agent`, read through the fail-closed `isAgentClient`:
+   * only an explicit `true` makes the client an agent. Required, so no caller
+   * of `canSkipConsent` can leave it out and skip the screen for an agent.
+   */
+  isAgent: boolean;
 }
 
 /**
@@ -96,6 +103,10 @@ export function filterRequestedScopes(
  * requested now.
  *
  * Returns false when:
+ *   - the client is an AI agent (fail-closed `isAgentClient`): every
+ *     authorization of an agent shows the screen, which names it as an agent
+ *     and says how long it may keep working, even when a stored consent
+ *     covers the request (ADR-015 Decision 11, ADR-014 §11)
  *   - no active consent row exists
  *   - the requested scopes are not a subset of the granted ones
  *   - the scopes were not granted for every requested resource
@@ -104,6 +115,12 @@ export function filterRequestedScopes(
  *     `DYNAMIC_CLIENT_BADGE_DAYS` window (we force re-consent to give the
  *     user another chance to notice the "Newly registered" warning per
  *     issue #150 phishing-defense requirements)
+ *
+ * Every caller that would issue a code without the screen asks this
+ * question: the browser fast path and `prompt=none` on `/oauth/authorize`,
+ * its legacy Bearer path, which can show no screen and so never issues a code
+ * to an agent, and the re-check of a skip under the consent row's lock in the
+ * transaction that mints the code.
  */
 export function canSkipConsent(
   consent: OAuthConsentLike | undefined,
@@ -111,6 +128,7 @@ export function canSkipConsent(
   requestedScopes: string[],
   requestedResources: readonly string[]
 ): boolean {
+  if (isAgentClient(client)) return false;
   if (!consent) return false;
   if (consent.revokedAt !== null) return false;
   if (isDynamicClientWithinBadgeWindow(client)) return false;
@@ -145,6 +163,61 @@ const SCOPE_DESCRIPTIONS: Record<string, string> = {
 
 export function describeScope(scope: string): string {
   return SCOPE_DESCRIPTIONS[scope] ?? scope;
+}
+
+const DURATION_UNITS: readonly (readonly [seconds: number, name: string])[] = [
+  [86_400, 'day'],
+  [3_600, 'hour'],
+  [60, 'minute'],
+  [1, 'second'],
+];
+
+/**
+ * A whole number of seconds as English prose that names every unit it holds:
+ * `3600` is "1 hour", `90000` "1 day and 1 hour", `90061` "1 day, 1 hour,
+ * 1 minute and 1 second".
+ *
+ * Exact, never rounded: the consent screen uses it for a realm's
+ * `sso_max_lifespan`, how long an agent may keep working, and must state that
+ * limit neither shorter nor longer than it is. A fraction of a second is
+ * dropped; the realm stores whole seconds.
+ *
+ * @param seconds - a duration in seconds, at least 1 (the realm refuses zero
+ *   or less)
+ */
+export function describeDuration(seconds: number): string {
+  let rest = Math.floor(seconds);
+  const parts: string[] = [];
+  for (const [size, name] of DURATION_UNITS) {
+    const count = Math.floor(rest / size);
+    if (count === 0) continue;
+    rest -= count * size;
+    parts.push(`${count} ${name}${count === 1 ? '' : 's'}`);
+  }
+  if (parts.length <= 1) return parts[0] ?? '0 seconds';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * The consent screen's persistence line for an agent client (ADR-014 §11):
+ * how long the agent may keep working once the user allows it.
+ *
+ * A code grant under a stored consent starts a refresh-token family. Without a
+ * realm `sso_max_lifespan` the family slides with each refresh and ends only
+ * when the user revokes the consent. With one, it also ends no later than its
+ * start plus the limit and the end of the browser session behind the code
+ * (#552, `helpers/refresh-family.ts`); that session ends the limit after the
+ * sign-in, so the family ends the limit after the sign-in at the latest.
+ *
+ * @param ssoMaxLifespanSeconds - the realm's `sso_max_lifespan`, or `null`
+ *   when it sets none
+ */
+export function agentPersistenceLine(ssoMaxLifespanSeconds: number | null): string {
+  if (ssoMaxLifespanSeconds === null) return 'It may keep working until you revoke it.';
+  return (
+    'It may keep working until you revoke it, or until ' +
+    `${describeDuration(ssoMaxLifespanSeconds)} after you signed in, whichever comes first.`
+  );
 }
 
 /**
