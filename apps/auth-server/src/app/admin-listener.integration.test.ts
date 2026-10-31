@@ -473,6 +473,10 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         const headers: Record<string, unknown> = { ...response.headers };
         delete headers['date'];
         delete headers['x-request-id'];
+        // Every answer draws its own CSP nonces; the policy is compared without them.
+        headers['content-security-policy'] = String(
+          headers['content-security-policy'] ?? ''
+        ).replace(/'nonce-[^']*'/g, "'nonce-…'");
         return { status: response.statusCode, headers, body: response.body };
       };
 
