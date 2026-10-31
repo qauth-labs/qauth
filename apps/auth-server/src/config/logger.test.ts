@@ -427,6 +427,38 @@ describe('redactLoggedUrl', () => {
     }
   });
 
+  it('censors an unknown spelling of an interaction path even when another escape is malformed (#592)', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    // One malformed escape anywhere must not turn the decoded check off, and
+    // a path encoded twice inside a query value is read as the router would
+    // read it once the value is followed.
+    for (const url of [
+      `/%69nteraction/v1-rc.0/${id}?x=%zz`,
+      `/interaction/v1-rc%2E0/${id}?x=%zz`,
+      `/%69nteraction/v1-rc.0/${id}/%zz`,
+      `/%69nteraction/v1-rc.0/${id}/answer?x=%`,
+      `/ui/x?return_to=%252Finteraction%252Fv1-rc.0%252F${id}%252Fanswer&y=2`,
+      `/ui/x?return_to=%252finteraction%252fv1-rc.0%252f${id}&y=%zz`,
+    ]) {
+      expect(redactLoggedUrl(url), url).toBe(LOG_REDACT_CENSOR);
+    }
+  });
+
+  it('keeps a URL with a malformed escape intact when it names no interaction id', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    for (const url of [
+      '/oauth/authorize?client_id=notes-app&redirect_uri=https%3A%2F%2Fnotes.example.com%2Fcb&x=%zz',
+      '/ui/x?return_to=%252Foauth%252Fauthorize&y=%',
+      '/interaction/v1-rc.0/openapi.json?x=%zz',
+    ]) {
+      expect(redactLoggedUrl(url), url).toBe(url);
+    }
+    // A known spelling keeps its shape: only the id is censored.
+    expect(redactLoggedUrl(`/interaction/v1-rc.0/${id}/answer?x=%zz`)).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/answer?x=%zz`
+    );
+  });
+
   it('leaves a URL without the parameter untouched', () => {
     for (const url of [
       '/health',

@@ -218,23 +218,50 @@ const NAMED_INTERACTION_SEGMENTS: ReadonlySet<string> = new Set([
   'cancel',
 ]);
 
+/** How many times {@link percentDecodedForCheck} decodes a URL at most. */
+const CHECK_DECODE_PASSES = 4;
+
+/** One `%XX` escape, in either hex case. */
+const PERCENT_ESCAPE = /%([0-9A-Fa-f]{2})/g;
+
+/**
+ * `url` with every `%XX` escape decoded on its own, as one byte, and again on
+ * the result (a `return_to` value may carry its path encoded twice: `%252F`
+ * → `%2F` → `/`), until nothing changes or after {@link CHECK_DECODE_PASSES}
+ * passes, so the work stays linear in the URL.
+ *
+ * Never throws: what is not an escape (`%zz`, a lone `%`) is left as it is.
+ * `decodeURIComponent` throws on the first malformed escape ANYWHERE in the
+ * URL, and a check that fell back to the raw URL then would let one
+ * `?x=%zz` keep an id in the clear. Only for the check: the decoded string
+ * is never logged.
+ */
+function percentDecodedForCheck(url: string): string {
+  let decoded = url;
+  for (let pass = 0; pass < CHECK_DECODE_PASSES; pass += 1) {
+    const next = decoded.replace(PERCENT_ESCAPE, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16))
+    );
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
 /**
  * Whether a URL the id censor has seen still names an Interaction API path
  * with a segment it may not show: a spelling the censor does not know, such
  * as a percent-encoded letter (`/%69nteraction/…`), an encoded dot segment
- * (`/%2E/<id>`) or a `..` that leads to the id. The check reads the URL
- * percent-decoded, as the router does. Such a URL is logged as
+ * (`/%2E/<id>`), a path encoded twice inside a query value, or a `..` that
+ * leads to the id. The check reads the URL percent-decoded
+ * ({@link percentDecodedForCheck}), as the router and the querystring parser
+ * do, whatever else in the URL is malformed. Such a URL is logged as
  * `[Redacted]` whole: only a client that holds the id sends one, and the
  * method and status still say what happened. The document path
  * (`openapi.json`) and the reserved wallet prefix are not ids.
  */
 function keepsAnInteractionSegment(url: string): boolean {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(url);
-  } catch {
-    decoded = url;
-  }
+  const decoded = percentDecodedForCheck(url);
   for (const match of decoded.matchAll(INTERACTION_PREFIX_ANYWHERE)) {
     const rest = decoded.slice(match.index + match[0].length);
     const end = rest.search(/[?#&\s]/);
