@@ -951,7 +951,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and writes the next state, so of two concurrent answers exactly one is
   processed while the step stays readable; a failure before the next state is
   written gives the turn back. Authentication creates a new browser session (a
-  new `sid`) and rotates the flow secret. A user switch ends the interaction and
+  new `sid`) and rotates the flow secret; a browser that loses that response
+  retries with the old secret and gets `interaction_expired`, so the ceremony
+  transport ([#616]) must submit credential steps by `fetch` or guard a form
+  against a double submit. A user switch ends the interaction and
   starts a new one for the same request at the identifier step, with nothing
   proved carried over and the request's absolute expiry kept. An unknown,
   expired or finished interaction and a wrong cookie get one

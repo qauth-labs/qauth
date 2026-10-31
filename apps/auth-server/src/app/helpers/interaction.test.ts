@@ -752,6 +752,40 @@ describe('authentication (#592)', () => {
     });
   });
 
+  it('answers a retry sent with the flow secret from before authentication as expired, like an unknown interaction', async () => {
+    // The browser lost the response to its authentication answer, and with it
+    // the rotated flow secret: it retries with the cookie it still has.
+    const owner = new Browser();
+    const id = await owner.start();
+    const beforeCookies = owner.header;
+    const decision: DecisionSpec = {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    };
+    expect((await owner.answer(id, 0, decision)).statusCode).toBe(200);
+
+    const retry = await harness.app.inject({
+      method: 'POST',
+      url: `${INTERACTION_API_PREFIX}/${id}/answer`,
+      headers: beforeCookies,
+      payload: { revision: 0, decision },
+    });
+    const unknown = await harness.app.inject({
+      method: 'POST',
+      url: `${INTERACTION_API_PREFIX}/${'C'.repeat(43)}/answer`,
+      headers: beforeCookies,
+      payload: { revision: 0, decision },
+    });
+
+    expect(retry.statusCode).toBe(410);
+    expect(comparable(retry)).toEqual(comparable(unknown));
+    // The retry reached no engine and created no second session.
+    expect(harness.decided).toHaveLength(1);
+    expect(harness.sessions.service.create).toHaveBeenCalledTimes(1);
+  });
+
   it('ends the session a first authentication created when a second one in the interaction replaces it', async () => {
     const owner = new Browser();
     const id = await owner.start();

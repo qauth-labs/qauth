@@ -435,7 +435,12 @@ function withAmr(amr: readonly string[], added: readonly string[] = []): string[
  *   `sid` is created and its cookie set (whatever session cookie the browser
  *   sent: the session-fixation defence), and the interaction is bound to a new
  *   flow secret that replaces the old one in the cookie. One subject per
- *   transaction: a transaction that already proved another user refuses.
+ *   transaction: a transaction that already proved another user refuses. A
+ *   browser that loses this response keeps only the old secret, so its retry
+ *   gets the uniform `interaction_expired` and the ceremony starts over: the
+ *   transport (#616) must submit credential steps by `fetch`, or guard a form
+ *   post against a double submit, so a second click never sends the answer
+ *   again with the old cookie.
  * - `finished`: the interaction ends; its secret leaves the cookie, and the
  *   request and the transaction go back to the caller, which completes or
  *   denies the authorization request (#628).
