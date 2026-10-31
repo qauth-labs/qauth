@@ -151,6 +151,12 @@ function makeFastify() {
         update: vi.fn(),
       },
     },
+    // A realm with no policies yet is capped with its fill's list (#516).
+    policyStore: {
+      ofRealm: vi.fn(() => ({
+        policies: { registration: { dynamicRegistrationAllowedScopes: ['openid', 'profile'] } },
+      })),
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
@@ -1221,6 +1227,33 @@ describe('scope allowlist enforcement (#86/#88)', () => {
         reply
       )
     ).rejects.toThrow(InvalidClientMetadataError);
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
+  });
+
+  it('caps a realm with no policies yet with the list of its fill, and writes nothing (#516)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    const realm = testRealm({
+      id: 'realm-2',
+      dynamicRegistrationAllowedScopes: [],
+      policiesVersion: 0,
+    });
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(realm);
+    const create = fastify.repositories.oauthClients.create as unknown as Mock;
+    create.mockImplementation(async (row: Record<string, unknown>) => makeClientRow(row));
+
+    const request = (scopes: string[]) =>
+      authedRequest({
+        realm,
+        body: { name: 'Realm 2', redirectUris: ['https://app.example.com/cb'], scopes },
+      });
+    await route(ctx, 'POST /').handler(request(['openid', 'profile']), createReply().reply);
+    await expect(
+      route(ctx, 'POST /').handler(request(['openid', 'email']), createReply().reply)
+    ).rejects.toThrow(InvalidClientMetadataError);
+
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledWith(realm);
+    expect(create).toHaveBeenCalledTimes(1);
     expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
   });
 

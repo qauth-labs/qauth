@@ -42,6 +42,7 @@ import {
  */
 
 const IGNORED = 'only seeds new realms and is ignored';
+const KEPT = 'from its row, which differs from the environment';
 
 /** The policy keys these tests set; the harness clears only its own prefixes between boots. */
 const POLICY_KEYS = [
@@ -212,6 +213,16 @@ describe('realm policies at boot on the auth server (#516)', () => {
       ).toEqual(['openid', 'email']);
     });
     expect(firstWarnings.filter((line) => line.msg.includes(IGNORED))).toEqual([]);
+    // Each value a row kept over a different seed is named, once: the default
+    // realm's ceiling, and the legacy realm's allowlist.
+    expect(firstWarnings.filter((line) => line.msg.includes(KEPT))).toEqual([
+      expect.objectContaining({ realm: 'master', policy: 'posture.maxEnvironmentLaxity' }),
+      expect.objectContaining({
+        realm: 'legacy',
+        policy: 'registration.dynamicRegistrationAllowedScopes',
+        variable: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
+      }),
+    ]);
     const filled = await defaultRealmRow();
     expect(filled).toMatchObject({
       id: realm.id,
@@ -233,6 +244,7 @@ describe('realm policies at boot on the auth server (#516)', () => {
       expect((await app.policyStore.get(realm.id))?.policies).toEqual(expected);
     });
     expect(await defaultRealmRow()).toEqual(filled);
+    expect(secondWarnings.filter((line) => line.msg.includes(KEPT))).toEqual([]);
     const ignored = secondWarnings.filter((line) => line.msg.includes(IGNORED));
     // The allowlist's area reads the realm row: its key is ignored, once.
     expect(ignored).toEqual([

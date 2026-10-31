@@ -94,8 +94,9 @@ curl -s -X POST http://localhost:3000/oauth/register \
 
 > **Scopes are deny-by-default.** The authorize endpoint only grants scopes that
 > are in the client's allowlist. DCR-registered clients are capped to the realm
-> allowlist (`DEFAULT_DYNAMIC_REGISTRATION_SCOPES`); set that env var to include
-> any non-OIDC scopes (e.g. `mcp:read`) you intend to request.
+> allowlist, which `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` seeds when the realm is
+> created; set that env var before the first boot to include any non-OIDC scopes
+> (e.g. `mcp:read`) you intend to request. An existing realm keeps its own list.
 
 ### 1. Generate a PKCE verifier and challenge (RFC 7636)
 

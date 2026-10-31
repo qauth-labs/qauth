@@ -414,9 +414,12 @@ export const authEnvSchema = z.object({
   OID4VP_REQUEST_OBJECT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
-   * Comma-separated scopes allowed by default for dynamically registered
-   * clients when a realm's `dynamic_registration_allowed_scopes` column is
-   * empty. Used at /oauth/register time to seed the realm on first use.
+   * Scopes, separated by spaces or commas, that seed a realm's dynamic
+   * registration allowlist (`registration.dynamicRegistrationAllowedScopes`,
+   * #516): a new realm stores them, and the first boot after the upgrade
+   * stores them for a realm whose row holds no scope. `/oauth/register` and
+   * the clients API cap a client's scopes with the realm row's list, never
+   * with this key, so a later change leaves every existing realm as it is.
    *
    * Intentionally tight: only OIDC core scopes. Admin / tenant-scoped
    * grants (e.g. `example:admin`, `tenant-a:*`) MUST be added explicitly by
