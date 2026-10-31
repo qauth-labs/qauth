@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
-import { CAEP_SESSION_REVOKED } from '../ssf-mapping';
+import { CAEP_SESSION_REVOKED, RISC_ACCOUNT_DISABLED, RISC_ACCOUNT_ENABLED } from '../ssf-mapping';
 import { FIRST_RELEASE, identifierHmac, reason, signInMethod, verifierProfile } from './fields';
 
 /**
@@ -116,6 +116,10 @@ export const userDisabled = defineEventType({
   since: FIRST_RELEASE,
   subject: 'user',
   data: z.strictObject({}),
+  security: true,
+  ssf: { event: RISC_ACCOUNT_DISABLED },
+  ssfNote:
+    'Sent without `reason`: RISC 1.0 names only `hijacking` and `bulk-account`, and QAuth records no reason for the switch.',
 });
 
 export const userEnabled = defineEventType({
@@ -129,6 +133,8 @@ export const userEnabled = defineEventType({
   since: FIRST_RELEASE,
   subject: 'user',
   data: z.strictObject({}),
+  security: true,
+  ssf: { event: RISC_ACCOUNT_ENABLED },
 });
 
 export const USER_EVENT_TYPES = [

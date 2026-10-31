@@ -204,8 +204,6 @@ or the refresh token ends.`,
     notesList(definitions),
     `## Security events with no SSF event`,
     unmappedTable(definitions),
-    `RISC 1.0 \`account-disabled\` and \`account-enabled\` map the disabling and enabling of a user,
-which has no event type yet: they arrive with that feature, under the same rule.`,
     `## QAuth-defined events`,
     `Where no CAEP 1.0 or RISC 1.0 event says what happened, QAuth defines one. Its identifier is
 \`urn:qauth:secevent:<name>:v<N>\`, a URN rather than a URL so that it never looks like a standard

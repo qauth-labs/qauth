@@ -1845,7 +1845,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either. The refusal `reason` in events is `issued_before_disablement`. The
   new operator tool `db:disable-user` disables an account or, with `--enable`,
   enables it again, and writes the new admin events `user.disabled` and
-  `user.enabled` in the same transaction. The operator guide's new
+  `user.enabled` in the same transaction; SSF streams receive them as RISC 1.0
+  `account-disabled` and `account-enabled` ([#540]). The operator guide's new
   **Accounts** page (`operate/accounts`) describes both, and the upgrade guide
   says why to enable an account disabled for a takeover only once every node
   runs this release.

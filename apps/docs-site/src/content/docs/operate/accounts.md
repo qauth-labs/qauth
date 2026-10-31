@@ -101,7 +101,10 @@ the state you ask for, or for a realm or a user it does not find, and says so.
 | [`user.enabled`](/reference/events/#userenabled-v1-rc0) (`info`)      | The tool enabled it again    |
 
 Both are admin events, in the realm's hash chain, with the operating-system
-user who ran the tool as the actor.
+user who ran the tool as the actor. The [SSF transmitter](/operate/ssf-transmitter/)
+sends them as RISC 1.0 `account-disabled` and `account-enabled` to each stream
+that requested them and has the user as a subject
+([SSF events](/reference/ssf-events/)).
 
 `UPDATE users SET enabled = false WHERE id = '<user id>'` by hand disables the
 account just as well, and the database records the time the same way, but no

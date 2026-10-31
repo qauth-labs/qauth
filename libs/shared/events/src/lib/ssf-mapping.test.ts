@@ -12,6 +12,8 @@ import {
   QAUTH_SECEVENT_PATTERN,
   QAUTH_SSF_EVENTS,
   QAUTH_TOKEN_REVOKED,
+  RISC_ACCOUNT_DISABLED,
+  RISC_ACCOUNT_ENABLED,
   ssfEventMembers,
   ssfMappingOf,
   STANDARD_SSF_EVENTS,
@@ -309,6 +311,11 @@ describe('the mapping table of #540', () => {
     ]) {
       expect(eventOf(type), type).toBe(CAEP_CREDENTIAL_CHANGE);
     }
+  });
+
+  it('maps user disable and enable to RISC account-disabled and account-enabled (#748)', () => {
+    expect(eventOf('urn:qauth:event:user.disabled:v1-rc.0')).toBe(RISC_ACCOUNT_DISABLED);
+    expect(eventOf('urn:qauth:event:user.enabled:v1-rc.0')).toBe(RISC_ACCOUNT_ENABLED);
   });
 
   it('maps a replay that revokes a refresh family to CAEP session-revoked', () => {

@@ -339,6 +339,7 @@ An operator disabled an account: it can no longer sign in or obtain tokens, and 
 - Category: `admin` · Severity: `warning` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [user.disabled.v1-rc.0.json](/schemas/events/user.disabled.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/risc/event-type/account-disabled` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
@@ -350,6 +351,7 @@ An operator enabled a disabled account again. The person signs in again: what wa
 - Category: `admin` · Severity: `info` · Since: v0.2.0
 - Subject: `user`, when known
 - Schema: [user.enabled.v1-rc.0.json](/schemas/events/user.enabled.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/risc/event-type/account-enabled` ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 
