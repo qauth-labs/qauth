@@ -115,8 +115,10 @@ function verificationKeyFor(
   keys: readonly VerificationKey[],
   selector: { readonly kid: string; readonly alg: string }
 ): VerificationKey | undefined {
-  // A published JWK always carries `kty`, `alg` and `kid` (`publicJwkOf`), the
-  // members `selectJwksKey` reads.
+  // `selectJwksKey` reads `kty`, `alg` and `kid`. `publicJwkOf` stamps the
+  // row's `kid`; the `realm_public_keys` CHECK requires a `kty`; `alg` is set
+  // by the key writers (`key-generation.ts`, `environment-keys.ts`), and a JWK
+  // without it matches no selector, so its token fails.
   const jwk = selectJwksKey(
     keys.map((key) => key.publicJwk as PublishedJwk),
     selector
