@@ -65,7 +65,9 @@ import { adminRealmRouteProblem } from './route-placement';
  * 7. Approval gate: a security operation needs an approval bound to it
  *    (#512). Until approvals ship the gate fails closed: every request
  *    classified `security` answers `approval_required` and never runs.
- * 8. Handler, inside one database transaction (`adminTransaction`).
+ * 8. Handler, inside one database transaction (`adminTransaction`), its
+ *    answer serialized before the commit. A route's own preHandler hooks run
+ *    before it, after stage 7, and refuse by throwing, never by answering.
  * 9. Audit append (#448): one row in the target realm's chain, in the
  *    handler's transaction, reads included.
  * 10. Error mapping to problem+json: the listener's error handler.
@@ -80,7 +82,8 @@ import { adminRealmRouteProblem } from './route-placement';
  *
  * Every call that reaches a realm within the caller's grants writes exactly
  * one audit row: a call that succeeds writes `succeeded` in the handler's
- * transaction, with the change the handler recorded; a call refused after
+ * transaction, with the change the handler recorded and after its answer
+ * serialized, so the answer and the row agree; a call refused after
  * that point (a missing permission, a missing approval, a precondition, a
  * request that fails validation) writes `denied`, and one that fails on the
  * server, its handler or commit included, writes `failed`, each in a new
@@ -542,20 +545,118 @@ function auditEntry(
   };
 }
 
-/** What a handler that tries to answer on its own is refused with. */
+/** What a handler or a route's own preHandler that tries to answer is refused with. */
 const SEND_REFUSAL =
-  'An admin handler answers by returning its body, never by sending or hijacking the reply: the answer would leave before its change and audit row commit';
+  'An admin handler answers by returning its body, and a preHandler refuses by throwing, never by sending or hijacking the reply: the answer would leave before its change and audit row commit';
 
 /** The reply methods that would answer from inside the handler, before the commit. */
 const ANSWERING_METHODS = ['send', 'hijack'] as const;
 
 /**
- * Stages 8 and 9: run `handler` inside one transaction, and append the
- * `succeeded` row in it once the handler returns. The handler answers by
- * returning its body. While it runs, `reply.send()` and `reply.hijack()`
- * throw: an answer sent from inside would leave before its change commits,
- * and Fastify runs no `onError` hook once a reply is out. The answer is sent
- * after the commit.
+ * Make `reply.send()` and `reply.hijack()`, and so `reply.redirect()`, throw
+ * until {@link allowAnswering}: an answer sent by the route's own code would
+ * leave before its change and audit row commit, and Fastify runs no `onError`
+ * hook once a reply is out.
+ */
+function refuseAnswering(reply: FastifyReply): void {
+  for (const method of ANSWERING_METHODS) {
+    Object.defineProperty(reply, method, {
+      configurable: true,
+      value: () => {
+        throw new Error(SEND_REFUSAL);
+      },
+    });
+  }
+}
+
+/** Undo {@link refuseAnswering}. */
+function allowAnswering(reply: FastifyReply): void {
+  for (const method of ANSWERING_METHODS) Reflect.deleteProperty(reply, method);
+}
+
+/** Refused all the same: an answer written to the raw response, around the reply, even only its head. */
+function assertNothingAnswered(reply: FastifyReply): void {
+  if (reply.sent || reply.raw.headersSent) throw new Error(SEND_REFUSAL);
+}
+
+/** A preHandler hook of a route, in either of the forms Fastify takes. */
+type RoutePreHandler = (
+  this: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  done: (error?: unknown) => void
+) => unknown;
+
+/** The route preHandlers the pipeline made, each running one of a route's own. */
+const wrappedPreHandlers = new WeakSet<object>();
+
+/**
+ * A route's own preHandler, run so that it cannot answer: it refuses by
+ * throwing, and the error goes through `onError`, which writes the call's
+ * audit row. A hook that sends or hijacks the reply fails the call instead.
+ */
+function refusingPreHandler(hook: RoutePreHandler) {
+  const wrapped = async function adminRoutePreHandler(
+    this: FastifyInstance,
+    request: FastifyRequest,
+    reply: FastifyReply
+  ): Promise<void> {
+    refuseAnswering(reply);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const done = (error?: unknown) => (error ? reject(error) : resolve());
+        const result = hook.call(this, request, reply, done);
+        if (result !== null && typeof result === 'object' && 'then' in result) {
+          (result as PromiseLike<unknown>).then(() => resolve(), reject);
+        }
+      });
+    } finally {
+      allowAnswering(reply);
+    }
+    assertNothingAnswered(reply);
+  };
+  wrappedPreHandlers.add(wrapped);
+  return wrapped;
+}
+
+/** Whether `body` is one Fastify sends as it is, with no serializer: none, text, bytes or a stream. */
+function sentAsItIs(body: unknown): boolean {
+  return (
+    body === undefined ||
+    typeof body === 'string' ||
+    Buffer.isBuffer(body) ||
+    (body !== null &&
+      typeof body === 'object' &&
+      typeof (body as { pipe?: unknown }).pipe === 'function')
+  );
+}
+
+/**
+ * The answer of a handler that returned `body`: serialized here, as Fastify
+ * would serialize it after the handler, with the route's response schema for
+ * the status the reply has, so a body the schema refuses fails inside the
+ * transaction. A body Fastify sends as it is, or one under a content type
+ * that is not JSON, is left as it is.
+ */
+function prepareAnswer(
+  reply: FastifyReply,
+  body: unknown
+): { readonly serialized: string } | { readonly body: unknown } {
+  const contentType = reply.getHeader('content-type');
+  if (sentAsItIs(body) || (contentType !== undefined && !String(contentType).includes('json'))) {
+    return { body };
+  }
+  return { serialized: String(reply.serialize(body)) };
+}
+
+/**
+ * Stages 8 and 9: run `handler` inside one transaction, serialize its answer
+ * and append the `succeeded` row in it once the handler returns. The handler
+ * answers by returning its body. While it runs, `reply.send()` and
+ * `reply.hijack()` throw ({@link refuseAnswering}). A body its response
+ * schema refuses fails the call before the commit, so the change rolls back
+ * and the call is `failed`: the answer and the row always agree. The answer
+ * is sent after the commit.
  */
 function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry) {
   const wrapped = async function adminTransactionStage(
@@ -568,33 +669,25 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
     // From here on a failure is the server's, the transaction's opening
     // included: the call was authorized and approved.
     state.handlerStarted = true;
-    let body: unknown;
+    let answer: { readonly serialized: string } | { readonly body: unknown };
     try {
-      body = await request.server.db.transaction(async (tx) => {
+      answer = await request.server.db.transaction(async (tx) => {
         state.transaction = tx;
-        for (const method of ANSWERING_METHODS) {
-          Object.defineProperty(reply, method, {
-            configurable: true,
-            value: () => {
-              throw new Error(SEND_REFUSAL);
-            },
-          });
-        }
+        refuseAnswering(reply);
         let result: unknown;
         try {
           result = await handler.call(this, request, reply);
         } finally {
-          for (const method of ANSWERING_METHODS) Reflect.deleteProperty(reply, method);
+          allowAnswering(reply);
           state.transaction = undefined;
         }
-        // Written to the raw response, around the reply, even only its head:
-        // refused all the same.
-        if (reply.sent || reply.raw.headersSent) throw new Error(SEND_REFUSAL);
+        assertNothingAnswered(reply);
+        const prepared = prepareAnswer(reply, result);
         await request.server.repositories.adminAuditLog.appendAdminAudit(
           tx,
           auditEntry(request, registry, caller, 'succeeded', state.change)
         );
-        return result;
+        return prepared;
       });
     } catch (error) {
       // A reply already out runs no `onError` hook: its row is written here.
@@ -604,8 +697,12 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
     }
     state.committed = true;
     state.rowSettled?.();
-    if (body === undefined) return reply.send();
-    return body;
+    if ('serialized' in answer) {
+      if (!reply.hasHeader('content-type')) reply.type('application/json; charset=utf-8');
+      return reply.send(answer.serialized);
+    }
+    if (answer.body === undefined) return reply.send();
+    return answer.body;
   };
   wrappedHandlers.add(wrapped);
   return wrapped;
@@ -666,10 +763,12 @@ function earlyRouteHookProblem(route: RouteOptions): string | undefined {
 /**
  * Refuse, from now on, every {@link EARLY_ROUTE_HOOKS} hook added to `scope`
  * with `addHook`: a scope's hooks of those kinds run before its `preHandler`
- * hooks, where stages 6 and 7 are, whoever adds them. A scope registered in
- * `scope` inherits its `addHook` (Fastify makes it with `Object.create`), and
- * a plugin wrapped in `fastify-plugin` adds to the scope it is registered in,
- * so the refusal reaches every route module behind the pipeline.
+ * hooks, where stages 6 and 7 are, whoever adds them. A `preHandler` hook a
+ * route module adds runs as a route's own does ({@link refusingPreHandler}):
+ * it refuses by throwing, never by answering. A scope registered in `scope`
+ * inherits its `addHook` (Fastify makes it with `Object.create`), and a
+ * plugin wrapped in `fastify-plugin` adds to the scope it is registered in,
+ * so both reach every route module behind the pipeline.
  */
 function refuseEarlyScopeHooks(scope: FastifyInstance): void {
   const addHook = scope.addHook;
@@ -680,7 +779,14 @@ function refuseEarlyScopeHooks(scope: FastifyInstance): void {
           `An admin route module adds an ${String(name)} hook, which would run before the admin pipeline authorizes the caller; use a preHandler hook or the handler`
         );
       }
-      return Reflect.apply(addHook, this, [name, ...rest]);
+      const [hook, ...after] = rest;
+      return name === 'preHandler' && typeof hook === 'function'
+        ? Reflect.apply(addHook, this, [
+            name,
+            refusingPreHandler(hook as RoutePreHandler),
+            ...after,
+          ])
+        : Reflect.apply(addHook, this, [name, ...rest]);
     },
   });
 }
@@ -708,6 +814,17 @@ export async function adminPipeline(
     if (problem !== undefined) throw new Error(problem);
     if (!wrappedHandlers.has(route.handler)) {
       route.handler = inTransaction(route.handler, registry) as RouteHandlerMethod;
+    }
+    // A route's own preHandlers run after the approval gate, and refuse by
+    // throwing: none may answer.
+    if (route.preHandler !== undefined && route.preHandler !== null) {
+      route.preHandler = [route.preHandler]
+        .flat()
+        .map((hook: unknown) =>
+          wrappedPreHandlers.has(hook as object)
+            ? hook
+            : refusingPreHandler(hook as RoutePreHandler)
+        ) as RouteOptions['preHandler'];
     }
   });
 

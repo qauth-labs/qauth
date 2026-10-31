@@ -138,9 +138,9 @@ The admin API runs on its own internal listener, never on the public one
 `ADMIN_API_PORT`, `127.0.0.1`, port `3002`, by default, while `ADMIN_API_ENABLED` is on
 ([Configuration](/operate/configuration/)). It is off by default until the first admin operations
 (#517) and DPoP-bound admin tokens (#520) ship, and until #520 a production process refuses an
-`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The public listener answers 404 `not_found` for every
-admin path. The admin OpenAPI document is served on the admin listener only, at
-`/admin/v1-rc.0/openapi.json`.
+`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The public listener
+answers 404 `not_found` for every admin path. The admin OpenAPI document is served on the admin
+listener only, at `/admin/v1-rc.0/openapi.json`.
 
 The listener grants nothing for a caller's network position: a call from loopback needs an admin
 token like any other. It never routes by host either. Every admin path names the realm it acts on,
@@ -167,12 +167,15 @@ Every admin route runs behind the same stages, in this order
    approvals ship (#512), every such request answers 403 `approval_required` and never runs.
 8. The handler, inside one database transaction. It answers by returning its body: a handler
    that sends or hijacks the reply itself fails, so no answer leaves before its change commits.
+   The body is serialized inside the transaction, so one its response schema refuses fails the
+   call and its change rolls back.
 9. The audit row, in the admin audit log of the realm the request acts on.
 10. The error, as a problem document.
 
 A route's own `onRequest`, `preParsing` and `preValidation` hooks would run before stages 6 and
 7, so the listener refuses to boot an admin route that has one, in its options or added by its
-module.
+module: use a `preHandler` hook or the handler. A `preHandler` refuses by throwing, never by
+sending the reply; one that sends or hijacks it fails the call.
 
 The listener also has request ceilings of its own, 100 calls a minute each, whatever
 `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW` say for the public listener, and answers 429
@@ -195,7 +198,8 @@ more for the audit rows of their calls, and closes before the database.
 **Audit rows.** Every call that reaches a realm within the caller's grants writes exactly one row
 to that realm's chain, reads included. A call that succeeds writes `succeeded` in the
 handler's transaction, with the change the handler recorded, its secret fields masked: the row
-and the change commit together, or neither does. A call refused after that point, such as one
+and the change commit together, or neither does, and the answer is serialized before they do, so
+the answer and the row always agree. A call refused after that point, such as one
 without the permission or the approval, or whose body does not parse, writes `denied`; one that
 fails on the server, its handler or commit included, writes `failed`. Both are written in a new
 transaction, with no diff. A `denied` or `failed` row that cannot be written is logged, not

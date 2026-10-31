@@ -113,8 +113,22 @@ async function fixtureAdminApi() {
     permissions: ['realms.policies.write'],
     description: 'Create an account outside the pipeline transaction (fixture).',
   });
+  const early = operations.defineOperation({
+    id: 'fixtureEarly.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'A route whose own preHandler sends the reply itself (fixture).',
+  });
+  const misanswer = operations.defineOperation({
+    id: 'fixtureMisanswers.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then return a body its response schema refuses (fixture).',
+  });
   const registry = operations.createOperationRegistry(
-    [read, create, fail, rotate, send, held, unwrapped],
+    [read, create, fail, rotate, send, held, unwrapped, early, misanswer],
     { reserved: [] }
   );
 
@@ -193,6 +207,42 @@ async function fixtureAdminApi() {
             adminTransaction(request)
           );
           return { id: account.id };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-early-answers',
+        {
+          config: { operation: early.id },
+          schema: schemaOf(early),
+          preHandler: [
+            async (_request, reply) => {
+              runs.push(`${early.id}:preHandler`);
+              return reply.send({ early: true });
+            },
+          ],
+        },
+        async () => {
+          runs.push(early.id);
+          return { early: false };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-misanswers',
+        {
+          config: { operation: misanswer.id },
+          // Hidden from the document: its response schema is the fixture's
+          // point, not one the document's conventions are checked against.
+          schema: {
+            ...schemaOf(misanswer),
+            hide: true,
+            response: { 200: z.object({ id: z.uuid() }) },
+          },
+        },
+        async (request) => {
+          runs.push(misanswer.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          return { id: 'not-a-uuid' };
         }
       );
       // A module whose own `onRoute` hook, which runs after the pipeline's,
@@ -413,6 +463,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(Object.keys(document.paths).sort()).toEqual([
         '/admin/v1-rc.0/realms/{realmId}',
         '/admin/v1-rc.0/realms/{realmId}/fixture-accounts',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-early-answers',
         '/admin/v1-rc.0/realms/{realmId}/fixture-failures',
         '/admin/v1-rc.0/realms/{realmId}/fixture-holds',
         '/admin/v1-rc.0/realms/{realmId}/fixture-keys/rotate',
@@ -477,7 +528,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' })
       ).json();
       const report = checkApiConventions(document, { operations: registry });
-      expect(report.checkedOperations).toBe(7);
+      expect(report.checkedOperations).toBe(8);
       expect(report.violations).toEqual([]);
     });
   });
@@ -888,6 +939,32 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(await accountsIn(realmId)).toBe(0);
       expect(await auditRows(realmId)).toMatchObject([
         { operation_id: 'fixtureUnwrapped.create', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('fails a route whose own preHandler sends the reply, before its handler, with one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-early-answers'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureEarly.create:preHandler']);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureEarly.create', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('fails a call whose body its response schema refuses: no change, one failed row, no succeeded row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-misanswers'), token);
+      expect(response.statusCode).toBe(500);
+      expect(runs).toEqual(['fixtureMisanswers.create']);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureMisanswers.create', outcome: 'failed', masked_diff: null },
       ]);
     });
 

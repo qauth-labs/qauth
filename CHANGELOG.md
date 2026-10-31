@@ -974,12 +974,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which a call without a token is refused before the guard and a refused token
   answers 429, while a valid token is never held back; per token subject, every
   call after the guard; and per address, every call to the OpenAPI document.
-  Every request id is the server's own. A handler
-  answers by returning its body, and an admin route may not have hooks that
-  would run before authorization. The admin
-  OpenAPI document is served on the listener only, at
-  `/admin/v1-rc.0/openapi.json`. No admin operation ships yet ([#517] adds the
-  first).
+  Every request id is the server's own. A handler answers by returning its
+  body, serialized inside its transaction, so a body its response schema
+  refuses fails the call and rolls its change back; a route's own preHandler
+  refuses by throwing, never by sending the reply; and an admin route may not
+  have hooks that would run before authorization. The admin OpenAPI document is
+  served on the listener only, at `/admin/v1-rc.0/openapi.json`. No admin operation ships yet ([#517] adds the first).
 
 ### Changed
 
