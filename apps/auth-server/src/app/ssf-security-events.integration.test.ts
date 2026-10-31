@@ -165,6 +165,7 @@ describe('security events on SSF streams (real containers)', () => {
       // signs in more accounts than the per-address defaults allow.
       REGISTRATION_RATE_LIMIT: '100',
       LOGIN_RATE_LIMIT: '100',
+      VERIFICATION_RATE_LIMIT: '100',
       EVENT_DELIVERY_RETRY_INITIAL_DELAY: '1',
       EVENT_DELIVERY_RETRY_MAX_DELAY: '2',
     });
