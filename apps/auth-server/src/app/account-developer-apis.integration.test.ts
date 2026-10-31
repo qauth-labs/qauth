@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   baseEnvironment,
@@ -265,8 +265,24 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
       expect((await call('GET', '/api/clients', dev.token)).statusCode).toBe(200);
     });
 
-    it('gives an existing system client without it the developer audience when a node boots', async () => {
+    it("gives every realm's system client without it the developer audience when a node boots", async () => {
       await developer();
+      // A second realm's system client, as a release before #524 created it.
+      const { realm: beta } = await app().repositories.realms.createWithPrimaryHost(
+        { name: 'beta', issuer: 'https://beta.example.com', enabled: true },
+        'beta.example.com'
+      );
+      await app().repositories.oauthClients.create({
+        realmId: beta.id,
+        clientId: 'system',
+        clientSecretHash: 'unused',
+        name: 'System Client',
+        redirectUris: [],
+        grantTypes: ['refresh_token'],
+        requirePkce: false,
+        developerId: null,
+        provisionedByOperator: true,
+      });
       await app().dbPool.query(
         `UPDATE oauth_clients SET audience = NULL WHERE client_id = 'system'`
       );
@@ -276,7 +292,10 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
         const { rows } = await second.app.dbPool.query<{ audience: string[] | null }>(
           `SELECT audience FROM oauth_clients WHERE client_id = 'system'`
         );
-        expect(rows).toEqual([{ audience: [DEVELOPER_AUDIENCE] }]);
+        expect(rows).toEqual([
+          { audience: [DEVELOPER_AUDIENCE] },
+          { audience: [DEVELOPER_AUDIENCE] },
+        ]);
       } finally {
         await second.close();
       }
@@ -628,6 +647,49 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
     });
   });
 
+  describe('a delegated account token (RFC 8693)', () => {
+    it('revokes a consent for its user, and the event names the acting agent', async () => {
+      const dev = await developer();
+      const created = await oldClient(dev.token);
+      const consentId = await consentTo(dev.userId, created['id'] as string);
+      const delegated = await app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        {
+          sub: dev.userId,
+          clientId: 'agent-client',
+          aud: ACCOUNT_AUDIENCE,
+          act: { sub: 'agent-client' },
+        }
+      );
+
+      const revoked = await call('DELETE', `${ACCOUNT}/consents/${consentId}`, delegated);
+
+      expect(revoked.statusCode, revoked.body).toBe(204);
+      const { rows } = await app().dbPool.query(
+        `SELECT actor_type, actor_id, actor_delegation_chain FROM events
+          WHERE type = 'urn:qauth:event:consent.revoked:v1-rc.0'`
+      );
+      expect(rows).toEqual([
+        {
+          actor_type: 'client',
+          actor_id: 'agent-client',
+          actor_delegation_chain: ['agent-client'],
+        },
+      ]);
+      // The developer family refuses a delegated token outright.
+      const developerToken = await app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        {
+          sub: dev.userId,
+          clientId: 'system',
+          aud: DEVELOPER_AUDIENCE,
+          act: { sub: 'agent-client' },
+        }
+      );
+      expect((await call('GET', `${DEVELOPER}/consents`, developerToken)).statusCode).toBe(401);
+    });
+  });
+
   describe('the family guards', () => {
     it('refuse an account token on the developer API and a developer token on the account API', async () => {
       const dev = await developer();
@@ -740,6 +802,26 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
       });
     });
 
+    it('lets one of two updates naming the same version through, and refuses the other with 412', async () => {
+      const dev = await developer();
+      const created = await oldClient(dev.token);
+      const url = `${DEVELOPER}/clients/${String(created['id'])}`;
+      const etag = (await call('GET', url, dev.token)).headers['etag'] as string;
+      const patch = (description: string) =>
+        call('PATCH', url, dev.token, {
+          headers: { 'content-type': 'application/merge-patch+json', 'if-match': etag },
+          payload: { description },
+        });
+
+      const answers = await Promise.all([patch('first'), patch('second')]);
+
+      expect(answers.map((answer) => answer.statusCode).sort()).toEqual([200, 412]);
+      const winner = answers.find((answer) => answer.statusCode === 200);
+      expect((await call('GET', url, dev.token)).json().description).toBe(
+        winner?.json().description
+      );
+    });
+
     it('is a merge patch: another media type is 415, and a client_name set to null 422', async () => {
       const dev = await developer();
       const created = await oldClient(dev.token);
@@ -801,6 +883,32 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
         expect(answer.json()).toMatchObject({ code: 'not_found' });
       }
       expect((await call('GET', `${DEVELOPER}/clients`, bob.token)).json().items).toEqual([]);
+
+      // Alice's key named under Bob's own client is no key of his.
+      await allowApiKeys(id);
+      const key = await call('POST', `${DEVELOPER}/clients/${id}/api-keys`, alice.token, {
+        payload: { name: 'alice' },
+      });
+      expect(key.statusCode).toBe(201);
+      const bobClient = (await oldClient(bob.token))['id'] as string;
+      const stolenKey = await call(
+        'DELETE',
+        `${DEVELOPER}/clients/${bobClient}/api-keys/${String(key.json().id)}`,
+        bob.token
+      );
+      expect(stolenKey.statusCode).toBe(404);
+
+      // Alice's consent is no consent of Bob's, on either family.
+      const consentId = await consentTo(alice.userId, id);
+      for (const [url, token] of [
+        [`${DEVELOPER}/consents/${consentId}`, bob.token],
+        [`${ACCOUNT}/consents/${consentId}`, await accountToken(bob.userId)],
+      ] as const) {
+        const answer = await call('DELETE', url, token);
+        expect(answer.statusCode, url).toBe(404);
+        expect(answer.json()).toMatchObject({ code: 'not_found' });
+      }
+      expect((await call('GET', '/api/consents', alice.token)).json().consents).toHaveLength(1);
       expect((await call('GET', `${DEVELOPER}/clients/${id}`, alice.token)).json()).toMatchObject({
         client_name: 'Old App',
       });
@@ -816,12 +924,27 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
     }
     type PortalClient = Record<string, (...args: unknown[]) => Promise<PortalResult<never>>>;
 
+    /** The portal's variables as they were, put back after the case. */
+    let saved: Record<string, string | undefined> = {};
+
+    afterEach(() => {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      saved = {};
+    });
+
     /**
      * Load `apps/developer-portal/src/server/auth-server-client.ts` pointed at
      * this server. The path is computed, so no project imports another: the
      * portal is an application, and only this suite runs its code here.
      */
     async function portalClient(): Promise<PortalClient> {
+      saved = {
+        AUTH_SERVER_URL: process.env['AUTH_SERVER_URL'],
+        PORTAL_SESSION_SECRET: process.env['PORTAL_SESSION_SECRET'],
+      };
       process.env['AUTH_SERVER_URL'] = origin;
       process.env['PORTAL_SESSION_SECRET'] = 'portal-e2e-session-secret-of-32-characters';
       const path = join(

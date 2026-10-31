@@ -30,8 +30,9 @@ import {
  * the session, the exchange signs its id into the ID token as `sid`, and the
  * session records the client in `session_clients`, the registry back-channel
  * logout will read. The access token, the introspection response and the
- * refresh row never carry it, and a code from the headless Bearer hand-off,
- * which has no browser session, gives an ID token without one.
+ * refresh row never carry it. The headless Bearer hand-off, which gave a code
+ * with no browser session, is retired (#524): a request with only a Bearer
+ * token signs in first and gets no code.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -389,7 +390,7 @@ describe('sid on ID tokens and authorization codes (#549, real containers)', () 
     for (const { row } of rows) expect(row).not.toContain(sid);
   });
 
-  it('gives a code from the headless Bearer hand-off an ID token with no sid', async () => {
+  it('issues no code from the retired headless Bearer hand-off (#524)', async () => {
     const app = server();
     const userId = await registerPasswordAccount(app, 'headless@example.test');
     await seedClient(app, [userId]);
@@ -401,13 +402,23 @@ describe('sid on ID tokens and authorization codes (#549, real containers)', () 
     expect(login.statusCode).toBe(200);
     const bearer = login.json<{ access_token: string }>().access_token;
 
-    const grant = await authorize(app, { authorization: `Bearer ${bearer}` });
-    expect(await codeSession(app, grant.code)).toBeNull();
-    const claims = idTokenClaims(await exchange(app, grant));
+    const response = await app.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPES.join(' '),
+        code_challenge: pkcePair().challenge,
+        code_challenge_method: 'S256',
+        state: 'sid-state',
+      }).toString()}`,
+      headers: { authorization: `Bearer ${bearer}` },
+    });
 
-    expect(claims['sub']).toBe(userId);
-    expect(Object.hasOwn(claims, 'sid')).toBe(false);
-    const { rows } = await app.dbPool.query(`SELECT 1 FROM session_clients`);
+    expect(response.statusCode).toBe(302);
+    expect(response.headers['location']).toMatch(/^\/ui\/login\?return_to=/);
+    const { rows } = await app.dbPool.query(`SELECT 1 FROM authorization_codes`);
     expect(rows).toEqual([]);
   });
 
