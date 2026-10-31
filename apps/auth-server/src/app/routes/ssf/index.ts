@@ -4,6 +4,7 @@ import {
   addSubjectRequestSchema,
   assertTransmitterMembers,
   authorizationHeaderContext,
+  canonicalSubject,
   canonicalSubjectKey,
   checkDelivery,
   eventSubjectOf,
@@ -454,18 +455,24 @@ export default async function (fastify: FastifyInstance) {
     }
   );
 
-  /** A subject's stored form: its canonical key and the event subject it stands for. */
+  /**
+   * A subject's stored form: the subject with a user's UUID in lower case, its
+   * canonical key and the event subject it stands for. Both spellings of a
+   * user's id are then one subject, which matches the user's events.
+   */
   function subjectRow(
     receiver: SsfReceiver,
-    subject: z.infer<typeof addSubjectRequestSchema>['subject']
+    received: z.infer<typeof addSubjectRequestSchema>['subject']
   ) {
+    const issuer = issuerOf(receiver);
+    const subject = canonicalSubject(received, issuer);
     const subjectKey = canonicalSubjectKey(subject);
     // Bytes, not characters: the key is indexed, and a long multibyte subject
     // would pass a character count and fail the index.
     if (Buffer.byteLength(subjectKey) > SUBJECT_KEY_MAX) {
       throw new SsfRequestError('The subject is too long');
     }
-    return { subjectKey, eventSubject: eventSubjectOf(subject, issuerOf(receiver)) };
+    return { subject, subjectKey, eventSubject: eventSubjectOf(subject, issuer) };
   }
 
   routes.post(
@@ -484,7 +491,7 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const receiver = ssfReceiverOf(request);
       const stream = await ownStream(receiver, request.body.stream_id);
-      const { subjectKey, eventSubject } = subjectRow(receiver, request.body.subject);
+      const { subject, subjectKey, eventSubject } = subjectRow(receiver, request.body.subject);
       // A receiver learns only of the users related to its own client (#540,
       // decided 2026-10-26): one who consented to it, or holds a live refresh
       // token it was issued. Any other user is refused as SSF 1.0 §8.1.3.2
@@ -505,7 +512,7 @@ export default async function (fastify: FastifyInstance) {
         stream.id,
         {
           subjectKey,
-          subject: request.body.subject,
+          subject,
           eventSubject,
           verified: request.body.verified ?? true,
         },

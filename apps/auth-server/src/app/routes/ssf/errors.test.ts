@@ -70,6 +70,7 @@ async function buildApp(options: { switchOn?: boolean } = {}) {
     create: vi.fn(async () => null as unknown),
     list: vi.fn(async () => []),
     addSubject: vi.fn(async () => 'added'),
+    removeSubject: vi.fn(async () => true),
     isRelatedUser: vi.fn(async () => false),
   };
   app.decorate('ssf', { eventsSupported: [], checkEndpoint } as never);
@@ -259,6 +260,50 @@ describe('SSF stream management errors (#513)', () => {
     const added = await add();
     expect(added.statusCode, added.body).toBe(200);
     expect(streams.addSubject).toHaveBeenCalledTimes(1);
+  });
+
+  // The event store holds a user id in lower case and the fan-out compares it
+  // as text: an upper-case UUID is stored as the lower-case one, so the
+  // subject matches the user's events and both spellings are one subject.
+  it('adds and removes a user named by an upper-case UUID under its lower-case id', async () => {
+    const { app, streams } = await buildApp();
+    streams.find.mockResolvedValue({ id: STREAM_ID });
+    streams.isRelatedUser.mockResolvedValue(true);
+    const user = '0192a000-0000-7000-8000-0000000000b1';
+    const upper = { format: 'iss_sub', iss: ISSUER, sub: user.toUpperCase() };
+    const stored = { format: 'iss_sub', iss: ISSUER, sub: user };
+
+    const added = await call(app, 'POST', '/ssf/subjects/add', {
+      token: 'receiver',
+      payload: { stream_id: STREAM_ID, subject: upper },
+    });
+    expect(added.statusCode, added.body).toBe(200);
+    expect(streams.isRelatedUser).toHaveBeenCalledWith(
+      REALM_ID,
+      'receiver-row',
+      user,
+      expect.any(Number)
+    );
+    expect(streams.addSubject).toHaveBeenCalledWith(
+      STREAM_ID,
+      {
+        subjectKey: JSON.stringify({ format: 'iss_sub', iss: ISSUER, sub: user }),
+        subject: stored,
+        eventSubject: { type: 'user', id: user },
+        verified: true,
+      },
+      expect.any(Number)
+    );
+
+    const removed = await call(app, 'POST', '/ssf/subjects/remove', {
+      token: 'receiver',
+      payload: { stream_id: STREAM_ID, subject: upper },
+    });
+    expect(removed.statusCode, removed.body).toBe(204);
+    expect(streams.removeSubject).toHaveBeenCalledWith(
+      STREAM_ID,
+      JSON.stringify({ format: 'iss_sub', iss: ISSUER, sub: user })
+    );
   });
 
   it('lets a receiver add a client without the user check', async () => {

@@ -155,8 +155,9 @@ curl -s https://auth.example.com/ssf/subjects/add \
   -d '{"stream_id": "'"$STREAM"'", "subject": {"format": "iss_sub", "iss": "https://auth.example.com", "sub": "'"$USER_ID"'"}}'
 ```
 
-A subject in another format, or with another issuer, is kept and matches no event. A stream holds
-at most 1000 subjects.
+A user's id is a UUID, and QAuth keeps it in lower case, as its SETs name the user: an upper-case
+spelling is the same subject. A subject in another format, or with another issuer, is kept as sent
+and matches no event. A stream holds at most 1000 subjects.
 
 Some events reach fewer streams than the subject alone would say. A withdrawn consent, an RFC 7009
 revocation and a replay's family revocation tell of the user's dealings with one client, and a
