@@ -6,10 +6,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // module; stub it so the real env-schema parse does not run in tests.
 vi.mock('../../config/env', () => ({ env: {} }));
 
+const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
+
 const systemClient = {
   id: '00000000-0000-4000-8000-00000000000a',
   clientId: 'system',
-  audience: null as unknown,
+  audience: [DEVELOPER_AUDIENCE] as unknown,
 };
 
 vi.mock('./oauth-client', () => ({
@@ -27,9 +29,9 @@ const OTHER_REALM_ID = '0190e3c4-0000-7000-8000-00000000000b';
 const users = { findById: vi.fn() };
 const fastify = { repositories: { users } } as unknown as FastifyInstance;
 
-/** The claims `/auth/login` puts on the developer-portal token. */
+/** The claims `/auth/login` puts on the developer-portal token since #524. */
 function portalClaims(overrides: Record<string, unknown> = {}) {
-  return { sub: USER_ID, clientId: 'system', aud: 'system', ...overrides };
+  return { sub: USER_ID, clientId: 'system', aud: DEVELOPER_AUDIENCE, ...overrides };
 }
 
 /**
@@ -56,7 +58,7 @@ async function refusal(promise: Promise<unknown>) {
 }
 
 beforeEach(() => {
-  systemClient.audience = null;
+  systemClient.audience = [DEVELOPER_AUDIENCE];
   users.findById.mockReset();
   users.findById.mockResolvedValue({ id: USER_ID, enabled: true, realmId: REALM.id });
   vi.mocked(getOrCreateSystemClient).mockClear();
@@ -69,11 +71,7 @@ describe('assertManagementToken', () => {
 
   it('rejects a token issued to any other client', async () => {
     await expect(
-      assertManagementToken(
-        fastify,
-        REALM,
-        portalClaims({ clientId: 'third-party-app', aud: 'system' })
-      )
+      assertManagementToken(fastify, REALM, portalClaims({ clientId: 'third-party-app' }))
     ).rejects.toThrow(JWTInvalidError);
   });
 
@@ -226,63 +224,44 @@ describe('assertManagementToken', () => {
     });
   });
 
-  it('follows a configured system-client audience, requiring every value', async () => {
-    systemClient.audience = ['https://portal.example.com', 'https://auth.example.com'];
-
-    await expect(
-      assertManagementToken(
-        fastify,
-        REALM,
-        portalClaims({ aud: ['https://portal.example.com', 'https://auth.example.com'] })
-      )
-    ).resolves.toBeUndefined();
-    await expect(
-      assertManagementToken(fastify, REALM, portalClaims({ aud: 'https://portal.example.com' }))
-    ).rejects.toThrow(JWTInvalidError);
-    // The bare client id no longer matches once an audience is configured.
-    await expect(assertManagementToken(fastify, REALM, portalClaims())).rejects.toThrow(
-      JWTInvalidError
-    );
-  });
-
-  // #509, expand then contract (ADR-018 §5): the developer API's audience is
-  // accepted on a portal token now, while the system client keeps no audience
-  // and the portal token keeps `aud = client_id`; #524 starts minting it.
-  describe('the developer audience on a system-client token (#509)', () => {
-    const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
-
-    it('accepts it while the system client lists no audience, beside the client id', async () => {
-      expect(systemClient.audience).toBeNull();
+  // #524, the contract step after #509's expand (ADR-018 §5): the portal
+  // token carries the developer API's audience, and nothing else is accepted.
+  describe('the developer audience, and only it (#524)', () => {
+    it("refuses the system client's id as audience, the portal token of before #524", async () => {
       await expect(
-        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
-      ).resolves.toBeUndefined();
-      await expect(assertManagementToken(fastify, REALM, portalClaims())).resolves.toBeUndefined();
-    });
-
-    it('accepts it where the legacy token is accepted, for a sign-out too', async () => {
+        assertManagementToken(fastify, REALM, portalClaims({ aud: 'system' }))
+      ).rejects.toThrow(JWTInvalidError);
+      // Expired tokens reach the check at sign-out: refused there too.
       await expect(
-        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }), {
+        assertManagementToken(fastify, REALM, portalClaims({ aud: 'system' }), {
           requireActiveUser: false,
         })
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow(JWTInvalidError);
     });
 
-    it('accepts it beside an audience an operator configured on the system client', async () => {
-      systemClient.audience = ['https://portal.example.com'];
+    it('accepts it for a sign-out too', async () => {
       await expect(
-        assertManagementToken(fastify, REALM, portalClaims({ aud: DEVELOPER_AUDIENCE }))
+        assertManagementToken(fastify, REALM, portalClaims(), { requireActiveUser: false })
       ).resolves.toBeUndefined();
     });
 
-    it('keeps the client id and delegation pins on either audience', async () => {
-      for (const aud of [DEVELOPER_AUDIENCE, 'system']) {
-        await expect(
-          assertManagementToken(fastify, REALM, portalClaims({ aud, clientId: 'third-party-app' }))
-        ).rejects.toThrow(JWTInvalidError);
-        await expect(
-          assertManagementToken(fastify, REALM, portalClaims({ aud, act: { sub: 'agent' } }))
-        ).rejects.toThrow(JWTInvalidError);
-      }
+    it('refuses it beside another audience, as the developer family does', async () => {
+      await expect(
+        assertManagementToken(
+          fastify,
+          REALM,
+          portalClaims({ aud: [DEVELOPER_AUDIENCE, 'https://mcp.example.com'] })
+        )
+      ).rejects.toThrow(JWTInvalidError);
+    });
+
+    it('keeps the client id and delegation pins', async () => {
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ clientId: 'third-party-app' }))
+      ).rejects.toThrow(JWTInvalidError);
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ act: { sub: 'agent' } }))
+      ).rejects.toThrow(JWTInvalidError);
     });
 
     it('refuses another family audience', async () => {
