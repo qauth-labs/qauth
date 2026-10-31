@@ -483,6 +483,45 @@ scenarios:
         redirect_uri: 'http://consent-plain-http.example/callback'
         scope: openid
 
+  unshownRedirect:
+    # redirectNotShown: a registered redirect URI whose host is not a DNS name of valid labels (an underscore). Every
+    # registration path and the manifest refuse one since #593, so the setup writes it into consent-web's row, as an
+    # older release could have, and the teardown takes it out. The POST does not read it, so the walk is the GET's.
+    given:
+      gate: open
+      returnUrl: fits
+      params: unshownRedirect
+      agentScope: withinCap
+      audience: listed
+      clientIsAgent: false
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW]]
+    as: user
+    setup:
+      - run:
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - >-
+            UPDATE oauth_clients SET redirect_uris = redirect_uris || '["https://consent_web.example/callback"]'::jsonb
+            WHERE client_id = 'consent-web'
+      - signIn: browser
+    teardown:
+      - run:
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - >-
+            UPDATE oauth_clients SET redirect_uris = redirect_uris - 'https://consent_web.example/callback'
+            WHERE client_id = 'consent-web'
+    request:
+      query: { redirect_uri: 'https://consent_web.example/callback' }
+
   malformedDpopJkt:
     # dpopJktMalformed: DPoP is on and dpop_jkt is no thumbprint
     given:

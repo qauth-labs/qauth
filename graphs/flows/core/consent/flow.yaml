@@ -65,7 +65,7 @@ scope:
 context:
   # The checks before the agent cap run in a fixed order and each refuses on its own, so the first two variables say
   # which of them the request fails first, if any: one variable per check would give the checker millions of starting
-  # situations instead of 497,664. Both hold for the request in flight, the GET or the POST.
+  # situations instead of 580,608. Both hold for the request in flight, the GET or the POST.
   gate:
     values:
       - open
