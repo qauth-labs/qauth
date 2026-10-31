@@ -301,7 +301,7 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
       }
     });
 
-    it("refuses a portal token minted before #524, whose audience was the system client's id", async () => {
+    it("refuses a portal token minted before #524, whose audience was the system client's id, but at sign-out", async () => {
       const dev = await developer();
       const legacy = await app().jwtUtils.signAccessToken(
         { id: await realmId() },
@@ -311,8 +311,10 @@ describe('the account and developer APIs under versioned prefixes (#524, real co
       for (const url of ['/api/clients', '/api/consents', `${DEVELOPER}/clients`]) {
         expect((await call('GET', url, legacy)).statusCode, url).toBe(401);
       }
+      // Sign-out still takes a live one for this release (the rolling-upgrade
+      // grace; remove it in the next release).
       const logout = await call('POST', '/auth/logout', legacy);
-      expect(logout.statusCode).toBe(401);
+      expect(logout.statusCode).toBe(200);
     });
 
     it('no longer takes the portal token as a sign-in at /oauth/authorize', async () => {

@@ -1336,7 +1336,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boot step gives it to the system client of every realm that has one, so
   `POST /auth/login` mints the developer audience and the token reaches the
   developer API. `/auth/logout` and the deprecated `/api/clients` and
-  `/api/consents` accept exactly that audience on a system-client token.
+  `/api/consents` accept exactly that audience on a system-client token, but
+  for the sign-out grace of this release (under **Removed**).
 
   **Action for operators**: developers sign in to the portal again when the
   first node of this release boots: a portal token minted before carries the
@@ -2259,7 +2260,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used it. A web-only process no longer loads the JWT plugin.
 - **The system client's id as a portal token's audience** ([#524]). Its
   acceptance had no end date at `/auth/logout`, where an expired token still
-  passed.
+  passed. One grace stays for this release only: `/auth/logout` still takes a
+  live portal token that carries it, so a developer who signs out while the
+  upgrade rolls still has their refresh tokens, sessions and codes ended. An
+  expired one is refused, and the next release removes the grace.
 
 ### Fixed
 

@@ -585,7 +585,7 @@ describe('one audience per API family and a guard for each (#509, real container
       expect(logout.json()).toMatchObject({ success: true });
     });
 
-    it('of before #524, with the system client id as audience, is refused everywhere', async () => {
+    it('of before #524, with the system client id as audience, is refused everywhere but at sign-out', async () => {
       const { userId } = await signInPortal('portal-before@example.com');
       const before = await app().jwtUtils.signAccessToken(
         { id: await realmId() },
@@ -595,12 +595,15 @@ describe('one audience per API family and a guard for each (#509, real container
       for (const path of ['/api/clients', '/api/consents', probePath('developer')]) {
         expect((await call(path, before)).statusCode, path).toBe(401);
       }
+      // For this release a live one still signs out, so a developer whose
+      // portal session began before the upgrade keeps no tokens (ADR-018 §5).
+      // Remove with the grace in the next release.
       const logout = await app().inject({
         method: 'POST',
         url: '/auth/logout',
         headers: { authorization: `Bearer ${before}` },
       });
-      expect(logout.statusCode).toBe(401);
+      expect(logout.statusCode).toBe(200);
     });
   });
 

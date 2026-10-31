@@ -40,8 +40,8 @@ const uuidSubjectSchema = z.uuid();
  *   release of #509 accepted it and minted the system client's `client_id`;
  *   this one mints it and no longer accepts the `client_id` (expand, then
  *   contract: ADR-018 §5). So a portal token minted before the upgrade is
- *   refused here, expired or not, and its developer signs in again.
- *   `/auth/logout` relies on the same rule.
+ *   refused here, expired or not, and its developer signs in again. The one
+ *   exception is `acceptPreDeveloperAudience`, below.
  * - No `act` claim: a delegated token acts for an agent, never the developer.
  * - `sub` names a user that still exists and is enabled. The token outlives
  *   the login that minted it by up to its lifetime, and an account disabled
@@ -61,6 +61,14 @@ const uuidSubjectSchema = z.uuid();
  * as `/auth/logout` does) and refuse a subject that names no user of that
  * realm, an unknown one or another realm's, before acting on it.
  *
+ * `acceptPreDeveloperAudience: true` also accepts, as the whole audience, the
+ * system client's `client_id` a portal token carried before #524, for a
+ * caller that only ends access: `/auth/logout`, for a token that has not
+ * expired. Without it, a developer whose portal session began on a node of
+ * the previous release would sign out during the rolling upgrade and keep
+ * their refresh tokens and sessions. REMOVE IN THE NEXT RELEASE: by then every
+ * such token has expired (ADR-018 §5, expand then contract).
+ *
  * Throws `JWTInvalidError` (401) on any mismatch, as RFC 6750 §3.1 prescribes
  * for a token that is not valid for the resource.
  */
@@ -68,7 +76,7 @@ export async function assertManagementToken(
   fastify: FastifyInstance,
   realm: Pick<RealmRow, 'id'>,
   claims: ManagementTokenClaims | undefined,
-  options: { requireActiveUser?: boolean } = {}
+  options: { requireActiveUser?: boolean; acceptPreDeveloperAudience?: boolean } = {}
 ): Promise<void> {
   if (!claims) {
     throw new JWTInvalidError('Missing JWT payload');
@@ -86,9 +94,15 @@ export async function assertManagementToken(
 
   // Exactly the developer API's audience, as the developer family's guard
   // reads it (#524): one value. The system client's `client_id`, which a
-  // portal token carried before #524, is no longer accepted.
+  // portal token carried before #524, is accepted only where the caller asks
+  // for it: sign-out during the rolling upgrade. REMOVE that branch in the
+  // next release.
   const presented = claims.aud === undefined ? [] : [claims.aud].flat();
-  if (presented.length !== 1 || presented[0] !== API_FAMILY_AUDIENCES.developer) {
+  const accepted =
+    presented.length === 1 &&
+    (presented[0] === API_FAMILY_AUDIENCES.developer ||
+      (options.acceptPreDeveloperAudience === true && presented[0] === systemClient.clientId));
+  if (!accepted) {
     throw new JWTInvalidError('Access token audience does not match the management API');
   }
 

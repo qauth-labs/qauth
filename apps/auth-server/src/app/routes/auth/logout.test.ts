@@ -552,11 +552,44 @@ describe('POST /auth/logout', () => {
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
+  // A live portal token minted before #524 still signs out for one release,
+  // so the rolling upgrade leaves no tokens of a developer who signs out on a
+  // new node. Remove with the grace in the next release.
+  it("signs out with a live portal token minted before #524, with the system client's id as audience", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('legacy.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ aud: 'system' })
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const result = await handler(logoutRequest('Bearer legacy.access.jwt'), createReply());
+
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
+      VALID_USER.id,
+      'logout'
+    );
+    expect(result).toMatchObject({ success: true });
+  });
+
   it.each([
     ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
     ['bound to another audience', { aud: 'https://mcp.example.com' }],
     ['delegated to an agent', { act: { sub: 'agent-1' } }],
-    ["minted before #524, with the system client's id as audience", { aud: 'system' }],
+    [
+      "minted before #524, with the system client's id among other audiences",
+      { aud: ['system', 'https://mcp.example.com'] },
+    ],
+    [
+      'issued to another client, with the system client id as audience',
+      {
+        clientId: 'third-party-app',
+        aud: 'system',
+      },
+    ],
   ])('throws (401) and does NOT revoke for a valid token %s', async (_name, overrides) => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');
@@ -579,7 +612,8 @@ describe('POST /auth/logout', () => {
     ['bound to another audience', { aud: 'https://mcp.example.com' }],
     ['delegated to an agent', { act: { sub: 'agent-1' } }],
     // #524 retired the system client id as a portal token's audience, which
-    // logout kept accepting for an expired token with no end date.
+    // logout kept accepting for an expired token with no end date. The
+    // rolling-upgrade grace covers a live token only.
     ["minted before #524, with the system client's id as audience", { aud: 'system' }],
   ])('throws (401) and does NOT revoke for an EXPIRED token %s', async (_name, overrides) => {
     const { fastify, ctx } = createFastifyStub();

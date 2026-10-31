@@ -108,9 +108,14 @@ export default async function (fastify: FastifyInstance) {
         // first-party token `/auth/login` mints, expired or not, so a token
         // issued to another client or audience cannot end the user's sessions.
         // A disabled user may still sign out: logout only ends access. The
-        // token must still be one of this host's realm (#487).
+        // token must still be one of this host's realm (#487). A live portal
+        // token minted before #524, with the system client's id as audience,
+        // still signs out for this release, so a developer whose portal
+        // session began on a node of the previous release keeps no tokens
+        // when the upgrade rolls. REMOVE IN THE NEXT RELEASE.
         await assertManagementToken(fastify, realm, claims, {
           requireActiveUser: false,
+          acceptPreDeveloperAudience: !isExpired,
         });
         // RFC 9449 §7.2 (#480): this route reads a Bearer token, and a
         // DPoP-bound token is never one.

@@ -239,6 +239,34 @@ describe('assertManagementToken', () => {
       ).rejects.toThrow(JWTInvalidError);
     });
 
+    // The rolling-upgrade grace of this release: a live pre-#524 portal token
+    // still signs out. Remove with the grace in the next release.
+    it("accepts the system client's id as the whole audience only where the caller asks for it", async () => {
+      await expect(
+        assertManagementToken(fastify, REALM, portalClaims({ aud: 'system' }), {
+          requireActiveUser: false,
+          acceptPreDeveloperAudience: true,
+        })
+      ).resolves.toBeUndefined();
+      // Not beside another audience, and not from another client.
+      await expect(
+        assertManagementToken(
+          fastify,
+          REALM,
+          portalClaims({ aud: ['system', 'https://mcp.example.com'] }),
+          { requireActiveUser: false, acceptPreDeveloperAudience: true }
+        )
+      ).rejects.toThrow(JWTInvalidError);
+      await expect(
+        assertManagementToken(
+          fastify,
+          REALM,
+          portalClaims({ clientId: 'third-party-app', aud: 'system' }),
+          { requireActiveUser: false, acceptPreDeveloperAudience: true }
+        )
+      ).rejects.toThrow(JWTInvalidError);
+    });
+
     it('accepts it for a sign-out too', async () => {
       await expect(
         assertManagementToken(fastify, REALM, portalClaims(), { requireActiveUser: false })
