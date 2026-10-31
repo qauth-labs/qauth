@@ -341,7 +341,7 @@ states:
       - guard: inputInvalid
         target: validation_error.query
         say: 'the query does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
+        source: apps/auth-server/src/app/plugins/error-handler.ts:264
       - target: showFindingSession
         say: 'the query matches the schema'
         source: apps/auth-server/src/app/routes/ui/consent.ts:431
@@ -634,7 +634,7 @@ states:
       - guard: inputInvalid
         target: validation_error.form
         say: 'the form does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
+        source: apps/auth-server/src/app/plugins/error-handler.ts:264
       - target: submitFindingSession
         say: 'the form matches the schema'
         source: apps/auth-server/src/app/routes/ui/consent.ts:668
@@ -844,11 +844,11 @@ states:
         target: mintingCode
         effect: [saveConsent]
         say: 'the consent is saved'
-        source: libs/infra/db/src/lib/repositories/oauth-consents.repository.ts:118
+        source: libs/infra/db/src/lib/repositories/oauth-consents.repository.ts:160
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   mintingCode:
     title: Mint the authorization code
@@ -866,11 +866,11 @@ states:
         target: recordingGrant
         effect: [mintCode]
         say: 'the code is stored'
-        source: apps/auth-server/src/app/helpers/authorization-code.ts:138
+        source: apps/auth-server/src/app/helpers/authorization-code.ts:139
       FAIL.server:
         target: server_error.store
         say: 'the database fails, or three codes in a row collide'
-        source: apps/auth-server/src/app/helpers/authorization-code.ts:140
+        source: apps/auth-server/src/app/helpers/authorization-code.ts:141
 
   recordingGrant:
     title: Record the grant
@@ -889,7 +889,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the event store fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   parkingRequest:
     title: Park the authorization request for the sign-in
@@ -1212,7 +1212,7 @@ states:
     type: final
     title: Refuse a query that does not match the authorize schema
     redirect: never
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
+    source: apps/auth-server/src/app/plugins/error-handler.ts:339
     response:
       status: 400
       body:
@@ -1231,7 +1231,7 @@ states:
     type: final
     title: Refuse a form that does not match the consent form schema
     redirect: never
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
+    source: apps/auth-server/src/app/plugins/error-handler.ts:339
     response:
       status: 400
       body:
@@ -1311,7 +1311,7 @@ states:
       The URIError reaches the error handler as an unknown error, logged at error level. The body says nothing of the
       failure, in any NODE_ENV; its trace_id finds the log line.
     redirect: never
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    source: apps/auth-server/src/app/plugins/error-handler.ts:604
     response:
       status: 500
       body:
@@ -1329,7 +1329,7 @@ states:
     description: >-
       The steps before the failing one stay done. The body says nothing of the failure, in any NODE_ENV; its trace_id
       finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    source: apps/auth-server/src/app/plugins/error-handler.ts:604
     response:
       status: 500
       body:

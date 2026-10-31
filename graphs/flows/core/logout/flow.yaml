@@ -225,18 +225,18 @@ states:
       - guard: "issuedFor == 'otherClient'"
         target: invalid_token.not_management_client
         say: "the token's client_id is not the system client's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:77
+        source: apps/auth-server/src/app/helpers/management-token.ts:76
       - guard: "issuedFor == 'delegated'"
         target: invalid_token.delegated
         say: 'the token acts for an agent'
-        source: apps/auth-server/src/app/helpers/management-token.ts:81
+        source: apps/auth-server/src/app/helpers/management-token.ts:80
       - guard: "issuedFor == 'otherAudience'"
         target: invalid_token.wrong_audience
-        say: "the token's audience lacks the system client's (its client_id while it lists none), and the developer API's too (#509)"
+        say: "the token's audience is not exactly the developer API's (#524)"
         source: apps/auth-server/src/app/helpers/management-token.ts:91
       - target: checkingBinding
         say: "the token is the portal's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:99
+        source: apps/auth-server/src/app/helpers/management-token.ts:93
 
   checkingBinding:
     title: Refuse a DPoP-bound token
@@ -481,7 +481,7 @@ states:
   invalid_token.not_management_client:
     type: final
     title: Refuse a token issued to another client
-    source: apps/auth-server/src/app/helpers/management-token.ts:78
+    source: apps/auth-server/src/app/helpers/management-token.ts:77
     response:
       status: 401
       headers:
@@ -500,7 +500,7 @@ states:
   invalid_token.delegated:
     type: final
     title: Refuse a token that acts for an agent
-    source: apps/auth-server/src/app/helpers/management-token.ts:82
+    source: apps/auth-server/src/app/helpers/management-token.ts:81
     response:
       status: 401
       headers:
@@ -519,7 +519,7 @@ states:
   invalid_token.wrong_audience:
     type: final
     title: Refuse a token for another audience
-    source: apps/auth-server/src/app/helpers/management-token.ts:95
+    source: apps/auth-server/src/app/helpers/management-token.ts:92
     response:
       status: 401
       headers:
@@ -601,7 +601,7 @@ states:
     description: >-
       The steps before the failing one stay done. The body says nothing of the failure, in any NODE_ENV; its
       trace_id finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    source: apps/auth-server/src/app/plugins/error-handler.ts:604
     response:
       status: 500
       body:
