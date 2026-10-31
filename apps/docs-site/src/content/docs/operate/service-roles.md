@@ -125,8 +125,9 @@ A process holding `admin` runs the admin API on a second listener, beside the
 public one, while `ADMIN_API_ENABLED` is on. It is off by default until the
 first admin operations (#517) and DPoP-bound admin tokens (#520) ship. The
 listener binds to loopback, and until #520 a production process refuses an
-`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The listener grants nothing for a
-caller's network position: every admin call needs an admin token
+`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`).
+The listener grants nothing for a caller's network position: every admin call
+needs an admin token, except `GET /admin/v1-rc.0/openapi.json`
 ([API conventions](/reference/api-conventions/#the-admin-listener)). The public
 listener never serves the admin API. `ADMIN_API_PORT` must differ from `PORT`.
 

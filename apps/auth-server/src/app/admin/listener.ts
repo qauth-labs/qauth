@@ -39,7 +39,8 @@ import { AdminCallsInFlight, adminPipeline } from './pipeline';
  * process, bound to ADMIN_API_HOST and ADMIN_API_PORT (loopback by default),
  * on a process that holds the `admin` service role with ADMIN_API_ENABLED on.
  * Its routes register only there: the public listener refuses to boot an
- * admin route and answers 404 for every admin path.
+ * admin route and answers 404 for every admin path, but for a CORS preflight,
+ * which it answers as on any other path.
  *
  * `main.ts` builds the instance with {@link createAdminServer}, hands it to
  * the app, and listens on it once the app is ready. The app installs the

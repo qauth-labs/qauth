@@ -8,8 +8,8 @@ import { z } from 'zod';
  * operator turns it on: it is off by default until the first admin operations
  * (#517) and DPoP-bound admin tokens (#520) ship. It binds to loopback by
  * default; until #520, a production process refuses any other address. The
- * listener grants nothing for a caller's network position: every call carries
- * an admin token.
+ * listener grants nothing for a caller's network position: every call but the
+ * one for its OpenAPI document carries an admin token.
  * A plain `z.object`, so the auth server can spread its `.shape`.
  */
 

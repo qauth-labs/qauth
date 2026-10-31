@@ -951,7 +951,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DPoP-bound admin tokens ([#520]) ship, and until [#520] a production process
   refuses an `ADMIN_API_HOST` that is not loopback. It
   binds before the public port and closes with the server. The public listener
-  answers 404 for every admin path and refuses to boot an admin route. The
+  answers 404 for every admin path, but for a CORS preflight, which it answers
+  as on any other path, and refuses to boot an admin route. The
   listener grants nothing for a caller's network position: every admin route
   runs behind the same stages, in order: the request id, the admin family's
   token guard (with the keys of the realm the token's issuer names, the
@@ -979,7 +980,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses fails the call and rolls its change back; a route's own preHandler
   refuses by throwing, never by sending the reply; and an admin route may not
   have hooks that would run before authorization. The admin OpenAPI document is
-  served on the listener only, at `/admin/v1-rc.0/openapi.json`. No admin operation ships yet ([#517] adds the first).
+  served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
+  token. No admin operation ships yet ([#517] adds the first).
 
 ### Changed
 

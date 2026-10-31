@@ -455,6 +455,32 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(await auditRows(realmId)).toHaveLength(1);
     });
 
+    it('answers a CORS preflight under /admin on the public listener as on any path, naming nothing of the admin API', async () => {
+      const realmId = await tenant('alpha');
+      const preflight = (url: string) =>
+        app().inject({
+          method: 'OPTIONS',
+          url,
+          headers: {
+            origin: 'https://console.example.com',
+            'access-control-request-method': 'POST',
+          },
+        });
+      const comparable = (response: LightMyRequestResponse) => {
+        const headers: Record<string, unknown> = { ...response.headers };
+        delete headers['date'];
+        delete headers['x-request-id'];
+        return { status: response.statusCode, headers, body: response.body };
+      };
+
+      const underAdmin = comparable(await preflight(realmPath(realmId)));
+      const elsewhere = comparable(await preflight(`/elsewhere/v1-rc.0/realms/${realmId}`));
+      expect(underAdmin).toEqual(elsewhere);
+      expect(JSON.stringify(underAdmin)).not.toMatch(/admin/i);
+      expect(runs).toEqual([]);
+      expect(await auditRows(realmId)).toEqual([]);
+    });
+
     it('serves the admin OpenAPI document on the admin listener only', async () => {
       const onAdmin = await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' });
       expect(onAdmin.statusCode).toBe(200);

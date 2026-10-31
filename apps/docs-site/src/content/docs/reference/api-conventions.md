@@ -139,11 +139,13 @@ The admin API runs on its own internal listener, never on the public one
 ([Configuration](/operate/configuration/)). It is off by default until the first admin operations
 (#517) and DPoP-bound admin tokens (#520) ship, and until #520 a production process refuses an
 `ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The public listener
-answers 404 `not_found` for every admin path. The admin OpenAPI document is served on the admin
-listener only, at `/admin/v1-rc.0/openapi.json`.
+answers 404 `not_found` for every admin path, except a CORS preflight (`OPTIONS`), which it
+answers as on any other path, naming nothing of the admin API. The admin OpenAPI document is
+served on the admin listener only, at `/admin/v1-rc.0/openapi.json`, without a token: it
+describes the operations and holds no realm data.
 
-The listener grants nothing for a caller's network position: a call from loopback needs an admin
-token like any other. It never routes by host either. Every admin path names the realm it acts on,
+The listener grants nothing for a caller's network position: every other call, from loopback too,
+needs an admin token. It never routes by host either. Every admin path names the realm it acts on,
 `/admin/v1-rc.0/realms/{realmId}/...`, and the listener refuses to boot a route that does not.
 
 Every admin route runs behind the same stages, in this order
@@ -184,8 +186,8 @@ Redis, or in memory while it is off.
 
 - Per client address, the calls the token guard refuses. Past that count, a call from the address
   that presents no token is refused before the token guard, and one whose token the guard refuses
-  answers 429. A call with a valid token is never held back by the refusals of others at its
-  address.
+  answers 429. A call that presents a `Bearer` token always reaches the token guard, so a valid
+  token is never held back by the refusals of others from the same address.
 - Per token subject, every call, right after the token guard.
 - Per client address, every call to the OpenAPI document, which needs no token, in a count of its
   own.

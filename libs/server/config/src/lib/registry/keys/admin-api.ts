@@ -21,7 +21,7 @@ export const ADMIN_API_KEYS = defineKeys([
     owner: 'server',
     default: '127.0.0.1',
     since: '0.2.0',
-    docs: "The address the admin API's listener binds to, loopback by default, and loopback only in production until admin tokens are DPoP-bound (#520); the listener grants nothing for a caller's network position, so every call needs an admin token.",
+    docs: "The address the admin API's listener binds to, loopback by default, and loopback only in production until admin tokens are DPoP-bound (#520); the listener grants nothing for a caller's network position, so every call but the one for its OpenAPI document needs an admin token.",
   },
   {
     name: 'ADMIN_API_PORT',
