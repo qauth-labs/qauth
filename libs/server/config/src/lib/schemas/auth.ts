@@ -289,6 +289,24 @@ export const authEnvSchema = z.object({
     .default(60),
 
   /**
+   * How long an interaction of the Interaction API lives, in seconds (#592,
+   * ADR-019 Decision 6): the record of one browser ceremony and the flow
+   * cookie that binds it to the browser that started it. Absolute, counted
+   * from the request that starts the ceremony; an answer never extends it.
+   * Default 1800 (30 minutes). At least a minute and at most two hours. The
+   * record is written before anyone signs in, so an interaction nobody
+   * answers lives only ten minutes of it (`INTERACTION_UNANSWERED_TTL_MS` in
+   * the auth server); the first processed answer lets it run to this expiry,
+   * which never moves.
+   */
+  INTERACTION_TTL: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(2 * 60 * 60)
+    .default(30 * 60),
+
+  /**
    * Whether to set the Secure attribute on the session cookie. Defaults true;
    * tests and local dev can set false to use plain HTTP. Production MUST
    * keep this true — the __Host- prefix will reject the cookie otherwise.

@@ -99,12 +99,13 @@ describe('what each role loads (the boot-time list)', () => {
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
 
-  it("gives admin what the admin listener's pipeline reads and writes (#511)", () => {
+  it("gives admin what the admin listener's pipeline reads and writes (#511, #512)", () => {
     expect(repositoriesFor(['admin'])).toEqual([
       'users',
       'realms',
       'adminGrants',
       'adminAuditLog',
+      'adminApprovals',
       'realmPublicKeys',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.
@@ -173,11 +174,12 @@ describe('what each role loads (the boot-time list)', () => {
 });
 
 describe('the jobs of each role', () => {
-  it('places purge-expired and the SSF subject sweep on api, and event retention on delivery', () => {
+  it('places purge-expired and the SSF subject sweep on api, event retention on delivery and the interaction sweep on web', () => {
     expect(Object.fromEntries(SERVER_JOBS.map((job) => [job.name, job.role]))).toEqual({
       'purge-expired': 'api',
       'event-retention': 'delivery',
       'ssf-subject-sweep': 'api',
+      'interaction-expiry': 'web',
     });
   });
 
@@ -195,12 +197,13 @@ describe('the jobs of each role', () => {
       ),
       metrics: {},
     } as unknown as FastifyInstance;
-    expect(serverJobs(fastify, {}, ['web', 'admin', 'signer'])).toEqual([]);
+    expect(serverJobs(fastify, {}, ['admin', 'signer'])).toEqual([]);
     expect(serverJobs(fastify, {}, ['api']).map((job) => job.name)).toEqual([
       'purge-expired',
       'ssf-subject-sweep',
     ]);
     expect(() => serverJobs(fastify, {}, ['delivery'])).toThrow('read eventRetention');
+    expect(() => serverJobs(fastify, {}, ['web'])).toThrow('read events');
   });
 });
 

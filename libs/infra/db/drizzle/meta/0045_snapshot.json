@@ -1,9 +1,255 @@
 {
-  "id": "ac178f95-70cc-410f-ac18-b51a99a4d2cc",
+  "id": "ce313569-7a34-43bd-8c3a-bc073f5c9f21",
   "prevId": "56e7ca53-4a13-482b-a170-f678d1bdf699",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.admin_approvals": {
+      "name": "admin_approvals",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "realm_id": {
+          "name": "realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requester_kind": {
+          "name": "requester_kind",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requester_realm_id": {
+          "name": "requester_realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requester_id": {
+          "name": "requester_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "canonical_request": {
+          "name": "canonical_request",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "op_hash": {
+          "name": "op_hash",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nonce": {
+          "name": "nonce",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "classification": {
+          "name": "classification",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approvals_required": {
+          "name": "approvals_required",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approvals": {
+          "name": "approvals",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "used_at": {
+          "name": "used_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_admin_approvals_realm_created": {
+          "name": "idx_admin_approvals_realm_created",
+          "columns": [
+            {
+              "expression": "realm_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_admin_approvals_requester": {
+          "name": "idx_admin_approvals_requester",
+          "columns": [
+            {
+              "expression": "requester_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "admin_approvals_realm_id_realms_id_fk": {
+          "name": "admin_approvals_realm_id_realms_id_fk",
+          "tableFrom": "admin_approvals",
+          "tableTo": "realms",
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "admin_approvals_requester_realm_id_realms_id_fk": {
+          "name": "admin_approvals_requester_realm_id_realms_id_fk",
+          "tableFrom": "admin_approvals",
+          "tableTo": "realms",
+          "columnsFrom": ["requester_realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "admin_approvals_requester_id_users_id_fk": {
+          "name": "admin_approvals_requester_id_users_id_fk",
+          "tableFrom": "admin_approvals",
+          "tableTo": "users",
+          "columnsFrom": ["requester_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "admin_approvals_requester_kind": {
+          "name": "admin_approvals_requester_kind",
+          "value": "\"admin_approvals\".\"requester_kind\" in ('human', 'service_account')"
+        },
+        "admin_approvals_status": {
+          "name": "admin_approvals_status",
+          "value": "\"admin_approvals\".\"status\" in ('pending', 'approved', 'denied', 'cancelled', 'consumed')"
+        },
+        "admin_approvals_operation_id_not_empty": {
+          "name": "admin_approvals_operation_id_not_empty",
+          "value": "\"admin_approvals\".\"operation_id\" <> ''"
+        },
+        "admin_approvals_canonical_request_object": {
+          "name": "admin_approvals_canonical_request_object",
+          "value": "jsonb_typeof(\"admin_approvals\".\"canonical_request\") = 'object'"
+        },
+        "admin_approvals_request_hash_sha256": {
+          "name": "admin_approvals_request_hash_sha256",
+          "value": "octet_length(\"admin_approvals\".\"request_hash\") = 32"
+        },
+        "admin_approvals_op_hash_sha256": {
+          "name": "admin_approvals_op_hash_sha256",
+          "value": "octet_length(\"admin_approvals\".\"op_hash\") = 32"
+        },
+        "admin_approvals_nonce_length": {
+          "name": "admin_approvals_nonce_length",
+          "value": "octet_length(\"admin_approvals\".\"nonce\") = 32"
+        },
+        "admin_approvals_reason_not_empty": {
+          "name": "admin_approvals_reason_not_empty",
+          "value": "\"admin_approvals\".\"reason\" is null or \"admin_approvals\".\"reason\" <> ''"
+        },
+        "admin_approvals_classification_object": {
+          "name": "admin_approvals_classification_object",
+          "value": "jsonb_typeof(\"admin_approvals\".\"classification\") = 'object'"
+        },
+        "admin_approvals_required_range": {
+          "name": "admin_approvals_required_range",
+          "value": "\"admin_approvals\".\"approvals_required\" between 1 and 2"
+        },
+        "admin_approvals_approvals_array": {
+          "name": "admin_approvals_approvals_array",
+          "value": "jsonb_typeof(\"admin_approvals\".\"approvals\") = 'array' and jsonb_array_length(\"admin_approvals\".\"approvals\") <= \"admin_approvals\".\"approvals_required\""
+        },
+        "admin_approvals_status_matches_approvals": {
+          "name": "admin_approvals_status_matches_approvals",
+          "value": "(\"admin_approvals\".\"status\" not in ('approved', 'consumed') or jsonb_array_length(\"admin_approvals\".\"approvals\") = \"admin_approvals\".\"approvals_required\") and (\"admin_approvals\".\"status\" <> 'pending' or jsonb_array_length(\"admin_approvals\".\"approvals\") < \"admin_approvals\".\"approvals_required\")"
+        },
+        "admin_approvals_expires_after_created": {
+          "name": "admin_approvals_expires_after_created",
+          "value": "\"admin_approvals\".\"expires_at\" > \"admin_approvals\".\"created_at\""
+        },
+        "admin_approvals_used_exactly_when_consumed": {
+          "name": "admin_approvals_used_exactly_when_consumed",
+          "value": "(\"admin_approvals\".\"status\" = 'consumed') = (\"admin_approvals\".\"used_at\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.admin_audit_log": {
       "name": "admin_audit_log",
       "schema": "",
@@ -1765,26 +2011,6 @@
           "notNull": true,
           "default": false
         },
-        "policies": {
-          "name": "policies",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "policy_schema_version": {
-          "name": "policy_schema_version",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "policies_version": {
-          "name": "policies_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
@@ -1895,22 +2121,6 @@
         "realms_dynamic_registration_scopes_not_qauth": {
           "name": "realms_dynamic_registration_scopes_not_qauth",
           "value": "NOT jsonb_path_exists(\"realms\".\"dynamic_registration_allowed_scopes\", '$[*] ? (@ like_regex \"^[qQ][aA][uU][tT][hH]:\")')"
-        },
-        "realms_policies_object": {
-          "name": "realms_policies_object",
-          "value": "jsonb_typeof(\"realms\".\"policies\") = 'object'"
-        },
-        "realms_policies_version_not_negative": {
-          "name": "realms_policies_version_not_negative",
-          "value": "\"realms\".\"policies_version\" >= 0"
-        },
-        "realms_policy_schema_version_format": {
-          "name": "realms_policy_schema_version_format",
-          "value": "\"realms\".\"policy_schema_version\" ~ '^[1-9][0-9]*(-rc\\.(0|[1-9][0-9]*))?$'"
-        },
-        "realms_policies_complete": {
-          "name": "realms_policies_complete",
-          "value": "\"realms\".\"policies_version\" = 0 OR (\"realms\".\"policy_schema_version\" IS NOT NULL AND \"realms\".\"access_token_lifespan\" IS NOT NULL AND \"realms\".\"refresh_token_lifespan\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false

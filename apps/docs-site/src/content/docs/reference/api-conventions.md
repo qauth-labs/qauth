@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-26'
+lastVerified: '2026-10-31'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -165,9 +165,12 @@ Every admin route runs behind the same stages, in this order
    A caller without a permission the request needs gets 403 `forbidden`, with an
    `insufficient_scope` challenge when the token's scopes, not the caller's roles, are what is
    missing.
-7. The approval gate. A request classified `security` needs a fresh approval bound to it. Until
-   approvals ship (#512), every such request answers 403 `approval_required` and never runs.
-8. The handler, inside one database transaction. It answers by returning its body: a handler
+7. The approval gate. A request classified `security` runs only with the approval its
+   `QAuth-Approval` header names, filed for exactly this request ([Approvals](#approvals)). Every
+   other one answers 403 `approval_required` and never runs.
+8. The handler, inside one database transaction. The transaction first consumes the approval
+   stage 7 checked; a call that finds it used meanwhile answers 403 `approval_required`. The
+   handler answers by returning its body: a handler
    that sends or hijacks the reply itself fails, so no answer leaves before its change commits.
    The body is serialized inside the transaction, so one its response schema refuses fails the
    call and its change rolls back.
@@ -209,6 +212,90 @@ retried, and the call has no row; its answer is the same refusal or failure. A
 call refused before it reaches a realm within its grants writes no row: one without a valid
 token, one over a request limit, and one that names a realm outside its grants, which is logged
 with the caller instead, so a stranger cannot add rows to another realm's chain.
+
+### Approvals
+
+A security operation runs only with a fresh approval bound to that exact request (ADR-019
+Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approvals/`.
+
+1. The client calls the operation and gets 403 `approval_required`.
+2. It files an approval: `POST /admin/v1-rc.0/realms/{realmId}/approvals` with the operation's id,
+   its path parameters other than `realmId`, its query and its body, and an optional `reason`. The
+   answer, 201, is the approval, `pending`, with `approvalUrl`: the approval page, on the auth
+   server of the realm the requester's account lives in, built from that realm's row. Its path is
+   `/approvals/{realmId}/{approvalId}`, naming the realm the approval acts on, where the page finds
+   it: an operator-realm admin's approval for a tenant realm lives in the tenant realm.
+3. An approver confirms on that page with a factor, or declines. There is no admin route for it.
+   The passkey factor is the only one a deployment will use. Neither it nor the approval page has
+   shipped yet, so no code a deployment runs gives an approval; the one factor that exists is for
+   tests, and is built only in a test run (`VITEST` set or `NODE_ENV=test`), never under
+   `NODE_ENV=production`.
+4. The client reads the approval, `GET /admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}`,
+   until its `status` is `approved`.
+5. It repeats the original call, unchanged, with the header `QAuth-Approval: <approvalId>`. The
+   admin pipeline checks the approval and consumes it in the transaction of the operation, so the
+   operation runs once with it, under the requester's own authorization at that moment.
+
+**What an approval binds.** The server keeps the canonical request: the operation id, the method,
+every path parameter, the query and the body, each as the operation's route parses it, the realm
+and the requester, serialized with the JSON Canonicalization Scheme (RFC 8785). `request_hash` is
+its SHA-256 without the server's nonce; the gate recomputes it from the retried call and refuses
+the call when it differs, so a changed body, path parameter, query, realm or requester finds no
+approval. `op_hash` is its SHA-256 with the nonce, and the challenge an approver's factor signs is
+derived from it, so an approval given for one filing approves nothing else.
+
+**What a security operation's route and handler must do.** The admin listener refuses to boot a
+security operation's route that cannot be bound this way: it needs a renderer, one method, a Zod
+object schema for its path parameters naming every parameter of its URL, and a Zod body schema
+under every method that carries a body; and every admin operation has exactly one route. Its
+handler reads only the parsed path parameters, query and body, whose schemas are deterministic,
+and makes an effect outside the database (a KMS or KEK call, a mail, an outbound request) only
+through an outbox written in its transaction or after the commit, since an operation that rolls
+back leaves its approval usable. The rules in full are on the
+[Security operations](/reference/security-operations/#rules) page.
+
+**Who approves.** A human requester's own fresh step-up is its first approval, and only the
+requester gives it. An approval needs that one approval today. The engine already counts a
+required second approval only from a different account that holds `approvals.approve` on the
+realm; the two-admin rule (#521) will make a second admin mandatory where a realm asks for it, and
+add the rest of ADR-019's eligibility rules (the approver held the security scope before the
+request, no account or credential change in the 7 days before it, a passkey that is not the
+requester's). Service accounts (#522) have no passkey: a human admin will approve in their place.
+Until they ship, every admin API caller is a human account.
+
+**Who reads.** Filing (`approvals.create`) and withdrawing (`approvals.cancel`) take the
+classification of the operation the approval is for: the caller needs every permission it
+declares, and `qauth:admin:security`. Reading (`approvals.get`) needs `approvals.read`, and only
+the requester, an account that gave one of its approvals and an account that may still give one
+read an approval. Anyone else gets 404 `not_found`, exactly as for an id that does not exist. An
+approval's representation holds the operation's path parameters and query, never its body. Its `reason`, `params` and `query` are raw values, not display text; a page shows `display` instead, which is `null` once the approval is no longer open.
+
+**How an approval ends.** It expires 5 minutes after it is filed, a constant. It is `consumed`
+once the operation commits on it; an operation that fails or rolls back leaves it `approved`
+until then. The requester withdraws it with
+`POST /admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}/cancel`, whose `If-Match` names the
+version the approval's `ETag` gave (428 without one, 412 for another version, 409 for an approval
+that is no longer open). An approver may decline it instead (`denied`). A consumed, expired,
+cancelled or denied approval approves nothing. A consumed, cancelled or denied approval no longer
+keeps the operation's body, which may hold a secret: its two hashes are what the audit log binds
+to. No job removes approvals: one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
+
+**What the approver is shown.** The operation, rendered from the stored request, never from text
+the requester wrote: every security operation registers a renderer, which returns typed display
+data, never HTML, and the admin listener refuses to boot a security operation without one. The
+requester's reason is shown apart, as quoted text. Every string is length-capped, and a control,
+bidirectional, format or other default-ignorable character in it is shown escaped (`\u{202E}`), as
+is a private-use or unassigned code point and every space but U+0020, a
+backslash doubled and a combining mark past the third on one character escaped, so the text can
+neither hide nor reorder what the page shows, nor pass for an escape. Every reader of an approval
+gets its display data, so a renderer must never show a secret value of the request: nothing checks it.
+
+**Audit rows.** Every state change writes the admin audit log of the approval's realm: filing and
+withdrawing write the rows of `approvals.create` and `approvals.cancel`; approving and declining
+write `approvals.approve` and `approvals.deny`, the first with the credential that approved; the
+operation's own `succeeded` row lists the approvals it ran on and carries the approval's
+`op_hash` as its request digest. A factor that refuses an approver's answer writes a `denied` row
+of `approvals.approve`.
 
 ### Issuing a family audience
 

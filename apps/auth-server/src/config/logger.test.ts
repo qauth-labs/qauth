@@ -227,6 +227,48 @@ describe('buildLoggerOptions', () => {
   });
 });
 
+describe('the interaction id and the flow cookie in the log (#592)', () => {
+  it('logs neither on the request line, the error line or the unknown-route line', async () => {
+    const captured: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        captured.push(chunk.toString());
+        cb();
+      },
+    });
+
+    const loggerOptions = buildLoggerOptions(baseEnv) as LoggerOptions;
+    const app = Fastify({ logger: { ...loggerOptions, stream } });
+    app.get('/interaction/v1-rc.0/:id', async (request) => {
+      request.log.info({ req: request }, 'read');
+      throw new Error('boom');
+    });
+    app.setNotFoundHandler(answerRouteNotFound);
+
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    const secret = 'Zmxvdy1jb29raWUtc2VjcmV0LW9mLTMyLWJ5dGVzLXg';
+    const cookie = `__Host-qauth_flow=${secret}`;
+    const read = await app.inject({
+      method: 'GET',
+      url: `/interaction/v1-rc.0/${id}`,
+      headers: { cookie },
+    });
+    const missing = await app.inject({
+      method: 'GET',
+      url: `/interaction/v1-rc.0/${id}/nowhere`,
+      headers: { cookie },
+    });
+    await app.close();
+
+    expect(read.statusCode).toBe(500);
+    expect(missing.statusCode).toBe(404);
+    const serialized = captured.join('');
+    expect(serialized).toContain(`/interaction/v1-rc.0/${LOG_REDACT_CENSOR}`);
+    expect(serialized).not.toContain(id);
+    expect(serialized).not.toContain(secret);
+  });
+});
+
 describe('percentEncodingTolerantPattern', () => {
   it('admits each character plain or percent-encoded, in either hex case', () => {
     const pattern = new RegExp(`^${percentEncodingTolerantPattern('a_b')}$`);
@@ -329,6 +371,91 @@ describe('redactLoggedUrl', () => {
   it('censors an empty value without eating the following parameter', () => {
     expect(redactLoggedUrl('/r?response_code=&next=1')).toBe(
       `/r?response_code=${LOG_REDACT_CENSOR}&next=1`
+    );
+  });
+
+  it('censors the interaction id of an Interaction API path, and only the id (#592)', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    expect(redactLoggedUrl(`/interaction/v1-rc.0/${id}`)).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl(`/interaction/v1-rc.0/${id}/answer?x=1`)).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/answer?x=1`
+    );
+    expect(redactLoggedUrl(`/interaction/v1/${id}/personal`)).toBe(
+      `/interaction/v1/${LOG_REDACT_CENSOR}/personal`
+    );
+    // Quoted inside a query value, and a junk id that no route would accept.
+    expect(redactLoggedUrl(`/ui/x?next=/interaction/v1-rc.0/${id}&y=2`)).toBe(
+      `/ui/x?next=/interaction/v1-rc.0/${LOG_REDACT_CENSOR}&y=2`
+    );
+    expect(redactLoggedUrl('/interaction/v1-rc.0/not-an-id/cancel')).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/cancel`
+    );
+    // Percent-encoded, as a `return_to` value carries it, in either case.
+    expect(redactLoggedUrl(`/ui/x?return_to=%2Finteraction%2Fv1-rc.0%2F${id}%2Fanswer&y=2`)).toBe(
+      `/ui/x?return_to=%2Finteraction%2Fv1-rc.0%2F${LOG_REDACT_CENSOR}%2Fanswer&y=2`
+    );
+    expect(redactLoggedUrl(`/x?r=%2finteraction%2fv1-rc.0%2f${id}`)).toBe(
+      `/x?r=%2finteraction%2fv1-rc.0%2f${LOG_REDACT_CENSOR}`
+    );
+    // Spellings the censor does not know: the whole URL is censored.
+    for (const url of [
+      `/%69nteraction/v1-rc.0/${id}/answer`,
+      `/interaction/v1-rc%2E0/${id}`,
+      `/interaction/v1-rc.0/%2E/${id}/personal`,
+      `/interaction/v1-rc.0/x/../${id}`,
+      `/interaction/v1-rc.0/${id}/nowhere`,
+    ]) {
+      expect(redactLoggedUrl(url), url).toBe(LOG_REDACT_CENSOR);
+    }
+    // Empty and dot segments before the id.
+    for (const spacer of ['/', './', '/./', '././/']) {
+      const redacted = redactLoggedUrl(`/interaction/v1-rc.0/${spacer}${id}/personal`);
+      expect(redacted, spacer).not.toContain(id);
+      expect(redacted, spacer).toContain(LOG_REDACT_CENSOR);
+    }
+    // The document and the reserved wallet prefix are not ids.
+    for (const url of [
+      '/interaction/v1-rc.0/openapi.json',
+      '/interaction/v1-rc.0/openapi.json?x=1',
+      '/interaction/v1-rc.0/wallet/return',
+      '/interaction/v1-rc.0/',
+      '/x?r=%2Finteraction%2Fv1-rc.0%2Fopenapi.json',
+    ]) {
+      expect(redactLoggedUrl(url)).toBe(url);
+    }
+  });
+
+  it('censors an unknown spelling of an interaction path even when another escape is malformed (#592)', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    // One malformed escape anywhere must not turn the decoded check off, and
+    // a path encoded twice inside a query value is read as the router would
+    // read it once the value is followed.
+    for (const url of [
+      `/%69nteraction/v1-rc.0/${id}?x=%zz`,
+      `/interaction/v1-rc%2E0/${id}?x=%zz`,
+      `/%69nteraction/v1-rc.0/${id}/%zz`,
+      `/%69nteraction/v1-rc.0/${id}/answer?x=%`,
+      `/ui/x?return_to=%252Finteraction%252Fv1-rc.0%252F${id}%252Fanswer&y=2`,
+      `/ui/x?return_to=%252finteraction%252fv1-rc.0%252f${id}&y=%zz`,
+    ]) {
+      expect(redactLoggedUrl(url), url).toBe(LOG_REDACT_CENSOR);
+    }
+  });
+
+  it('keeps a URL with a malformed escape intact when it names no interaction id', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    for (const url of [
+      '/oauth/authorize?client_id=notes-app&redirect_uri=https%3A%2F%2Fnotes.example.com%2Fcb&x=%zz',
+      '/ui/x?return_to=%252Foauth%252Fauthorize&y=%',
+      '/interaction/v1-rc.0/openapi.json?x=%zz',
+    ]) {
+      expect(redactLoggedUrl(url), url).toBe(url);
+    }
+    // A known spelling keeps its shape: only the id is censored.
+    expect(redactLoggedUrl(`/interaction/v1-rc.0/${id}/answer?x=%zz`)).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/answer?x=%zz`
     );
   });
 
@@ -529,6 +656,79 @@ describe('serializeErrorForLog', () => {
       expect.objectContaining({ query, message: expect.stringContaining('Failed query') }),
     ]);
     expect(serializeErrorForLog(wrapped)['original']).toMatchObject({ query });
+  });
+
+  describe('a Redis error (#592)', () => {
+    // The shapes ioredis 5 builds: every error a command replies with gets
+    // `command = { name, args }` (DataHandler#returnError), and the
+    // `EXECABORT` of a MULTI gets `previousErrors`, the errors of the
+    // commands that failed to queue (transaction.js).
+    class ReplyError extends Error {
+      override name = 'ReplyError';
+    }
+    const record = JSON.stringify({
+      personal: { accounts: ['alice@example.com'] },
+      request: { login_hint: 'alice@example.com', state: 'af0ifjsldkj', nonce: 'n-0S6_WzA2Mj' },
+      transaction: { sid: '44444444-4444-4444-8444-444444444444' },
+    });
+    const key = 'interaction:22222222-2222-4222-8222-222222222222:abc';
+
+    function failedSet(): ReplyError & { command: { name: string; args: unknown[] } } {
+      return Object.assign(
+        new ReplyError('OOM command not allowed when used memory > maxmemory.'),
+        { command: { name: 'set', args: [key, record, 'PXAT', 1_900_000_000_000, 'XX'] } }
+      );
+    }
+
+    it('keeps the name of the failed command and drops its arguments', async () => {
+      const serialized = await logThroughFastify(failedSet());
+
+      expect(serialized).not.toContain('alice@example.com');
+      expect(serialized).not.toContain('af0ifjsldkj');
+      expect(serialized).not.toContain(key);
+      expect(serializeErrorForLog(failedSet())).toEqual({
+        type: 'ReplyError',
+        message: 'OOM command not allowed when used memory > maxmemory.',
+        stack: expect.stringContaining('ReplyError: OOM command not allowed'),
+        name: 'ReplyError',
+        command: { name: 'set' },
+      });
+    });
+
+    it('serializes the previous errors of an EXECABORT the same way', async () => {
+      const execAbort = Object.assign(
+        new ReplyError('EXECABORT Transaction discarded because of previous errors.'),
+        { command: { name: 'exec', args: [] }, previousErrors: [failedSet(), failedSet()] }
+      );
+
+      const serialized = await logThroughFastify(execAbort);
+
+      expect(serialized).not.toContain('alice@example.com');
+      expect(serialized).not.toContain('n-0S6_WzA2Mj');
+      expect(serialized).not.toContain('44444444-4444-4444-8444-444444444444');
+      const parsed = JSON.parse(serialized) as { err: Record<string, unknown> };
+      expect(parsed.err).toMatchObject({
+        type: 'ReplyError',
+        message: 'EXECABORT Transaction discarded because of previous errors.',
+        command: { name: 'exec' },
+        previousErrors: [
+          { type: 'ReplyError', command: { name: 'set' }, message: expect.stringContaining('OOM') },
+          { type: 'ReplyError', command: { name: 'set' }, message: expect.stringContaining('OOM') },
+        ],
+      });
+    });
+
+    it('leaves out a command of any other shape, and keeps a list of plain values', () => {
+      const serialized = serializeErrorForLog(
+        Object.assign(new Error('spawn failed'), {
+          command: `redis-cli SET ${key} ${record}`,
+          hosts: ['redis-1', 'redis-2'],
+        })
+      );
+
+      expect(serialized).not.toHaveProperty('command');
+      expect(serialized['hosts']).toEqual(['redis-1', 'redis-2']);
+    });
   });
 
   it('ends a cycle through error-valued fields', () => {

@@ -327,3 +327,58 @@ export const ASSERTED_IDENTIFIER_MAX_LENGTH = 320;
  * caches within that window.
  */
 export const JWKS_CACHE_CONTROL = 'public, max-age=300';
+
+/**
+ * Hard ceiling on the authorization request an interaction holds (#592),
+ * serialised as JSON. The record is written BEFORE anyone signs in, into the
+ * Redis that also holds sessions and rate-limit counters, so what a caller
+ * puts in it is bounded three ways: by the per-parameter bounds of the
+ * authorize request, by this backstop, and by how long an unanswered record
+ * stays ({@link INTERACTION_UNANSWERED_TTL_MS}).
+ *
+ * 16 KiB, the ceiling of the authorize URL the pending-authorization stash
+ * holds ({@link PENDING_AUTHORIZATION_MAX_URL_BYTES}), holds any realistic
+ * request twice over: the largest plausible one, a 2048-character `state` and
+ * `nonce` and a few RFC 8707 `resource` values, is under 8 KiB. A request
+ * near the schema maximum (ten 2048-character `resource` values, or opaque
+ * values whose every character JSON escapes to six bytes) is refused with
+ * `invalid_request`, as the stash refuses an authorize URL over its ceiling.
+ */
+export const INTERACTION_MAX_REQUEST_BYTES = 16 * 1024;
+
+/**
+ * Hard ceiling on one whole interaction record (#592), serialised: the
+ * request ({@link INTERACTION_MAX_REQUEST_BYTES} at most) plus the current
+ * step and its personal data, which the engine writes. The headroom keeps a
+ * request at its own ceiling from leaving no room for the steps. A first step
+ * that does not fit beside the request refuses the start with
+ * `invalid_request`; a later state that does not fit fails the answer.
+ */
+export const INTERACTION_MAX_RECORD_BYTES = 32 * 1024;
+
+/**
+ * How long an interaction nobody has answered lives (#592): ten minutes from
+ * its creation, or its absolute expiry (`INTERACTION_TTL`) if that is sooner.
+ * The record, its turn and its expiry-index entry are written with this
+ * deadline; the first answer the server processes, which only the browser
+ * holding the flow cookie can send, moves all three to the absolute expiry.
+ * The absolute expiry itself never moves.
+ *
+ * Starting an interaction needs no account, so this is what bounds the Redis
+ * an unauthenticated caller can fill by starting ceremonies and leaving them:
+ * ten minutes of records rather than `INTERACTION_TTL` of them. Past the
+ * deadline the server refuses the interaction as expired, and the expiry
+ * sweep audits it once, as it audits an absolute expiry. Ten minutes is ample
+ * for a person to read the first step and answer it.
+ */
+export const INTERACTION_UNANSWERED_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * How long an interaction record stays in Redis after it expires (#592), at
+ * its absolute expiry or at the deadline of an unanswered one
+ * ({@link INTERACTION_UNANSWERED_TTL_MS}). The server refuses an expired
+ * interaction on every read whatever Redis still holds; the grace only lets
+ * the expiry sweep find the record and audit the step it ended at. Longer
+ * than two sweep intervals.
+ */
+export const INTERACTION_SWEEP_GRACE_MS = 5 * 60 * 1000;

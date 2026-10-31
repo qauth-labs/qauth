@@ -955,6 +955,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test vectors, `test-vectors/interaction/steps.json`, with each transport's
   answer.
 
+- **The interaction record and the flow cookie** ([#592], ADR-019 Decision 6,
+  ADR-017 Decision 6). The server side of one browser ceremony of the
+  Interaction API, for its routes to build on ([#616], [#628]); no route serves
+  it yet. An interaction is a Redis record keyed by the realm and the SHA-256 of
+  a 32-byte random id, so the id is stored nowhere, holding a bounded snapshot of
+  the validated authorization request (at most 16 KiB, as the
+  pending-authorization stash holds, and at most 32 KiB with the first step;
+  refused with `invalid_request` above), the engine transaction, the current
+  step and its personal data, the hash of the flow secret, the creation time and
+  an absolute expiry: `INTERACTION_TTL`, a new advanced key, 30 minutes by
+  default (60 to 7200 seconds). Starting an interaction takes no account, so one
+  nobody answers lives only 10 minutes: its record, turn and expiry-index entry
+  are written with that deadline, and the first answer the server processes
+  (which needs the flow cookie) moves them to the absolute expiry, which never
+  moves. The `__Host-qauth_flow` cookie (`HttpOnly`, `Secure`,
+  `SameSite=Lax`, `Path=/`, no `Domain`) carries the flow secret; a browser
+  holds up to four, one per ceremony. The id alone reads the step's display
+  data. The personal data, an answer, a cancel and a user switch need the
+  cookie. An answer takes the interaction's turn with `GETDEL`, now in the cache
+  utilities (`takeValue`, `takeSession`, `takeCache`), reads the record again
+  and writes the next state, so of two concurrent answers exactly one is
+  processed while the step stays readable; a failure before the next state is
+  written gives the turn back. Authentication creates a new browser session (a
+  new `sid`) and rotates the flow secret; a browser that loses that response
+  retries with the old secret and gets `interaction_expired`, so the ceremony
+  transport ([#616]) must submit credential steps by `fetch` or guard a form
+  against a double submit. A user switch ends the interaction and
+  starts a new one for the same request at the identifier step, with nothing
+  proved carried over and the request's absolute expiry kept. An unknown,
+  expired or finished interaction and a wrong cookie get one
+  `interaction_expired` answer (410), the same bytes whatever the cause. Every
+  problem document on an `/interaction/<version>/` path, `404` included, carries
+  no `instance`, `detail` or `errors`. Four new events, `interaction.created`,
+  `.answered`, `.cancelled` and `.expired`, name an interaction by a random
+  reference, never by its id or cookie; a sweep job on the `web` role audits
+  each expiry once, the 10-minute one of an unanswered interaction included,
+  claiming each in one Redis transaction so a dropped connection cannot lose
+  one, and a finish or cancel the sweep beat is answered as expired. The
+  request log now censors the interaction id in an `/interaction/<version>/`
+  path, plain or percent-encoded (once or twice), whatever else in the URL is
+  malformed, and a Redis error in the log names its command but no longer
+  carries the command's arguments.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -1071,9 +1113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
   the caller's grants and scopes, the classification and permission check, an
   approval gate, the handler inside one database transaction, and the audit
-  row. Until approvals ship ([#512]) the gate fails closed: every request
-  classified `security` answers the new `approval_required` problem code (403)
-  and never runs. A call that reaches a realm within the caller's grants writes
+  row. A request classified `security` that carries no approval bound to it
+  ([#512]) answers the new `approval_required` problem code (403) and never
+  runs. A call that reaches a realm within the caller's grants writes
   exactly one admin audit row, reads included: `succeeded` in the handler's
   transaction, or `denied` or `failed` in a new one with no diff (a `denied`
   or `failed` row that cannot be written is logged instead). A realm
@@ -1092,6 +1134,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+
+- **Approvals for security operations, bound to the exact request** ([#512],
+  ADR-019 Decision 7). The admin pipeline's approval gate, which refused every
+  security operation, now lets one run with the approval its `QAuth-Approval`
+  header names. The client files the approval with
+  `POST /admin/v1-rc.0/realms/{realmId}/approvals` (the operation's id, path
+  parameters, query and body, and an optional reason), reads it with
+  `GET …/approvals/{approvalId}` and may withdraw it with
+  `POST …/approvals/{approvalId}/cancel` (`If-Match` on the version its `ETag`
+  gave). Migration 0045 adds `admin_approvals`. The server keeps the canonical
+  request (operation id, method, path parameters, query, body, realm and
+  requester, RFC 8785): `request_hash` without the server's nonce, which the
+  gate recomputes from the retried call, and `op_hash` with it, which an
+  approver's factor signs a challenge derived from. The retry consumes the
+  approval with one conditional update in its own transaction, so it runs once,
+  and an operation that rolls back leaves the approval usable until it expires,
+  five minutes after it was filed. Filing and withdrawing take the
+  classification of the operation they name, reading needs `approvals.read`,
+  and anyone but the requester and an eligible approver gets 404. A human
+  requester's own fresh step-up is the one approval an operation needs today;
+  the engine counts a required second approval only from a different account
+  that holds `approvals.approve`, which the two-admin rule ([#521]) will
+  require where a realm asks, with ADR-019's other eligibility rules. Approving
+  happens through a factor (the `ApprovalFactor` interface), never through an
+  admin route. Neither the passkey factor nor the approval page has shipped,
+  so no code a deployment runs gives an approval; the one factor that exists is
+  for tests and is built only in a test run, never under
+  `NODE_ENV=production`. The answer
+  carries `approvalUrl`, `/approvals/{realmId}/{approvalId}` on the requester
+  realm's issuer, built from its row. Every security
+  operation registers a renderer, and the admin listener refuses to boot one
+  without it: the approver sees typed display data rendered from the stored
+  request, every string length-capped with its control, bidirectional, format
+  and other default-ignorable characters, private-use and unassigned code
+  points and spaces other than U+0020 shown escaped and its backslashes
+  doubled, and the requester's reason apart, as quoted text. A consumed,
+  cancelled or denied approval drops the operation's body, which may hold a
+  secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
+  Filing, approving, declining, withdrawing and consuming each write the admin
+  audit log; the operation's own row lists the approvals it ran on.
 
 ### Changed
 
@@ -1858,6 +1940,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#516]: https://github.com/qauth-labs/qauth/issues/516
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
+[#521]: https://github.com/qauth-labs/qauth/issues/521
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#527]: https://github.com/qauth-labs/qauth/issues/527
@@ -1875,9 +1958,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
 [#591]: https://github.com/qauth-labs/qauth/issues/591
+[#592]: https://github.com/qauth-labs/qauth/issues/592
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
+[#628]: https://github.com/qauth-labs/qauth/issues/628
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ### Fixed
