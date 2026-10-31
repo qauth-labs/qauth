@@ -196,6 +196,31 @@ scenarios:
           json: { email: '{account.email}', password: '{account.password}' }
         save: { token: body.access_token }
 
+  reenabledAccount:
+    # a token minted before the account was disabled and enabled again (#748)
+    given:
+      host: realm
+      overLimit: false
+      header: bearer
+      signature: valid
+      expired: false
+      issuedFor: portal
+      subject: reenabled
+      dpopBound: false
+      ownSession: false
+    as: throwaway
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: '{account.password}' }
+        save: { token: body.access_token }
+      - run: # disabled and enabled again by hand, as an operator does
+          - psql
+          - '{databaseUrl}'
+          - --command
+          - "UPDATE users SET enabled = false WHERE id = '{account.sub}'; UPDATE users SET enabled = true WHERE id = '{account.sub}'"
+
   unknownHost:
     given:
       host: unknown

@@ -18,9 +18,10 @@
  * server's clock, a refresh token's and a code's `created_at` the database's,
  * rounded to the second, as `not_valid_before` is the database's to the
  * millisecond. So a credential issued up to {@link NOT_VALID_BEFORE_MARGIN_MS}
- * after the disablement counts as issued before it. That costs nothing: no
- * credential is issued to a disabled account, so only one issued within that
- * second after the account was enabled again is refused too.
+ * after the disablement counts as issued before it, and an access token, whose
+ * `iat` drops the milliseconds, up to two seconds after. That costs nothing:
+ * no credential is issued to a disabled account, so only one issued within
+ * those seconds after the account was enabled again is refused too.
  */
 
 /** What these checks read of a `users` row. */

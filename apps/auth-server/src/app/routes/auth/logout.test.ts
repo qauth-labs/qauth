@@ -26,6 +26,7 @@ import {
   createBrowserSessionFixture,
 } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
+import { INACTIVE_SUBJECT_DESCRIPTION } from '../../helpers/token-subject';
 import { emitUserEvent } from '../../helpers/user-events';
 import logoutRoute from './logout';
 
@@ -307,6 +308,59 @@ describe('POST /auth/logout', () => {
       'logout'
     );
     expect(result).toMatchObject({ success: true });
+  });
+
+  it('still logs a disabled user out with a token minted before the disablement (#748)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    const disabledAt = Date.now() - 60_000;
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...VALID_USER,
+      enabled: false,
+      notValidBefore: disabledAt,
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ iat: Math.floor((disabledAt - 60_000) / 1000) })
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(logoutRequest(), createReply())).resolves.toMatchObject({
+      success: true,
+    });
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledOnce();
+  });
+
+  it('ends nothing of an account enabled again for a token minted before it was disabled (#748)', async () => {
+    // Whoever held the token while the account was disabled must not sign the
+    // owner out of the sessions started since.
+    const { fastify, ctx, sessions } = createFastifyStub();
+    const disabledAt = Date.now() - 60_000;
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...VALID_USER,
+      enabled: true,
+      notValidBefore: disabledAt,
+    });
+    await signedIn(sessions, 'sess-new');
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ iat: Math.floor((disabledAt - 60_000) / 1000) })
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(logoutRequest(), createReply())).rejects.toMatchObject({
+      statusCode: 401,
+      message: INACTIVE_SUBJECT_DESCRIPTION,
+    });
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+    expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.service.sessions.has('sess-new')).toBe(true);
   });
 
   it('denylists the token it was called with for the rest of its lifetime', async () => {

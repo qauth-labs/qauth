@@ -930,10 +930,15 @@ async function handleAuthorizationCode(
   // disabled in between must not receive tokens for it — the same gate the
   // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14) —
   // even when the account was enabled again before the code is redeemed
-  // (#748). The code is burned all the same, so it cannot be retried; a code
-  // a concurrent request spent first is burned already, and the answer is the
-  // same.
-  const accountRefusal = accountCredentialRefusal(user, authCode.createdAt);
+  // (#748). The earlier of the code and the sign-in behind it: a code the
+  // previous release minted from a session older than the disablement is no
+  // newer a grant than that session. The code is burned all the same, so it
+  // cannot be retried; a code a concurrent request spent first is burned
+  // already, and the answer is the same.
+  const accountRefusal = accountCredentialRefusal(
+    user,
+    Math.min(authCode.createdAt, authCode.authTime ?? authCode.createdAt)
+  );
   if (accountRefusal !== null) {
     await spendGrant(() => fastify.repositories.authorizationCodes.markUsed(authCode.id));
     await emitRequestFailed(ctx, 'invalid_grant', accountRefusal, user.id);
@@ -1417,15 +1422,21 @@ async function handleRefreshToken(
   }
 
   // Load the subject user; reject if missing or disabled (RFC 9700 §4.14),
-  // or if the token was issued before the account was last disabled (#748):
-  // a token nobody used while the account was disabled does not come back
-  // when it is enabled again.
+  // or if the token's family began before the account was last disabled
+  // (#748): a token nobody used while the account was disabled does not come
+  // back when it is enabled again. The family's start, not this token's: a
+  // rotation the previous release made after the account was enabled again,
+  // or one that read the account as enabled while the disabling transaction
+  // was still open, is no newer a grant than the token it replaced.
   const user = await fastify.repositories.users.findById(ctx.realmId, storedToken.userId);
   if (!user) {
     await emitRequestFailed(ctx, 'invalid_grant', 'user_not_found');
     throw new InvalidGrantError('Invalid or expired refresh token');
   }
-  const accountRefusal = accountCredentialRefusal(user, storedToken.createdAt);
+  const accountRefusal = accountCredentialRefusal(
+    user,
+    Math.min(storedToken.familyCreatedAt, storedToken.createdAt)
+  );
   if (accountRefusal !== null) {
     // Burned all the same; a token a concurrent request revoked first is
     // burned already, and the answer is the same.
@@ -2470,12 +2481,17 @@ async function handleJwtBearer(
     throw new InvalidGrantError('the presented assertion is not acceptable');
   }
 
+  // An assertion issued before the account was last disabled is refused as a
+  // disabled account's is (#748), whatever the account's state now.
   const user = await fastify.repositories.users.findById(realmId, credential.userId);
-  if (!user || !user.enabled) {
+  const accountRefusal = user
+    ? accountCredentialRefusal(user, assertion.issuedAt * 1000)
+    : 'user_not_found';
+  if (!user || accountRefusal !== null) {
     await emitRequestFailed(
       ctx,
       'invalid_grant',
-      user ? 'user_disabled' : 'user_not_found',
+      accountRefusal ?? 'user_not_found',
       user?.id ?? null
     );
     throw new InvalidGrantError('the presented assertion is not acceptable');

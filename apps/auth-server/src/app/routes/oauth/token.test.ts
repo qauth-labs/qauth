@@ -3004,6 +3004,34 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
   });
 
+  // A code the previous release minted after the account was enabled again,
+  // from a session older than the disablement: the sign-in behind it counts.
+  it('rejects a new code minted from a sign-in older than the last disablement (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, authCode, user } = setupAuthCodeStub();
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
+      ...authCode,
+      authTime: notValidBefore - 60_000,
+      createdAt: notValidBefore + 60_000,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'issued_before_disablement' }),
+    ]);
+  });
+
   // ADR-007 §2 (#184): the authorization_code grant enforces the agent's
   // CURRENT cap, like every other grant. A code approved under agent:exec must
   // not redeem into agent:exec after the operator lowers the cap.
@@ -3422,7 +3450,11 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     );
     (
       fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
-    ).mockResolvedValue({ ...storedToken, createdAt: notValidBefore + 60_000 });
+    ).mockResolvedValue({
+      ...storedToken,
+      familyCreatedAt: notValidBefore + 30_000,
+      createdAt: notValidBefore + 60_000,
+    });
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       ...user,
       notValidBefore,
@@ -3442,6 +3474,43 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     );
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
+  });
+
+  // A rotation made after the account was enabled again, by a node of the
+  // previous release or while the disabling transaction was still open, gives
+  // the token a new `created_at`; its family still began before.
+  it('revokes a rotated refresh token whose family began before the user was last disabled (#748)', async () => {
+    const notValidBefore = Date.now() - 600_000;
+    const { fastify, ctx, storedToken, user, confidentialClient } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({
+      ...storedToken,
+      familyCreatedAt: notValidBefore - 60_000,
+      createdAt: notValidBefore + 60_000,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      notValidBefore,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).rejects.toBeInstanceOf(
+      InvalidGrantError
+    );
+    expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledExactlyOnceWith(
+      storedToken.id,
+      'issued_before_disablement'
+    );
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      { grantType: 'refresh_token', error: 'invalid_grant', reason: 'issued_before_disablement' },
+    ]);
   });
 
   it('records the rotated access token against the family, inside the rotation', async () => {
@@ -5955,6 +6024,47 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     await expect(
       invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
     ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects an assertion issued before its user was last disabled, as for a disabled user (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    // Issued two minutes ago, still within its lifetime; the account was
+    // disabled a minute ago and is enabled again.
+    const now = Math.floor(Date.now() / 1000);
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: (now - 60) * 1000,
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: now - 120, exp: now + 60 }))
+      )
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'issued_before_disablement' }),
+    ]);
+  });
+
+  it('redeems an assertion issued after its user was enabled again (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: Date.now() - 600_000,
+    });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).resolves.toMatchObject({ access_token: 'ema.access.jwt' });
   });
 
   it('rejects a requested scope wider than the assertion authorized', async () => {
