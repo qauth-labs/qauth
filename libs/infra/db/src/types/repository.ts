@@ -62,6 +62,9 @@ export type UpdateOAuthClient = Partial<
     | 'idJagTargets'
     | 'webauthnAllowedOrigins'
     | 'dpopBoundAccessTokens'
+    // #593: the verified domain is admin state (`clients.update`, a security
+    // operation), so no owner or self-registration path may write it.
+    | 'verifiedDomain'
   >
 > & {
   updatedAt?: number;

@@ -137,4 +137,13 @@ describe('UpdateOAuthClient', () => {
     const owner: UpdateOAuthClient = { enabled: true };
     expect([lift, clear, owner]).toHaveLength(3);
   });
+
+  // #593: only an admin sets the domain a screen shows first for a client.
+  it('cannot carry a verified domain', () => {
+    // @ts-expect-error -- `verifiedDomain` is admin state, not an update field.
+    const verify: UpdateOAuthClient = { verifiedDomain: 'app.example.com' };
+    // @ts-expect-error -- nor can an update clear it.
+    const unverify: UpdateOAuthClient = { verifiedDomain: null };
+    expect([verify, unverify]).toHaveLength(2);
+  });
 });

@@ -4,6 +4,7 @@ import {
   EVENT_RETENTION_MAX_DAYS,
   USER_EVENT_RETENTION_DEFAULT_DAYS,
   USER_EVENT_RETENTION_MIN_DAYS,
+  VERIFIED_DOMAIN_PATTERN,
 } from '@qauth-labs/shared-validation';
 import { relations, sql } from 'drizzle-orm';
 import {
@@ -596,6 +597,28 @@ export const oauthClients = pgTable(
      * could clear it could ask for bearer tokens its operator meant to refuse.
      */
     dpopBoundAccessTokens: boolean('dpop_bound_access_tokens').notNull().default(false),
+    /**
+     * The domain an admin verified for this client (ADR-019 Decision 6, issue
+     * #593): what consent, device-code entry, logout and the account console
+     * show FIRST for a client an admin registered, above the name the client
+     * declared. Stored as a DNS name of two or more labels in its ASCII
+     * (punycode) form, lower case, no port and no IP address
+     * (`VERIFIED_DOMAIN_PATTERN` in shared-validation, checked below). NULL
+     * (every row until an admin sets one) means nothing is verified: the
+     * screen says the app is unverified and shows where the code goes.
+     *
+     * Read only for an operator-provisioned client (`provisioned_by_operator`),
+     * so an owner who changes the redirect URIs, which clears that marker, also
+     * stops the domain from showing. A CIMD client's verified domain is the
+     * host of its client id URL, never this column.
+     *
+     * ADMIN-SET, NOT SELF-ASSERTED. Setting it is a security operation of
+     * `clients.update` (`qauth:admin:security`, ADR-019 Decision 7); until the
+     * admin API ships, only the `db:seed-oauth-clients` manifest writes it.
+     * Dynamic registration, CIMD materialisation and `/api/clients` never name
+     * it, and `UpdateOAuthClient` excludes it, so no client can verify itself.
+     */
+    verifiedDomain: varchar('verified_domain', { length: 253 }),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -618,6 +641,13 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_webauthn_allowed_origins_is_array',
       sql`jsonb_typeof(${t.webauthnAllowedOrigins}) = 'array'`
+    ),
+    // #593: the stored form of a verified domain, so a value written by hand
+    // can never reach a screen in any other form. The same expression as
+    // `VERIFIED_DOMAIN_PATTERN` in shared-validation.
+    check(
+      'oauth_clients_verified_domain_form',
+      sql`${t.verifiedDomain} IS NULL OR ${t.verifiedDomain} ~ ${sql.raw(`'${VERIFIED_DOMAIN_PATTERN}'`)}`
     ),
   ]
 );

@@ -271,4 +271,56 @@ describe('isCimdClientIdShape', () => {
       expect(manifestSchema.safeParse(dpopClient(value)).success).toBe(false);
     });
   });
+
+  describe('verified_domain (#593)', () => {
+    const verifiedClient = (value: unknown) => ({
+      realm: 'master',
+      clients: [
+        {
+          client_id: 'notes',
+          name: 'Notes',
+          grant_types: ['authorization_code'],
+          ...(value === undefined ? {} : { verified_domain: value }),
+        },
+      ],
+    });
+
+    it('stores the domain lower case and in its xn-- form, and leaves it out when omitted', () => {
+      expect(
+        manifestSchema.parse(verifiedClient('Notes.Example.com')).clients?.[0].verified_domain
+      ).toBe('notes.example.com');
+      expect(
+        manifestSchema.parse(verifiedClient('bücher.example')).clients?.[0].verified_domain
+      ).toBe('xn--bcher-kva.example');
+      expect(
+        manifestSchema.parse(verifiedClient(undefined)).clients?.[0].verified_domain
+      ).toBeUndefined();
+    });
+
+    it.each([
+      ['a URL', 'https://notes.example.com'],
+      ['a port', 'notes.example.com:443'],
+      ['an IP address', '192.0.2.1'],
+      ['a single label', 'intranet'],
+    ])('refuses %s, naming the entry', (_name, value) => {
+      const result = manifestSchema.safeParse(verifiedClient(value));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain(`"${value}"`);
+    });
+
+    it('refuses it on a CIMD entry, whose verified domain is the host of its client id', () => {
+      expect(
+        manifestSchema.safeParse({
+          realm: 'master',
+          cimd_clients: [
+            {
+              client_id: 'https://client.example.com/c',
+              scopes: [],
+              verified_domain: 'other.example.com',
+            },
+          ],
+        }).success
+      ).toBe(false);
+    });
+  });
 });

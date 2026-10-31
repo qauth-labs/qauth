@@ -18,5 +18,7 @@ export type * from './lib/security-effects';
 export * from './lib/security-effects';
 export type * from './lib/url';
 export * from './lib/url';
+export type * from './lib/verified-domain';
+export * from './lib/verified-domain';
 export type * from './lib/webauthn-origin';
 export * from './lib/webauthn-origin';

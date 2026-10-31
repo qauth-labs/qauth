@@ -5,9 +5,11 @@
  * it, like `client-suspension.ts`.
  */
 import {
+  InvalidVerifiedDomainError,
   InvalidWebAuthnOriginError,
   isReservedAudience,
   isReservedQauthScope,
+  normaliseVerifiedDomain,
   normaliseWebAuthnOrigin,
 } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
@@ -59,6 +61,20 @@ const webauthnOriginZ = z.string().transform((value, ctx) => {
   }
 });
 
+/**
+ * The domain the operator verified for the client (#593), stored in the form
+ * the screens show it: lower case, `xn--` labels for an internationalised name.
+ */
+const verifiedDomainZ = z.string().transform((value, ctx) => {
+  try {
+    return normaliseVerifiedDomain(value);
+  } catch (error) {
+    if (!(error instanceof InvalidVerifiedDomainError)) throw error;
+    ctx.addIssue({ code: 'custom', message: `"${value}": ${error.message}` });
+    return z.NEVER;
+  }
+});
+
 export const clientSpecSchema = z
   .object({
     client_id: z.string().min(1).max(255),
@@ -104,6 +120,13 @@ export const clientSpecSchema = z
     // refused while DPOP_ENABLED is on. Operator-set only, like
     // `max_agent_mode`: no registration path accepts it. Omitted ⇒ false.
     dpop_bound_access_tokens: z.boolean().optional(),
+    // ADR-019 Decision 6 (#593): the domain consent, device-code entry, logout
+    // and the account console show first for this client, above the name it
+    // declares. Admin-set only: setting it is a security operation of the
+    // admin API (`clients.update`), and until that ships this manifest is the
+    // only path. No registration path accepts it. Omitted ⇒ NULL ⇒ the
+    // screens say the app is unverified.
+    verified_domain: verifiedDomainZ.optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be

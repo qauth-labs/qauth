@@ -219,6 +219,9 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     // RFC 9449 §5.2 (#480): refuse this client's token requests without a
     // DPoP proof while DPOP_ENABLED is on. false = DPoP stays optional.
     dpopBoundAccessTokens: spec.dpop_bound_access_tokens ?? false,
+    // ADR-019 Decision 6 (#593): the domain the screens show first, normalised
+    // by the manifest schema. NULL = the screens say the app is unverified.
+    verifiedDomain: spec.verified_domain ?? null,
     enabled: true,
     // The operator wrote this client, redirect URIs included, so it is the one
     // kind that receives authorization errors by automatic redirect
@@ -255,6 +258,8 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     jwksUri: spec.jwks_uri ?? null,
     webauthnAllowedOrigins: Array.from(new Set(spec.webauthn_allowed_origins ?? [])),
     dpopBoundAccessTokens: spec.dpop_bound_access_tokens ?? false,
+    // Removed from the manifest ⇒ cleared, like every other operator field.
+    verifiedDomain: spec.verified_domain ?? null,
     // A rotation rewrites every field from the manifest, redirect URIs
     // included, so the operator now vouches for the row as it stands
     // (ANT-2026-O8U3P920). This is also how an operator marks a client the
