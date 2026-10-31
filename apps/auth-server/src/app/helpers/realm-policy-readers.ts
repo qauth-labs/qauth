@@ -1,3 +1,7 @@
+import type { RealmPolicyStoreOfRealms } from '@qauth-labs/fastify-plugin-realm-policy';
+
+import type { RealmRow } from './request-realm';
+
 /**
  * The realm policies the auth server reads from the realm row (ADR-019
  * Decision 10, #516), by their path in the realm policy schema.
@@ -19,3 +23,26 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // `resolveEnvironmentPolicy` (ADR-008): the realm's environment ceiling.
   'posture.maxEnvironmentLaxity',
 ]);
+
+/**
+ * A realm's dynamic registration allowlist (#516), which `/oauth/register`
+ * and the clients API cap a client's scopes with. A realm that has its
+ * policies keeps the list in its row. One that has none yet (counter 0: from
+ * before migration 0046, or created by a node of the previous release during
+ * a rolling upgrade) reads as its fill will leave it: the list its row holds
+ * when it holds a scope, the environment's seed otherwise.
+ *
+ * Nothing is written here. The boot step stores the fill, the first node to
+ * boot winning, so a request can neither overwrite that fill with its own
+ * node's environment nor give an empty list a scope.
+ *
+ * @throws PolicyValidationError when the fill of a realm with no policies is
+ *   not a valid policy document, such as a scope written into its row by hand
+ */
+export function dynamicRegistrationScopesOf(
+  policies: Pick<RealmPolicyStoreOfRealms, 'ofRealm'>,
+  realm: RealmRow
+): string[] {
+  if (realm.policiesVersion !== 0) return [...(realm.dynamicRegistrationAllowedScopes ?? [])];
+  return [...policies.ofRealm(realm).policies.registration.dynamicRegistrationAllowedScopes];
+}

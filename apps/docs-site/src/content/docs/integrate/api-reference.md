@@ -376,10 +376,11 @@ Key contract facts:
 - Tokens carry `iss`, `aud` (RFC 8707 resource binding), `exp`, `iat`, and `scope`.
 - `client_credentials` tokens set `sub = client_id` and issue **no** refresh token.
 - Scopes are **deny-by-default** (client allowlist; DCR clients capped to the
-  realm's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`). The `qauth:` scope namespace
-  is QAuth's own, the admin API's scopes among them: no realm allowlist holds
-  one, so dynamic registration drops one, a CIMD document's is ignored, and
-  discovery does not list them ([admin permissions](/reference/admin-permissions/)).
+  realm's allowlist, which `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` seeds). The
+  `qauth:` scope namespace is QAuth's own, the admin API's scopes among them: no
+  realm allowlist holds one, so dynamic registration drops one, a CIMD
+  document's is ignored, and discovery does not list them
+  ([admin permissions](/reference/admin-permissions/)).
 - The `urn:ietf:params:oauth:grant-type:token-exchange` grant (RFC 8693, ADR-007 §2)
   lets an **agent** client delegate on behalf of a user: `sub` stays the user and
   an `act` claim names the agent (nested for chained delegation). Agent-only and

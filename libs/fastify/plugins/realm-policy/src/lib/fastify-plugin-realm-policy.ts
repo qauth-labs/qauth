@@ -42,7 +42,10 @@ export interface RealmPolicyPluginOptions {
    * The realms repository the store reads and writes through: the database
    * plugin's `fastify.repositories.realms`, which every service role builds.
    */
-  readonly realms: Pick<RealmsRepository, 'findById' | 'listPolicyRecords' | 'writePolicies'>;
+  readonly realms: Pick<
+    RealmsRepository,
+    'findById' | 'listPolicyRecords' | 'lockPolicyRecord' | 'writePolicies'
+  >;
   /** Where secret fields are kept (#529). Absent, every write of a secret is refused. */
   readonly secrets?: RealmSecretStore<DbClient>;
 }

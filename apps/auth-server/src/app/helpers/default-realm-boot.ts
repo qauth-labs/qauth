@@ -58,7 +58,10 @@ import {
  *    warning that the key only seeds new realms and is ignored when the server
  *    reads its policy from the realm row, and otherwise a line that the
  *    stored policy ignores it but the server still applies it to every realm
- *    until that policy moves to the row (`realm-policy-readers.ts`).
+ *    until that policy moves to the row (`realm-policy-readers.ts`), and that
+ *    the stored value applies from then on, whatever the key says. For each
+ *    realm step 3 filled, a warning names each field its row kept that
+ *    differs from the environment's seed (the ceiling, a non-empty allowlist).
  *
  * All of it runs in one transaction under the realm provisioning lock, so nodes
  * that start together do it one at a time: the first creates the realm, the
@@ -177,10 +180,26 @@ export function seedKeyIgnoredWarning(key: string, realmName: string, path: stri
  * Logged once per boot for each seed key the environment sets while the
  * default realm already has its policies, but whose policy the server does
  * not read from the realm row yet (#516): the stored policy ignores the key,
- * and the server still applies it to every realm, so it must stay set.
+ * and the server still applies it to every realm, so it must stay set. A
+ * change of the key never reaches the stored value, which applies once the
+ * policy's area moves to the row (#527, #528, #529, #534): a key tightened in
+ * the meantime would loosen again then, so the line says to change the
+ * stored policy along with it.
  */
 export function seedKeyStillAppliedNote(key: string, realmName: string, path: string): string {
-  return `${key} only seeds new realms and is ignored by the stored policies of the realm "${realmName}", whose ${path} stays as stored; the server still applies ${key} to every realm until it reads that policy from the realm row, so keep it set`;
+  return `${key} only seeds new realms and is ignored by the stored policies of the realm "${realmName}", whose ${path} stays as stored: a change of ${key} never reaches it. The server still applies ${key} to every realm until it reads that policy from the realm row, so keep it set; once it does, the stored ${path} applies and ${key} is ignored, so change the stored policy along with ${key}`;
+}
+
+/**
+ * Logged once, as a warning, for each field the boot's fill kept from a
+ * realm's row although the environment seeds another value (#516): the
+ * environment ceiling, or a dynamic registration allowlist that holds a scope.
+ * The server read the row's value before the policies existed, so the fill
+ * keeps it rather than the seed, and the operator learns the realm does not
+ * follow the environment there.
+ */
+export function keptFromRowWarning(realmName: string, path: string): string {
+  return `realm policies filled from the environment, but the realm "${realmName}" kept its ${path} from its row, which differs from the environment's seed: the server read that value before, and the realm row owns it from now on`;
 }
 
 /** A seed key the environment sets, and whether the server reads its policy from the realm row. */
@@ -288,9 +307,25 @@ export async function bootDefaultRealm(
 
   for (const filled of result.policySeeding.filled) {
     deps.log.info(
-      { realm: filled.realmName, realmId: filled.realmId },
+      {
+        realm: filled.realmName,
+        realmId: filled.realmId,
+        keptFromRow: filled.keptFromRow.map((kept) => kept.path),
+      },
       'realm policies filled from the environment: the realm row owns them from now on'
     );
+    for (const { path } of filled.keptFromRow.filter((kept) => kept.differsFromSeed)) {
+      const key = settings.seedKeysSet?.find((set) => set.path === path)?.key;
+      deps.log.warn(
+        {
+          realm: filled.realmName,
+          realmId: filled.realmId,
+          policy: path,
+          ...(key === undefined ? {} : { variable: key }),
+        },
+        keptFromRowWarning(filled.realmName, path)
+      );
+    }
   }
   for (const completed of result.policySeeding.completed) {
     deps.log.info(

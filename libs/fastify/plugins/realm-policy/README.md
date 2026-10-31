@@ -24,7 +24,9 @@ await fastify.policyStore.seedRealms(tx); // the default realm's boot step
 The storage (`createRealmPolicyStorage`) reads a row through `realmPolicyRecord`, which joins the
 four policy columns and `realms.policies` into one document, and writes through the realms
 repository's `writePolicies`, which splits it again with `UPDATE ... WHERE policies_version =
-<expected>`.
+<expected>`. A write first reads the row locked (`lockPolicyRecord`, `SELECT ... FOR UPDATE`): the
+counter of a realm with no policies stays 0 through a plain write of its row, which the fill must
+not overwrite.
 
 ## Tests
 
@@ -34,5 +36,5 @@ pnpm nx test-integration fastify-plugin-realm-policy  # against Postgres (Docker
 ```
 
 The integration suite holds the four column-backed fields round-tripping, a stale expected version
-changing nothing, two nodes filling a realm at once leaving one document, and a secret staying out
-of the realm row.
+changing nothing, two nodes filling a realm at once leaving one document, a fill keeping a plain
+write of the row it waited on, and a secret staying out of the realm row.
