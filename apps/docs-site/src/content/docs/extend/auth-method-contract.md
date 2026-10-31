@@ -75,10 +75,11 @@ engine: verify(result) ──► VerifiedIdentity, checked
 1. **Start.** The engine calls `start()`. The method answers where the browser goes and the
    transaction it needs back: a fresh `state`, a `nonce`, a PKCE verifier. The engine checks the
    answer (`startUpstreamStep`): the redirect is an absolute `https` URL with no credentials and no
-   fragment, and the transaction is JSON data of at most 4096 bytes.
+   fragment, and the transaction is an object of JSON data of at most 4096 bytes.
 2. **Callback.** The provider sends the browser back to one of the method's callback routes. The
    host takes the transaction the flow cookie names, once. A request with none (no flow cookie,
-   another interaction, a replay) ends as `transaction_mismatch` in the host: the method never
+   another interaction, a replay; anything the host's store answers that is not an object reads
+   as none) ends as `transaction_mismatch` in the host: the method never
    runs for it, so it never spends the code. Otherwise the host hands the transaction to the
    route's handler, which checks `state` against it before it does anything else (a `state` that
    is missing, empty, repeated or another start's is a `transaction_mismatch` too), and answers
@@ -87,7 +88,8 @@ engine: verify(result) ──► VerifiedIdentity, checked
    `invalid_response`, `upstream_unavailable`).
 3. **Identity.** The engine (`completeUpstreamStep`) passes a `result` to `verify()`, checks the
    identity it resolves (an `externalSub` of 1 to 255 characters with no control character, an
-   assurance level, raw claims of JSON data within 64 KiB, which it copies and freezes), then
+   assurance level, raw claims of JSON data within 64 KiB, which it copies and freezes; a claim
+   that is `undefined` or a `Date` is not JSON data and makes the answer a fault), then
    takes the attributes. Every attribute's `source` must equal
    the method's `type`: a method cannot write attributes under another source, such as `wallet`,
    which outranks every other in claim resolution. A `verify()` rejection ends the step as
@@ -134,9 +136,10 @@ There are two kinds of route:
 
 - a **callback** route gets the query, the form and the taken transaction, and answers an outcome
   that goes to the engine;
-- a **bounce** route gets no transaction and may only send the browser to one of the method's own
-  `GET` callback routes on the same origin. It is for a provider's `form_post`, which arrives
-  cross-site without the `SameSite=Lax` flow cookie.
+- a **bounce** route gets no transaction and no context, and may only send the browser to one of
+  the method's own `GET` callback routes on the same origin. It is for a provider's `form_post`,
+  which arrives cross-site without the `SameSite=Lax` flow cookie. Anyone can send that POST, so
+  the code it runs holds no egress client, no signer and no config.
 
 A route has no `HEAD` twin, a `POST` route reads only a urlencoded form (a JSON body reaches the
 method as an empty form), and a method sees at most 64 parameters, each at most 8192 characters.
@@ -153,7 +156,9 @@ The provider registry holds AuthMethods beside plain providers, in one `type` sp
 `resolveAuthMethod(type)` finds only an AuthMethod, `findAuthMethod(type)` answers `undefined`
 for a type that came from a request and names none, and `authMethods()` lists them for the
 mount.
-A provider that carries a `contract` member is held to the whole contract at registration, so a
+The registry keeps a frozen snapshot of each method, read once and validated as kept: the `type`
+it checked, the routes it mounts and the members the engine calls cannot change afterwards. A
+provider that carries a `contract` member is held to the whole contract at registration, so a
 method written against another contract version, with a route that could leave its prefix, or
 under a reserved type, fails the boot, and so does a duplicate `type`.
 `createConfiguredProviders` takes the methods to register (`authMethods`) and appends them after
@@ -189,17 +194,23 @@ check the method failed:
   transactions;
 - the callback, with its transaction, ends in an identity whose attributes carry the method's
   `type`, and a second sign-in of the same person resolves the same `externalSub`;
-- the callback carries a value of the authorization request (`state`) that binds it to its
-  transaction; without it, with it empty or repeated, and with another start's transaction, the
-  callback never gives a result and never calls the provider;
+- the callback carries back a value of its own start that binds it to its transaction (`state`:
+  a value one start sent the provider and another did not, in the redirect or in a body the method
+  posted, as a pushed authorization request does). At least one such value binds: without it, with
+  it empty or repeated, the callback never gives a result and never calls the provider, and the
+  value is at least 22 characters long (128 bits as base64url). With another start's transaction
+  the callback never gives a result either;
 - `verify()` rejects inputs no callback produced: a well-formed identity, a copy of a real result,
   and a result it has already verified;
 - a declined callback ends as `declined`, when the scenario gives one;
 - the method never calls the global `fetch` while the kit runs it (the kit cannot see
   `node:https`, `undici` or a `fetch` kept from before; the lint rule `qauth/no-direct-network`
   refuses those in QAuth's own code);
-- no log line carries the value of a `writeOnly` config member, in a field, a message or an
-  error, wherever the member sits in the config schema.
+- no log line carries the value of a `writeOnly` config member: any string inside such a member,
+  found through `properties`, `items`, `additionalProperties`, `anyOf`, `oneOf`, `allOf` and local
+  `$ref`s, as it is, in base64 or base64url, percent-encoded, or as HTTP Basic credentials with
+  another string of the config, in a field, a message, or an error's message, stack, cause or own
+  fields. It is a check for common leaks, not a proof that none exists.
 
 `libs/server/federation/testing/sample-auth-method.fixture.ts` is a sample method that passes,
 written the way a plugin would be; `libs/server/federation/src/testing/contract-kit.test.ts`
