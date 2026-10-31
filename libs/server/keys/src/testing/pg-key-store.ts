@@ -7,6 +7,7 @@ import type {
   StoredKeySummary,
 } from '../lib/key-store';
 import type { RealmKeyBootStore, StoredPublicKey } from '../lib/realm-key-boot';
+import type { WrappedSignerKey } from '../lib/signer-key-store';
 
 /**
  * A {@link RealmKeyBootStore} over a node-postgres pool, for this library's
@@ -98,6 +99,45 @@ export function createPgKeyStore(pool: Pool): RealmKeyBootStore<PoolClient> {
         publishAt: row.publish_at === null ? null : Number(row.publish_at),
         createdAt: Number(row.created_at),
       }));
+    },
+
+    async getWrappedKey(
+      realmId: string,
+      kid: string,
+      tx: PoolClient
+    ): Promise<WrappedSignerKey | undefined> {
+      const { rows } = await tx.query<{
+        realm_id: string;
+        purpose: string;
+        scope_id: string | null;
+        kid: string;
+        algorithm: string;
+        status: StoredKeyStatus;
+        ciphertext: Buffer;
+        iv: Buffer;
+        wrapped_dek: Buffer;
+        kek_ref: string;
+        aad_version: number;
+      }>(
+        `SELECT realm_id, purpose, scope_id, kid, algorithm, status, ciphertext, iv, wrapped_dek,
+           kek_ref, aad_version FROM realm_keys WHERE realm_id = $1 AND kid = $2`,
+        [realmId, kid]
+      );
+      const row = rows[0];
+      if (row === undefined) return undefined;
+      return {
+        realmId: row.realm_id,
+        purpose: row.purpose,
+        scopeId: row.scope_id,
+        kid: row.kid,
+        algorithm: row.algorithm,
+        status: row.status,
+        ciphertext: row.ciphertext,
+        iv: row.iv,
+        wrappedDek: row.wrapped_dek,
+        kekRef: row.kek_ref,
+        aadVersion: row.aad_version,
+      };
     },
 
     async lockRealm(realmId: string, tx: PoolClient): Promise<void> {

@@ -267,11 +267,10 @@ describe('realm key boot integration (real Postgres)', () => {
     for (const entry of variableWarnings) {
       const purpose = entry.variable === 'SESSION_COOKIE_SECRET' ? 'cookie_hmac' : 'token_signing';
       expect(entry.msg).toBe(keyVariableWarning(entry.variable ?? '', purpose));
-      // The cookie is still signed with its variable (#493); the tokens are
-      // signed through the store, which reads a token variable only to
-      // replace the stored key (#491).
+      // Tokens (#491) and the session cookie (#493) are signed through the
+      // store, which reads a key variable only to replace the stored key.
       expect(entry.msg).toContain(
-        purpose === 'cookie_hmac' ? 'keep it set' : 'replaces the stored key'
+        purpose === 'cookie_hmac' ? 'replaces the stored cookie key' : 'replaces the stored key'
       );
     }
     await second.app.close();
@@ -303,6 +302,33 @@ describe('realm key boot integration (real Postgres)', () => {
     expect(warnings).toContainEqual(
       expect.objectContaining({ msg: keyReplacedWarning(['JWT_PRIVATE_KEY'], 'EdDSA') })
     );
+    await app.close();
+  });
+
+  it('replaces the stored cookie key when SESSION_COOKIE_SECRET changes; the old key stays previous (#493)', async () => {
+    const first = await boot(OLD_VARIABLES);
+    const before = await first.app.signer.getCookieSecrets('local', await realmId());
+    await first.app.close();
+    const changed = `${COOKIE_SECRET}-rotated`;
+
+    const { app, warnings } = await boot({
+      cookieSecret: { value: changed, variables: ['SESSION_COOKIE_SECRET'] },
+    });
+
+    const after = await app.signer.getCookieSecrets('local', await realmId());
+    expect(after.current.secret.equals(Buffer.from(changed, 'utf8'))).toBe(true);
+    expect(after.current.kid).not.toBe(before.current.kid);
+    expect(after.previous?.kid).toBe(before.current.kid);
+    expect(after.previous?.secret.equals(Buffer.from(COOKIE_SECRET, 'utf8'))).toBe(true);
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        msg: keyReplacedWarning(['SESSION_COOKIE_SECRET'], 'HS256', 'cookie_hmac'),
+      })
+    );
+    // Neither value reaches a log line.
+    for (const entry of warnings) {
+      expect(JSON.stringify(entry)).not.toContain(COOKIE_SECRET);
+    }
     await app.close();
   });
 

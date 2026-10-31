@@ -201,6 +201,39 @@ describe('realm key boot integration (real Postgres)', () => {
     expect(publicText).not.toContain('"d"');
   });
 
+  it('replaces the stored cookie key with a changed secret, keeping the old one retired (#493)', async () => {
+    const realmId = await seedRealm();
+    const first = await bootOn(0, realmId, UPGRADE);
+    const firstKid = first.imported.find((key) => key.purpose === 'cookie_hmac')?.kid;
+    const changed = { value: `${COOKIE_SECRET}-changed`, variables: ['SESSION_COOKIE_SECRET'] };
+
+    const second = await bootOn(1, realmId, { cookieSecret: changed });
+    // The node that still has the old value finds it retired and changes nothing.
+    const third = await bootOn(0, realmId, { cookieSecret: UPGRADE.cookieSecret });
+
+    expect(second.replaced).toEqual([
+      expect.objectContaining({ purpose: 'cookie_hmac', retiredKids: [firstKid] }),
+    ]);
+    expect(third.imported).toEqual([]);
+    expect(third.inactive).toEqual([
+      expect.objectContaining({
+        kid: firstKid,
+        status: 'retired',
+        activeKid: second.replaced[0].kid,
+      }),
+    ]);
+    const cookieRows = (await keyRows(realmId)).filter((row) => row.purpose === 'cookie_hmac');
+    expect(cookieRows.map((row) => [row.kid, row.status]).sort()).toEqual(
+      [
+        [firstKid, 'retired'],
+        [second.replaced[0].kid, 'active'],
+      ].sort()
+    );
+    const retired = cookieRows.find((row) => row.kid === firstKid);
+    expect(retired?.['retire_at']).not.toBeNull();
+    expect(retired?.['unpublish_at']).toBeNull();
+  });
+
   it('stores nothing when the import is refused', async () => {
     const realmId = await seedRealm();
 

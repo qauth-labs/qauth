@@ -6,8 +6,8 @@ repositories, and decorates the Fastify instance with the in-process signer of
 [`@qauth-labs/server-keys`](../../../server/keys/README.md).
 
 > **Status:** the auth-server registers this plugin for the key boot step, which imports the key
-> variables into the default realm's store at first boot (#485). Token signing moves onto it with
-> #491, and the session cookie with #493.
+> variables into the default realm's store at first boot (#485). Tokens are signed through it since
+> #491, and the session cookie with the realm's cookie key from it since #493.
 
 ## Who may import the KEK
 
@@ -70,9 +70,11 @@ await fastify.register(signerPlugin, {
 - It logs `realm keys ready` with the `kid`s it imported and generated, one warning per replaced
   key with the retired `kid`s (`keyReplacedWarning`), one per variable that holds a key the store
   retired (`keyInactiveWarning`), and one per key variable still set (`keyVariableWarning`).
-  Tokens are signed through the store (#491), so a token variable is read only here, where a new
-  key in it replaces the stored key; the session cookie is still signed with its variable (#493),
-  so that one stays set.
+  Tokens (#491) and the session cookie (#493) are signed through the store, so a key variable is
+  read only here: a new key in a token variable replaces the stored key, and a different secret in
+  `SESSION_COOKIE_SECRET` replaces the stored cookie key, found by opening each stored cookie key
+  and comparing it with the secret in constant time. The replaced cookie key stays the realm's
+  previous cookie key, so cookies it signed keep verifying for its retention.
 - A refusal rejects `ready()`. The message names the variables, never a value. See the
   [server-keys README](../../../server/keys/README.md#importing-the-key-variables) for the
   refusals.

@@ -288,7 +288,7 @@ store (#485). `bootRealmKeys` is that step; the signer's wiring runs it at every
 import { bootRealmKeys } from '@qauth-labs/server-keys/custody';
 
 const result = await bootRealmKeys({
-  store, // a RealmKeyBootStore: the factory's store, plus lockRealm and listPublicKeys
+  store, // a RealmKeyBootStore: the factory's store, plus lockRealm, listPublicKeys and getWrappedKey
   kekProvider,
   enabledSignatureAlgorithms: cryptoEnv.enabledSignatureAlgorithms,
   hybridSigning: cryptoEnv.HYBRID_SIGNING_ENABLED,
@@ -301,23 +301,30 @@ const result = await bootRealmKeys({
 // result.imported, .replaced, .alreadyStored, .inactive and .generated name keys by kid; no material.
 ```
 
-| Variable                                           | Becomes                                                                                        |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `JWT_PRIVATE_KEY` (or `_PATH`)                     | The active Ed25519 `token_signing` key.                                                        |
-| `JWT_RS256_PRIVATE_KEY` (or `_PATH`)               | The active RS256 `token_signing` key.                                                          |
-| `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`)               | With hybrid signing on only: the ML-DSA-65 key, in one hybrid pair with the Ed25519 key.       |
-| `SESSION_COOKIE_SECRET`                            | The first `cookie_hmac` key, when the realm has none. Its UTF-8 bytes, so HMACs stay the same. |
-| `JWT_PUBLIC_KEY`, `JWT_RS256_PUBLIC_KEY` (`_PATH`) | Nothing: the public key is derived with `node:crypto`, and one that differs stops the boot.    |
+| Variable                                           | Becomes                                                                                     |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `JWT_PRIVATE_KEY` (or `_PATH`)                     | The active Ed25519 `token_signing` key.                                                     |
+| `JWT_RS256_PRIVATE_KEY` (or `_PATH`)               | The active RS256 `token_signing` key.                                                       |
+| `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`)               | With hybrid signing on only: the ML-DSA-65 key, in one hybrid pair with the Ed25519 key.    |
+| `SESSION_COOKIE_SECRET`                            | The active `cookie_hmac` key. Its UTF-8 bytes, so HMACs stay the same.                      |
+| `JWT_PUBLIC_KEY`, `JWT_RS256_PUBLIC_KEY` (`_PATH`) | Nothing: the public key is derived with `node:crypto`, and one that differs stops the boot. |
 
 - The `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, else the RFC 7638 thumbprint, as for a
   generated key. The cookie key gets a random `kid`.
 - A signing key counts as stored when the realm has a published key with the same public key,
   whatever its `kid`. So the import happens once, and removing `JWT_RS256_KID` later changes nothing.
-- A signing key the store lacks, while the realm has an active key of its algorithm, replaces that
-  key: the stored key, and its hybrid partner, are retired and unpublished at once (`replaced`).
-  Until rotation through the store ships (manual rotation #544, emergency retirement #551),
-  changing the variable is how a deployment replaces a signing key. Tokens are signed with the
-  stored keys (#491), so the replacement is what signs from then on.
+- The cookie secret counts as stored when a stored `cookie_hmac` key holds the same bytes. It has
+  no public half, so each stored cookie key is opened with the KEK, the active one first, and
+  compared with the secret in constant time (the SHA-256 digests of both); every opened copy is
+  zeroed (#493).
+- A signing key or a cookie secret the store lacks, while the realm has an active key of its
+  algorithm, replaces that key: the stored key, and its hybrid partner, are retired, and a
+  published one is unpublished at once (`replaced`). Until rotation through the store ships (manual
+  rotation #544, emergency retirement #551), changing the variable is how a deployment replaces a
+  signing key or the cookie key. Tokens are signed with the stored keys (#491) and the session
+  cookie with the realm's cookie key (#493), so the replacement is what signs from then on. A
+  replaced cookie key is never published: it is the realm's previous cookie key, so cookies it
+  signed keep verifying for its retention.
 - A variable that holds a key the store keeps, but not as its active key (one a replacement
   retired), changes nothing; it is reported in `inactive`.
 - It all runs in one transaction under `lockRealm`, a transaction-level advisory lock: nodes that

@@ -60,15 +60,15 @@ export interface RealmKeysDependencies {
  * The message logged at every boot for a key variable whose key is in the
  * store. It names the variable, never its value.
  *
- * Tokens are signed through the realm's key store (#491), so a token variable
- * is read only by the key boot step, where a new key in it replaces the stored
- * key until rotation through the store ships (#544, #551). The session cookie
- * is still signed with its variable until it moves onto the signer (#493), so
- * that variable stays set.
+ * Tokens are signed through the realm's key store (#491), and the session
+ * cookie with the realm's cookie key from the signer (#493), so a key variable
+ * is read only by the key boot step: a new key in a token variable replaces the
+ * stored key, and a different secret in `SESSION_COOKIE_SECRET` replaces the
+ * stored cookie key, until rotation through the store ships (#544, #551).
  */
 export function keyVariableWarning(variable: string, purpose: KeyPurpose): string {
   return purpose === 'cookie_hmac'
-    ? `${variable} is in the realm's key store, but the session cookie is still signed with the variable: keep it set until the upgrade guide says to remove it.`
+    ? `${variable} is in the realm's key store, which signs the session cookie: the variable is read only at boot, where a different secret in it replaces the stored cookie key. Cookies the replaced key signed keep verifying until its retention ends. Remove it unless you may roll back to a release that signs the cookie with it.`
     : `${variable} is in the realm's key store, which signs the tokens: the variable is read only at boot, where a new key in it replaces the stored key and unpublishes the old one at once. Remove it unless you may roll back to a release that signs with it.`;
 }
 
@@ -76,9 +76,19 @@ export function keyVariableWarning(variable: string, purpose: KeyPurpose): strin
  * The message logged at boot for a key variable that held a new key, which
  * replaced the realm's active key of its algorithm. The log line carries the
  * new and the retired `kid`s.
+ *
+ * A replaced signing key leaves the JWKS at once. A replaced cookie key stays
+ * the realm's previous cookie key (#493), which verifies the cookies it signed
+ * until its retention ends.
  */
-export function keyReplacedWarning(variables: readonly string[], algorithm: string): string {
-  return `${variables.join(' and ')} held a new ${algorithm} key: the realm's key store now holds it as the active key, and retired and unpublished the key it replaced at once. Tokens that key signed no longer verify.`;
+export function keyReplacedWarning(
+  variables: readonly string[],
+  algorithm: string,
+  purpose: KeyPurpose = 'token_signing'
+): string {
+  return purpose === 'cookie_hmac'
+    ? `${variables.join(' and ')} held a session cookie secret the realm's key store lacked: the store now holds it as the active cookie key, which signs every new cookie, and retired the key it replaced. Cookies that key signed keep verifying until its retention ends.`
+    : `${variables.join(' and ')} held a new ${algorithm} key: the realm's key store now holds it as the active key, and retired and unpublished the key it replaced at once. Tokens that key signed no longer verify.`;
 }
 
 /**
@@ -89,9 +99,12 @@ export function keyReplacedWarning(variables: readonly string[], algorithm: stri
 export function keyInactiveWarning(
   variables: readonly string[],
   algorithm: string,
-  status: string
+  status: string,
+  purpose: KeyPurpose = 'token_signing'
 ): string {
-  return `${variables.join(' and ')} holds an ${algorithm} key the realm's key store holds as ${status}, not as its active key, and the store does not make it active again: once tokens are signed through the key store, its active key signs. Set the variable to the active key, or to a new key to replace it.`;
+  return purpose === 'cookie_hmac'
+    ? `${variables.join(' and ')} holds a session cookie secret the realm's key store holds as ${status}, not as its active cookie key, and the store does not make it active again: the active cookie key signs the session cookie. Set the variable to the active secret, or to a new secret to replace it.`
+    : `${variables.join(' and ')} holds an ${algorithm} key the realm's key store holds as ${status}, not as its active key, and the store does not make it active again: once tokens are signed through the key store, its active key signs. Set the variable to the active key, or to a new key to replace it.`;
 }
 
 /**
@@ -102,8 +115,8 @@ export function keyInactiveWarning(
  *
  * Then log one line with what was imported and generated, by `kid`, one
  * warning per replaced key and per variable that holds a retired key, and one
- * warning per key variable that is still set: tokens and the session cookie
- * are still signed with it, so it stays set.
+ * warning per key variable that is still set: nothing signs with it any more,
+ * and a new key or secret in it replaces the stored one at the next boot.
  *
  * @throws Error when the realm does not exist
  * @throws KeyCreationRefusedError (`HYBRID_PAIR_INCOMPLETE`) when hybrid
@@ -171,13 +184,13 @@ export async function bootRealmKeysByName(
   for (const { purpose, algorithm, kid, variables, retiredKids } of result.replaced) {
     deps.log.warn(
       { realm: realm.name, purpose, algorithm, kid, retiredKids, variables },
-      keyReplacedWarning(variables, algorithm)
+      keyReplacedWarning(variables, algorithm, purpose)
     );
   }
   for (const { purpose, algorithm, kid, status, activeKid, variables } of result.inactive) {
     deps.log.warn(
       { realm: realm.name, purpose, algorithm, kid, status, activeKid, variables },
-      keyInactiveWarning(variables, algorithm, status)
+      keyInactiveWarning(variables, algorithm, status, purpose)
     );
   }
 
