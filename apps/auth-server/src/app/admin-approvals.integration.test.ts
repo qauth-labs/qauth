@@ -773,6 +773,41 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect((await storedApproval(second.id))?.status).toBe('pending');
   });
 
+  it('lets a failure of the factor itself through, approving nothing and writing no refusal', async () => {
+    const realmId = await tenant('alpha');
+    const requester = await adminWith(realmId, 'security-admin');
+    const filed = await file(realmId, requester.token);
+    const engine = await import('./admin/approvals/engine');
+    const broken = {
+      ...test.factor,
+      verify: async () => {
+        throw new Error('the authenticator service is unreachable');
+      },
+    };
+    const decision = {
+      realmId,
+      approvalId: filed.id,
+      approver: requester.approver,
+      sessionIssuedAtMs: Date.now(),
+    };
+    const { challenge } = await engine.startApproval(app(), broken, decision, engineOptions());
+
+    const failed = await engine
+      .completeApproval(
+        app(),
+        broken,
+        { ...decision, response: test.answer(challenge, requester.approver) },
+        engineOptions()
+      )
+      .catch((error: unknown) => error);
+    // Not the 403 of a refused answer: the server's own failure.
+    expect(failed).toBeInstanceOf(Error);
+    expect(failed).toMatchObject({ message: 'the authenticator service is unreachable' });
+    expect(failed).not.toHaveProperty('statusCode');
+    expect((await storedApproval(filed.id))?.status).toBe('pending');
+    expect((await auditRows(realmId)).map((row) => row.operation_id)).toEqual(['approvals.create']);
+  });
+
   // Acceptance criterion: each state change writes an audit row.
   it('writes an audit row for each state change: filed, approved, denied, cancelled and consumed', async () => {
     const realmId = await tenant('alpha');

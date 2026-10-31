@@ -372,7 +372,9 @@ export async function startApproval(
  * challenge, then add the approval, in one transaction with its audit row
  * (`approvals.approve`, `succeeded`, naming the credential). The approval is
  * `approved` once it holds every approval it needs. An answer the factor
- * refuses writes a `denied` row and approves nothing.
+ * refuses ({@link ApprovalFactorError}) writes a `denied` row and approves
+ * nothing. Any other failure of the factor is the server's: it approves
+ * nothing either, writes no row, and is thrown as it came.
  *
  * @throws {NotFoundError} when the approver may not read the approval
  * @throws {ApprovalStateError} when it is not pending any more, or has expired
@@ -396,10 +398,8 @@ export async function completeApproval(
       approver,
       response: decision.response,
     });
-    if (typeof credentialId !== 'string' || credentialId === '') {
-      throw new ApprovalFactorError('the factor named no credential');
-    }
   } catch (error) {
+    if (!(error instanceof ApprovalFactorError)) throw error;
     fastify.log.warn(
       { err: error, approvalId: approval.id, factor: factor.name },
       'An approval factor refused an answer: nothing was approved'
@@ -419,6 +419,11 @@ export async function completeApproval(
       );
     }
     throw new ForbiddenError('The approval was not given: the factor did not verify the answer');
+  }
+  if (typeof credentialId !== 'string' || credentialId === '') {
+    throw new Error(
+      `The approval factor ${factor.name} verified an answer but named no credential`
+    );
   }
 
   const now = clock();
