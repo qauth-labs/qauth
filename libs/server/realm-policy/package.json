@@ -1,0 +1,17 @@
+{
+  "name": "@qauth-labs/server-realm-policy",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/shared-validation": "workspace:*",
+    "tslib": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/server-config": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}
