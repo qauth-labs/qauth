@@ -22,9 +22,11 @@ test-vectors/
 | `agent/act-chain.json`    | Reading an RFC 8693 `act` chain, and QAuth's depth cap of 4        | RFC 8693 §4.1, ADR-007 §2                                           |
 | `jwt/access-token.json`   | The access token checks of RFC 9068 §4                             | Generated from fixed-seed throwaway Ed25519 keys                    |
 | `dpop/proof.json`         | The DPoP proof checks of RFC 9449 §4.3, nonces and replay          | RFC 9449 Figures 2, 7 and 13, and fixed-seed throwaway Ed25519 keys |
+| `interaction/steps.json`  | Each sign-in step on the Interaction API and the FiPA endpoint     | The Interaction API v1-rc.0 contract's step examples (#590, #591)   |
 
 The server's tests run `pkce/s256` in `libs/server/pkce`, `jwt/access-token` in `libs/server/jwt`,
-`dpop/proof` in `libs/server/dpop` and `agent/act-chain` in `apps/auth-server`.
+`dpop/proof` in `libs/server/dpop`, `interaction/steps` in `libs/server/step-grammar` and
+`agent/act-chain` in `apps/auth-server`.
 `libs/shared/test-vectors` checks `webhooks/signature` against `node:crypto`. The webhook signer in
 `libs/server/keys` does not run these vectors yet.
 
@@ -120,6 +122,14 @@ node test-vectors/generators/webhooks-signature.mjs <path to the standardwebhook
 files byte for byte; `dpop-proof.mjs` copies the RFC 9449 proofs from the RFC.
 `webhooks-signature.mjs` refuses any version of the reference library other than the pinned one;
 its header says how to fetch it.
+
+`interaction/steps.json` is written by the step grammar library instead, from the Interaction API
+contract's step examples and its transport mappers, and a test there fails when the committed file
+differs from what it writes:
+
+```bash
+pnpm exec nx run server-step-grammar:vectors-export
+```
 
 To add a file: write `<area>/<name>.json` with an `id` of `<area>/<name>`, describe `input` and
 `expected` in `description` precisely enough for another language, run `validate`, and load it with
