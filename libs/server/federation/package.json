@@ -6,6 +6,8 @@
   "dependencies": {
     "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
+    "@qauth-labs/shared-interaction-contract": "workspace:*",
+    "@qauth-labs/shared-stability": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "@simplewebauthn/server": "catalog:",
     "jose": "catalog:",

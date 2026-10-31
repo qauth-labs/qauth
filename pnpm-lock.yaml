@@ -1317,6 +1317,12 @@ importers:
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
+      '@qauth-labs/shared-interaction-contract':
+        specifier: workspace:*
+        version: link:../../shared/interaction-contract
+      '@qauth-labs/shared-stability':
+        specifier: workspace:*
+        version: link:../../shared/stability
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation

@@ -4,12 +4,18 @@ import {
 } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
+import { createSampleAuthMethod } from '../../testing/sample-auth-method.fixture';
+import { AUTH_METHOD_CONTRACT } from '../auth-method/contract';
+import { AuthMethodContractError } from '../auth-method/errors';
+import { isAuthMethod } from '../auth-method/validate';
 import type {
   CredentialProvider,
   UserAttribute,
   VerifiedIdentity,
 } from './credential-provider.interface';
+import { createPasswordProvider, PASSWORD_PROVIDER_TYPE } from './password.provider';
 import { createProviderRegistry } from './provider-registry';
+import { createWalletProvider, WALLET_PROVIDER_TYPE } from './wallet.provider';
 
 /**
  * Minimal in-test {@link CredentialProvider} used to exercise the registry
@@ -134,5 +140,106 @@ describe('createProviderRegistry', () => {
       );
       expect(registry.resolve('password')).toBe(original);
     });
+  });
+});
+
+/**
+ * AuthMethod entries beside plain providers (#599). The registry holds both in
+ * one `type` space: the engine resolves an AuthMethod by `type` like any
+ * other provider, and a duplicate `type` fails at boot whichever kind it is.
+ */
+describe('AuthMethod entries (#599)', () => {
+  it('registers a method beside PasswordProvider, and the engine resolves each by type', async () => {
+    const password = createPasswordProvider();
+    const method = createSampleAuthMethod({ type: 'oidc_sample' });
+    const registry = createProviderRegistry([password, method]);
+
+    expect(registry.resolve(PASSWORD_PROVIDER_TYPE)).toBe(password);
+    expect(registry.resolve('oidc_sample')).toBe(method);
+    expect(registry.resolveAuthMethod('oidc_sample')).toBe(method);
+    expect(registry.authMethods()).toEqual([method]);
+    expect(registry.has('oidc_sample')).toBe(true);
+    // The password path is unchanged: still a plain provider, never an AuthMethod.
+    expect(() => registry.resolveAuthMethod(PASSWORD_PROVIDER_TYPE)).toThrow(
+      ProviderNotRegisteredError
+    );
+    await expect(
+      registry.resolve(PASSWORD_PROVIDER_TYPE).verify({
+        email: 'person@example.com',
+        passwordHash: '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA',
+        emailVerified: true,
+      })
+    ).resolves.toMatchObject({ externalSub: 'person@example.com' });
+  });
+
+  it('fails at boot when two methods share a type', () => {
+    const error = captureThrown(() =>
+      createProviderRegistry([
+        createPasswordProvider(),
+        createSampleAuthMethod({ type: 'oidc_corp' }),
+        createSampleAuthMethod({ type: 'oidc_corp' }),
+      ])
+    );
+    expect(error).toBeInstanceOf(ProviderAlreadyRegisteredError);
+    expect((error as ProviderAlreadyRegisteredError).providerType).toBe('oidc_corp');
+  });
+
+  it('fails at boot when a method takes the type of a plain provider registered first', () => {
+    const plain = createStubProvider('oidc_corp');
+    expect(() =>
+      createProviderRegistry([plain, createSampleAuthMethod({ type: 'oidc_corp' })])
+    ).toThrow(ProviderAlreadyRegisteredError);
+  });
+
+  it('fails at boot when a method does not meet the contract, naming every problem', () => {
+    const broken = {
+      ...createSampleAuthMethod(),
+      contract: 'qauth-auth-method/0',
+      routes: [
+        { kind: 'callback', method: 'GET', path: '/../oauth/token', handle: async () => ({}) },
+      ],
+    };
+    const error = captureThrown(() =>
+      createProviderRegistry([createPasswordProvider(), broken as unknown as CredentialProvider])
+    );
+    expect(error).toBeInstanceOf(AuthMethodContractError);
+    expect((error as AuthMethodContractError).problems).toEqual([
+      'it is written against the contract qauth-auth-method/0, and this server implements qauth-auth-method/1-rc.0',
+      "routes[0].path must be one to four lower-case segments, such as /callback: a route cannot leave the method's prefix",
+    ]);
+  });
+
+  it('holds a provider that carries a contract member to the whole contract', () => {
+    const halfway = { ...createStubProvider('oidc_corp'), contract: AUTH_METHOD_CONTRACT };
+    expect(() => createProviderRegistry([halfway])).toThrow(AuthMethodContractError);
+  });
+
+  it('refuses a method under a type QAuth writes itself', () => {
+    for (const type of ['password', 'wallet', 'webauthn', 'self_reported']) {
+      const error = captureThrown(() =>
+        createProviderRegistry([{ ...createSampleAuthMethod(), type }])
+      );
+      expect(error).toBeInstanceOf(AuthMethodContractError);
+      expect((error as AuthMethodContractError).problems).toEqual([
+        `type ${type} is reserved for QAuth's own credentials`,
+      ]);
+    }
+  });
+
+  it('keeps WalletProvider a plain provider whose verify() still rejects', async () => {
+    const wallet = createWalletProvider();
+    const registry = createProviderRegistry([createPasswordProvider(), wallet]);
+
+    expect(isAuthMethod(wallet)).toBe(false);
+    expect('contract' in wallet).toBe(false);
+    expect(registry.resolve(WALLET_PROVIDER_TYPE)).toBe(wallet);
+    expect(() => registry.resolveAuthMethod(WALLET_PROVIDER_TYPE)).toThrow(
+      ProviderNotRegisteredError
+    );
+    expect(registry.authMethods()).toEqual([]);
+    await expect(wallet.verify({})).rejects.toThrow();
+    await expect(
+      wallet.verify({ externalSub: 'x', assuranceLevel: 'high', rawClaims: {} })
+    ).rejects.toThrow();
   });
 });
