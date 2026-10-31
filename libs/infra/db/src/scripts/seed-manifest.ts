@@ -26,6 +26,7 @@ import {
   responseTypeEnum,
   tokenEndpointAuthMethodEnum,
 } from '../lib/schema/enums';
+import { systemClientSpecSchema } from '../lib/system-client/provision';
 
 // Reuse pgEnum values to stay in lock-step with the database schema. If
 // someone adds a grant type or auth method to the enum, the manifest
@@ -325,12 +326,37 @@ export const manifestSchema = z
     realm: z.string().min(1),
     clients: z.array(clientSpecSchema).optional(),
     cimd_clients: z.array(cimdClientSpecSchema).optional(),
+    // ADR-017 phase F0 (#631): the developer portal's system client, as a
+    // `private_key_jwt` client with the `web_redirect` first-party profile
+    // and the portal's callback. `client_id` defaults to `system`; set it to
+    // the auth server's SYSTEM_CLIENT_ID when that is set. The migration
+    // runner provisions the same row from its SYSTEM_CLIENT_* environment.
+    system_client: systemClientSpecSchema.optional(),
   })
   .strict()
-  .refine((m) => (m.clients?.length ?? 0) + (m.cimd_clients?.length ?? 0) > 0, {
-    message: 'the manifest lists no client: add an entry to clients or cimd_clients',
-    path: ['clients'],
-  })
+  .refine(
+    (m) =>
+      (m.clients?.length ?? 0) + (m.cimd_clients?.length ?? 0) > 0 || m.system_client !== undefined,
+    {
+      message:
+        'the manifest lists no client: add an entry to clients, cimd_clients or system_client',
+      path: ['clients'],
+    }
+  )
+  // The system client is provisioned by its own section only, so the rules
+  // of its row never meet a `clients` entry's.
+  .refine(
+    (m) =>
+      m.system_client === undefined ||
+      ![...(m.clients ?? []), ...(m.cimd_clients ?? [])].some(
+        ({ client_id }) => client_id === m.system_client?.client_id
+      ),
+    {
+      message:
+        'the system client is listed twice: provision it under system_client only, not under clients or cimd_clients',
+      path: ['system_client'],
+    }
+  )
   // One row per client_id: a CIMD entry may not name a client the manifest
   // also provisions, or another CIMD entry.
   .refine(

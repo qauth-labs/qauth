@@ -37,6 +37,19 @@
  * its metadata document supplies the rest. It has no secret, so `--rotate`
  * does not apply: an entry always converges the row on the manifest. See
  * `cimd-client-grants.ts`.
+ *
+ * A `clients` entry may set a first-party profile (ADR-017 Decision 2, #631):
+ * `first_party_profile`, a native profile's `first_party_policy` and a
+ * required `first_party_reason`. A change of them is recorded as a
+ * `client.first_party_changed` event, and removing the profile on `--rotate`
+ * revokes every refresh token of the client. See `seed-clients.ts`.
+ *
+ * The optional `system_client` section provisions the developer portal's
+ * system client (#631): `private_key_jwt` with the portal's keys, the
+ * `web_redirect` profile and the portal's callback. It has no secret either,
+ * and always converges the row on the manifest, like a CIMD grant. The
+ * migration runner provisions the same row from its environment. See
+ * `lib/system-client/provision.ts`.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -46,6 +59,7 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 
 import { realms } from '../lib/schema';
+import { describeSystemClientResult, provisionSystemClient } from '../lib/system-client/provision';
 import { applyCimdClientGrant, type CimdGrantResult } from './cimd-client-grants';
 import { type Issued, provisionClient } from './seed-clients';
 import { type ClientSpec, firstPartyColumnsOf, manifestSchema } from './seed-manifest';
@@ -125,6 +139,19 @@ async function main(): Promise<void> {
     reportCimdGrants(manifest.realm, granted);
 
     if (granted.some((g) => g.status === 'not_cimd')) process.exitCode = 1;
+
+    // ADR-017 phase F0 (#631): the portal's system client, last, so a refusal
+    // here leaves every other entry's result printed.
+    if (manifest.system_client !== undefined) {
+      const result = await provisionSystemClient(db, manifest.realm, manifest.system_client);
+      const line = describeSystemClientResult(result);
+      if (result.status === 'refused') {
+        console.error(line);
+        process.exitCode = 1;
+      } else {
+        console.log(`\n${line}\n`);
+      }
+    }
   } finally {
     await db.$client.end();
   }

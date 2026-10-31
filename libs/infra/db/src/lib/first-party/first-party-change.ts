@@ -60,13 +60,15 @@ export interface FirstPartyChangeResult {
   readonly revokedTokenCount: number;
 }
 
-/** JSON with object keys sorted, so two equal policies compare equal. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+/** JSON with object keys sorted, so two equal values compare equal. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     return `{${Object.keys(value)
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`)
+      .map(
+        (key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`
+      )
       .join(',')}}`;
   }
   return JSON.stringify(value) ?? 'null';
@@ -75,7 +77,9 @@ function canonical(value: unknown): string {
 /** Whether the first-party columns differ. */
 export function firstPartyColumnsDiffer(a: FirstPartyColumns, b: FirstPartyColumns): boolean {
   return (
-    a.profile !== b.profile || a.reason !== b.reason || canonical(a.policy) !== canonical(b.policy)
+    a.profile !== b.profile ||
+    a.reason !== b.reason ||
+    canonicalJson(a.policy) !== canonicalJson(b.policy)
   );
 }
 
