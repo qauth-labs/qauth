@@ -9,7 +9,11 @@ import {
   authMethodSnapshot,
   declaresAuthMethodContract,
 } from '../auth-method/validate';
-import type { CredentialProvider } from './credential-provider.interface';
+import type {
+  CredentialProvider,
+  UserAttribute,
+  VerifiedIdentity,
+} from './credential-provider.interface';
 
 /**
  * Runtime registry mapping a credential `type` to its {@link CredentialProvider}
@@ -18,16 +22,19 @@ import type { CredentialProvider } from './credential-provider.interface';
  * verification to it without any provider-specific branching (ADR-003).
  *
  * It holds AuthMethod entries (#599, EXPERIMENTAL) beside plain providers, in
- * the same `type` space: an AuthMethod is a `CredentialProvider`, so
- * {@link ProviderRegistry.resolve} finds it like any other, and a duplicate
- * `type` fails whichever kind came second.
+ * the same `type` space, so a duplicate `type` fails whichever kind came
+ * second. An AuthMethod's `verify()` is not fail-closed the way
+ * `WalletProvider`'s is: it resolves for its own callback's results. So only
+ * {@link ProviderRegistry.resolveAuthMethod} hands one out, for the engine's
+ * upstream step; {@link ProviderRegistry.resolve} answers a stand-in whose
+ * `verify()` and `extractAttributes()` refuse.
  */
 export interface ProviderRegistry {
   /**
    * Register a provider under its `provider.type`. A provider that carries a
    * `contract` member is an AuthMethod and must meet the whole contract; the
-   * registry keeps a frozen snapshot of it, which `resolve` and
-   * `resolveAuthMethod` answer.
+   * registry keeps a frozen snapshot of it, which `resolveAuthMethod`
+   * answers (`resolve` answers a fail-closed stand-in).
    *
    * @throws {AuthMethodContractError} when an AuthMethod does not meet the
    * contract (a wrong contract version, a route outside its prefix, …)
@@ -36,7 +43,12 @@ export interface ProviderRegistry {
    */
   register(provider: CredentialProvider): void;
   /**
-   * Resolve the provider registered for `type`.
+   * Resolve the provider registered for `type`. For an AuthMethod's type it
+   * answers a fail-closed stand-in, the same one at every call: its `type`,
+   * a `verify()` that rejects and an `extractAttributes()` that throws. An
+   * AuthMethod verifies only through the upstream step
+   * (`resolveAuthMethod`, then `completeUpstreamStep`), never through a
+   * generic credential path. Plain providers are answered as registered.
    *
    * @throws {ProviderNotRegisteredError} if no provider is registered for `type`.
    */
@@ -98,12 +110,11 @@ export function createProviderRegistry(
         assertAuthMethod(snapshot);
         method = snapshot;
       }
-      const entry: CredentialProvider = method ?? provider;
-      const type = entry.type;
+      const type = (method ?? provider).type;
       if (providers.has(type)) {
         throw new ProviderAlreadyRegisteredError(type);
       }
-      providers.set(type, entry);
+      providers.set(type, method === undefined ? provider : failClosedStandIn(type));
       if (method !== undefined) methods.set(type, method);
     },
     resolve(type: string): CredentialProvider {
@@ -136,4 +147,26 @@ export function createProviderRegistry(
   }
 
   return registry;
+}
+
+/**
+ * What `resolve()` answers for an AuthMethod's type: the type, and members
+ * that refuse. An AuthMethod's own `verify()` resolves for its callback's
+ * results; handing it to a generic credential path would let that path sign
+ * someone in without the upstream step's checks.
+ */
+function failClosedStandIn(type: string): CredentialProvider {
+  const refusal = () =>
+    new Error(
+      `The AuthMethod ${type} verifies only through the upstream step: resolve it with resolveAuthMethod() and hand its callback's outcome to completeUpstreamStep()`
+    );
+  return Object.freeze({
+    type,
+    async verify(): Promise<VerifiedIdentity> {
+      throw refusal();
+    },
+    extractAttributes(): UserAttribute[] {
+      throw refusal();
+    },
+  });
 }

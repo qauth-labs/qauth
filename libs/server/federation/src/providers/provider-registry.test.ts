@@ -158,7 +158,6 @@ describe('AuthMethod entries (#599)', () => {
     // The registry keeps a frozen snapshot of the method, the same one by
     // every lookup, with the method's members.
     const kept = registry.resolveAuthMethod('oidc_sample');
-    expect(registry.resolve('oidc_sample')).toBe(kept);
     expect(registry.authMethods()).toEqual([kept]);
     expect(Object.isFrozen(kept)).toBe(true);
     expect(Object.isFrozen(kept.routes)).toBe(true);
@@ -185,6 +184,28 @@ describe('AuthMethod entries (#599)', () => {
         emailVerified: true,
       })
     ).resolves.toMatchObject({ externalSub: 'person@example.com' });
+  });
+
+  it("answers resolve() for a method's type with a stand-in that refuses, never the method", async () => {
+    const method = createSampleAuthMethod({ type: 'oidc_sample' });
+    const registry = createProviderRegistry([createPasswordProvider(), method]);
+
+    const standIn = registry.resolve('oidc_sample');
+    expect(standIn).not.toBe(registry.resolveAuthMethod('oidc_sample'));
+    expect(registry.resolve('oidc_sample')).toBe(standIn);
+    expect(standIn.type).toBe('oidc_sample');
+    expect(Object.isFrozen(standIn)).toBe(true);
+    // Whatever it is handed, even a result its own callback might return.
+    await expect(standIn.verify({ sub: 'person' })).rejects.toThrow(
+      /verifies only through the upstream step/
+    );
+    expect(() =>
+      standIn.extractAttributes({
+        externalSub: 'person',
+        assuranceLevel: 'low',
+        rawClaims: { email: 'person@example.com' },
+      })
+    ).toThrow(/verifies only through the upstream step/);
   });
 
   it('fails at boot when two methods share a type', () => {
