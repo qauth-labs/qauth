@@ -351,6 +351,49 @@ describe('approval requests (real Postgres)', () => {
     ).toEqual({ operationId: 'keys.rotate', method: 'POST', realmId: denied.realm.id });
   });
 
+  it('files an approval pending and empty, whatever else its caller hands over', async () => {
+    const { realm, approval } = await approved();
+    const stored = await approvals.findById(realm.id, approval.id);
+    expect(stored).toMatchObject({ status: 'approved' });
+    const again = await approvals.create({
+      ...(stored as NonNullable<typeof stored>),
+      createdAt: NOW + 1_000,
+    });
+    expect(again.id).not.toBe(approval.id);
+    expect(again).toMatchObject({ status: 'pending', approvals: [], usedAt: null });
+  });
+
+  it('drops the body of an approval that expired unused when the next one of its realm is filed', async () => {
+    const bodyOf = async (id: string) =>
+      (
+        await db().database.pool.query<{ body: unknown }>(
+          `SELECT canonical_request -> 'body' AS body FROM admin_approvals WHERE id = $1`,
+          [id]
+        )
+      ).rows[0].body;
+    const first = await filed();
+    const elsewhere = await filed();
+    // Filed in the first one's realm before it expires: it keeps its body.
+    const live = await approvals.create({
+      ...first.approval,
+      reason: null,
+      createdAt: NOW + 1_000,
+      expiresAt: NOW + 1_000 + LIFETIME,
+    });
+    expect(await bodyOf(first.approval.id)).not.toBeNull();
+    // Filed once it has expired: its body goes, the open one's and another
+    // realm's stay.
+    await approvals.create({
+      ...first.approval,
+      reason: null,
+      createdAt: NOW + LIFETIME,
+      expiresAt: NOW + 2 * LIFETIME,
+    });
+    expect(await bodyOf(first.approval.id)).toBeNull();
+    expect(await bodyOf(live.id)).not.toBeNull();
+    expect(await bodyOf(elsewhere.approval.id)).not.toBeNull();
+  });
+
   it('goes with its realm', async () => {
     const { realm, approval } = await filed();
     await db().database.pool.query('DELETE FROM realms WHERE id = $1', [realm.id]);

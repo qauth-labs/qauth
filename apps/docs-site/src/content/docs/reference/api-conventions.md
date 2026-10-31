@@ -255,9 +255,7 @@ classification of the operation the approval is for: the caller needs every perm
 declares, and `qauth:admin:security`. Reading (`approvals.get`) needs `approvals.read`, and only
 the requester, an account that gave one of its approvals and an account that may still give one
 read an approval. Anyone else gets 404 `not_found`, exactly as for an id that does not exist. An
-approval's representation holds the operation's path parameters and query, never its body. Its
-`reason`, `params` and `query` are raw text; a page shows `display` instead, which is `null` once
-the approval is no longer open.
+approval's representation holds the operation's path parameters and query, never its body. Its `reason`, `params` and `query` are raw values, not display text; a page shows `display` instead, which is `null` once the approval is no longer open.
 
 **How an approval ends.** It expires 5 minutes after it is filed, a constant. It is `consumed`
 once the operation commits on it; an operation that fails or rolls back leaves it `approved`
@@ -267,7 +265,7 @@ version the approval's `ETag` gave (428 without one, 412 for another version, 40
 that is no longer open). An approver may decline it instead (`denied`). A consumed, expired,
 cancelled or denied approval approves nothing. A consumed, cancelled or denied approval no longer
 keeps the operation's body, which may hold a secret: its two hashes are what the audit log binds
-to. One that expires unused keeps it until a retention job removes expired approvals.
+to. No job removes approvals: one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
 
 **What the approver is shown.** The operation, rendered from the stored request, never from text
 the requester wrote: every security operation registers a renderer, which returns typed display
@@ -276,7 +274,7 @@ requester's reason is shown apart, as quoted text. Every string is length-capped
 bidirectional, format or other default-ignorable character in it is shown escaped (`\u{202E}`), a
 backslash doubled and a combining mark past the third on one character escaped, so the text can
 neither hide nor reorder what the page shows, nor pass for an escape. Every reader of an approval
-gets its display data, so a renderer never shows a secret value of the request.
+gets its display data, so a renderer must never show a secret value of the request: nothing checks it.
 
 **Audit rows.** Every state change writes the admin audit log of the approval's realm: filing and
 withdrawing write the rows of `approvals.create` and `approvals.cancel`; approving and declining

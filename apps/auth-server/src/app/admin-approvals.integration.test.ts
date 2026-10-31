@@ -128,6 +128,26 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
           return { rotated: true };
         }
       );
+      // A second route that names the engine's own filing operation: only the
+      // approvals route itself passes the gate without an approval.
+      scope.route({
+        method: 'HEAD',
+        url: '/admin/v1-rc.0/realms/:realmId/fixture-approvals',
+        config: { operation: 'approvals.create' },
+        schema: {
+          ...operations.operationSchemaExtensions(
+            registry.get('approvals.create') as Parameters<
+              typeof operations.operationSchemaExtensions
+            >[0]
+          ),
+          hide: true,
+          params: z.object({ realmId: z.uuid() }),
+        },
+        handler: async () => {
+          runs.push('approvals.create:head');
+          return {};
+        },
+      });
       scope.post(
         '/admin/v1-rc.0/realms/:realmId/fixture-keys/:keyId/retire',
         {
@@ -461,6 +481,18 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect(ran.statusCode, ran.body).toBe(200);
     expect(ran.json()).toEqual({ retired: 'end of life' });
     expect(runs).toEqual(['fixtureKeys.retire']);
+  });
+
+  it("gates another route that names the engine's own filing operation", async () => {
+    const realmId = await tenant('alpha');
+    const requester = await adminWith(realmId, 'security-admin');
+    const response = await admin().inject({
+      method: 'HEAD',
+      url: `/admin/v1-rc.0/realms/${realmId}/fixture-approvals`,
+      headers: { authorization: `Bearer ${requester.token}` },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(runs).toEqual([]);
   });
 
   it('refuses a retry whose body, path parameter or query differs from the request filed', async () => {

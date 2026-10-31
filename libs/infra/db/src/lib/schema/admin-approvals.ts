@@ -94,8 +94,9 @@ const sqlList = (values: readonly string[]) =>
  *
  * The canonical request holds the operation's body as the requester sent it,
  * so it holds whatever that body holds, a secret included: the repository
- * drops the body once the approval is consumed, cancelled or denied. One that
- * expires unused keeps it until a retention job removes expired approvals.
+ * drops the body once the approval is consumed, cancelled or denied. No job
+ * removes approvals: one that expires unused keeps its body until the next
+ * approval is filed in its realm, which drops it.
  */
 export const adminApprovals = pgTable(
   'admin_approvals',

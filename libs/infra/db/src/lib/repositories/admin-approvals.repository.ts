@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, type InferSelectModel, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, type InferSelectModel, lte, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import {
@@ -56,11 +56,16 @@ export interface AdminApprovalExpectedState {
  * A move that closes an approval (consumed, cancelled, denied) drops the
  * operation's body from the stored request: the body may hold a secret, such
  * as a credential the operation sets, and nothing reads it once no approval
- * can be given or used. An approval that expires unused keeps it until a
- * retention job removes expired approvals.
+ * can be given or used. No job removes approvals: an approval that expires
+ * unused keeps its body until the next one is filed in its realm, which drops
+ * it.
  */
 export interface AdminApprovalsRepository {
-  /** File an approval request, `pending`, with no approval yet. */
+  /**
+   * File an approval request, `pending`, with no approval yet. First drops
+   * the body of every approval of the realm that expired unused by the new
+   * one's `createdAt`.
+   */
   create(approval: NewAdminApproval, tx?: DbClient): Promise<AdminApproval>;
 
   /** The approval with this id in the realm; `undefined` for another realm's, or an id that is not a UUID. */
@@ -147,10 +152,36 @@ const withoutBody = sql`${adminApprovals.canonicalRequest} - 'body'`;
 export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprovalsRepository {
   return {
     async create(approval, tx) {
-      const [record] = await (tx ?? defaultDb)
+      const invoker = tx ?? defaultDb;
+      await invoker
+        .update(adminApprovals)
+        .set({ canonicalRequest: withoutBody })
+        .where(
+          and(
+            eq(adminApprovals.realmId, approval.realmId),
+            inArray(adminApprovals.status, ['pending', 'approved']),
+            lte(adminApprovals.expiresAt, approval.createdAt),
+            sql`${adminApprovals.canonicalRequest} ? 'body'`
+          )
+        );
+      const [record] = await invoker
         .insert(adminApprovals)
+        // The fields a new approval has, named one by one: its id, status,
+        // approvals and time of use are the table's, never the caller's.
         .values({
-          ...approval,
+          realmId: approval.realmId,
+          requesterKind: approval.requesterKind,
+          requesterRealmId: approval.requesterRealmId,
+          requesterId: approval.requesterId,
+          operationId: approval.operationId,
+          canonicalRequest: approval.canonicalRequest,
+          requestHash: approval.requestHash,
+          opHash: approval.opHash,
+          nonce: approval.nonce,
+          reason: approval.reason,
+          approvalsRequired: approval.approvalsRequired,
+          createdAt: approval.createdAt,
+          expiresAt: approval.expiresAt,
           classification: {
             class: approval.classification.class,
             effects: [...approval.classification.effects],

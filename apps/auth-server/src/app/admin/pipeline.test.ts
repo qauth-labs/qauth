@@ -314,6 +314,24 @@ describe('the routes of security operations at boot (#512)', () => {
     });
   });
 
+  it('boots a HEAD route beside the operation route, and files only against the latter', async () => {
+    const params = z.object({ realmId: z.uuid() });
+    let context: FastifyInstance['adminApi'] | undefined;
+    await bootSecurity(
+      rotate(() => ({ title: 'Rotate' })),
+      (scope, schema) => {
+        context = scope.adminApi;
+        const options = {
+          config: { operation: 'fixtureKeys.rotate' },
+          schema: { ...schema, params },
+        };
+        scope.route({ method: 'HEAD', url: path, ...options, handler: async () => ({}) });
+        scope.post(path, options, async () => ({}));
+      }
+    );
+    expect(context?.routeOf('fixtureKeys.rotate')).toMatchObject({ method: 'POST', url: path });
+  });
+
   it('checks a HEAD route of a security operation, but never files against it', async () => {
     await expect(
       bootSecurity(rotate(), (scope, schema) => {

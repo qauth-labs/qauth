@@ -1099,7 +1099,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and other default-ignorable characters shown escaped and its backslashes
   doubled, and the requester's reason apart, as quoted text. A consumed,
   cancelled or denied approval drops the operation's body, which may hold a
-  secret; one that expires unused keeps it until a retention job removes it.
+  secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
 

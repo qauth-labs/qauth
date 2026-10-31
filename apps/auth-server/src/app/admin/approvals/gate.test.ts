@@ -206,6 +206,20 @@ describe('the canonical request (#512)', () => {
     );
     expect(() => canonicalRequest({ ...FILED, params: 'realm' })).toThrow(CanonicalRequestError);
     expect(() => canonicalRequest({ ...FILED, query: ['dryRun'] })).toThrow(CanonicalRequestError);
+    // An object a schema's transform made says nothing through its members:
+    // two different queries would hash alike.
+    for (const query of [
+      new URLSearchParams('force=true'),
+      new Map([['force', 'true']]),
+      new Date(0),
+      new (class Query {
+        force = 'true';
+      })(),
+    ]) {
+      expect(() => canonicalRequest({ ...FILED, query }), String(query)).toThrow(
+        CanonicalRequestError
+      );
+    }
     expect(() => canonicalRequest({ ...FILED, params: Buffer.from('x') })).toThrow(
       CanonicalRequestError
     );

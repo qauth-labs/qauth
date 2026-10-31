@@ -43,12 +43,14 @@ export const DISPLAY_LIMITS = Object.freeze({
  * Code points a display string never carries as they are: controls (C0, DEL,
  * C1), format characters (the bidirectional embeddings, overrides, isolates
  * and marks, zero-width characters, the byte order mark, tag characters),
- * the line and paragraph separators, lone surrogates, and every other code
- * point Unicode says to render as nothing (`Default_Ignorable_Code_Point`:
- * the Hangul fillers, the combining grapheme joiner, variation selectors).
+ * the line and paragraph separators, lone surrogates, every other code point
+ * Unicode says to render as nothing (`Default_Ignorable_Code_Point`: the
+ * Hangul fillers, the combining grapheme joiner, variation selectors), and
+ * two that render blank or as a box, the blank Braille pattern and the object
+ * replacement character.
  */
 const UNSAFE_CODE_POINT =
-  /^(?:[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]|\p{Cs})$/u;
+  /^(?:[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffc]|\p{Cs})$/u;
 
 /** A combining mark, which draws on the character before it. */
 const COMBINING_MARK = /^\p{M}$/u;

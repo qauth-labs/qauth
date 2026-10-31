@@ -111,7 +111,11 @@ describe('the display rules (#512, ADR-019 Decision 6)', () => {
       expect(shown, JSON.stringify(unsafe)).toMatch(/^a\\u\{[0-9A-F]{4,5}\}b$/);
     }
     // Code points Unicode renders as nothing, outside the classes above.
-    for (const codePoint of [0x3164, 0x115f, 0xffa0, 0x034f, 0xfe00, 0xfe0f, 0x180b, 0xe0100]) {
+    for (const codePoint of [
+      0x3164, 0x115f, 0xffa0, 0x034f, 0xfe00, 0xfe0f, 0x180b, 0xe0100,
+      // Blank or a box, though not default-ignorable.
+      0x2800, 0xfffc,
+    ]) {
       const shown = displayText(`a${String.fromCodePoint(codePoint)}b`, 100);
       expect(shown, codePoint.toString(16)).toBe(
         `a\\u{${codePoint.toString(16).toUpperCase().padStart(4, '0')}}b`

@@ -84,22 +84,30 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The own enumerable members of the path parameters or the query, as a plain
- * object. Fastify hands both over as objects of a prototype of their own
- * (the router's and the query parser's null-prototype objects) when the
- * route has no schema for them, which the canonicalizer would refuse;
- * a binary value or an array is not a set of parameters.
+ * Whether `value` is one of the objects Fastify hands a route with no params
+ * or querystring schema: the router's `NullObject` and the query parser's
+ * `Empty`, each made from a prototype that is an empty object with no
+ * prototype of its own.
+ */
+function isParsedRecord(value: object): boolean {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return (
+    typeof prototype === 'object' &&
+    prototype !== null &&
+    Object.getPrototypeOf(prototype) === null &&
+    Reflect.ownKeys(prototype).length === 0
+  );
+}
+
+/**
+ * The path parameters or the query as a plain object of their own members:
+ * a plain object as it is, and Fastify's own parsed objects copied. Anything
+ * else, such as a `Map` or a class instance a schema's transform made, is not
+ * a set of parameters: its members would not say what it holds.
  */
 function parameterRecord(value: unknown): Record<string, unknown> | undefined {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Array.isArray(value) ||
-    ArrayBuffer.isView(value) ||
-    value instanceof ArrayBuffer
-  ) {
-    return undefined;
-  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  if (!isPlainObject(value) && !isParsedRecord(value)) return undefined;
   return Object.fromEntries(Object.entries(value));
 }
 
