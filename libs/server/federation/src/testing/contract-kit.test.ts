@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -75,6 +75,7 @@ describe('checkAuthMethod, the contract test kit', () => {
       'start',
       'transaction-binding',
       'callback',
+      'pkce',
       'verify-fails-closed',
       'declined',
       'egress-only',
@@ -197,12 +198,15 @@ describe('checkAuthMethod, the contract test kit', () => {
           const url = new URL(start.redirectTo);
           const value = 'fixed-fixed-fixed-fixed';
           url.searchParams.set('state', value);
-          return { redirectTo: url.href, transaction: { state: value }, binding: value };
+          return {
+            redirectTo: url.href,
+            transaction: { ...start.transaction, state: value },
+            binding: value,
+          };
         },
       };
       expect(await kitProblems(fixed)).toMatchInlineSnapshot(`
         [
-          "two starts answered the same transaction: its state must be fresh for each start",
           "two starts answered the same binding: it must be fresh for each start",
         ]
       `);
@@ -235,6 +239,67 @@ describe('checkAuthMethod, the contract test kit', () => {
         [
           "start() did not send its binding to the provider, in the redirect or in a body it posted: the provider cannot carry it back",
           "the provider's callback does not carry back the binding start() answered, in the callback route's bindingParameter (state by default): the host answers it as transaction_mismatch before the method runs",
+        ]
+      `);
+    });
+
+    it('one that asks for a code without PKCE', async () => {
+      const method = createSampleAuthMethod();
+      const plain = {
+        ...method,
+        start: async (context: Parameters<typeof method.start>[0]) => {
+          const start = await method.start(context, { uiLocales: [] });
+          const url = new URL(start.redirectTo);
+          url.searchParams.delete('code_challenge');
+          url.searchParams.delete('code_challenge_method');
+          return { ...start, redirectTo: url.href };
+        },
+      };
+      expect(await kitProblems(plain)).toMatchInlineSnapshot(`
+        [
+          "the authorization request asks for a code without PKCE: it must carry code_challenge_method=S256 and a code_challenge (RFC 7636)",
+          "the token request carries no code_verifier whose S256 is the start's code_challenge (RFC 7636 §4.5)",
+        ]
+      `);
+    });
+
+    it('one that uses the plain PKCE method', async () => {
+      const method = createSampleAuthMethod();
+      const plain = {
+        ...method,
+        start: async (context: Parameters<typeof method.start>[0]) => {
+          const start = await method.start(context, { uiLocales: [] });
+          const url = new URL(start.redirectTo);
+          url.searchParams.set('code_challenge', start.transaction.codeVerifier);
+          url.searchParams.set('code_challenge_method', 'plain');
+          return { ...start, redirectTo: url.href };
+        },
+      };
+      expect(await kitProblems(plain)).toMatchInlineSnapshot(`
+        [
+          "the authorization request asks for a code without PKCE: it must carry code_challenge_method=S256 and a code_challenge (RFC 7636)",
+          "the token request carries no code_verifier whose S256 is the start's code_challenge (RFC 7636 §4.5)",
+        ]
+      `);
+    });
+
+    it("one whose token request carries a verifier that is not the start's", async () => {
+      const method = withCallback(
+        (original) => async (request, context) =>
+          original(
+            {
+              ...request,
+              transaction: {
+                ...(request.transaction as object),
+                codeVerifier: randomBytes(32).toString('base64url'),
+              },
+            },
+            context
+          )
+      );
+      expect(await kitProblems(method)).toMatchInlineSnapshot(`
+        [
+          "the token request carries no code_verifier whose S256 is the start's code_challenge (RFC 7636 §4.5)",
         ]
       `);
     });
@@ -455,13 +520,17 @@ describe('checkAuthMethod, the contract test kit', () => {
         ...method,
         start: async (context: Parameters<typeof method.start>[0]) => {
           const state = randomBytes(16).toString('base64url');
+          const codeVerifier = randomBytes(32).toString('base64url');
           const answer = await context.egress.request({
             method: 'POST',
             url: 'https://provider.example/par',
             body: new URLSearchParams({
+              response_type: 'code',
               client_id: context.config.clientId,
               state,
               redirect_uri: context.routeUrl('/callback'),
+              code_challenge: createHash('sha256').update(codeVerifier).digest('base64url'),
+              code_challenge_method: 'S256',
             }).toString(),
             purpose: 'upstream-par',
             source: 'admin',
@@ -472,7 +541,7 @@ describe('checkAuthMethod, the contract test kit', () => {
           const url = new URL(context.config.authorizationEndpoint);
           url.searchParams.set('client_id', context.config.clientId);
           url.searchParams.set('request_uri', requestUri);
-          return { redirectTo: url.href, transaction: { state }, binding: state };
+          return { redirectTo: url.href, transaction: { state, codeVerifier }, binding: state };
         },
       };
       const scenario = sampleScenario();
@@ -581,6 +650,26 @@ describe('checkAuthMethod, the contract test kit', () => {
       expect(await kitProblems(method)).toEqual([
         'a log line carries the value of a writeOnly config member',
       ]);
+    });
+
+    it('one that logs a short secret', async () => {
+      const configSchema = z.object({
+        authorizationEndpoint: z.url(),
+        tokenEndpoint: z.url(),
+        clientId: z.string(),
+        clientSecret: z.string(),
+        pin: z.string().meta({ writeOnly: true }),
+      });
+      const leaky = withCallback((original) => async (request, context) => {
+        context.log.info({ pin: (context.config as { pin: string }).pin }, 'calling');
+        return original(request, context);
+      });
+      expect(
+        await kitProblems({ ...leaky, configSchema } as unknown as AuthMethod, {
+          ...sampleScenario(),
+          config: { ...SAMPLE_CONFIG, pin: 'abc' },
+        })
+      ).toEqual(['a log line carries the value of a writeOnly config member']);
     });
 
     it('one that logs a secret held in a list, or behind a $ref', async () => {

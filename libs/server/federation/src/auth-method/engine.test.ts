@@ -211,6 +211,44 @@ describe('completeUpstreamStep', () => {
     });
   });
 
+  it("ends the sample's callback as invalid_response when the provider answers no JSON", async () => {
+    const method = createSampleAuthMethod();
+    const context = createAuthMethodContext(method, {
+      config: SAMPLE_CONFIG,
+      origin: 'https://auth.example.com',
+      realmName: 'acme',
+      realmId: '0190a5c4-0000-7000-8000-000000000001',
+      providerId: method.type,
+      signerCaller: 'api',
+      egress: {
+        request: async (request) => ({
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+          body: Buffer.from('<html>not json</html>'),
+          url: request.url,
+        }),
+      },
+      signer: {
+        signClientAssertion: async () => 'a.b.c',
+        getUpstreamJwks: async () => ({ keys: [] }),
+      },
+      log,
+    });
+    const start = await startUpstreamStep(method, context, { uiLocales: [] });
+    const route = method.routes.find((r) => r.kind === 'callback');
+    if (route?.kind !== 'callback') throw new Error('no callback route');
+    const outcome = await route.handle(
+      {
+        method: 'GET',
+        query: { code: 'code-for-person', state: start.binding },
+        form: {},
+        transaction: start.transaction,
+      },
+      context
+    );
+    expect(outcome).toEqual({ kind: 'failed', reason: 'invalid_response' });
+  });
+
   it('passes declined and failed outcomes through', async () => {
     const method = createSampleAuthMethod();
     await expect(completeUpstreamStep(method, { kind: 'declined' })).resolves.toEqual({

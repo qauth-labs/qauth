@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
@@ -27,7 +27,11 @@ import type { AuthMethodKitScenario } from '../src/testing';
  *   back before the method runs;
  * - the callback compares `state` with its transaction too, in constant
  *   time, before it spends the code: belt and braces, at no cost;
+ * - the authorization request uses PKCE with S256 (RFC 7636; QAuth requires
+ *   it): `start()` keeps the verifier in the transaction and sends its
+ *   challenge, and the callback sends the verifier with the code;
  * - the code is redeemed through `context.egress`, never `fetch`;
+ * - an answer that is not JSON is an `invalid_response`, not a throw;
  * - `verify()` accepts only results its own callback produced (a `WeakSet`
  *   of them), so nothing else can sign anyone in through it;
  * - a `form_post` answer arrives at a bounce route, which sends the browser
@@ -48,6 +52,8 @@ type SampleConfig = z.output<typeof sampleConfigSchema>;
 
 interface SampleTransaction {
   readonly state: string;
+  /** The PKCE verifier (RFC 7636 §4.1): 32 random bytes, base64url. */
+  readonly codeVerifier: string;
 }
 
 interface SampleResult {
@@ -60,6 +66,11 @@ interface SampleResult {
 function single(parameters: AuthMethodParameters, name: string): string | undefined {
   const value = parameters[name];
   return typeof value === 'string' ? value : undefined;
+}
+
+/** The S256 code challenge of a PKCE verifier (RFC 7636 §4.2). */
+function s256(verifier: string): string {
+  return createHash('sha256').update(verifier, 'ascii').digest('base64url');
 }
 
 function sameState(expected: string, presented: string | undefined): boolean {
@@ -92,12 +103,15 @@ export function createSampleAuthMethod(
 
     async start(context) {
       const state = randomBytes(16).toString('base64url');
+      const codeVerifier = randomBytes(32).toString('base64url');
       const url = new URL(context.config.authorizationEndpoint);
       url.searchParams.set('response_type', 'code');
       url.searchParams.set('client_id', context.config.clientId);
       url.searchParams.set('redirect_uri', context.routeUrl('/callback'));
       url.searchParams.set('state', state);
-      return { redirectTo: url.href, transaction: { state }, binding: state };
+      url.searchParams.set('code_challenge', s256(codeVerifier));
+      url.searchParams.set('code_challenge_method', 'S256');
+      return { redirectTo: url.href, transaction: { state, codeVerifier }, binding: state };
     },
 
     routes: [
@@ -126,6 +140,7 @@ export function createSampleAuthMethod(
               body: new URLSearchParams({
                 grant_type: 'authorization_code',
                 code,
+                code_verifier: request.transaction.codeVerifier,
                 client_id: context.config.clientId,
                 client_secret: context.config.clientSecret,
                 redirect_uri: context.routeUrl('/callback'),
@@ -138,13 +153,19 @@ export function createSampleAuthMethod(
             return { kind: 'failed', reason: 'upstream_unavailable' };
           }
           if (answer.status !== 200) return { kind: 'failed', reason: 'invalid_response' };
+          let body: unknown;
+          try {
+            body = JSON.parse(Buffer.from(answer.body).toString('utf8'));
+          } catch {
+            return { kind: 'failed', reason: 'invalid_response' };
+          }
           const parsed = z
             .object({
               sub: z.string().min(1).max(255),
               email: z.email(),
               email_verified: z.boolean(),
             })
-            .safeParse(JSON.parse(Buffer.from(answer.body).toString('utf8')));
+            .safeParse(body);
           if (!parsed.success) return { kind: 'failed', reason: 'invalid_response' };
 
           const result: SampleResult = Object.freeze({
@@ -211,7 +232,11 @@ export const SAMPLE_CONFIG: SampleConfig = {
 /** The subject the fake provider signs in. */
 export const SAMPLE_SUBJECT = 'provider-subject-248';
 
-/** The fake provider's token endpoint: a code is `code-for-<subject>`. */
+/**
+ * The fake provider's token endpoint: a code is `code-for-<subject>`, and a
+ * token request without a PKCE verifier is refused. (Whether the verifier
+ * matches the challenge is the kit's check.)
+ */
 export function sampleProviderEgress(request: AuthMethodEgressRequest): AuthMethodEgressResponse {
   const json = (status: number, body: unknown): AuthMethodEgressResponse => ({
     status,
@@ -224,7 +249,11 @@ export function sampleProviderEgress(request: AuthMethodEgressRequest): AuthMeth
   }
   const form = new URLSearchParams(typeof request.body === 'string' ? request.body : '');
   const code = form.get('code') ?? '';
-  if (form.get('client_secret') !== SAMPLE_CONFIG.clientSecret || !code.startsWith('code-for-')) {
+  if (
+    form.get('client_secret') !== SAMPLE_CONFIG.clientSecret ||
+    !code.startsWith('code-for-') ||
+    (form.get('code_verifier') ?? '') === ''
+  ) {
     return json(400, { error: 'invalid_grant' });
   }
   return json(200, {

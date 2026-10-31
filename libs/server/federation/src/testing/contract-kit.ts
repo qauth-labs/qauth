@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { toJSONSchema } from 'zod';
 
 import type {
@@ -68,7 +70,12 @@ export interface AuthMethodKitRequest {
  * @experimental
  */
 export interface AuthMethodKitScenario {
-  /** A config for one realm, which the method's `configSchema` accepts. */
+  /**
+   * A config for one realm, which the method's `configSchema` accepts. Give
+   * its `writeOnly` members realistic secrets (a dozen characters or more):
+   * the kit looks for every one of them, however short, in every log line,
+   * and a secret such as `abc` matches text that is no leak.
+   */
   readonly config: unknown;
   /**
    * Answer the method's outbound calls as the provider would. Without it,
@@ -147,10 +154,16 @@ interface KitRun {
  *    hands the handler the transaction only when it does. It ends in an
  *    identity whose attributes carry the method's `type`; a second sign-in of
  *    the same person resolves the same `externalSub`.
- * 4. `verify()` rejects inputs that no callback produced, a well-formed
+ * 4. When the authorization request asks for a code (`response_type=code`,
+ *    in the redirect or a body the method posted), it carries
+ *    `code_challenge_method=S256` and a `code_challenge` (RFC 7636; QAuth
+ *    requires PKCE with S256), and every token request the callback makes
+ *    (`grant_type=authorization_code`) carries the `code_verifier` whose S256
+ *    is that challenge.
+ * 5. `verify()` rejects inputs that no callback produced, a well-formed
  *    identity, a copy of a real result and a result already used among them.
- * 5. When the scenario gives one, the declined callback ends as `declined`.
- * 6. The method called the global `fetch` nowhere, and no log line carries
+ * 6. When the scenario gives one, the declined callback ends as `declined`.
+ * 7. The method called the global `fetch` nowhere, and no log line carries
  *    the value of a config member marked `writeOnly` (a secret), in a field,
  *    a message or an error.
  *
@@ -240,7 +253,9 @@ async function runChecks(
 
   // The provider signs the person in, for the second start.
   const signIn = await scenario.callback(new URL(second.start.redirectTo));
+  const bodiesBefore = run.egressBodies.length;
   const happy = await callback(method, context, signIn, second.start, run);
+  pkceChecks(second, run.egressBodies.slice(bodiesBefore), run);
   if (happy === HOST_REFUSED) {
     run.stop(
       "the provider's callback does not carry back the binding start() answered, in the callback route's bindingParameter (state by default): the host answers it as transaction_mismatch before the method runs"
@@ -270,7 +285,7 @@ async function runChecks(
   ) {
     run.fail('a second sign-in of the same person did not resolve the same externalSub');
   }
-  run.checks.push('callback');
+  run.checks.push('callback', 'pkce');
 
   await verifyChecks(method, result, run);
   run.checks.push('verify-fails-closed');
@@ -302,6 +317,51 @@ function bindingChecks(first: KitStart, second: KitStart, run: KitRun): void {
     run.fail(
       'start() did not send its binding to the provider, in the redirect or in a body it posted: the provider cannot carry it back'
     );
+  }
+}
+
+/** What a PKCE verifier may be (RFC 7636 §4.1): 43 to 128 unreserved characters. */
+const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+/** What an S256 challenge is: the base64url SHA-256 of a verifier, 43 characters. */
+const PKCE_S256_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * PKCE with S256, as QAuth requires it of every authorization-code request
+ * (RFC 7636): an authorization request that asks for a code carries
+ * `code_challenge_method=S256` and a challenge, and every token request the
+ * callback made carries the verifier whose S256 is that challenge.
+ */
+function pkceChecks(start: KitStart, callbackBodies: readonly string[], run: KitRun): void {
+  const codeRequest = start.authorizationRequests.find(
+    (parameters) => parameters.get('response_type') === 'code'
+  );
+  const challenge = codeRequest?.get('code_challenge') ?? undefined;
+  if (
+    codeRequest !== undefined &&
+    (codeRequest.get('code_challenge_method') !== 'S256' ||
+      challenge === undefined ||
+      !PKCE_S256_CHALLENGE.test(challenge))
+  ) {
+    run.fail(
+      'the authorization request asks for a code without PKCE: it must carry code_challenge_method=S256 and a code_challenge (RFC 7636)'
+    );
+  }
+  const tokenRequests = callbackBodies
+    .map((body) => new URLSearchParams(body))
+    .filter((parameters) => parameters.get('grant_type') === 'authorization_code');
+  for (const tokenRequest of tokenRequests) {
+    const verifier = tokenRequest.get('code_verifier');
+    if (
+      verifier === null ||
+      !PKCE_VERIFIER.test(verifier) ||
+      challenge === undefined ||
+      createHash('sha256').update(verifier, 'ascii').digest('base64url') !== challenge
+    ) {
+      run.fail(
+        "the token request carries no code_verifier whose S256 is the start's code_challenge (RFC 7636 §4.5)"
+      );
+      return;
+    }
   }
 }
 
@@ -338,6 +398,8 @@ async function verifyChecks(method: AuthMethod, result: unknown, run: KitRun): P
 interface KitStart {
   readonly start: UpstreamStart;
   readonly values: readonly string[];
+  /** The redirect's query and each form the start posted (a pushed request). */
+  readonly authorizationRequests: readonly URLSearchParams[];
 }
 
 /** The values of a body the method posted: a form, or the strings of a JSON document. */
@@ -373,11 +435,16 @@ async function started(
   const start = await startUpstreamStep(method, context, { uiLocales: ['en'] }).catch(
     (error: unknown) => run.stop(`start() failed: ${describe(error)}`)
   );
+  const posted = run.egressBodies.slice(before);
   const values = [
     ...new URL(start.redirectTo).searchParams.values(),
-    ...run.egressBodies.slice(before).flatMap(bodyValues),
+    ...posted.flatMap(bodyValues),
   ];
-  return { start, values };
+  const authorizationRequests = [
+    new URL(start.redirectTo).searchParams,
+    ...posted.map((body) => new URLSearchParams(body)),
+  ];
+  return { start, values, authorizationRequests };
 }
 
 /** `work()`, with a synchronous throw read as a rejection, as the host's `await` reads it. */
@@ -552,7 +619,9 @@ function writeOnlyValues(root: unknown, schema: unknown, config: unknown, depth:
     return writeOnlyValues(root, resolveLocalRef(root, reference), config, depth + 1);
   }
   if (node['writeOnly'] === true) {
-    return stringLeaves(config, 0).filter((value) => value.length >= 4);
+    // Every one, however short: a short secret is still a secret. A scenario
+    // gives realistic ones, so a short one does not match by accident.
+    return stringLeaves(config, 0);
   }
   const found: string[] = [];
   for (const keyword of ['anyOf', 'oneOf', 'allOf']) {
@@ -619,7 +688,8 @@ function secretForms(secrets: readonly string[], strings: readonly string[]): st
       forms.add(base64(`${encodeURIComponent(other)}:${encodeURIComponent(secret)}`));
     }
   }
-  return [...forms].filter((form) => form.length >= 4);
+  // Only the empty string is left out: it is inside every line.
+  return [...forms].filter((form) => form.length > 0);
 }
 
 function kitLogger(lines: string[]) {
