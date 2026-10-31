@@ -489,6 +489,36 @@ describe('defaultsFromEnv', () => {
     expect(policies.mail.smtp.port).toBeNull();
   });
 
+  it('reads a deprecated key name as its current one, as the server does', () => {
+    expect(
+      defaultsFromEnv({ REQUIRE_EMAIL_VERIFIED: 'false' }).accounts.requireVerifiedAccount
+    ).toBe(false);
+    expect(
+      defaultsFromEnv({ REQUIRE_EMAIL_VERIFIED: 'false', REQUIRE_VERIFIED_ACCOUNT: 'false' })
+        .accounts.requireVerifiedAccount
+    ).toBe(false);
+    expect(() =>
+      defaultsFromEnv({ REQUIRE_EMAIL_VERIFIED: 'false', REQUIRE_VERIFIED_ACCOUNT: 'true' })
+    ).toThrow(/REQUIRE_EMAIL_VERIFIED/);
+  });
+
+  it('refuses a raw value the server refuses, which it would otherwise seed', () => {
+    for (const env of [
+      { REQUIRE_VERIFIED_ACCOUNT: '0' },
+      { CIMD_ENABLED: '1' },
+      { SMTP_SECURE: ' true ' },
+      { ACCESS_TOKEN_LIFESPAN: '' },
+      { CIMD_TRUST_POLICY: ' ' },
+    ]) {
+      expect(() => defaultsFromEnv(env), JSON.stringify(env)).toThrow(PolicySeedError);
+    }
+    // Blank is unset where the server reads it so, never the weakest score.
+    expect(defaultsFromEnv({ PASSWORD_MIN_SCORE: '' }).password.minScore).toBe(2);
+    expect(defaultsFromEnv({ REQUIRE_VERIFIED_ACCOUNT: ' ' }).accounts.requireVerifiedAccount).toBe(
+      true
+    );
+  });
+
   it('never seeds a secret into the document', () => {
     const policies = defaultsFromEnv({ SMTP_PASSWORD: 'p4ss', RESEND_API_KEY: 're_key' });
     expect(JSON.stringify(policies)).not.toMatch(/p4ss|re_key/);

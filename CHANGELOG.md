@@ -1782,6 +1782,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A blank `PASSWORD_MIN_SCORE` no longer means score 0.** The schema read
+  `''` as the number `0`, the weakest zxcvbn score, so a deployment that set
+  the variable blank (`PASSWORD_MIN_SCORE=`, or an orchestrator that passes an
+  absent variable as `''`) accepted a password of any strength. Blank is now
+  unset and takes the default, `2`. `docker-compose.yml` forwards
+  `${PASSWORD_MIN_SCORE:-2}` and was not affected. `EMAIL_FROM_NAME`,
+  `SMTP_HOST` and `SMTP_USER` read blank as unset too, as the other keys that
+  seed a realm's policies do (#514); `EMAIL_FROM_NAME` then takes its default,
+  `QAuth`.
 - **The OpenAPI document no longer claims version 1.0.0.** `info.version` was
   a fixed `1.0.0` from the first Swagger UI (2026-02-28), which read as the 1.0
   stability promise QAuth has not made. A release image now carries its own

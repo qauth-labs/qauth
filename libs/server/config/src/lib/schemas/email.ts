@@ -39,9 +39,10 @@ export const emailEnvSchema = z.object({
   EMAIL_FROM_ADDRESS: z.email(),
 
   /**
-   * Default sender name (default: 'QAuth')
+   * Default sender name (default: 'QAuth'). Blank is unset, as for every key
+   * that seeds a realm policy (#514).
    */
-  EMAIL_FROM_NAME: z.string().default('QAuth'),
+  EMAIL_FROM_NAME: z.preprocess(blankAsUnset, z.string().default('QAuth')),
 
   /**
    * Optional and not read since 0.2.0 (#490): a link in mail starts at the
@@ -57,9 +58,9 @@ export const emailEnvSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
 
   /**
-   * SMTP host (required if EMAIL_PROVIDER is 'smtp')
+   * SMTP host (required if EMAIL_PROVIDER is 'smtp'). Blank is unset.
    */
-  SMTP_HOST: z.string().optional(),
+  SMTP_HOST: z.preprocess(blankAsUnset, z.string().optional()),
 
   /**
    * SMTP port (required if EMAIL_PROVIDER is 'smtp')
@@ -79,9 +80,9 @@ export const emailEnvSchema = z.object({
     .transform((v) => v === 'true'),
 
   /**
-   * SMTP username (required if EMAIL_PROVIDER is 'smtp')
+   * SMTP username (required if EMAIL_PROVIDER is 'smtp'). Blank is unset.
    */
-  SMTP_USER: z.string().optional(),
+  SMTP_USER: z.preprocess(blankAsUnset, z.string().optional()),
 
   /**
    * SMTP password (required if EMAIL_PROVIDER is 'smtp')

@@ -4,12 +4,12 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "@qauth-labs/server-config": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "tslib": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@qauth-labs/server-config": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "vitest": "catalog:"

@@ -144,6 +144,33 @@ export class PolicySeedError extends Error {
 /** The environment as `defaultsFromEnv` reads it: raw strings, or values the env schema parsed. */
 export type PolicySeedEnv = Readonly<Record<string, unknown>>;
 
+/**
+ * How a registry reads the environment as the server does, so a new realm is
+ * seeded with the values the server runs with: the server's key aliases, and
+ * its parser of each key's raw string.
+ */
+export interface PolicyEnvReader {
+  /**
+   * The environment with every old key name read under its current one.
+   *
+   * @throws when an old and a current name disagree, as the server's boot does
+   */
+  readonly applyAliases: (env: PolicySeedEnv) => PolicySeedEnv;
+  /** The server's parser of `key`'s raw string, or `undefined` when it has none. */
+  readonly parserOf: (key: string) => z.ZodType | undefined;
+}
+
+/** What {@link createPolicyRegistry} takes. */
+export interface PolicyRegistryOptions {
+  /** The schema version; {@link REALM_POLICY_SCHEMA_VERSION} by default. */
+  readonly version?: string;
+  /**
+   * How the environment is read. Without it, a raw string is read by the
+   * generic rules of {@link PolicyRegistry.defaultsFromEnv}.
+   */
+  readonly env?: PolicyEnvReader;
+}
+
 /** A JSON Schema object. */
 export type JsonSchemaObject = Record<string, unknown>;
 
@@ -176,14 +203,19 @@ export interface PolicyRegistry {
   /**
    * The policy document of a new realm: each field from its seed key in
    * `env`, or its default where `env` does not set the key (ADR-019 Decision
-   * 10). A value the env schema already parsed is taken as it is; a raw
-   * string is read as the environment writes it (numbers, `true`/`false` or
-   * `1`/`0`, lists separated by spaces or commas; blank is unset, or the
-   * empty list). Secret fields are not in the document; see
-   * {@link secretSeedsFromEnv}.
+   * 10). A value the env schema already parsed is taken as it is. A raw
+   * string is read by the server's parser of its key when the registry has
+   * an env reader (`PolicyRegistryOptions.env`), after the key aliases, so a
+   * value the server refuses is refused here too; otherwise it is read as
+   * the environment writes it (numbers, `true`/`false` or `1`/`0`, lists
+   * separated by spaces or commas; blank is unset, or the empty list).
+   * Secret fields are not in the document; see {@link secretSeedsFromEnv}.
    */
   defaultsFromEnv(env: PolicySeedEnv): Record<string, unknown>;
-  /** The secret values `env` seeds, by field path, for the realm's secret store. */
+  /**
+   * The secret values `env` seeds, by field path, for the realm's secret
+   * store, read as {@link defaultsFromEnv} reads a value.
+   */
   secretSeedsFromEnv(env: PolicySeedEnv): ReadonlyMap<string, string>;
   /**
    * The changes from `before` to `after`, both parsed as the `input` view
@@ -315,8 +347,9 @@ function issuesOf(error: z.ZodError): PolicyIssue[] {
 }
 
 /** Create an empty registry. `version` defaults to {@link REALM_POLICY_SCHEMA_VERSION}. */
-export function createPolicyRegistry(options: { readonly version?: string } = {}): PolicyRegistry {
+export function createPolicyRegistry(options: PolicyRegistryOptions = {}): PolicyRegistry {
   const version = options.version ?? REALM_POLICY_SCHEMA_VERSION;
+  const envReader = options.env;
   if (!isPolicySchemaVersion(version)) {
     throw new PolicyDefinitionError(
       `"${String(version)}" is not a policy schema version (1-rc.<M>, or 1 from 1.0.0)`
@@ -507,11 +540,37 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     return result.data as Record<string, unknown>;
   }
 
+  /** The server's parser of `key`, when `raw` is a raw string and the registry has one. */
+  const serverParser = (key: string, raw: unknown): z.ZodType | undefined =>
+    typeof raw === 'string' ? envReader?.parserOf(key) : undefined;
+
+  /**
+   * `raw` as the server's `parser` reads it. A value the parser refuses is
+   * refused without its issues, which may repeat the value.
+   */
+  function readAsServer(
+    parser: z.ZodType,
+    entry: RegisteredPolicyField,
+    key: string,
+    raw: unknown
+  ): unknown {
+    const read = parser.safeParse(raw);
+    if (!read.success) {
+      throw new PolicySeedError(key, entry.path, 'the server refuses it as the value of this key');
+    }
+    return read.data;
+  }
+
   /** The value `raw` seeds into `entry`, or `undefined` for unset. */
   function seedValue(entry: RegisteredPolicyField, key: string, raw: unknown): unknown {
     const { field } = entry;
+    const parser = serverParser(key, raw);
     let candidate = raw;
-    if (typeof raw === 'string') {
+    if (parser !== undefined) {
+      // As the server reads the key, so a new realm starts with the value the
+      // server runs with.
+      candidate = readAsServer(parser, entry, key, raw);
+    } else if (typeof raw === 'string') {
       const kind = valueKind(field.schema);
       // A string-valued field takes the string as it is, unless it is blank.
       candidate =
@@ -540,7 +599,8 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     return result.data;
   }
 
-  function defaultsFromEnv(env: PolicySeedEnv): Record<string, unknown> {
+  function defaultsFromEnv(rawEnv: PolicySeedEnv): Record<string, unknown> {
+    const env = envReader?.applyAliases(rawEnv) ?? rawEnv;
     const document: Record<string, unknown> = {};
     for (const entry of entries) {
       const { field } = entry;
@@ -556,12 +616,15 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     return parse(document, 'document');
   }
 
-  function secretSeedsFromEnv(env: PolicySeedEnv): ReadonlyMap<string, string> {
+  function secretSeedsFromEnv(rawEnv: PolicySeedEnv): ReadonlyMap<string, string> {
+    const env = envReader?.applyAliases(rawEnv) ?? rawEnv;
     const secrets = new Map<string, string>();
     for (const entry of entries) {
       const { field } = entry;
       if (!field.secret || field.seedEnv === null) continue;
-      const raw = env[field.seedEnv];
+      const given = env[field.seedEnv];
+      const parser = serverParser(field.seedEnv, given);
+      const raw = parser === undefined ? given : readAsServer(parser, entry, field.seedEnv, given);
       if (raw === undefined || (typeof raw === 'string' && raw.trim() === '')) continue;
       const result = field.schema.safeParse(raw);
       if (!result.success || typeof result.data !== 'string') {

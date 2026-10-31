@@ -1,3 +1,15 @@
+import {
+  applyKeyAliases,
+  authEnvSchema,
+  CONFIG_KEY_REGISTRY,
+  emailEnvSchema,
+  envSchemaShape,
+  jwtEnvSchema,
+  observabilityEnvSchema,
+  passwordEnvSchema,
+} from '@qauth-labs/server-config';
+import type { z } from 'zod';
+
 import type { PolicyField } from './field';
 import { BUILT_IN_POLICY_GROUPS } from './groups';
 import {
@@ -5,6 +17,7 @@ import {
   type JsonSchemaObject,
   type PolicyDiff,
   type PolicyDiffOptions,
+  type PolicyEnvReader,
   type PolicyGroupShape,
   type PolicyRegistry,
   type PolicySeedEnv,
@@ -52,8 +65,37 @@ export type RealmPoliciesRepresentation = {
   -readonly [G in keyof BuiltInGroups]: PolicyGroupRepresentation<BuiltInGroups[G]>;
 };
 
+/** The server's parser of each key of the env schemas whose keys seed the built-in groups. */
+const SERVER_ENV_PARSERS: ReadonlyMap<string, z.ZodType> = new Map(
+  [authEnvSchema, jwtEnvSchema, passwordEnvSchema, observabilityEnvSchema, emailEnvSchema].flatMap(
+    (schema) => Object.entries(envSchemaShape(schema))
+  )
+);
+
+/**
+ * The environment as the auth server reads it (`@qauth-labs/server-config`):
+ * its key aliases, and each key's parser, so seeding a realm from raw strings
+ * and from the parsed environment can never disagree, nor with the server.
+ */
+export const REALM_POLICY_ENV: PolicyEnvReader = Object.freeze({
+  applyAliases(env: PolicySeedEnv): PolicySeedEnv {
+    const strings: Record<string, string> = {};
+    const parsed: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(env)) {
+      if (typeof value === 'string') strings[key] = value;
+      else parsed[key] = value;
+    }
+    // Only raw strings carry the old names; a value already parsed is read
+    // under its current name.
+    return { ...applyKeyAliases(strings, CONFIG_KEY_REGISTRY).env, ...parsed };
+  },
+  parserOf: (key: string) => SERVER_ENV_PARSERS.get(key),
+});
+
 /** The registry of QAuth's realm policies, with the built-in groups registered. */
-export const REALM_POLICY_REGISTRY: PolicyRegistry = createPolicyRegistry();
+export const REALM_POLICY_REGISTRY: PolicyRegistry = createPolicyRegistry({
+  env: REALM_POLICY_ENV,
+});
 for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
   REALM_POLICY_REGISTRY.registerPolicyGroup(name, shape);
 }
@@ -83,7 +125,11 @@ export function diffPolicies(
 
 /**
  * A new realm's policies from the environment (ADR-019 Decision 10): pass the
- * environment as the server's env schema parsed it, or raw strings.
+ * environment as the server's env schema parsed it, or raw strings, which are
+ * read as the server reads them ({@link REALM_POLICY_ENV}).
+ *
+ * @throws PolicySeedError when a value cannot seed its field
+ * @throws KeyAliasConflictError when an old and a current key name disagree
  */
 export function defaultsFromEnv(env: PolicySeedEnv): RealmPolicies {
   return REALM_POLICY_REGISTRY.defaultsFromEnv(env) as RealmPolicies;

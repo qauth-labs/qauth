@@ -8,7 +8,8 @@ import type { z } from 'zod';
 
 import { ANNOTATION_KEYS, DIRECTION_KINDS, directionKind, SECURITY_WHEN } from './field';
 import { renderRealmPoliciesPage } from './page';
-import { REALM_POLICY_REGISTRY } from './realm-policies';
+import { REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
+import { PolicySeedError } from './registry';
 
 /**
  * Contract tests over every registered group (#514): what each field must
@@ -307,6 +308,15 @@ describe('the configuration key registry (#449)', () => {
     }
   });
 
+  it("reads every seed key with the server's own parser", () => {
+    for (const { path, field } of FIELDS) {
+      if (field.seedEnv === null) continue;
+      expect(REALM_POLICY_ENV.parserOf(field.seedEnv), `${path}: ${field.seedEnv}`).toBe(
+        envFields.get(field.seedEnv)
+      );
+    }
+  });
+
   it("gives each field its env schema's default", () => {
     for (const { path, field } of FIELDS) {
       if (field.seedEnv === null) continue;
@@ -318,11 +328,31 @@ describe('the configuration key registry (#449)', () => {
     }
   });
 
-  /** Raw values of each kind, as an operator writes them. */
+  /**
+   * Raw values of each kind, as an operator writes them. Blank is in every
+   * kind: Docker Compose passes an absent variable as `''`.
+   */
+  const BLANK = ['', ' '];
   const SAMPLES: Readonly<Record<string, readonly string[]>> = {
-    number: ['1', '3', '60', '587', ' 900 ', '3600', '1e3', '0x10', '+5', '86400', '2.5', 'soon'],
-    boolean: ['true', 'false', '1', '0', 'TRUE', 'yes'],
+    number: [
+      ...BLANK,
+      '0',
+      '1',
+      '3',
+      '60',
+      '587',
+      ' 900 ',
+      '3600',
+      '1e3',
+      '0x10',
+      '+5',
+      '86400',
+      '2.5',
+      'soon',
+    ],
+    boolean: [...BLANK, 'true', 'false', '1', '0', 'TRUE', ' true ', 'yes'],
     list: [
+      ...BLANK,
       'a',
       'openid profile',
       'openid,profile',
@@ -333,6 +363,7 @@ describe('the configuration key registry (#449)', () => {
       'qauth:admin:read',
     ],
     text: [
+      ...BLANK,
       'QAuth',
       'smtp',
       'resend',
@@ -360,19 +391,31 @@ describe('the configuration key registry (#449)', () => {
   // Every value the env schema accepts seeds the value it parses to (a set
   // without repeats); where seeding refuses one, the policy type refuses the
   // env schema's value too, so the refusal is the policy's stricter bound and
-  // never a misreading of the string.
-  it('reads a raw value as the env schema reads it, wherever that schema accepts it', () => {
+  // never a misreading of the string. A value the env schema refuses, which
+  // stops the server, is refused too.
+  it('reads a raw value as the env schema reads it', () => {
     let compared = 0;
+    let refused = 0;
     for (const { path, field } of FIELDS) {
       if (field.seedEnv === null || field.secret) continue;
       const envField = envFields.get(field.seedEnv);
       if (envField === undefined) continue;
       for (const sample of SAMPLES[kindOf(field.default, path)]) {
         const parsed = envField.safeParse(sample);
-        if (!parsed.success) continue;
+        if (!parsed.success) {
+          expect(
+            () => REALM_POLICY_REGISTRY.defaultsFromEnv({ [field.seedEnv]: sample }),
+            `${field.seedEnv}=${JSON.stringify(sample)}`
+          ).toThrow(PolicySeedError);
+          refused++;
+          continue;
+        }
+        // An optional key the env schema reads as unset seeds the default.
         const expected = Array.isArray(parsed.data)
           ? [...new Set(parsed.data as unknown[])]
-          : parsed.data;
+          : parsed.data === undefined
+            ? field.default
+            : parsed.data;
         let seeded: unknown;
         try {
           seeded = valueAtPath(
@@ -390,6 +433,7 @@ describe('the configuration key registry (#449)', () => {
       }
     }
     expect(compared).toBeGreaterThan(40);
+    expect(refused).toBeGreaterThan(20);
   });
 
   it('seeds from the parsed environment exactly what it seeds from the raw one', () => {
@@ -415,5 +459,35 @@ describe('the configuration key registry (#449)', () => {
         );
       }
     }
+  });
+
+  it('seeds through an old key name what it seeds through the current one', () => {
+    let compared = 0;
+    for (const key of config.CONFIG_KEY_REGISTRY) {
+      if (key.role !== 'realm-seed' || key.seeds === undefined) continue;
+      const entry = REALM_POLICY_REGISTRY.field(key.seeds);
+      if (entry === undefined) continue;
+      for (const alias of key.aliases) {
+        for (const sample of SAMPLES[kindOf(entry.field.default, entry.path)]) {
+          const seed = (name: string) => {
+            try {
+              return entry.field.secret
+                ? REALM_POLICY_REGISTRY.secretSeedsFromEnv({ [name]: sample })
+                : valueAtPath(
+                    REALM_POLICY_REGISTRY.defaultsFromEnv({ [name]: sample }),
+                    entry.path
+                  );
+            } catch (error) {
+              return error instanceof Error ? error.name : 'refused';
+            }
+          };
+          expect(seed(alias.name), `${alias.name}=${JSON.stringify(sample)}`).toEqual(
+            seed(key.name)
+          );
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(0);
   });
 });
