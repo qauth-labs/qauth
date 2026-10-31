@@ -4,6 +4,7 @@ import { decodeProtectedHeader, importPKCS8, type JSONWebKeySet, SignJWT } from 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  allowConsentScreen,
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
@@ -208,6 +209,8 @@ describe('tokens of a retired key verify until its retention ends (#492)', () =>
    * access token from the code flow: its `aud` is the agent's client_id, so
    * userinfo, the agent's introspection and the agent's token exchange accept
    * it. Also a first-party `/auth/login` token, which `/auth/logout` takes.
+   * The stored consent does not skip the screen for an agent (ADR-015
+   * Decision 11, #845), so the code flow allows it there.
    */
   async function userTokens(
     app: FastifyInstance
@@ -261,8 +264,12 @@ describe('tokens of a retired key verify until its retention ends (#492)', () =>
       headers: { cookie: jar.header() as string },
     });
     expect(authorize.statusCode, authorize.body).toBe(302);
-    const code = new URL(String(authorize.headers['location'])).searchParams.get('code');
-    if (code === null) throw new Error('authorize returned no code');
+    let location = String(authorize.headers['location']);
+    if (location.startsWith('/ui/consent?')) {
+      location = await allowConsentScreen(app, jar.header() as string, location);
+    }
+    const code = new URL(location).searchParams.get('code');
+    if (code === null) throw new Error(`authorize returned no code: ${location}`);
     const token = await app.inject({
       method: 'POST',
       url: '/oauth/token',
