@@ -6,8 +6,15 @@ import { createMemoryKeyStore } from '../testing/memory-key-store';
 import { createMemorySignerStore } from '../testing/memory-signer-store';
 import { createInProcessSigner } from './in-process-signer';
 import { createKeyFactory } from './key-factory';
-import { createPublishedKeyReader, publicKeyIdentity } from './published-keys';
+import {
+  createPublishedKeyReader,
+  isPublishedAt,
+  publicKeyIdentity,
+  realmJwksOf,
+  verificationKeysOf,
+} from './published-keys';
 import { isSignerError } from './signer-errors';
+import type { PublicKeyRecord } from './signer-key-store';
 
 const REALM_A = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
 const REALM_B = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e02';
@@ -98,6 +105,60 @@ describe('createPublishedKeyReader (#491, #495)', () => {
     ]) {
       await expect(attempt).rejects.toSatisfy((error: unknown) => isSignerError(error));
     }
+  });
+});
+
+describe('a retired key with no set end to its publication (#492)', () => {
+  const published = (
+    kid: string,
+    status: PublicKeyRecord['status'],
+    unpublishAt: number | null
+  ): PublicKeyRecord => ({
+    kid,
+    purpose: 'token_signing',
+    algorithm: 'EdDSA',
+    status,
+    publicJwk: { kty: 'OKP', crv: 'Ed25519', x: kid, alg: 'EdDSA' },
+    publishAt: NOW - 1000,
+    unpublishAt,
+  });
+  const records = [
+    published('active', 'active', null),
+    published('next', 'next', null),
+    published('retired-open', 'retired', null),
+    published('retired-kept', 'retired', NOW + 1),
+    published('retired-ended', 'retired', NOW),
+  ];
+
+  it('is out of its window at once, while an active or next key stays open-ended', () => {
+    const inWindow = (kid: string) =>
+      isPublishedAt(records.find((record) => record.kid === kid) as PublicKeyRecord, NOW);
+    expect(inWindow('active')).toBe(true);
+    expect(inWindow('next')).toBe(true);
+    expect(inWindow('retired-kept')).toBe(true);
+    expect(inWindow('retired-open')).toBe(false);
+    expect(inWindow('retired-ended')).toBe(false);
+  });
+
+  it('neither verifies nor is served, so the verification set and the JWKS agree', async () => {
+    expect(verificationKeysOf(records, 'token_signing', NOW).map((key) => key.kid)).toEqual([
+      'active',
+      'retired-kept',
+    ]);
+    expect(realmJwksOf(records, NOW).keys.map((jwk) => jwk.kid)).toEqual([
+      'active',
+      'next',
+      'retired-kept',
+    ]);
+
+    const reader = createPublishedKeyReader(
+      { listPublicKeys: async () => records },
+      { now: () => NOW }
+    );
+    const verifying = await reader.getVerificationKeys('local', REALM_A, 'token_signing');
+    const served = await reader.getJwks('local', REALM_A);
+    expect(verifying.map((key) => key.kid)).not.toContain('retired-open');
+    expect(served.keys.map((jwk) => jwk.kid)).not.toContain('retired-open');
   });
 });
 
