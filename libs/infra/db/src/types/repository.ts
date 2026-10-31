@@ -460,6 +460,14 @@ export interface RefreshTokensRepository {
     tx?: DbClient
   ): Promise<number>;
   /**
+   * Revoke every live refresh token of one client, for every user, under each
+   * holder's revocation lock (#631: removing a client's first-party profile
+   * ends every family it holds).
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeAllForClient(oauthClientId: string, reason: string, tx?: DbClient): Promise<number>;
+  /**
    * Delete the families whose every token has expired, whole. A rotated token
    * is kept while its family has a live token, so replay detection lasts as
    * long as the family. Returns count of deleted tokens.

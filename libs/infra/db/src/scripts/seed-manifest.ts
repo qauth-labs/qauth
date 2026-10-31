@@ -5,8 +5,13 @@
  * it, like `client-suspension.ts`.
  */
 import {
+  FIRST_PARTY_PROFILES,
+  FIRST_PARTY_REASON_MAX_LENGTH,
+  type FirstPartyPolicy,
+  firstPartyPolicySchema,
   InvalidVerifiedDomainError,
   InvalidWebAuthnOriginError,
+  isNativeBrowserLegRedirectUri,
   isReservedAudience,
   isReservedQauthScope,
   normaliseVerifiedDomain,
@@ -137,6 +142,26 @@ export const clientSpecSchema = z
     // only path. No registration path accepts it. Omitted ⇒ NULL ⇒ the
     // screens say the app is unverified.
     verified_domain: verifiedDomainZ.optional(),
+    // ADR-017 Decision 2 (#631): the client's first-party profile. Set it only
+    // for an app the entity that operates this server controls and that users
+    // see under that entity's brand; another entity's app, a tenant's
+    // included, uses `/oauth/authorize` as a third party. `web_redirect` earns
+    // the consent waiver at `/oauth/authorize`; `native_backend` reaches the
+    // authorization challenge endpoint. Operator-set only, like
+    // `max_agent_mode`: no registration path accepts it, and the database
+    // refuses it on a dynamic, CIMD, agent or developer-owned client. Removing
+    // it on `--rotate` revokes every refresh token of the client. Omitted ⇒
+    // NULL ⇒ not first party.
+    first_party_profile: z.enum(FIRST_PARTY_PROFILES).optional(),
+    // A `native_backend` client's policy: `flows` (default `["login"]`),
+    // `email_code_after_password` (default false), `pkce_required` (default
+    // true). Strict: an unknown member is refused. Omitted on a native
+    // profile ⇒ the defaults.
+    first_party_policy: firstPartyPolicySchema.optional(),
+    // The operator's written reason for the profile, stored with the client
+    // and recorded in its `client.first_party_changed` event. Required with a
+    // profile, refused without one.
+    first_party_reason: z.string().trim().min(1).max(FIRST_PARTY_REASON_MAX_LENGTH).optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be
@@ -157,6 +182,73 @@ export const clientSpecSchema = z
     {
       message: 'token_endpoint_auth_method=private_key_jwt requires either jwks or jwks_uri',
       path: ['token_endpoint_auth_method'],
+    }
+  )
+  // ADR-017 Decision 2 (#631). The database CHECKs hold the profile's shape
+  // on every path; these say what is wrong in the operator's own terms first,
+  // and add the rules only the seed can check.
+  .refine(
+    (spec) => spec.first_party_profile === undefined || spec.first_party_reason !== undefined,
+    {
+      message:
+        "first_party_profile requires first_party_reason: a written reason why this deployment's operator controls the app and users see it under the operator's brand",
+      path: ['first_party_reason'],
+    }
+  )
+  .refine(
+    (spec) => spec.first_party_reason === undefined || spec.first_party_profile !== undefined,
+    {
+      message: 'first_party_reason applies only together with first_party_profile',
+      path: ['first_party_reason'],
+    }
+  )
+  .refine(
+    (spec) =>
+      spec.first_party_policy === undefined || spec.first_party_profile === 'native_backend',
+    {
+      message: 'first_party_policy applies only to first_party_profile=native_backend',
+      path: ['first_party_policy'],
+    }
+  )
+  .refine(
+    (spec) =>
+      spec.first_party_profile === undefined ||
+      spec.token_endpoint_auth_method === 'private_key_jwt',
+    {
+      message:
+        'first_party_profile requires token_endpoint_auth_method=private_key_jwt: no first-party client authenticates with a secret or as a public client',
+      path: ['token_endpoint_auth_method'],
+    }
+  )
+  .refine((spec) => spec.first_party_profile === undefined || spec.is_agent !== true, {
+    message: 'first_party_profile cannot be set on an agent (is_agent: true)',
+    path: ['first_party_profile'],
+  })
+  .refine(
+    (spec) => spec.first_party_profile !== 'native_backend' || Boolean(spec.jwks || spec.jwks_uri),
+    {
+      message:
+        "first_party_profile=native_backend requires the backend's public keys: set jwks or jwks_uri",
+      path: ['first_party_profile'],
+    }
+  )
+  .refine(
+    (spec) =>
+      spec.first_party_profile !== 'native_backend' ||
+      spec.grant_types.includes('authorization_code'),
+    {
+      message: 'first_party_profile=native_backend requires the authorization_code grant',
+      path: ['grant_types'],
+    }
+  )
+  .refine(
+    (spec) =>
+      spec.first_party_profile !== 'native_backend' ||
+      (spec.redirect_uris ?? []).some(isNativeBrowserLegRedirectUri),
+    {
+      message:
+        'first_party_profile=native_backend requires at least one redirect URI for the browser leg: an https URI, a private-use scheme in reverse domain-name form (com.example.app:/callback) or an http loopback IP literal (http://127.0.0.1/callback)',
+      path: ['redirect_uris'],
     }
   );
 
@@ -254,5 +346,31 @@ export const manifestSchema = z
   );
 
 export type ClientSpec = z.infer<typeof clientSpecSchema>;
+
+/** A client's first-party columns, as the manifest sets them. */
+export interface ClientFirstPartyColumns {
+  readonly profile: (typeof FIRST_PARTY_PROFILES)[number] | null;
+  readonly policy: FirstPartyPolicy | null;
+  readonly reason: string | null;
+}
+
+/**
+ * The first-party columns a client entry writes (#631). A `native_backend`
+ * entry with no policy gets the policy's defaults, so the stored row always
+ * holds every member; every other entry writes NULL for all three, which on
+ * `--rotate` removes a profile the row had.
+ */
+export function firstPartyColumnsOf(spec: ClientSpec): ClientFirstPartyColumns {
+  const profile = spec.first_party_profile ?? null;
+  if (profile === null) return { profile: null, policy: null, reason: null };
+  return {
+    profile,
+    policy:
+      profile === 'native_backend'
+        ? (spec.first_party_policy ?? firstPartyPolicySchema.parse({}))
+        : null,
+    reason: spec.first_party_reason ?? null,
+  };
+}
 export type CimdClientSpec = z.infer<typeof cimdClientSpecSchema>;
 export type Manifest = z.infer<typeof manifestSchema>;

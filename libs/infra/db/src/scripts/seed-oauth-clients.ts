@@ -38,31 +38,23 @@
  * does not apply: an entry always converges the row on the manifest. See
  * `cimd-client-grants.ts`.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { hash } from '@node-rs/argon2';
 import * as dotenv from 'dotenv';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 
-import { oauthClients, realms } from '../lib/schema';
+import { realms } from '../lib/schema';
 import { applyCimdClientGrant, type CimdGrantResult } from './cimd-client-grants';
-import { type ClientSpec, manifestSchema } from './seed-manifest';
+import { type Issued, provisionClient } from './seed-clients';
+import { type ClientSpec, firstPartyColumnsOf, manifestSchema } from './seed-manifest';
 
 dotenv.config({ path: '../../../.env' });
 
 /* ------------------------------------------------------------------------ */
 /*                                 Helpers                                  */
 /* ------------------------------------------------------------------------ */
-
-// Matches `DEFAULT_PASSWORD_CONFIG` in libs/server/password so hashes verify
-// against the same settings the auth-server uses at runtime.
-const ARGON2_OPTS = { memoryCost: 65536, timeCost: 3, parallelism: 4 } as const;
-
-function generateClientSecret(): string {
-  return randomBytes(32).toString('hex');
-}
 
 function fingerprint(secret: string): string {
   return createHash('sha256').update(secret).digest('hex').slice(0, 8);
@@ -89,9 +81,6 @@ function parseArgs(argv: string[]): { manifestPath: string; rotate: boolean } {
 /* ------------------------------------------------------------------------ */
 /*                                   Main                                   */
 /* ------------------------------------------------------------------------ */
-
-type Action = 'created' | 'rotated' | 'skipped';
-type Issued = { clientId: string; secret: string; action: Action };
 
 async function main(): Promise<void> {
   const { manifestPath, rotate } = parseArgs(process.argv);
@@ -126,6 +115,7 @@ async function main(): Promise<void> {
     // Print the secrets before anything else can fail: they are already
     // committed, and the database keeps only their hashes.
     if (issued.length > 0) report(manifest.realm, issued);
+    warnPkceOff(manifest.clients ?? []);
 
     const granted: CimdGrantResult[] = [];
     for (const spec of manifest.cimd_clients ?? []) {
@@ -138,135 +128,6 @@ async function main(): Promise<void> {
   } finally {
     await db.$client.end();
   }
-}
-
-/**
- * Provision a single client. The check-then-act is wrapped in a transaction
- * so that if two seeder instances ever raced, one would block on the
- * row-level lock acquired by the other's read (FOR UPDATE semantics are
- * implicit in an UPDATE under READ COMMITTED on the same row).
- *
- * argon2 hashing is deliberately done *inside* the transaction only after
- * we've decided we need a new hash — so the skip path incurs no CPU cost.
- */
-async function provisionClient(
-  db: ReturnType<typeof drizzle>,
-  realmId: string,
-  spec: ClientSpec,
-  rotate: boolean
-): Promise<Issued> {
-  return db.transaction(async (tx) => {
-    const [existing] = await tx
-      .select({ id: oauthClients.id })
-      .from(oauthClients)
-      .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, spec.client_id)))
-      .limit(1);
-
-    if (existing && !rotate) {
-      return { clientId: spec.client_id, secret: '', action: 'skipped' as const };
-    }
-
-    const plaintextSecret = generateClientSecret();
-    const clientSecretHash = await hash(plaintextSecret, ARGON2_OPTS);
-
-    if (existing) {
-      await tx
-        .update(oauthClients)
-        .set(buildUpdate(spec, clientSecretHash))
-        .where(eq(oauthClients.id, existing.id));
-      return { clientId: spec.client_id, secret: plaintextSecret, action: 'rotated' as const };
-    }
-
-    await tx.insert(oauthClients).values(buildInsert(realmId, spec, clientSecretHash));
-    return { clientId: spec.client_id, secret: plaintextSecret, action: 'created' as const };
-  });
-}
-
-/* ------------------------------------------------------------------------ */
-/*                              Row builders                                */
-/* ------------------------------------------------------------------------ */
-
-/**
- * Row for a freshly-inserted client. Defaults here mirror the schema column
- * defaults (require_pkce = true, response_types = ['code']) so a client
- * created via seed behaves identically to one created via the dev portal.
- */
-function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string) {
-  return {
-    realmId,
-    clientId: spec.client_id,
-    clientSecretHash,
-    name: spec.name,
-    description: spec.description ?? null,
-    redirectUris: spec.redirect_uris ?? [],
-    scopes: spec.scopes ?? [],
-    audience: spec.audience ?? null,
-    // ADR-011 (#434) ID-JAG targets; `[]` = no ID-JAG mint or redemption.
-    idJagTargets: spec.id_jag_targets ?? [],
-    requirePkce: spec.require_pkce ?? true,
-    tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
-    grantTypes: spec.grant_types,
-    responseTypes: spec.response_types ?? ['code'],
-    isAgent: spec.is_agent ?? false,
-    // Operator-set agent scope-mode cap; null = deny-by-default (no agent mode).
-    maxAgentMode: spec.max_agent_mode ?? null,
-    // RFC 7591 §2 client JWKS for `private_key_jwt` (#384). Mutually exclusive
-    // — the manifest validator rejects a spec that sets both.
-    jwks: spec.jwks ?? null,
-    jwksUri: spec.jwks_uri ?? null,
-    // Operator-set passkey origins (#467), normalised by the manifest schema.
-    webauthnAllowedOrigins: Array.from(new Set(spec.webauthn_allowed_origins ?? [])),
-    // RFC 9449 §5.2 (#480): refuse this client's token requests without a
-    // DPoP proof while DPOP_ENABLED is on. false = DPoP stays optional.
-    dpopBoundAccessTokens: spec.dpop_bound_access_tokens ?? false,
-    // ADR-019 Decision 6 (#593): the domain the screens show first, normalised
-    // by the manifest schema. NULL = the screens say the app is unverified.
-    verifiedDomain: spec.verified_domain ?? null,
-    enabled: true,
-    // The operator wrote this client, redirect URIs included, so it is the one
-    // kind that receives authorization errors by automatic redirect
-    // (RFC 9700 §4.11.2, ANT-2026-O8U3P920).
-    provisionedByOperator: true,
-  } as const;
-}
-
-/**
- * Row for a rotation. Deliberately omits `enabled` so Drizzle doesn't emit
- * it in the SET clause — a client that was manually disabled in the DB
- * stays disabled after a secret rotation.
- */
-function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
-  return {
-    clientSecretHash,
-    name: spec.name,
-    description: spec.description ?? null,
-    redirectUris: spec.redirect_uris ?? [],
-    scopes: spec.scopes ?? [],
-    audience: spec.audience ?? null,
-    // ADR-011 (#434) ID-JAG targets; `[]` = no ID-JAG mint or redemption.
-    idJagTargets: spec.id_jag_targets ?? [],
-    requirePkce: spec.require_pkce ?? true,
-    tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
-    grantTypes: spec.grant_types,
-    responseTypes: spec.response_types ?? ['code'],
-    isAgent: spec.is_agent ?? false,
-    // Operator-set agent scope-mode cap; null = deny-by-default (no agent mode).
-    maxAgentMode: spec.max_agent_mode ?? null,
-    // Kept in lock-step with the manifest so a key rotation is a manifest edit
-    // + re-run, exactly like the other document-derived fields above.
-    jwks: spec.jwks ?? null,
-    jwksUri: spec.jwks_uri ?? null,
-    webauthnAllowedOrigins: Array.from(new Set(spec.webauthn_allowed_origins ?? [])),
-    dpopBoundAccessTokens: spec.dpop_bound_access_tokens ?? false,
-    // Removed from the manifest ⇒ cleared, like every other operator field.
-    verifiedDomain: spec.verified_domain ?? null,
-    // A rotation rewrites every field from the manifest, redirect URIs
-    // included, so the operator now vouches for the row as it stands
-    // (ANT-2026-O8U3P920). This is also how an operator marks a client the
-    // migration 0023 backfill could not attribute.
-    provisionedByOperator: true,
-    updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
-  } as const;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -297,12 +158,43 @@ function report(realm: string, issued: Issued[]): void {
     console.log('');
   }
 
+  const firstParty = issued.filter((i) => i.firstPartyChanged);
+  if (firstParty.length > 0) {
+    console.log('First-party profile changed (recorded as client.first_party_changed):');
+    for (const i of firstParty) {
+      console.log(
+        `  ${i.clientId}` +
+          (i.revokedTokenCount
+            ? `: profile removed, ${i.revokedTokenCount} refresh tokens revoked`
+            : '')
+      );
+    }
+    console.log('');
+  }
+
   if (skipped.length > 0) {
     console.log(
       `Skipped (already exist; pass --rotate to re-issue secrets):\n  ` +
         skipped.map((s) => s.clientId).join(', ') +
         '\n'
     );
+  }
+}
+
+/**
+ * ADR-017 question 11: PKCE stays required at the authorization challenge
+ * endpoint unless the operator switches it off for one client. Say so, by
+ * name, every time the manifest does.
+ */
+function warnPkceOff(clients: readonly ClientSpec[]): void {
+  for (const spec of clients) {
+    if (firstPartyColumnsOf(spec).policy?.pkce_required === false) {
+      console.warn(
+        `WARNING: ${spec.client_id}: first_party_policy.pkce_required is false. Its native ` +
+          'sign-in at the authorization challenge endpoint will not require PKCE. The ' +
+          'redirect flow still does.'
+      );
+    }
   }
 }
 

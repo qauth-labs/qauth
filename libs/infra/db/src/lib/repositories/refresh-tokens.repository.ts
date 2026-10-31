@@ -27,7 +27,7 @@ import { refreshTokens } from '../schema/tokens';
  * Serialise refresh-token rotation against bulk revocation for one user.
  *
  * A bulk revocation (`revokeFamily`, `revokeAllForUser`,
- * `revokeAllForUserAndClient`) is a single `UPDATE ... WHERE revoked = false`.
+ * `revokeAllForUserAndClient`, `revokeAllForClient`) is a single `UPDATE ... WHERE revoked = false`.
  * Under READ COMMITTED it blocks on the parent row of a rotation that is in
  * flight, re-checks that row once the rotation commits, finds it already
  * revoked, and never sees the child the rotation inserted — so the child
@@ -412,6 +412,56 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
           )
           .returning({ id: refreshTokens.id });
 
+        return updated.length;
+      };
+
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+    },
+
+    /**
+     * Revoke every live refresh token of one client, for every user: each
+     * family the client holds ends (#631, removing a client's first-party
+     * profile, ADR-017 Decision 2). Already-revoked rows keep their reason.
+     *
+     * Takes the revocation lock of every user who holds such a token, in
+     * user-id order so two runs cannot deadlock on each other, before the
+     * UPDATE: a rotation in flight for any of them commits first and its child
+     * is revoked here, and one that starts afterwards loses its
+     * compare-and-set. A caller that also locks the client row must use
+     * `FOR NO KEY UPDATE`, which a rotation's foreign-key check does not wait
+     * on; `FOR UPDATE` would deadlock with a rotation holding its user lock.
+     *
+     * @param oauthClientId - The client row's id (`oauth_clients.id`)
+     * @param reason - Recorded as `revokedReason`
+     * @param tx - Optional transaction client
+     * @returns Count of rows revoked by this call
+     */
+    async revokeAllForClient(
+      oauthClientId: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const run = async (invoker: DbClient): Promise<number> => {
+        const now = Date.now();
+        const live = and(
+          eq(refreshTokens.oauthClientId, oauthClientId),
+          eq(refreshTokens.revoked, false),
+          gt(refreshTokens.expiresAt, now)
+        );
+        const holders = await invoker
+          .selectDistinct({ userId: refreshTokens.userId })
+          .from(refreshTokens)
+          .where(live)
+          .orderBy(refreshTokens.userId);
+        for (const { userId } of holders) {
+          await lockUserTokens(invoker, 'revoke', userId);
+        }
+
+        const updated = await invoker
+          .update(refreshTokens)
+          .set({ revoked: true, revokedAt: now, revokedReason: reason })
+          .where(live)
+          .returning({ id: refreshTokens.id });
         return updated.length;
       };
 
