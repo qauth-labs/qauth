@@ -1,10 +1,18 @@
 import { randomUUID } from 'node:crypto';
 
-import type { SessionCache, SessionCacheLookup, SessionStore } from '../lib/ports';
+import { sessionEnds } from '../lib/lifetimes';
+import type {
+  SessionCache,
+  SessionCacheLookup,
+  SessionRevocationBatch,
+  SessionStore,
+} from '../lib/ports';
 import type {
   CachedSession,
+  EndedSession,
   NewSessionRecord,
   RealmSessionLifetimes,
+  SessionClientRecord,
   SessionRecord,
   SessionRevokedReason,
   StoredSession,
@@ -45,6 +53,10 @@ export interface MemorySessionStoreCalls {
   /** Conditional last-seen updates that wrote the row. */
   touchWrites: number;
   revokes: number;
+  /** Transactions of the bulk revocations: one per user call, one per batch. */
+  revocationBatches: number;
+  /** Batches the purge sent. */
+  purgeBatches: number;
 }
 
 /** {@link SessionStore} in memory, with the repository's conditions. */
@@ -55,6 +67,16 @@ export interface MemorySessionStore extends SessionStore {
   row(sid: string): SessionRecord | undefined;
   /** Change a stored row, as another writer would. */
   update(sid: string, changes: Partial<SessionRecord>): void;
+  /**
+   * Record that a session served a client, as a code mint does (#549).
+   * Nothing is recorded for a session not in the store.
+   */
+  recordClient(
+    sid: string,
+    client: Omit<SessionClientRecord, 'firstSeenAt'> & { firstSeenAt?: number }
+  ): void;
+  /** The clients the registry holds for a session, oldest first. */
+  clientsOf(sid: string): SessionClientRecord[];
   readonly calls: MemorySessionStoreCalls;
   /** While `true`, every method throws, as with Postgres stopped. */
   down: boolean;
@@ -64,9 +86,15 @@ function copyOf(row: SessionRecord): SessionRecord {
   return { ...row, amr: [...row.amr] };
 }
 
+/** Byte order of two ids, as Postgres sorts `uuid` values. */
+function byId(a: { id: string }, b: { id: string }): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export function createMemorySessionStore(clock: { now(): number }): MemorySessionStore {
   const realms = new Map<string, RealmSessionLifetimes>();
   const rows = new Map<string, SessionRecord>();
+  const registry = new Map<string, SessionClientRecord[]>();
   const calls: MemorySessionStoreCalls = {
     realmReads: 0,
     inserts: 0,
@@ -74,7 +102,44 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
     touchAttempts: 0,
     touchWrites: 0,
     revokes: 0,
+    revocationBatches: 0,
+    purgeBatches: 0,
   };
+
+  function clientsOf(sid: string): SessionClientRecord[] {
+    return [...(registry.get(sid) ?? [])]
+      .sort(
+        (a, b) =>
+          a.firstSeenAt - b.firstSeenAt ||
+          (a.oauthClientId < b.oauthClientId ? -1 : a.oauthClientId > b.oauthClientId ? 1 : 0)
+      )
+      .map((client) => ({ ...client }));
+  }
+
+  /** End `row` as the repository does: revoked, its registry taken with it. */
+  function end(
+    row: SessionRecord,
+    reason: SessionRevokedReason,
+    at: number = clock.now()
+  ): EndedSession {
+    const ended: SessionRecord = { ...row, revokedAt: at, revokedReason: reason };
+    rows.set(row.id, ended);
+    const clients = clientsOf(row.id);
+    registry.delete(row.id);
+    return { session: copyOf(ended), clients };
+  }
+
+  function batchOf(
+    selected: SessionRecord[],
+    endOne: (row: SessionRecord) => EndedSession
+  ): SessionRevocationBatch {
+    calls.revocationBatches += 1;
+    return {
+      ended: selected.map(endOne),
+      last: selected.length === 0 ? null : selected[selected.length - 1].id,
+      selected: selected.length,
+    };
+  }
 
   const store: MemorySessionStore = {
     calls,
@@ -97,6 +162,16 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
       if (row === undefined) throw new Error(`no session ${sid}`);
       rows.set(sid, { ...row, ...changes });
     },
+
+    recordClient(sid, client) {
+      const row = rows.get(sid);
+      if (row === undefined || row.revokedAt !== null) return;
+      const held = registry.get(sid) ?? [];
+      if (held.some((existing) => existing.oauthClientId === client.oauthClientId)) return;
+      registry.set(sid, [...held, { ...client, firstSeenAt: client.firstSeenAt ?? clock.now() }]);
+    },
+
+    clientsOf,
 
     async findRealmLifetimes(realmId) {
       if (store.down) throw new Error('store down');
@@ -157,9 +232,115 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
       if (row === undefined || row.realmId !== realmId || row.revokedAt !== null) {
         return undefined;
       }
-      const ended: SessionRecord = { ...row, revokedAt: clock.now(), revokedReason: reason };
-      rows.set(sid, ended);
-      return copyOf(ended);
+      return end(row, reason);
+    },
+
+    async revokeForUser(realmId, userId, reason, filter) {
+      if (store.down) throw new Error('store down');
+      const selected = [...rows.values()]
+        .filter(
+          (row) =>
+            row.realmId === realmId &&
+            row.userId === userId &&
+            row.revokedAt === null &&
+            row.id !== filter.exceptSid &&
+            (filter.createdBefore === undefined || row.createdAt < filter.createdBefore)
+        )
+        .sort(byId);
+      return batchOf(selected, (row) => end(row, reason)).ended;
+    },
+
+    async revokeRealmBatch(realmId, reason, batch) {
+      if (store.down) throw new Error('store down');
+      const selected = [...rows.values()]
+        .filter(
+          (row) =>
+            row.realmId === realmId &&
+            row.revokedAt === null &&
+            (batch.after === null || row.id > batch.after) &&
+            row.createdAt <= batch.createdThrough &&
+            (batch.activeSince === undefined || row.lastSeenAt >= batch.activeSince)
+        )
+        .sort(byId)
+        .slice(0, batch.limit);
+      return batchOf(selected, (row) => end(row, reason));
+    },
+
+    async revokeLapsedBatch(batch) {
+      if (store.down) throw new Error('store down');
+      const lapsed: Array<{ row: SessionRecord; reason: SessionRevokedReason; at: number }> = [];
+      for (const row of [...rows.values()].sort(byId)) {
+        const lifetimes = realms.get(row.realmId);
+        if (row.revokedAt !== null || lifetimes === undefined) continue;
+        if (batch.after !== null && row.id <= batch.after) continue;
+        const ends = sessionEnds(row, lifetimes, batch.defaultMaxLifespanSeconds);
+        const idle = ends.idle ?? Number.POSITIVE_INFINITY;
+        const at = Math.min(ends.absolute, idle);
+        if (at > batch.now) continue;
+        lapsed.push({ row, reason: idle < ends.absolute ? 'idle' : 'expired', at });
+        if (lapsed.length === batch.limit) break;
+      }
+      const reasons = new Map(lapsed.map((item) => [item.row.id, item]));
+      return batchOf(
+        lapsed.map((item) => item.row),
+        (row) => {
+          const item = reasons.get(row.id);
+          if (item === undefined) throw new Error('unreachable');
+          return end(row, item.reason, item.at);
+        }
+      );
+    },
+
+    async list(realmId, owner, page) {
+      if (store.down) throw new Error('store down');
+      calls.reads += 1;
+      const lifetimes = realms.get(realmId);
+      if (lifetimes === undefined) return undefined;
+      const selected = [...rows.values()]
+        .filter(
+          (row) =>
+            row.realmId === realmId &&
+            ('userId' in owner
+              ? row.userId === owner.userId
+              : (registry.get(row.id) ?? []).some(
+                  (client) => client.oauthClientId === owner.oauthClientId
+                ))
+        )
+        .sort((a, b) => b.createdAt - a.createdAt || byId(b, a))
+        .filter(
+          (row) =>
+            page.after === undefined ||
+            row.createdAt < page.after.createdAt ||
+            (row.createdAt === page.after.createdAt && row.id < page.after.sid)
+        )
+        .slice(0, page.limit);
+      return {
+        lifetimes: { ...lifetimes },
+        sessions: selected.map((row) => ({ session: copyOf(row), clients: clientsOf(row.id) })),
+      };
+    },
+
+    async deleteEnded(batch) {
+      if (store.down) throw new Error('store down');
+      calls.purgeBatches += 1;
+      const doomed = [...rows.values()]
+        .filter(
+          (row) =>
+            (batch.after === null || row.id > batch.after) &&
+            ((row.revokedAt !== null && row.revokedAt < batch.before) ||
+              row.expiresAt < batch.before)
+        )
+        .sort(byId)
+        .slice(0, batch.limit);
+      for (const row of doomed) {
+        rows.delete(row.id);
+        registry.delete(row.id);
+      }
+      return {
+        deleted: doomed.length,
+        last: doomed.length === 0 ? null : doomed[doomed.length - 1].id,
+        selected: doomed.length,
+      };
     },
   };
   return store;
