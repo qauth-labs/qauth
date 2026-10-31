@@ -52,6 +52,12 @@ export interface AdminApprovalExpectedState {
  * Who may make each write is the approval engine's to decide
  * (`apps/auth-server/src/app/admin/approvals`); the repository only keeps
  * the moves consistent.
+ *
+ * A move that closes an approval (consumed, cancelled, denied) drops the
+ * operation's body from the stored request: the body may hold a secret, such
+ * as a credential the operation sets, and nothing reads it once no approval
+ * can be given or used. An approval that expires unused keeps it until a
+ * retention job removes expired approvals.
  */
 export interface AdminApprovalsRepository {
   /** File an approval request, `pending`, with no approval yet. */
@@ -127,6 +133,13 @@ function openApproval(realmId: string, id: string, now: number) {
 const holds = (count: number) => sql`jsonb_array_length(${adminApprovals.approvals}) = ${count}`;
 
 /**
+ * The stored request without its body. An approval that is used, cancelled or
+ * denied keeps no body: it may hold a secret, and the two hashes are what the
+ * audit log binds to.
+ */
+const withoutBody = sql`${adminApprovals.canonicalRequest} - 'body'`;
+
+/**
  * Factory for the approval request repository (issue #512).
  *
  * @param defaultDb - The database a call without a transaction runs on.
@@ -192,7 +205,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
       const [record] = await (tx ?? defaultDb)
         .update(adminApprovals)
-        .set({ status: 'denied' })
+        .set({ status: 'denied', canonicalRequest: withoutBody })
         .where(
           and(
             openApproval(realmId, id, now),
@@ -209,7 +222,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       if (expected.status !== 'pending' && expected.status !== 'approved') return undefined;
       const [record] = await (tx ?? defaultDb)
         .update(adminApprovals)
-        .set({ status: 'cancelled' })
+        .set({ status: 'cancelled', canonicalRequest: withoutBody })
         .where(
           and(
             openApproval(realmId, id, now),
@@ -228,7 +241,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
       const [record] = await tx
         .update(adminApprovals)
-        .set({ status: 'consumed', usedAt: now })
+        .set({ status: 'consumed', usedAt: now, canonicalRequest: withoutBody })
         .where(
           and(
             openApproval(realmId, id, now),

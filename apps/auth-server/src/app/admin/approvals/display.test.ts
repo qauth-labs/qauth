@@ -110,8 +110,28 @@ describe('the display rules (#512, ADR-019 Decision 6)', () => {
       const shown = displayText(`a${unsafe}b`, 100);
       expect(shown, JSON.stringify(unsafe)).toMatch(/^a\\u\{[0-9A-F]{4,5}\}b$/);
     }
+    // Code points Unicode renders as nothing, outside the classes above.
+    for (const codePoint of [0x3164, 0x115f, 0xffa0, 0x034f, 0xfe00, 0xfe0f, 0x180b, 0xe0100]) {
+      const shown = displayText(`a${String.fromCodePoint(codePoint)}b`, 100);
+      expect(shown, codePoint.toString(16)).toBe(
+        `a\\u{${codePoint.toString(16).toUpperCase().padStart(4, '0')}}b`
+      );
+    }
     // Letters, emoji and combining marks stay as they are.
     expect(displayText('Zürich 🔑 é', 100)).toBe('Zürich 🔑 é');
+  });
+
+  it('doubles a backslash, so a text that spells an escape out never passes for one', () => {
+    expect(displayText(`spelled \\u{202E} out`, 100)).toBe(`spelled \\\\u{202E} out`);
+    expect(displayText(`real ${RLO} one`, 100)).toBe(`real \\u{202E} one`);
+  });
+
+  it('shows three combining marks on a character, and escapes any after them', () => {
+    const acute = String.fromCodePoint(0x0301);
+    expect(displayText(`e${acute}${acute}${acute}`, 100)).toBe(`e${acute}${acute}${acute}`);
+    expect(displayText(`e${acute.repeat(5)}x${acute}`, 100)).toBe(
+      `e${acute.repeat(3)}\\u{0301}\\u{0301}x${acute}`
+    );
   });
 
   it('caps a string by code points, with an ellipsis, never cutting an escape or a pair', () => {

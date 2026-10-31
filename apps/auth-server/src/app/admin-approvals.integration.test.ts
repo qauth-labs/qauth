@@ -79,7 +79,19 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
         }
       : {}),
   });
-  const registry = operations.createAdminOperationRegistry([rotate], { reserved: [] });
+  // A security operation whose route has no query or body schema: Fastify
+  // hands its handler the router's and the query parser's own objects.
+  const retire = operations.defineOperation({
+    id: 'fixtureKeys.retire',
+    class: 'security',
+    effects: ['key-custody'],
+    permissions: ['realms.policies.security'],
+    description: 'Retire a key of the realm (fixture).',
+    render: (request: { params: unknown }) => ({
+      title: `Retire the signing key ${(request.params as { keyId: string }).keyId}`,
+    }),
+  });
+  const registry = operations.createAdminOperationRegistry([rotate, retire], { reserved: [] });
   fixture.registry = registry;
 
   return {
@@ -114,6 +126,23 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
             annotations: {},
           });
           return { rotated: true };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-keys/:keyId/retire',
+        {
+          config: { operation: retire.id },
+          schema: {
+            ...operations.operationSchemaExtensions(retire),
+            'x-qauth-stability': 'experimental',
+            'x-qauth-errors': [400, 401, 403, 404],
+            security: [{ bearerAuth: [] }],
+            params: z.object({ realmId: z.uuid(), keyId: z.string().min(1).max(64) }),
+          },
+        },
+        async (request) => {
+          runs.push(retire.id);
+          return { retired: (request.query as { note?: string }).note ?? null };
         }
       );
     },
@@ -392,8 +421,14 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect(runs).toEqual(['fixtureKeys.rotate']);
     expect(await accountsIn(realmId)).toBe(1);
     const consumed = await get(approvals(realmId, `/${filed.id}`), requester.token);
-    expect(consumed.json()).toMatchObject({ status: 'consumed' });
+    expect(consumed.json()).toMatchObject({ status: 'consumed', display: null });
     expect(consumed.json<{ usedAt: string | null }>().usedAt).not.toBeNull();
+    // The body it was filed with is no longer kept.
+    const { rows } = await app().dbPool.query<{ body: unknown }>(
+      `SELECT canonical_request -> 'body' AS body FROM admin_approvals WHERE id = $1`,
+      [filed.id]
+    );
+    expect(rows[0].body).toBeNull();
 
     // A consumed approval runs nothing again.
     const again = await post(rotateUrl(realmId), requester.token, ROTATION, {
@@ -402,6 +437,30 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect(again.statusCode).toBe(403);
     expect(again.json()).toMatchObject({ code: 'approval_required' });
     expect(runs).toEqual(['fixtureKeys.rotate']);
+  });
+
+  it('runs an operation whose route parses no query or body, the query as the URL carries it', async () => {
+    const realmId = await tenant('alpha');
+    const requester = await adminWith(realmId, 'security-admin');
+    const created = await post(approvals(realmId), requester.token, {
+      operation: 'fixtureKeys.retire',
+      params: { keyId: 'signing-1' },
+      query: { note: 'end of life' },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const { id } = created.json<{ id: string }>();
+    await approve(realmId, id, requester.approver);
+    const url = `/admin/v1-rc.0/realms/${realmId}/fixture-keys/signing-1/retire`;
+    const other = await post(`${url}?note=another`, requester.token, undefined, {
+      'qauth-approval': id,
+    });
+    expect(other.statusCode).toBe(403);
+    const ran = await post(`${url}?note=end%20of%20life`, requester.token, undefined, {
+      'qauth-approval': id,
+    });
+    expect(ran.statusCode, ran.body).toBe(200);
+    expect(ran.json()).toEqual({ retired: 'end of life' });
+    expect(runs).toEqual(['fixtureKeys.retire']);
   });
 
   it('refuses a retry whose body, path parameter or query differs from the request filed', async () => {

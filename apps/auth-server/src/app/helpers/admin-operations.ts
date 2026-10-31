@@ -206,7 +206,9 @@ export interface AdminOperationDefinition<State = unknown> {
    * What an approver is shown of one request (#512), from the stored request
    * alone: pure and synchronous. Required on every security operation an
    * admin route performs: the admin pipeline refuses to boot such a route
-   * without it. Only a security operation renders.
+   * without it. Only a security operation renders. Every reader of the
+   * approval gets what it returns, so it never shows a secret value of the
+   * request, such as a credential the body sets: it says one is set.
    */
   render?(request: RenderInput): RenderedOperation;
 }

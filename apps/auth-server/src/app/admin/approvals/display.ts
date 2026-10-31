@@ -19,7 +19,13 @@ import {
  * ADR-019 Decision 6: it is length-capped, and it shows no control,
  * bidirectional or other invisible character. Each such character is shown
  * escaped, as `\u{202E}`, so the approver sees that the text held one and the
- * text cannot reorder or hide what the page shows around it.
+ * text cannot reorder or hide what the page shows around it. A backslash is
+ * shown doubled, so a text that spells an escape out cannot pass for one, and
+ * combining marks past the third on one character are shown escaped, so a
+ * pile of them cannot spill over the lines around it.
+ *
+ * The display data goes to every reader of the approval: a renderer never
+ * shows a secret value of the request, such as a password in its body.
  */
 
 /** The length caps, in code points. A longer string ends in `…`. */
@@ -37,26 +43,54 @@ export const DISPLAY_LIMITS = Object.freeze({
  * Code points a display string never carries as they are: controls (C0, DEL,
  * C1), format characters (the bidirectional embeddings, overrides, isolates
  * and marks, zero-width characters, the byte order mark, tag characters),
- * the line and paragraph separators, and lone surrogates.
+ * the line and paragraph separators, lone surrogates, and every other code
+ * point Unicode says to render as nothing (`Default_Ignorable_Code_Point`:
+ * the Hangul fillers, the combining grapheme joiner, variation selectors).
  */
-const UNSAFE_CODE_POINT = /^(?:[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|\p{Cs})$/u;
+const UNSAFE_CODE_POINT =
+  /^(?:[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]|\p{Cs})$/u;
 
-/** One code point as it is shown: itself, or escaped. */
-function shown(codePoint: string): string {
-  if (!UNSAFE_CODE_POINT.test(codePoint)) return codePoint;
+/** A combining mark, which draws on the character before it. */
+const COMBINING_MARK = /^\p{M}$/u;
+
+/** The combining marks shown on one character; any after them is shown escaped. */
+const MAX_COMBINING_MARKS = 3;
+
+/** `codePoint` escaped: `\u{XXXX}`. */
+function escaped(codePoint: string): string {
   const hex = (codePoint.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0');
   return `\\u{${hex}}`;
+}
+
+/** Each code point of `value` as it is shown: itself, doubled for a backslash, or escaped. */
+function shownParts(value: string): string[] {
+  const parts: string[] = [];
+  let marks = 0;
+  for (const codePoint of value) {
+    if (UNSAFE_CODE_POINT.test(codePoint)) {
+      parts.push(escaped(codePoint));
+      marks = 0;
+    } else if (COMBINING_MARK.test(codePoint)) {
+      marks += 1;
+      parts.push(marks > MAX_COMBINING_MARKS ? escaped(codePoint) : codePoint);
+    } else {
+      parts.push(codePoint === '\\' ? '\\\\' : codePoint);
+      marks = 0;
+    }
+  }
+  return parts;
 }
 
 const ELLIPSIS = '…';
 
 /**
- * `value` as a display string: each unsafe code point escaped, and the whole
- * cut to `maxLength` code points, an escape never cut in two, with `…` at the
- * end when anything was cut.
+ * `value` as a display string: each unsafe code point escaped, a backslash
+ * doubled, a fourth and later combining mark on one character escaped, and
+ * the whole cut to `maxLength` code points, an escape never cut in two, with
+ * `…` at the end when anything was cut.
  */
 export function displayText(value: string, maxLength: number): string {
-  const parts = Array.from(value, shown);
+  const parts = shownParts(value);
   let length = 0;
   let out = '';
   for (const [index, part] of parts.entries()) {

@@ -93,7 +93,9 @@ const sqlList = (values: readonly string[]) =>
  * expires `expires_at`, five minutes after it was filed.
  *
  * The canonical request holds the operation's body as the requester sent it,
- * so it holds whatever that body holds.
+ * so it holds whatever that body holds, a secret included: the repository
+ * drops the body once the approval is consumed, cancelled or denied. One that
+ * expires unused keeps it until a retention job removes expired approvals.
  */
 export const adminApprovals = pgTable(
   'admin_approvals',
@@ -119,7 +121,7 @@ export const adminApprovals = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     /** The operation id in the admin operation registry, such as `keys.rotate`. */
     operationId: varchar('operation_id', { length: 128 }).notNull(),
-    /** The canonical request without the nonce, as a JSON object. */
+    /** The canonical request without the nonce, as a JSON object; without its body once closed. */
     canonicalRequest: jsonb('canonical_request').$type<Record<string, unknown>>().notNull(),
     /** SHA-256 of the RFC 8785 form of the canonical request, without the nonce. */
     requestHash: bytea('request_hash').notNull(),

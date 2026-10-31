@@ -37,6 +37,7 @@ import {
   approvalResource,
   approvalsRequiredFor,
   approvalUrlOf,
+  openApprovalDisplay,
 } from './engine';
 import { APPROVAL_OPERATION_IDS, isApprovalEngineOperation } from './operations';
 import { approvalStanding, approvalVersion, callerAccount, parseApprovalVersion } from './standing';
@@ -130,9 +131,10 @@ const approvalSchema = z
           .object({ type: z.literal('quote'), source: z.literal('requester'), text: z.string() })
           .nullable(),
       })
+      .nullable()
       .meta({
         description:
-          'The operation as an approver sees it, rendered from the stored request: typed display data, never HTML.',
+          'The operation as an approver sees it, rendered from the stored request: typed display data, never HTML. Null once the approval is used, cancelled, denied or expired. The reason, params and query beside it are raw: show this instead.',
       }),
   })
   .meta({ description: 'An approval request for one request of a security operation.' });
@@ -351,10 +353,11 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       const caller = requestAdminCaller(request);
       const { approval } = await readableApproval(request, caller, request.params.approvalId);
       reply.header('etag', `"${approvalVersion(approval)}"`);
+      const now = Date.now();
       return approvalResource(approval, {
-        now: Date.now(),
+        now,
         approvalUrl: await approvalUrlFor(request, caller, approval),
-        display: renderOperation(approval, registry),
+        display: openApprovalDisplay(approval, registry, now),
       });
     }
   );
@@ -421,7 +424,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       return approvalResource(cancelled, {
         now,
         approvalUrl: await approvalUrlFor(request, caller, cancelled),
-        display: renderOperation(cancelled, registry),
+        display: null,
       });
     }
   );

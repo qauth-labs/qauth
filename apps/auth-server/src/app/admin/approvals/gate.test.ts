@@ -179,6 +179,22 @@ describe('the canonical request (#512)', () => {
     });
   });
 
+  it("takes the router's and the query parser's null-prototype objects as the plain ones filed", () => {
+    // What Fastify hands a route with no params or querystring schema: an
+    // object whose prototype is itself a null-prototype object.
+    const NULL_OBJECT_PROTOTYPE = Object.create(null) as object;
+    const asParsed = (members: Record<string, string>) =>
+      Object.assign(Object.create(NULL_OBJECT_PROTOTYPE) as object, members);
+    expect(Object.getPrototypeOf(Object.getPrototypeOf(asParsed({})))).toBeNull();
+    expect(
+      decide({
+        ...FILED,
+        params: asParsed({ realmId: REALM, keyId: 'signing-1' }),
+        query: Object.assign(Object.create(null) as object, { dryRun: 'false' }),
+      })
+    ).toBeNull();
+  });
+
   it('refuses a request it cannot store or canonicalize', () => {
     expect(() => canonicalRequest({ ...FILED, body: Buffer.from('bytes') })).toThrow(
       CanonicalRequestError
@@ -189,5 +205,9 @@ describe('the canonical request (#512)', () => {
       CanonicalRequestError
     );
     expect(() => canonicalRequest({ ...FILED, params: 'realm' })).toThrow(CanonicalRequestError);
+    expect(() => canonicalRequest({ ...FILED, query: ['dryRun'] })).toThrow(CanonicalRequestError);
+    expect(() => canonicalRequest({ ...FILED, params: Buffer.from('x') })).toThrow(
+      CanonicalRequestError
+    );
   });
 });

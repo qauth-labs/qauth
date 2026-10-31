@@ -68,7 +68,12 @@ describe('approval requests (real Postgres)', () => {
   async function filed(required = 1, overrides: Partial<NewAdminApproval> = {}) {
     const realm = await realms.create({ name: `realm-${randomBytes(4).toString('hex')}` });
     const requester = await users.create({ realmId: realm.id });
-    const canonical = { operationId: 'keys.rotate', method: 'POST', realmId: realm.id };
+    const canonical = {
+      operationId: 'keys.rotate',
+      method: 'POST',
+      realmId: realm.id,
+      body: { smtpPassword: 'a secret the operation sets' },
+    };
     const approval = await approvals.create({
       realmId: realm.id,
       requesterKind: 'human',
@@ -302,6 +307,48 @@ describe('approval requests (real Postgres)', () => {
     await expect(update(`op_hash = '\\x00'`)).rejects.toMatchObject({
       constraint: 'admin_approvals_op_hash_sha256',
     });
+  });
+
+  it('drops the body once consumed, cancelled or denied, and keeps it while open', async () => {
+    const bodyOf = async (id: string) =>
+      (
+        await db().database.pool.query<{ body: unknown }>(
+          `SELECT canonical_request -> 'body' AS body FROM admin_approvals WHERE id = $1`,
+          [id]
+        )
+      ).rows[0].body;
+
+    const used = await approved();
+    expect(await bodyOf(used.approval.id)).toEqual({ smtpPassword: 'a secret the operation sets' });
+    await db().database.db.transaction((tx) =>
+      approvals.consume(
+        used.realm.id,
+        used.approval.id,
+        { requestHash: sha256('request'), now: NOW + 2_000 },
+        tx
+      )
+    );
+    expect(await bodyOf(used.approval.id)).toBeNull();
+
+    const cancelled = await filed();
+    await approvals.cancel(cancelled.realm.id, cancelled.approval.id, {
+      requesterRealmId: cancelled.realm.id,
+      requesterId: cancelled.requester.id,
+      expected: { status: 'pending', approvalCount: 0 },
+      now: NOW + 1_000,
+    });
+    expect(await bodyOf(cancelled.approval.id)).toBeNull();
+
+    const denied = await filed();
+    await approvals.deny(denied.realm.id, denied.approval.id, {
+      expectedCount: 0,
+      now: NOW + 1_000,
+    });
+    expect(await bodyOf(denied.approval.id)).toBeNull();
+    // The rest of the stored request stays.
+    expect(
+      (await approvals.findById(denied.realm.id, denied.approval.id))?.canonicalRequest
+    ).toEqual({ operationId: 'keys.rotate', method: 'POST', realmId: denied.realm.id });
   });
 
   it('goes with its realm', async () => {

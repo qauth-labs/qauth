@@ -84,6 +84,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The own enumerable members of the path parameters or the query, as a plain
+ * object. Fastify hands both over as objects of a prototype of their own
+ * (the router's and the query parser's null-prototype objects) when the
+ * route has no schema for them, which the canonicalizer would refuse;
+ * a binary value or an array is not a set of parameters.
+ */
+function parameterRecord(value: unknown): Record<string, unknown> | undefined {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer
+  ) {
+    return undefined;
+  }
+  return Object.fromEntries(Object.entries(value));
+}
+
+/**
  * Throw when a string of `value`, member names included, holds U+0000:
  * Postgres `jsonb` cannot store it, so such a request could be approved but
  * never filed.
@@ -108,7 +128,8 @@ function assertStorable(value: unknown, path: string): void {
 }
 
 /**
- * The canonical request of `input`: the method in upper case, an absent
+ * The canonical request of `input`: the method in upper case, the path
+ * parameters and the query as plain objects of their own members, an absent
  * query as `{}`, an absent body as `null`, and the path's `realmId` replaced
  * by the realm's stored id.
  *
@@ -117,16 +138,16 @@ function assertStorable(value: unknown, path: string): void {
  *   canonicalizer takes (a binary body among them) or a U+0000
  */
 export function canonicalRequest(input: CanonicalRequestInput): CanonicalRequest {
-  const params = input.params ?? {};
-  const query = input.query ?? {};
-  if (!isPlainObject(params) || !isPlainObject(query)) {
+  const params = parameterRecord(input.params ?? {});
+  const query = parameterRecord(input.query ?? {});
+  if (params === undefined || query === undefined) {
     throw new CanonicalRequestError('the path parameters and the query are objects');
   }
   const request = {
     operationId: input.operationId,
     method: input.method.toUpperCase(),
     params: { ...params, realmId: input.realmId },
-    query: { ...query },
+    query,
     body: input.body === undefined ? null : input.body,
     realmId: input.realmId,
     requester: {

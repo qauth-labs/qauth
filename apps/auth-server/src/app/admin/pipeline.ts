@@ -534,6 +534,26 @@ function authorizeAdminRequest(
   );
 }
 
+/**
+ * Whether `request` is a call of the approval engine's own `approvals.create`
+ * or `approvals.cancel` on the very route that performs it
+ * ({@link AdminApiContext.routeOf}): another route that names one of them,
+ * such as a HEAD route, is gated as any security operation.
+ */
+function isApprovalEngineRoute(
+  request: FastifyRequest,
+  registry: OperationRegistry,
+  operationId: string
+): boolean {
+  if (!isApprovalEngineOperation(registry.get(operationId))) return false;
+  const route = request.server.adminApi.routeOf(operationId);
+  return (
+    route !== undefined &&
+    route.method === request.method.toUpperCase() &&
+    route.url === request.routeOptions.url
+  );
+}
+
 /** What a call whose `QAuth-Approval` names no approval of this call is told. */
 const APPROVAL_REFUSED =
   'The approval named in QAuth-Approval does not approve this call: it is not approved yet, was used, cancelled or denied, has expired, or was filed for another request';
@@ -568,7 +588,7 @@ function approvalGate(registry: OperationRegistry) {
   return async function adminApprovalGate(request: FastifyRequest): Promise<void> {
     const classification = requestClassification(request);
     if (classification.class !== 'security') return;
-    if (isApprovalEngineOperation(registry.get(classification.operationId))) return;
+    if (isApprovalEngineRoute(request, registry, classification.operationId)) return;
     const header = request.headers[APPROVAL_HEADER];
     if (header === undefined) throw new ApprovalRequiredError();
 
@@ -941,14 +961,28 @@ const isSchemaPart = (value: unknown): value is RouteSchemaPart =>
   typeof (value as { safeParse?: unknown }).safeParse === 'function';
 
 /**
+ * A route's schema part `name`. Fastify takes `query` for `querystring`, but
+ * folds it in only after the `onRoute` hooks have run, so both are read.
+ */
+function schemaPart(schema: Record<string, unknown>, name: (typeof FILED_PARTS)[number]): unknown {
+  return name === 'querystring' ? (schema['querystring'] ?? schema['query']) : schema[name];
+}
+
+/**
  * Why `route` cannot serve its operation, or `undefined`, recording it in
  * `routes` when it can. A route that names no registered operation is the
- * classification stage's to refuse. An operation is served by one route,
- * a HEAD route aside. A
- * security operation, but the approval engine's own, needs what an approval
- * of it needs: a renderer (`render`), so an approver sees what it approves,
- * one method, and Zod schemas for its path parameters, query and body, so a
- * filed request is parsed as the retried one is.
+ * classification stage's to refuse.
+ *
+ * - A security operation, but the approval engine's own, needs what an
+ *   approval of it needs: a renderer (`render`), so an approver sees what it
+ *   approves; one method; and Zod schemas, so a filed request is parsed as
+ *   the retried one is: one for its path parameters, which always hold the
+ *   realm, and one for its query and its body where it has them.
+ * - An operation is served by one route. A HEAD route, which Fastify adds
+ *   beside a GET route on a listener that exposes them (the admin listener
+ *   does not), is checked as any route but is never the operation's route:
+ *   no approval is filed against it, and the approval gate lets the engine's
+ *   own operations through only on their own routes.
  */
 function operationRouteProblem(
   route: RouteOptions,
@@ -958,15 +992,8 @@ function operationRouteProblem(
   const id = route.config?.operation;
   const operation = typeof id === 'string' ? registry.get(id) : undefined;
   if (operation === undefined) return undefined;
-  const methods = [route.method].flat();
-  // The HEAD route Fastify adds beside a GET route on a listener that exposes
-  // them (the admin listener does not) carries no request of its own.
-  if (methods.length === 1 && String(methods[0]).toUpperCase() === 'HEAD') return undefined;
+  const methods = [route.method].flat().map((method) => String(method).toUpperCase());
   const where = `${methods.join(',')} ${route.url}`;
-  const taken = routes.get(operation.id);
-  if (taken !== undefined) {
-    return `${where} performs ${operation.id}, which ${taken.method} ${taken.url} already performs: an operation has one route`;
-  }
   const schema = (route.schema ?? {}) as Record<string, unknown>;
   if (operation.class === 'security' && !isApprovalEngineOperation(operation)) {
     if (operation.render === undefined) {
@@ -975,16 +1002,27 @@ function operationRouteProblem(
     if (methods.length !== 1) {
       return `${where} performs the security operation ${operation.id} under several methods; an approval binds one`;
     }
+    if (!isSchemaPart(schema['params'])) {
+      return `${where}: the security operation ${operation.id} has no Zod params schema, so a filed request cannot be parsed as the route parses it`;
+    }
     for (const part of FILED_PARTS) {
-      if (schema[part] !== undefined && !isSchemaPart(schema[part])) {
+      const value = schemaPart(schema, part);
+      if (value !== undefined && !isSchemaPart(value)) {
         return `${where}: the ${part} schema of the security operation ${operation.id} is not a Zod schema, so a filed request cannot be parsed as the route parses it`;
       }
     }
   }
-  const part = (name: (typeof FILED_PARTS)[number]) =>
-    isSchemaPart(schema[name]) ? { [name]: schema[name] } : {};
+  if (methods.length === 1 && methods[0] === 'HEAD') return undefined;
+  const taken = routes.get(operation.id);
+  if (taken !== undefined) {
+    return `${where} performs ${operation.id}, which ${taken.method} ${taken.url} already performs: an operation has one route`;
+  }
+  const part = (name: (typeof FILED_PARTS)[number]) => {
+    const value = schemaPart(schema, name);
+    return isSchemaPart(value) ? { [name]: value } : {};
+  };
   routes.set(operation.id, {
-    method: String(methods[0]).toUpperCase(),
+    method: methods[0],
     url: route.url,
     ...part('params'),
     ...part('querystring'),

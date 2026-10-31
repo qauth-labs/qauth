@@ -77,6 +77,20 @@ export function approvalsRequiredFor(): number {
   return 1;
 }
 
+/**
+ * The display data of `approval` while it is open, rendered from the stored
+ * request (`renderOperation`); `null` once it is used, cancelled, denied or
+ * expired: no approver is shown it any more, and its body may be gone.
+ */
+export function openApprovalDisplay(
+  approval: AdminApproval,
+  registry: OperationRegistry,
+  now: number
+): OperationDisplay | null {
+  const status = shownStatus(approval, now);
+  return status === 'pending' || status === 'approved' ? renderOperation(approval, registry) : null;
+}
+
 /** What a factor sees of `approval`. */
 export function approvalForFactor(approval: AdminApproval): ApprovalForFactor {
   return { id: approval.id, realmId: approval.realmId, opHash: approval.opHash };
@@ -113,7 +127,11 @@ export interface ApprovalResource {
   readonly expiresAt: string;
   readonly usedAt: string | null;
   readonly approvalUrl: string;
-  readonly display: Omit<OperationDisplay, 'fields'> & { readonly fields: DisplayField[] };
+  /**
+   * The operation as an approver sees it, while the approval is open
+   * (`pending` or `approved`); `null` once it is not, its body dropped.
+   */
+  readonly display: (Omit<OperationDisplay, 'fields'> & { readonly fields: DisplayField[] }) | null;
 }
 
 const isoTime = (epochMs: number) => new Date(epochMs).toISOString();
@@ -124,7 +142,7 @@ export function approvalResource(
   context: {
     readonly now: number;
     readonly approvalUrl: string;
-    readonly display: OperationDisplay;
+    readonly display: OperationDisplay | null;
   }
 ): ApprovalResource {
   const stored = approval.canonicalRequest;
@@ -154,7 +172,8 @@ export function approvalResource(
     expiresAt: isoTime(approval.expiresAt),
     usedAt: approval.usedAt === null ? null : isoTime(approval.usedAt),
     approvalUrl: context.approvalUrl,
-    display: { ...context.display, fields: [...context.display.fields] },
+    display:
+      context.display === null ? null : { ...context.display, fields: [...context.display.fields] },
   };
 }
 
