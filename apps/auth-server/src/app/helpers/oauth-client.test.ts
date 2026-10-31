@@ -129,25 +129,28 @@ describe('getOrCreateSystemClient', () => {
         redirectUris: ['https://portal.example.com/auth/callback'],
       },
     ],
-  ])('keeps an existing system client with %s, writing only the developer audience', async (_l, columns) => {
-    const existing = { id: 'row-0', clientId: 'system', audience: null, ...columns };
-    const fastify = makeFastify(existing);
+  ])(
+    'keeps an existing system client with %s, writing only the developer audience',
+    async (_l, columns) => {
+      const existing = { id: 'row-0', clientId: 'system', audience: null, ...columns };
+      const fastify = makeFastify(existing);
 
-    const client = await getOrCreateSystemClient('realm-1', fastify);
+      const client = await getOrCreateSystemClient('realm-1', fastify);
 
-    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
-    expect(fastify.repositories.oauthClients.update).toHaveBeenCalledExactlyOnceWith(
-      'realm-1',
-      'row-0',
-      { audience: [DEVELOPER_AUDIENCE] }
-    );
-    expect(client).toMatchObject({ ...columns, audience: [DEVELOPER_AUDIENCE] });
-    expect(fastify.log.warn).not.toHaveBeenCalled();
-  });
+      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.oauthClients.update).toHaveBeenCalledExactlyOnceWith(
+        'realm-1',
+        'row-0',
+        { audience: [DEVELOPER_AUDIENCE] }
+      );
+      expect(client).toMatchObject({ ...columns, audience: [DEVELOPER_AUDIENCE] });
+      expect(fastify.log.warn).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('giveSystemClientsTheDeveloperAudience (the boot step of #524)', () => {
-  it("sets the developer audience on the system client of every realm, in one statement", async () => {
+  it('sets the developer audience on the system client of every realm, in one statement', async () => {
     const setAudienceInEveryRealm = vi.fn(async () => 2);
     const fastify = {
       repositories: { oauthClients: { setAudienceInEveryRealm } },
@@ -155,8 +158,6 @@ describe('giveSystemClientsTheDeveloperAudience (the boot step of #524)', () => 
 
     await expect(giveSystemClientsTheDeveloperAudience(fastify)).resolves.toBe(2);
 
-    expect(setAudienceInEveryRealm).toHaveBeenCalledExactlyOnceWith('system', [
-      DEVELOPER_AUDIENCE,
-    ]);
+    expect(setAudienceInEveryRealm).toHaveBeenCalledExactlyOnceWith('system', [DEVELOPER_AUDIENCE]);
   });
 });
