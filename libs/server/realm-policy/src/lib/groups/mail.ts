@@ -14,8 +14,11 @@ const SINGLE_LINE = /^[^\r\n]*$/;
  * The transport and the sender decide which mailbox receives a verification
  * or recovery link, so every change of them is a security operation in either
  * direction (ADR-019 Decision 7, "the realm's mail transport and sender",
- * `credential-path`). The verification token settings change no such path,
- * so they are write fields. Every field describes the environment the realm
+ * `credential-path`). The verification link's lifetime is a token lifetime:
+ * lengthening it is a security operation (`posture-loosening`), as for the
+ * lifetimes of `tokens` (#508), and shortening it is a write. Whether a resend
+ * invalidates the earlier links changes no such path, so it is a write field.
+ * Every field describes the environment the realm
  * sends mail from, so a sandbox promotion leaves it out unless it is
  * selected.
  *
@@ -158,8 +161,8 @@ export const MAIL_POLICY_GROUP = {
     seedEnv: 'EMAIL_VERIFICATION_TOKEN_EXPIRY',
     default: 86400,
     direction: 'lower-is-stricter',
-    securityWhen: 'never',
-    effects: [],
+    securityWhen: 'loosening',
+    effects: ['posture-loosening'],
     secret: false,
     environmentBound: true,
     doc: {

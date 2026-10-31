@@ -315,6 +315,12 @@ describe('diffPolicies', () => {
         { mail: { verificationTokenExpirySeconds: 172800 } },
         'mail.verificationTokenExpirySeconds',
         'loosening',
+        'security',
+      ],
+      [
+        { mail: { verificationTokenExpirySeconds: 3600 } },
+        'mail.verificationTokenExpirySeconds',
+        'tightening',
         'write',
       ],
       [

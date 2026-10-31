@@ -26,12 +26,15 @@ const FIELDS = REALM_POLICY_REGISTRY.fields();
  * A change here changes what needs `qauth:admin:security`, so the pull
  * request that makes it says why.
  *
- * Three rows differ from the issue's table, each toward stricter:
+ * These rows differ from the issue's table, each toward stricter:
  *
  * - the four token lifetimes are `loosening`, not `never`: the operation
  *   registry of #508 rules that lengthening a token lifetime is
  *   `posture-loosening` (`admin-operations-reserved.ts`, and the effect's
  *   description in `SECURITY_EFFECTS`);
+ * - `mail.verificationTokenExpirySeconds` is `loosening` with
+ *   `posture-loosening`, not `never`, by the same rule: the verification
+ *   link's lifetime is a token lifetime (the maintainer's call on #890);
  * - `admin.twoAdminMandatoryOperations` is `any-change`, not `loosening`:
  *   ADR-019 Decision 7 lists "the two-admin configuration" among the changes
  *   of who administers, in either direction.
@@ -75,7 +78,7 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
   'mail.verificationTokenExpirySeconds': [
     'EMAIL_VERIFICATION_TOKEN_EXPIRY',
     'lower-is-stricter',
-    'never',
+    'loosening',
   ],
   'mail.invalidateExistingTokensOnResend': [
     'EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND',
@@ -97,6 +100,12 @@ const GROUP_EFFECTS: Readonly<Record<string, readonly string[]>> = {
   mail: ['credential-path'],
   posture: ['posture-loosening'],
   admin: ['administration'],
+};
+
+/** The fields whose security changes carry another effect than their group's. */
+const FIELD_EFFECTS: Readonly<Record<string, readonly string[]>> = {
+  // A token lifetime, as the lifetimes of `tokens` are.
+  'mail.verificationTokenExpirySeconds': ['posture-loosening'],
 };
 
 /** The fields CFG-14 leaves out of a sandbox promotion unless selected. */
@@ -165,7 +174,7 @@ describe('every field in every group', () => {
   it('takes the effects of its group and the environment binding #514 assigns', () => {
     for (const { path, segments, field } of FIELDS) {
       if (field.securityWhen !== 'never')
-        expect(field.effects, path).toEqual(GROUP_EFFECTS[segments[0]]);
+        expect(field.effects, path).toEqual(FIELD_EFFECTS[path] ?? GROUP_EFFECTS[segments[0]]);
       expect(field.environmentBound, path).toBe(ENVIRONMENT_BOUND(path));
     }
   });
