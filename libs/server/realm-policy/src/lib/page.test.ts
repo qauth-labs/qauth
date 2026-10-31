@@ -104,7 +104,7 @@ describe('the realm policies page (#514)', () => {
     }
   });
 
-  it('keeps a default or an order value with a pipe or a backtick in its cell and its code span', () => {
+  it('keeps a default or an order value with a pipe, a backslash or a backtick in its cell and its code', () => {
     const annotations = {
       seedEnv: null,
       secret: false,
@@ -120,6 +120,20 @@ describe('the realm policies page (#514)', () => {
         securityWhen: 'never',
         effects: [],
       }),
+      path: policyField(z.string(), {
+        ...annotations,
+        default: 'C:\\x|y\\',
+        direction: 'opaque',
+        securityWhen: 'never',
+        effects: [],
+      }),
+      tick: policyField(z.string(), {
+        ...annotations,
+        default: 'x`y',
+        direction: 'opaque',
+        securityWhen: 'never',
+        effects: [],
+      }),
       level: policyField(z.enum(['lo|w', '`high`']), {
         ...annotations,
         default: 'lo|w',
@@ -129,10 +143,12 @@ describe('the realm policies page (#514)', () => {
       }),
     });
     const rows = tableRows(sectionOf(renderRealmPoliciesPage(registry), '`odd`'));
-    expect(rows.map((cells) => cells.length)).toEqual([6, 6]);
-    expect(rows[0][1]).toBe('``a\\|b`c``');
-    expect(rows[1][1]).toBe('`lo\\|w`');
-    expect(rows[1][3]).toBe('closer to `` `high` `` (`lo\\|w` < `` `high` ``)');
+    expect(rows.map((cells) => cells.length)).toEqual([6, 6, 6, 6]);
+    expect(rows[0][1]).toBe('<code>a&#124;b&#96;c</code>');
+    expect(rows[1][1]).toBe('<code>C:&#92;x&#124;y&#92;</code>');
+    expect(rows[2][1]).toBe('``x`y``');
+    expect(rows[3][1]).toBe('<code>lo&#124;w</code>');
+    expect(rows[3][3]).toBe('closer to `` `high` `` (<code>lo&#124;w</code> < `` `high` ``)');
   });
 
   it('names the schema version', () => {

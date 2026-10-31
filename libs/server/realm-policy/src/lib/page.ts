@@ -34,11 +34,18 @@ function code(value: string): string {
 }
 
 /**
- * A value as a code span in a table cell: a pipe is escaped, which a GFM
- * table unescapes inside code too. A backslash is not, since code shows it as
- * it is.
+ * A value as code in a table cell. A GFM table splits a cell on a pipe even
+ * inside a code span, and no escape keeps both a backslash and a pipe as they
+ * are there: `\|` hides the backslash, `\\|` ends the cell. So a value that
+ * holds either is an HTML `code` element with every markup character as a
+ * character reference, and any other value is a code span.
  */
-const valueCode = (value: string) => code(value.replace(/\|/g, '\\|'));
+const valueCode = (value: string) => (/[\\|]/.test(value) ? htmlCode(value) : code(value));
+
+/** An HTML `code` element showing `value` as it is, with no markup character left raw. */
+function htmlCode(value: string): string {
+  return `<code>${value.replace(/[&<>"'\\|`*_[\]]/g, (c) => `&#${c.charCodeAt(0)};`)}</code>`;
+}
 
 /**
  * A table cell: backslashes and pipes escaped, newlines flattened. The
