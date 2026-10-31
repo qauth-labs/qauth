@@ -1,10 +1,15 @@
+import { z } from 'zod';
+
+import { StepAnswerError } from './answer-error';
 import { StepMappingError } from './mapping-error';
 import {
   grammarStep,
   isStepName,
+  type StepAnswer,
   type StepError,
   type StepErrorCode,
   type StepName,
+  stepNameOfUrn,
   type StepParams,
 } from './steps';
 
@@ -188,4 +193,118 @@ export function readOffer(offer: StepOffer): ReadOffer {
     alternatives,
     required: offer.required !== false,
   };
+}
+
+/**
+ * How an answer arrived: a JSON body, or an HTML form post, where every value
+ * is a string and a boolean is `true` or `false` (#590, ADR-017 Decision 3).
+ */
+export type AnswerEncoding = 'json' | 'form';
+
+/** An answer after the grammar's checks: its step, the params it was offered with, and its fields. */
+export type ReadAnswer = {
+  readonly [K in StepName]: {
+    readonly step: K;
+    readonly params: StepParams<K>;
+    readonly answer: StepAnswer<K>;
+  };
+}[StepName];
+
+/** The members of a step's answer, which is always a closed object. */
+function answerShape(name: StepName): Readonly<Record<string, z.ZodType>> {
+  const schema = grammarStep(name).answer;
+  if (!(schema instanceof z.ZodObject)) throw new Error(`${name}: the answer is not an object`);
+  return schema.shape as Record<string, z.ZodType>;
+}
+
+/** A form post's `true` or `false`, for a member that takes a boolean and not that string. */
+function formValue(member: z.ZodType, value: unknown): unknown {
+  if (value !== 'true' && value !== 'false') return value;
+  if (member.safeParse(value).success) return value;
+  const decoded = value === 'true';
+  return member.safeParse(decoded).success ? decoded : value;
+}
+
+/**
+ * The rules between an answer and the params its step was offered with,
+ * which the answer schema alone does not state (ADR-017 Decision 7's input
+ * bounds): a code has exactly the offered number of digits, and a passkey
+ * enrolment the person may not decline carries a response.
+ */
+function checkAnswerRules(name: StepName, params: unknown, answer: unknown): void {
+  const digitsOffered = (otp: string | undefined, digits: number) => {
+    if (otp !== undefined && otp.length !== digits) {
+      throw new StepAnswerError('invalid_answer', `${name}: otp length`);
+    }
+  };
+  switch (name) {
+    case 'email_code':
+      digitsOffered(
+        (answer as StepAnswer<'email_code'>).otp,
+        (params as StepParams<'email_code'>).length
+      );
+      return;
+    case 'totp':
+    case 'totp_setup':
+      digitsOffered(
+        (answer as StepAnswer<'totp'>).otp,
+        (params as StepParams<'totp' | 'totp_setup'>).digits
+      );
+      return;
+    case 'webauthn_create':
+      if (
+        !(params as StepParams<'webauthn_create'>).optional &&
+        (answer as StepAnswer<'webauthn_create'>).webauthn_response === undefined
+      ) {
+        throw new StepAnswerError('invalid_answer', 'webauthn_create: webauthn_response');
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * Read an answer to `lastOffer`, the offer as the transport presented it:
+ * one implementation for both transports, whose mappers' `readAnswer` pass
+ * only the steps they put on the wire. `stepUrn` names the step answered
+ * (the Interaction API's `type`, the FiPA endpoint's
+ * `qauth_interaction_type`); it must be the current step or an alternative
+ * of the offer. Only the members that step's answer declares are taken from
+ * `form`, so the envelope's own members and any other field stay behind;
+ * they are parsed by the step's strict answer schema, and the result is
+ * checked against the params the step was offered with. Throws
+ * {@link StepAnswerError} for a refused answer, and
+ * {@link StepMappingError} for an offer the grammar refuses.
+ */
+export function readAnswer(
+  lastOffer: StepOffer,
+  stepUrn: string,
+  form: unknown,
+  encoding: AnswerEncoding = 'form'
+): ReadAnswer {
+  const read = readOffer(lastOffer);
+  const name = typeof stepUrn === 'string' ? stepNameOfUrn(stepUrn) : undefined;
+  const offered = [read.current, ...read.alternatives].find((step) => step.step === name);
+  if (name === undefined || offered === undefined) {
+    throw new StepAnswerError('not_offered', 'the answered step');
+  }
+  if (typeof form !== 'object' || form === null || Array.isArray(form)) {
+    throw new StepAnswerError('invalid_answer', `${name}: not an object`);
+  }
+  const shape = answerShape(name);
+  const picked: Record<string, unknown> = {};
+  for (const [key, member] of Object.entries(shape)) {
+    if (!Object.hasOwn(form, key)) continue;
+    const value = (form as Record<string, unknown>)[key];
+    picked[key] = encoding === 'form' ? formValue(member, value) : value;
+  }
+  const parsed = grammarStep(name).answer.safeParse(picked);
+  if (!parsed.success) {
+    // Paths only: an answer holds passwords and codes.
+    const paths = parsed.error.issues.map((issue) => issue.path.join('.') || '(root)');
+    throw new StepAnswerError('invalid_answer', `${name}: ${[...new Set(paths)].join(', ')}`);
+  }
+  checkAnswerRules(name, offered.params, parsed.data);
+  return { step: name, params: offered.params, answer: parsed.data } as ReadAnswer;
 }

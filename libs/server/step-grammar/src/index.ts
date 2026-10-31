@@ -1,4 +1,9 @@
 export {
+  STEP_ANSWER_ERROR_CODES,
+  StepAnswerError,
+  type StepAnswerErrorCode,
+} from './lib/answer-error';
+export {
   createFipaMapper,
   FIPA_SERVES_ALL,
   FIPA_STEP_MAPPERS,
@@ -40,7 +45,7 @@ export {
   StepMappingError,
   type StepMappingErrorCode,
 } from './lib/mapping-error';
-export type { CurrentStep, OfferedStep, StepOffer } from './lib/offer';
+export type { AnswerEncoding, CurrentStep, OfferedStep, ReadAnswer, StepOffer } from './lib/offer';
 export { generatedStepSchemaFile } from './lib/step-files';
 export {
   EMAIL_CODE_PURPOSES,

@@ -13,20 +13,21 @@ publishes cannot drift apart.
 
 ## What it holds
 
-| Module, under `src/`        | What                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `lib/grammar.ts`            | `defineStep`, and what a step is: name, URN, transports, params, personal data, answer, errors |
-| `lib/zod-kit.ts`            | Zod builders, one per JSON Schema builder of the contract (display text, base64url, URIs, …)   |
-| `lib/steps/*.ts`            | The 17 steps, by area; `lib/steps/index.ts` lists them and derives the constants and types     |
-| `lib/json-schema.ts`        | Zod to JSON Schema, in the contract's spelling (`const`, integer enums, open objects)          |
-| `lib/step-files.ts`         | Each step's schema file, generated from the grammar with the contract's file layout            |
-| `lib/offer.ts`              | `StepOffer`: what the engine offers next, before a transport wraps it; the grammar's checks    |
-| `lib/interaction-mapper.ts` | The Interaction API mapper: the step-grammar members of the step read                          |
-| `lib/fipa-mapper.ts`        | The FiPA mapper: `403 insufficient_authorization`, or `403 redirect_to_web`                    |
-| `lib/mapping-error.ts`      | `StepMappingError`: why a mapper refused an offer (a code fault, never sent)                   |
-| `lib/formats.ts`            | The `uri` and `date-time` checks of ajv-formats, which the Zod schemas run beside each pattern |
-| `lib/vectors.ts`            | The contract's step examples as shared test vectors, with each transport's answer              |
-| `scripts/export-vectors.ts` | Writes `test-vectors/interaction/steps.json`. Nothing imports it                               |
+| Module, under `src/`        | What                                                                                            |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `lib/grammar.ts`            | `defineStep`, and what a step is: name, URN, transports, params, personal data, answer, errors  |
+| `lib/zod-kit.ts`            | Zod builders, one per JSON Schema builder of the contract (display text, base64url, URIs, …)    |
+| `lib/steps/*.ts`            | The 17 steps, by area; `lib/steps/index.ts` lists them and derives the constants and types      |
+| `lib/json-schema.ts`        | Zod to JSON Schema, in the contract's spelling (`const`, integer enums, open objects)           |
+| `lib/step-files.ts`         | Each step's schema file, generated from the grammar with the contract's file layout             |
+| `lib/offer.ts`              | `StepOffer`: what the engine offers next, before a transport wraps it; the grammar's checks     |
+| `lib/interaction-mapper.ts` | The Interaction API mapper: the step-grammar members of the step read                           |
+| `lib/fipa-mapper.ts`        | The FiPA mapper: `403 insufficient_authorization`, or `403 redirect_to_web`                     |
+| `lib/mapping-error.ts`      | `StepMappingError`: why a mapper refused an offer (a code fault, never sent)                    |
+| `lib/answer-error.ts`       | `StepAnswerError`: why an answer was refused before the engine read it (a fault of the request) |
+| `lib/formats.ts`            | The `uri` and `date-time` checks of ajv-formats, which the Zod schemas run beside each pattern  |
+| `lib/vectors.ts`            | The contract's step examples as shared test vectors, with each transport's answer               |
+| `scripts/export-vectors.ts` | Writes `test-vectors/interaction/steps.json`. Nothing imports it                                |
 
 ## What it exports
 
@@ -119,7 +120,19 @@ createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).chall
   endpoint.
 - **What may be answered next** is what the output names: the step read's `step` and
   `alternatives`, or the FiPA body's `qauth_interaction_types_offered` (none after
-  `redirect_to_web`). A transport accepts an answer only to one of those.
+  `redirect_to_web`). Each mapper's `readAnswer` enforces it, with one implementation for both
+  (`readAnswer` in `lib/offer.ts`): `interaction.readAnswer(lastOffer, stepUrn, form, encoding)`
+  and `fipa.readAnswer(lastOffer, listing, stepUrn, form)` refuse a step the transport did not
+  present with `not_offered`, take only the answered step's own members from the body (the
+  envelope's members and another step's fields stay behind), parse them with the step's strict
+  answer schema, and check them against the params the step was offered with: a code has exactly
+  the offered number of digits (`email_code`, `totp`, `totp_setup`), and a passkey enrolment the
+  person may not decline carries a response. A refusal is a `StepAnswerError` (`invalid_answer`),
+  a fault of the request that the transport answers as a malformed request and the engine never
+  counts as a failed credential; its message names paths, never values. A form post's `true` and
+  `false` are read as booleans. What only the engine knows stays the engine's: a password policy's
+  bounds (`password_rejected`), whether the transaction already holds an identifier, a device
+  code's letters.
 - **The FiPA round** carries the realm's issuer (no query, fragment or userinfo; `http` only for a
   development realm), `newAuthSession`, which makes the round's new handle (43 base64url
   characters), and the client's parsed `interaction_types_supported`, at most 16 entries. The
@@ -173,6 +186,7 @@ names, which JSON Schema's `contentSchema` only annotates.
 | `interaction-mapper.test.ts` | The step view and personal data read of every example equal the contract's examples                                   |
 | `fipa-mapper.test.ts`        | ADR-017's wire examples; `redirect_to_web`; `interaction_type_required` is always a version-1 name                    |
 | `no-prose.test.ts`           | No output of either mapper, personal data included, carries prose; an offer that tries is refused                     |
+| `answer.test.ts`             | Every example answer on both transports; an answer to a step not presented, foreign members, lengths, empty answers   |
 | `zod-kit.test.ts`            | A value over its maximum length is refused before a pattern, a `format` or a JSON parse reads it                      |
 | `exhaustive.test.ts`         | Runs the TypeScript compiler: a step without a mapper fails the type check                                            |
 | `vectors.test.ts`            | The committed vectors are what the mappers give, and a reader recovers each step from them                            |

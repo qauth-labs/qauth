@@ -1,9 +1,12 @@
 import { z } from 'zod';
 
+import { StepAnswerError } from './answer-error';
 import type { AnyGrammarStep } from './grammar';
 import { StepMappingError } from './mapping-error';
 import {
   checkParams,
+  type ReadAnswer,
+  readAnswer,
   type ReadOffer,
   readOffer,
   refuseUnknownMembers,
@@ -215,6 +218,20 @@ export interface FipaMapper {
    * {@link StepMappingError} for an offer the grammar refuses.
    */
   challenge(offer: StepOffer, context: FipaRoundContext): FipaChallengeResponse;
+  /**
+   * Read an answer to `lastOffer`, the offer the last response was built
+   * from, for the client of `listing`: only a step that response named in
+   * `qauth_interaction_types_offered` may be answered (none after
+   * `redirect_to_web`), and only its answer members are taken from `form`,
+   * the request's form body. Throws {@link StepAnswerError} for a refused
+   * answer, and {@link StepMappingError} for an offer the endpoint refuses.
+   */
+  readAnswer(
+    lastOffer: StepOffer,
+    listing: FipaListing,
+    stepUrn: string,
+    form: unknown
+  ): ReadAnswer;
 }
 
 /** Build the FiPA endpoint's mapper for the steps `config` names. */
@@ -238,6 +255,15 @@ export function createFipaMapper(config: FipaTransportConfig): FipaMapper {
       (FIPA_STEP_MAPPERS[name] as (value: unknown) => unknown)(params),
       'FiPA mapper'
     );
+
+  // The round's context will do: only its listing is read.
+  const readListing = (listing: FipaListing): ReadonlySet<string> => {
+    const parsed = listingSchema.safeParse(
+      (listing as Partial<FipaListing> | null)?.interactionTypesSupported
+    );
+    if (!parsed.success) refuseContext(parsed.error, 'listing');
+    return new Set(parsed.data);
+  };
 
   const negotiatedBy =
     (listed: ReadonlySet<string>) =>
@@ -271,12 +297,20 @@ export function createFipaMapper(config: FipaTransportConfig): FipaMapper {
       if (typeof step !== 'string' || !isStepName(step)) {
         throw new StepMappingError('unknown_step', 'negotiates');
       }
-      // The round's context will do: only its listing is read.
-      const parsed = listingSchema.safeParse(
-        (listing as Partial<FipaListing> | null)?.interactionTypesSupported
-      );
-      if (!parsed.success) refuseContext(parsed.error, 'listing');
-      return negotiatedBy(new Set(parsed.data))(step);
+      return negotiatedBy(readListing(listing))(step);
+    },
+    readAnswer(lastOffer, listing, stepUrn, form) {
+      const read = readOffer(lastOffer);
+      const presented = present(read, readListing(listing));
+      if (presented.redirect) throw new StepAnswerError('not_offered', 'the answered step');
+      const [first, ...others] = presented.steps;
+      // The step the response required: the offer's own current step, with
+      // its error, or the alternative that took its place.
+      const current =
+        first.step === read.current.step
+          ? { ...first, ...(read.current.error === undefined ? {} : { error: read.current.error }) }
+          : first;
+      return readAnswer({ current, alternatives: others } as StepOffer, stepUrn, form, 'form');
     },
     challenge(offer, context) {
       const read = readOffer(offer);

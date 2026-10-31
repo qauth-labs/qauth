@@ -2,7 +2,15 @@ import type { z } from 'zod';
 
 import type { AnyGrammarStep } from './grammar';
 import { StepMappingError } from './mapping-error';
-import { checkParams, readOffer, refuseUnknownMembers, type StepOffer } from './offer';
+import {
+  type AnswerEncoding,
+  checkParams,
+  type ReadAnswer,
+  readAnswer,
+  readOffer,
+  refuseUnknownMembers,
+  type StepOffer,
+} from './offer';
 import {
   grammarStep,
   type GrammarStepUnion,
@@ -114,6 +122,21 @@ export interface InteractionMapper {
    * {@link stepView}. Throws {@link StepMappingError}.
    */
   personalView(offer: StepOffer, data: unknown): InteractionPersonalView;
+  /**
+   * Read an answer to `lastOffer`, the offer the last step read was built
+   * from: only a step that read named (its `step` or one of its
+   * `alternatives`) may be answered, and only its answer members are taken
+   * from `form`, the body, which arrived as `encoding` (a form post by
+   * default; a JSON body takes `'json'`). Throws `StepAnswerError` for a
+   * refused answer, and
+   * {@link StepMappingError} for an offer the step read refuses.
+   */
+  readAnswer(
+    lastOffer: StepOffer,
+    stepUrn: string,
+    form: unknown,
+    encoding?: AnswerEncoding
+  ): ReadAnswer;
 }
 
 /** Build the Interaction API's mapper for the steps `config` names. */
@@ -177,5 +200,19 @@ export function createInteractionMapper(
     serves: Object.freeze(STEP_NAMES.filter((name) => serves.has(name))),
     stepView,
     personalView,
+    readAnswer(lastOffer, stepUrn, form, encoding = 'form') {
+      const presented = new Set<StepUrn>(stepView(lastOffer).alternatives);
+      return readAnswer(
+        {
+          current: lastOffer.current,
+          alternatives: lastOffer.alternatives.filter((alternative) =>
+            presented.has(STEP_URNS[alternative.step])
+          ),
+        },
+        stepUrn,
+        form,
+        encoding
+      );
+    },
   };
 }
