@@ -2520,10 +2520,14 @@ async function handleJwtBearer(
   }
 
   // An assertion issued before the account was last disabled is refused as a
-  // disabled account's is (#748), whatever the account's state now.
+  // disabled account's is (#748), whatever the account's state now. Its `iat`
+  // is the identity provider's clock, which validation lets run up to
+  // `ID_JAG_CLOCK_SKEW_LEEWAY` ahead of ours: it counts as issued that much
+  // earlier, so an assertion issued before the disablement by a clock ahead
+  // within that leeway is refused too.
   const user = await fastify.repositories.users.findById(realmId, credential.userId);
   const accountRefusal = user
-    ? accountCredentialRefusal(user, assertion.issuedAt * 1000)
+    ? accountCredentialRefusal(user, (assertion.issuedAt - env.ID_JAG_CLOCK_SKEW_LEEWAY) * 1000)
     : 'user_not_found';
   if (!user || accountRefusal !== null) {
     await emitRequestFailed(

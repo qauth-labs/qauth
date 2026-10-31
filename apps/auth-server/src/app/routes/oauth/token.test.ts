@@ -6069,6 +6069,55 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     ]);
   });
 
+  it('counts an assertion as issued the clock-skew leeway earlier than its iat (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    // Disabled 100 s ago and enabled again since. The identity provider's
+    // clock may run ID_JAG_CLOCK_SKEW_LEEWAY (60 s) ahead of ours, so an `iat`
+    // half that past the disablement may have been issued before it.
+    const now = Math.floor(Date.now() / 1000);
+    const disabledAt = now - 100;
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: disabledAt * 1000,
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: disabledAt + 30, exp: now + 60 }))
+      )
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+      expect.objectContaining({ error: 'invalid_grant', reason: 'issued_before_disablement' }),
+    ]);
+  });
+
+  it('redeems an assertion issued more than the clock-skew leeway after the disablement (#748)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const now = Math.floor(Date.now() / 1000);
+    const disabledAt = now - 100;
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: true,
+      notValidBefore: disabledAt * 1000,
+    });
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: disabledAt + 62, exp: now + 60 }))
+      )
+    ).resolves.toMatchObject({ access_token: 'ema.access.jwt' });
+  });
+
   it('redeems an assertion issued after its user was enabled again (#748)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
