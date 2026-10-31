@@ -227,6 +227,48 @@ describe('buildLoggerOptions', () => {
   });
 });
 
+describe('the interaction id and the flow cookie in the log (#592)', () => {
+  it('logs neither on the request line, the error line or the unknown-route line', async () => {
+    const captured: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        captured.push(chunk.toString());
+        cb();
+      },
+    });
+
+    const loggerOptions = buildLoggerOptions(baseEnv) as LoggerOptions;
+    const app = Fastify({ logger: { ...loggerOptions, stream } });
+    app.get('/interaction/v1-rc.0/:id', async (request) => {
+      request.log.info({ req: request }, 'read');
+      throw new Error('boom');
+    });
+    app.setNotFoundHandler(answerRouteNotFound);
+
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    const secret = 'Zmxvdy1jb29raWUtc2VjcmV0LW9mLTMyLWJ5dGVzLXg';
+    const cookie = `__Host-qauth_flow=${secret}`;
+    const read = await app.inject({
+      method: 'GET',
+      url: `/interaction/v1-rc.0/${id}`,
+      headers: { cookie },
+    });
+    const missing = await app.inject({
+      method: 'GET',
+      url: `/interaction/v1-rc.0/${id}/nowhere`,
+      headers: { cookie },
+    });
+    await app.close();
+
+    expect(read.statusCode).toBe(500);
+    expect(missing.statusCode).toBe(404);
+    const serialized = captured.join('');
+    expect(serialized).toContain(`/interaction/v1-rc.0/${LOG_REDACT_CENSOR}`);
+    expect(serialized).not.toContain(id);
+    expect(serialized).not.toContain(secret);
+  });
+});
+
 describe('percentEncodingTolerantPattern', () => {
   it('admits each character plain or percent-encoded, in either hex case', () => {
     const pattern = new RegExp(`^${percentEncodingTolerantPattern('a_b')}$`);
@@ -330,6 +372,34 @@ describe('redactLoggedUrl', () => {
     expect(redactLoggedUrl('/r?response_code=&next=1')).toBe(
       `/r?response_code=${LOG_REDACT_CENSOR}&next=1`
     );
+  });
+
+  it('censors the interaction id of an Interaction API path, and only the id (#592)', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    expect(redactLoggedUrl(`/interaction/v1-rc.0/${id}`)).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl(`/interaction/v1-rc.0/${id}/answer?x=1`)).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/answer?x=1`
+    );
+    expect(redactLoggedUrl(`/interaction/v1/${id}/personal`)).toBe(
+      `/interaction/v1/${LOG_REDACT_CENSOR}/personal`
+    );
+    // Quoted inside a query value, and a junk id that no route would accept.
+    expect(redactLoggedUrl(`/ui/x?next=/interaction/v1-rc.0/${id}&y=2`)).toBe(
+      `/ui/x?next=/interaction/v1-rc.0/${LOG_REDACT_CENSOR}&y=2`
+    );
+    expect(redactLoggedUrl('/interaction/v1-rc.0/not-an-id/cancel')).toBe(
+      `/interaction/v1-rc.0/${LOG_REDACT_CENSOR}/cancel`
+    );
+    // The document and the reserved wallet prefix are not ids.
+    for (const url of [
+      '/interaction/v1-rc.0/openapi.json',
+      '/interaction/v1-rc.0/wallet/return',
+      '/interaction/v1-rc.0/',
+    ]) {
+      expect(redactLoggedUrl(url)).toBe(url);
+    }
   });
 
   it('leaves a URL without the parameter untouched', () => {

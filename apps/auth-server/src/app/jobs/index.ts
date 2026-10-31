@@ -11,6 +11,11 @@ import {
   EVENT_RETENTION_ROLE,
   type RetentionRoute,
 } from './event-retention';
+import {
+  createInteractionExpiryJob,
+  INTERACTION_EXPIRY_JOB_NAME,
+  INTERACTION_EXPIRY_ROLE,
+} from './interaction-expiry';
 import { type JobDefinition, SERVICE_ROLES, type ServiceRole } from './job-runner';
 import {
   createPurgeExpiredJob,
@@ -26,6 +31,7 @@ import {
 
 export * from './advisory-lock';
 export * from './event-retention';
+export * from './interaction-expiry';
 export * from './job-runner';
 export * from './purge-expired';
 export * from './ssf-subject-sweep';
@@ -89,6 +95,14 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
     role: SSF_SUBJECT_SWEEP_ROLE,
     repositories: ['ssfStreams'],
     create: (fastify) => createSsfSubjectSweepJob(fastify.repositories),
+  },
+  {
+    // The Interaction API's expired interactions (#592): audited and cleared.
+    name: INTERACTION_EXPIRY_JOB_NAME,
+    role: INTERACTION_EXPIRY_ROLE,
+    repositories: ['events'],
+    create: (fastify) =>
+      createInteractionExpiryJob({ redis: fastify.redis, events: fastify.repositories.events }),
   },
 ];
 

@@ -157,9 +157,23 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
 );
 
 /**
+ * An interaction id in a path of the Interaction API (#592, ADR-019 Decision
+ * 6): the segment after `/interaction/<version>/`, as in
+ * `/interaction/v1-rc.0/<id>/answer`. The id is a secret: with it the
+ * ceremony app's server reads the current step, so it never reaches a log.
+ * The document path (`openapi.json`) and the reserved wallet prefix
+ * (`wallet/`) are not ids and stay readable. Matched anywhere in the URL, so a
+ * path quoted inside a query value is censored too.
+ */
+const INTERACTION_ID_IN_PATH_PATTERN =
+  /(\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?\/)(?!(?:openapi\.json|wallet)(?:[/?#&]|$))[^/?#&]+/g;
+
+/**
  * Censor the value of every {@link LOG_REDACTED_QUERY_PARAMETERS} entry in a
- * request URL, leaving everything else byte-for-byte as it was — including the
- * spelling of the censored parameter's name, encoded or not.
+ * request URL, and the interaction id of an Interaction API path
+ * ({@link INTERACTION_ID_IN_PATH_PATTERN}), leaving everything else
+ * byte-for-byte as it was — including the spelling of the censored
+ * parameter's name, encoded or not.
  *
  * A string rewrite rather than `new URL(...)` round-tripping deliberately: the
  * logged URL is the request-target as the client sent it, and re-serialising it
@@ -174,7 +188,9 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
  * @param url - the raw request-target (`req.url`), path plus query string.
  */
 export function redactLoggedUrl(url: string): string {
-  return url.replace(REDACTED_QUERY_VALUE_PATTERN, `$1${LOG_REDACT_CENSOR}`);
+  return url
+    .replace(REDACTED_QUERY_VALUE_PATTERN, `$1${LOG_REDACT_CENSOR}`)
+    .replace(INTERACTION_ID_IN_PATH_PATTERN, `$1${LOG_REDACT_CENSOR}`);
 }
 
 /**
