@@ -20,6 +20,7 @@ import {
   signInWithPassword,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { sessionIdOfCookie } from '../testing/session-cookie-value';
 
 /**
  * THE ID TOKEN'S `sid` IS THE BROWSER SESSION BEHIND THE CODE (ADR-019
@@ -106,7 +107,7 @@ describe('sid on ID tokens and authorization codes (#549, real containers)', () 
   function cookieSessionId(jar: CookieJar): string {
     const value = jar.get(SESSION_COOKIE);
     if (value === undefined) throw new Error('the browser holds no session cookie');
-    return value.slice(0, value.lastIndexOf('.'));
+    return sessionIdOfCookie(value);
   }
 
   /** Sign `email` in on the browser whose cookies `jar` holds, as `/ui/login` does. */
