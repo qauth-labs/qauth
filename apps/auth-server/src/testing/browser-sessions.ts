@@ -370,6 +370,11 @@ export interface FakeSideRecordSeed {
   consentScopes?: Record<string, string[]>;
   /** Bound resources by `client_id`; each client needs `consentScopes` too. */
   consentResources?: Record<string, string[]>;
+  /**
+   * Whether the bound page was an agent's, by `client_id`; each client needs
+   * `consentScopes` too. A client left out was shown as no agent.
+   */
+  consentAgent?: Record<string, boolean>;
 }
 
 /**
@@ -408,14 +413,22 @@ export function createBrowserSessionFixture(): BrowserSessionFixture {
           csrfToken: side.csrfToken,
           apiCsrfToken: side.apiCsrfToken,
         });
-        for (const clientId of Object.keys(side.consentResources ?? {})) {
+        for (const clientId of [
+          ...Object.keys(side.consentResources ?? {}),
+          ...Object.keys(side.consentAgent ?? {}),
+        ]) {
           if (side.consentScopes?.[clientId] === undefined) {
-            throw new Error(`seed consentScopes for ${clientId} with its consentResources`);
+            throw new Error(`seed consentScopes for ${clientId} with its other bindings`);
           }
         }
         for (const [clientId, scopes] of Object.entries(side.consentScopes ?? {})) {
           await writeSessionSideRecord(fastify, session, {
-            consent: { clientId, scopes, resources: side.consentResources?.[clientId] ?? [] },
+            consent: {
+              clientId,
+              scopes,
+              resources: side.consentResources?.[clientId] ?? [],
+              agent: side.consentAgent?.[clientId] ?? false,
+            },
           });
         }
       }

@@ -129,6 +129,11 @@ from an agent answers `consent_required` with no code, and the legacy Bearer
 path of `/oauth/authorize`, which cannot show the screen, issues an agent no
 code.
 
+The decision is taken for the page the user saw. A client whose `is_agent`
+changes between the page and the decision (a Client ID Metadata Document can
+change it) gets nothing from that decision: the browser goes back to
+`/oauth/authorize`, which shows the page the client needs now.
+
 ## `/ui/resume/{handle}`
 
 `GET /ui/resume/{handle}` is where a login round-trip lands after a

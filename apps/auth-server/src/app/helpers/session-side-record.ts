@@ -50,6 +50,15 @@ export interface SessionSideRecord {
    * POST records and binds only these.
    */
   consentResources: Record<string, string[]>;
+  /**
+   * Whether that same consent screen was the page for an AI agent (ADR-014
+   * §11, #845), keyed by `client_id`: `true` when it named the client as an
+   * agent and said how long it may keep working. The consent POST mints a
+   * code only when the client is still what the page showed. Absent (a
+   * record lost, or written by a node of the previous release) reads as a
+   * page that named no agent.
+   */
+  consentAgent: Record<string, boolean>;
 }
 
 /** What {@link writeSessionSideRecord} sets; a field left out is kept. */
@@ -57,8 +66,11 @@ export interface SessionSideRecordUpdate {
   identifier?: string;
   csrfToken?: string;
   apiCsrfToken?: string;
-  /** The scopes and resources one consent screen named, for its client. */
-  consent?: { clientId: string; scopes: string[]; resources: string[] };
+  /**
+   * The scopes and resources one consent screen named, for its client, and
+   * whether it was the page for an AI agent.
+   */
+  consent?: { clientId: string; scopes: string[]; resources: string[]; agent: boolean };
 }
 
 /** The hash fields. A client's binding is one field per `client_id`. */
@@ -68,6 +80,7 @@ const FIELD = {
   apiCsrfToken: 'apiCsrfToken',
   consentScopesPrefix: 'consentScopes:',
   consentResourcesPrefix: 'consentResources:',
+  consentAgentPrefix: 'consentAgent:',
 } as const;
 
 const stringList = z.array(z.string());
@@ -96,7 +109,7 @@ export async function readSessionSideRecord(
   session: Pick<BrowserSession, 'realmId' | 'sid'>
 ): Promise<SessionSideRecord> {
   const fields = await fastify.redis.hgetall(sideRecordKey(session.realmId, session.sid));
-  const record: SessionSideRecord = { consentScopes: {}, consentResources: {} };
+  const record: SessionSideRecord = { consentScopes: {}, consentResources: {}, consentAgent: {} };
   for (const [field, value] of Object.entries(fields ?? {})) {
     if (field === FIELD.identifier) record.identifier = value;
     else if (field === FIELD.csrfToken) record.csrfToken = value;
@@ -108,6 +121,11 @@ export async function readSessionSideRecord(
       const resources = parseList(value);
       if (resources) {
         record.consentResources[field.slice(FIELD.consentResourcesPrefix.length)] = resources;
+      }
+    } else if (field.startsWith(FIELD.consentAgentPrefix)) {
+      // Only the two values written below; anything else is left out.
+      if (value === '1' || value === '0') {
+        record.consentAgent[field.slice(FIELD.consentAgentPrefix.length)] = value === '1';
       }
     }
   }
@@ -129,9 +147,10 @@ export async function writeSessionSideRecord(
   if (update.csrfToken !== undefined) fields[FIELD.csrfToken] = update.csrfToken;
   if (update.apiCsrfToken !== undefined) fields[FIELD.apiCsrfToken] = update.apiCsrfToken;
   if (update.consent !== undefined) {
-    const { clientId, scopes, resources } = update.consent;
+    const { clientId, scopes, resources, agent } = update.consent;
     fields[`${FIELD.consentScopesPrefix}${clientId}`] = JSON.stringify(scopes);
     fields[`${FIELD.consentResourcesPrefix}${clientId}`] = JSON.stringify(resources);
+    fields[`${FIELD.consentAgentPrefix}${clientId}`] = agent ? '1' : '0';
   }
   if (Object.keys(fields).length === 0) return;
   const key = sideRecordKey(session.realmId, session.sid);

@@ -34,6 +34,7 @@ describe('session side record', () => {
     await expect(readSessionSideRecord(fastify, SESSION)).resolves.toEqual({
       consentScopes: {},
       consentResources: {},
+      consentAgent: {},
     });
   });
 
@@ -41,11 +42,16 @@ describe('session side record', () => {
     await writeSessionSideRecord(fastify, SESSION, { identifier: 'alice@example.com' });
     await writeSessionSideRecord(fastify, SESSION, {
       csrfToken: 'consent-token',
-      consent: { clientId: 'app-1', scopes: ['openid', 'email'], resources: [] },
+      consent: { clientId: 'app-1', scopes: ['openid', 'email'], resources: [], agent: false },
     });
     await writeSessionSideRecord(fastify, SESSION, { apiCsrfToken: 'api-token' });
     await writeSessionSideRecord(fastify, SESSION, {
-      consent: { clientId: 'app-2', scopes: ['read:foo'], resources: ['https://api.example'] },
+      consent: {
+        clientId: 'app-2',
+        scopes: ['read:foo'],
+        resources: ['https://api.example'],
+        agent: true,
+      },
     });
 
     // A later write sets only what it names: the consent screen and the
@@ -56,9 +62,12 @@ describe('session side record', () => {
       apiCsrfToken: 'api-token',
       consentScopes: { 'app-1': ['openid', 'email'], 'app-2': ['read:foo'] },
       consentResources: { 'app-1': [], 'app-2': ['https://api.example'] },
+      consentAgent: { 'app-1': false, 'app-2': true },
     });
     expect([...(redis.hashes.get(KEY)?.keys() ?? [])].sort()).toEqual([
       'apiCsrfToken',
+      'consentAgent:app-1',
+      'consentAgent:app-2',
       'consentResources:app-1',
       'consentResources:app-2',
       'consentScopes:app-1',
@@ -90,10 +99,15 @@ describe('session side record', () => {
 
   it('rebinds a client to the scopes of the latest screen', async () => {
     await writeSessionSideRecord(fastify, SESSION, {
-      consent: { clientId: 'app-1', scopes: ['read:foo', 'write:foo'], resources: [] },
+      consent: {
+        clientId: 'app-1',
+        scopes: ['read:foo', 'write:foo'],
+        resources: [],
+        agent: false,
+      },
     });
     await writeSessionSideRecord(fastify, SESSION, {
-      consent: { clientId: 'app-1', scopes: ['read:foo'], resources: [] },
+      consent: { clientId: 'app-1', scopes: ['read:foo'], resources: [], agent: false },
     });
 
     const side = await readSessionSideRecord(fastify, SESSION);
@@ -107,6 +121,7 @@ describe('session side record', () => {
         ['consentScopes:app-1', 'not json'],
         ['consentScopes:app-2', '{"scope":"admin"}'],
         ['consentResources:app-3', '[1,2]'],
+        ['consentAgent:app-4', 'true'],
         ['somethingElse', 'x'],
       ])
     );
@@ -114,6 +129,7 @@ describe('session side record', () => {
     await expect(readSessionSideRecord(fastify, SESSION)).resolves.toEqual({
       consentScopes: {},
       consentResources: {},
+      consentAgent: {},
     });
   });
 

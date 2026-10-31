@@ -649,6 +649,116 @@ describe('UI /ui/consent GET — an agent client (ADR-014 §11, #845)', () => {
   });
 });
 
+describe('UI /ui/consent — the page an agent client was shown (ADR-014 §11, #845)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const POST_BODY = {
+    decision: 'allow',
+    allow_forever: '1',
+    client_id: 'app-123',
+    redirect_uri: 'https://example.com/cb',
+    state: 'xyz',
+    scope: 'email',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+    response_type: 'code',
+  };
+
+  it('binds whether the page was the agent’s', async () => {
+    for (const isAgent of [true, false]) {
+      const { fastify, ctx, sessions } = makeFastify();
+      await consentRoute(fastify);
+      const { session, cookie } = await signIn(sessions, { sid: `sid-bind-${isAgent}` });
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        isAgent,
+      });
+      const { reply } = createReply();
+      await ctx.get!(
+        { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
+        reply
+      );
+
+      expect((await sessions.sideRecord(session)).consentAgent).toEqual({ 'app-123': isAgent });
+    }
+  });
+
+  it.each([
+    { shown: false, now: true, why: 'became an agent after a page that named none' },
+    { shown: true, now: false, why: 'stopped being an agent after the agent’s page' },
+  ])(
+    'grants nothing and starts over at /oauth/authorize for a client that $why',
+    async ({ shown, now }) => {
+      const { fastify, ctx, sessions } = makeFastify();
+      await consentRoute(fastify);
+      const csrf = `csrf-flip-${shown}`;
+      const { cookie } = await signIn(sessions, {
+        sid: `sid-flip-${shown}`,
+        side: {
+          csrfToken: csrf,
+          consentScopes: { 'app-123': ['email'] },
+          consentAgent: { 'app-123': shown },
+        },
+      });
+      // A CIMD document that changed `is_agent` between the GET and the POST.
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        isAgent: now,
+      });
+
+      const { reply, state } = createReply();
+      await ctx.post!(
+        {
+          body: { ...POST_BODY, csrf_token: csrf, resource: ['https://api.example.com'] },
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(state.statusCode).toBe(302);
+      const next = new URL(state.redirected ?? '', 'https://issuer.example');
+      expect(next.pathname).toBe('/oauth/authorize');
+      expect(next.searchParams.get('client_id')).toBe('app-123');
+      expect(next.searchParams.get('state')).toBe('xyz');
+      expect(next.searchParams.getAll('resource')).toEqual(['https://api.example.com']);
+      expect(next.searchParams.get('code')).toBeNull();
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reads a binding without the flag as a page that named no agent', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-legacy';
+    // As a node of the previous release binds a page: scopes, no agent flag.
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-legacy',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    await sessions.redis.hdel(
+      `browser-session-side:${REALM.id}:sid-legacy`,
+      'consentAgent:app-123'
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      isAgent: true,
+    });
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      { body: { ...POST_BODY, csrf_token: csrf }, headers: { cookie }, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.redirected).toMatch(/^\/oauth\/authorize\?/);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('UI /ui/consent GET — who the client is (ADR-019 Decision 6, #593)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1922,6 +2032,8 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
         // scope-presentation binding check; the in-cap success test POSTs
         // `agent:readonly`, so bind that so its grant matches what was rendered.
         consentScopes: { 'app-123': ['agent:readonly'] },
+        // The page was the agent's (#845).
+        consentAgent: { 'app-123': true },
       },
     });
   }
@@ -2135,13 +2247,19 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   // set. The bound set must equal what the test POSTs, so callers pass the scope
   // they submit (default `write:foo`, the dangerous scope these step-up tests
   // exercise).
-  function signInAt(sessions: BrowserSessionFixture, authTime: number, boundScope = 'write:foo') {
+  function signInAt(
+    sessions: BrowserSessionFixture,
+    authTime: number,
+    boundScope = 'write:foo',
+    agent = false
+  ) {
     return signIn(sessions, {
       sid: 'sid-su',
       authTime,
       side: {
         csrfToken: 'csrf-su',
         consentScopes: { 'app-123': boundScope.split(/\s+/).filter((s) => s.length > 0) },
+        consentAgent: { 'app-123': agent },
       },
     });
   }
@@ -2233,7 +2351,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   it('per-agent audit (#186): elevation by an agent client attributes actor + scope mode', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { cookie } = await signInAt(sessions, Date.now() - 5000, 'agent:exec');
+    const { cookie } = await signInAt(sessions, Date.now() - 5000, 'agent:exec', true);
     // An EXEC-capped agent elevating to the dangerous `agent:exec` scope.
     const EXEC_AGENT = {
       ...DANGEROUS_CLIENT,

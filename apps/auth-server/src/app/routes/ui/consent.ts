@@ -558,7 +558,9 @@ export default async function (fastify: FastifyInstance) {
       // extends it.
       await writeSessionSideRecord(fastify, session, {
         csrfToken,
-        consent: { clientId: client.clientId, scopes, resources },
+        // ADR-014 §11 (#845): whether this page names the client as an AI
+        // agent, which the POST checks the client still is.
+        consent: { clientId: client.clientId, scopes, resources, agent: isAgentClient(client) },
       });
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -785,6 +787,40 @@ export default async function (fastify: FastifyInstance) {
             error_description: 'requested scope exceeds the agent scope mode for this client',
             state: body.state ?? undefined,
             iss,
+          }),
+          302
+        );
+      }
+
+      // ADR-014 §11 (#845): a code is minted only for the client the page
+      // showed. A CIMD document can change `is_agent` between the GET and
+      // this POST: a client that became an agent was never named as one or
+      // told the user how long it may keep working, and one that stopped
+      // being one was shown lines that no longer hold. Either way nothing is
+      // granted, and the request starts over at /oauth/authorize, which
+      // checks everything again and shows the page the client needs now. A
+      // binding without the flag (a record written by a node of the previous
+      // release) reads as a page that named no agent.
+      const shownAsAgent = side.consentAgent[client.clientId] === true;
+      if (shownAsAgent !== isAgentClient(client)) {
+        fastify.log.warn(
+          { realmId: realm.id, clientId: client.clientId, shownAsAgent },
+          'the client changed whether it is an agent since its consent page; showing the page again'
+        );
+        return reply.redirect(
+          buildAuthorizeUrl({
+            client_id: body.client_id,
+            redirect_uri: body.redirect_uri,
+            state: body.state,
+            scope: body.scope,
+            nonce: body.nonce,
+            code_challenge: body.code_challenge,
+            code_challenge_method: body.code_challenge_method,
+            response_type: body.response_type,
+            prompt: body.prompt,
+            max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
+            dpop_jkt: typeof body.dpop_jkt === 'string' ? body.dpop_jkt : undefined,
+            resource: body.resource,
           }),
           302
         );
