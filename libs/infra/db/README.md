@@ -597,7 +597,7 @@ to each destination of a route, at least once and with the same id, through
   `SELECT`, `INSERT` and `UPDATE` on `event_deliveries`, every row privilege
   on `event_delivery_positions`, `SELECT` on `ssf_streams`, and `SELECT` on
   `ssf_stream_subjects (stream_id, event_subject_type, event_subject_id)`,
-  `realms (id, ssf_transmitter_enabled)` and
+  `realms (id, ssf_transmitter_enabled, issuer)` and
   `oauth_clients (id, enabled, suspended, scopes)`. Nothing else: not the raw
   subject a receiver sent, which may be an email address.
 

@@ -707,13 +707,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   family was revoked already names no one, so a second revocation sends no second SET. A receiver
   may add a user as a subject only when the user holds an active consent for
   its client or a live refresh token it was issued; any other user is refused
-  with `403`. The delivery role now reads `realms.issuer`, for the `iss_sub`
-  subjects: a deployment that runs it as its own database user re-applies
-  `eventDeliveryGrantStatements` to that user. Each delivery attempt reads the
-  stream as it is then: a held or retried delivery of an event the receiver no
-  longer requests, or about a subject it has removed, is not sent. The docs site's
-  new **SSF events** page (`reference/ssf-events`) is generated from the
+  with `403`; a disabled user is related to no client. The delivery role now
+  reads `realms.issuer`, for the `iss_sub` subjects. Each delivery attempt reads
+  the stream as it is then: a held or retried delivery of an event the receiver
+  no longer requests, or about a subject it has removed, is not sent. The docs
+  site's new **SSF events** page (`reference/ssf-events`) is generated from the
   registry, and a test fails when it differs.
+
+  **Action for operators**: a deployment that runs the delivery role as its
+  own database user grants that user `SELECT` on `realms.issuer` before it
+  upgrades, by applying `eventDeliveryGrantStatements(<role>)` of
+  `@qauth-labs/infra-db` again, or `GRANT SELECT ("issuer") ON TABLE "realms"
+  TO <role>`. Nothing checks the grants at boot: without this one every SSF
+  delivery attempt fails with `permission denied for table realms` (SQLSTATE
+  `42501`) until its attempts run out. A delivery role that uses the server's
+  own database user needs nothing. See the upgrade guide (`operate/upgrades`).
+
 - **Schema**: migration 0039 adds `ssf_streams`, `ssf_stream_subjects`,
   `realms.ssf_transmitter_enabled` (default off) and an index on
   `event_deliveries` that finds a destination's latest failed delivery ([#410]).
