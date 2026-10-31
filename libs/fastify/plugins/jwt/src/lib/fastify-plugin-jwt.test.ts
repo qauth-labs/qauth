@@ -387,6 +387,40 @@ describe('signing through the signer (#491)', () => {
     }
   });
 
+  it("gives an ID token the configured lifespan, or the override, a realm's lifetime that may be longer (#527)", async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const configured = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+      });
+      const shorter = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+        expiresInOverride: 300,
+      });
+      const longer = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+        expiresInOverride: 3600,
+      });
+
+      const lifetime = (token: string) => {
+        const claims = payload(token);
+        return (claims['exp'] as number) - (claims['iat'] as number);
+      };
+      expect(lifetime(configured)).toBe(900);
+      expect(lifetime(shorter)).toBe(300);
+      expect(lifetime(longer)).toBe(3600);
+      // The override sets the lifetime; it is never a claim.
+      expect(payload(longer)).not.toHaveProperty('expiresInOverride');
+      expect(payload(longer)).not.toHaveProperty('expires_in_override');
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serves each realm's JWKS: a realm's tokens verify with its JWKS and not with another's", async () => {
     const realms = await createRealms();
     const app = await buildTestApp(realms);
