@@ -408,9 +408,10 @@ describe('the configuration key registry (#449)', () => {
       for (const sample of SAMPLES[kindOf(field.default, path)]) {
         const parsed = envField.safeParse(sample);
         if (!parsed.success) {
+          const key = field.seedEnv;
           expect(
-            () => REALM_POLICY_REGISTRY.defaultsFromEnv({ [field.seedEnv]: sample }),
-            `${field.seedEnv}=${JSON.stringify(sample)}`
+            () => REALM_POLICY_REGISTRY.defaultsFromEnv({ [key]: sample }),
+            `${key}=${JSON.stringify(sample)}`
           ).toThrow(PolicySeedError);
           refused++;
           continue;
